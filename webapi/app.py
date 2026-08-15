@@ -35,9 +35,16 @@ DIST_DIR = ROOT / "webui" / "dist"
 
 app = FastAPI(title="AlphaGPT Web API", version="1.0.0")
 
+# The API can start/stop/reset the simulation, so it is intentionally bound
+# to local origins only (dev Vite proxy + the single-origin production build).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -99,8 +106,27 @@ def sim_day(date: str) -> dict:
 
 @app.post("/api/sim/stop")
 def sim_stop() -> JSONResponse:
-    result = service.write_stop_signal()
+    result = service.sim_stop_run()
     return JSONResponse(result, status_code=200 if result.get("ok") else 500)
+
+
+@app.get("/api/sim/status")
+def sim_run_status() -> dict:
+    return service.sim_status()
+
+
+@app.post("/api/sim/start")
+def sim_run_start(req: service.SimStartRequest) -> JSONResponse:
+    result = service.sim_start(req)
+    code = 409 if result.get("conflict") else (200 if result.get("ok") else 400)
+    return JSONResponse(result, status_code=code)
+
+
+@app.post("/api/sim/reset")
+def sim_run_reset() -> JSONResponse:
+    result = service.sim_reset_run()
+    code = 409 if result.get("conflict") else (200 if result.get("ok") else 500)
+    return JSONResponse(result, status_code=code)
 
 
 @app.get("/api/sim/config")

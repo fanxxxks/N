@@ -62,11 +62,11 @@ cd webui && npm run dev
 # 浏览器打开 http://127.0.0.1:5173
 ```
 
-生产模式（单服务，后端托管构建产物）：
+生产模式（单服务，后端托管构建产物；API 可启停模拟盘，故仅绑定本机）：
 
 ```bash
 cd webui && npm install && npm run build && cd ..
-python -m uvicorn webapi.app:app --host 0.0.0.0 --port 8000
+python -m uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 # 浏览器打开 http://127.0.0.1:8000
 ```
 
@@ -77,6 +77,16 @@ python -m uvicorn webapi.app:app --host 0.0.0.0 --port 8000
 （佣金 / 最低佣金 / 印花税 / 过户费 / 滑点）是全项目单一口径（`backtest`
 段），修改后对回测与模拟盘同时生效；初始资金在下次 reset 时生效。日志页
 仅展示 `logs/` 与 `data/` 下的 `.log` / `.txt` 文件。
+
+模拟盘的启停由后端进程管理器（`ashare_trading/manager.py`）托管，状态全部
+落盘（`data/sim_run.json` + 锁文件），API 进程重启不会丢失或孤儿化子进程：
+
+| 端点 | 说明 |
+| --- | --- |
+| `POST /api/sim/start` | 启动 `run_sim`（body：`reset` / `start` / `end`）；有状态时自动 `--resume`，运行中返回 409 |
+| `POST /api/sim/stop` | 写 `STOP_SIGNAL` 后立即返回 `stopping`，宽限期后升级为终止进程树 |
+| `POST /api/sim/reset` | 先 `archive_run.py --mode sim --commit` 归档旧状态（失败则中止），再重置并移走订单/成交目录 |
+| `GET /api/sim/status` | 轮询状态机（idle/starting/running/stopping/stopped/finished/error）、PID、当前日期与净值 |
 
 首次数据同步会拉取沪深 300、中证 500、中证 1000 成分股及日线数据。为避免重复请求 AkShare，可先使用 `--offline` 测试本地流程，或使用 `--limit N` 限制股票数量。日线缓存落后于交易日历时会自动刷新；全量（不带 `--limit`）同步会清理不在股票池中的历史行。
 
