@@ -95,6 +95,7 @@ class SimConfig:
     state_path: Path = Path("data/sim_portfolio_state.json")
     orders_dir: Path = Path("data/sim_orders")
     trades_dir: Path = Path("data/sim_trades")
+    progress_path: Path = Path("data/sim_progress.json")
 
 
 def _resolve_paths(
@@ -195,4 +196,6 @@ def make_sim_config(raw: dict[str, Any], project_root: Path) -> SimConfig:
         data["orders_dir"] = project_root / str(data.get("orders_dir", defaults.orders_dir))
     if not Path(str(data.get("trades_dir", "") or "")).is_absolute():
         data["trades_dir"] = project_root / str(data.get("trades_dir", defaults.trades_dir))
+    if not Path(str(data.get("progress_path", "") or "")).is_absolute():
+        data["progress_path"] = project_root / str(data.get("progress_path", defaults.progress_path))
     return SimConfig(**data)

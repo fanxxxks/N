@@ -3,13 +3,21 @@
 Usage:
     python -m ashare_trading.run_sim [--config config/ashare_config.yaml]
                                     [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+                                    [--reset | --resume]
+
+Replay safety: when the portfolio state already contains processed history,
+a plain start is refused; pass ``--resume`` to continue from the state's
+``last_exec_date`` or ``--reset`` to start over from scratch.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +48,34 @@ from ashare_logging import export_log_txt, setup_run_logging
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def write_progress_file(
+    path: str | Path,
+    phase: str,
+    current_date: str | None = None,
+    equity: float | None = None,
+) -> None:
+    """Atomically write the sim progress file consumed by the status API.
+
+    Phases: ``loading`` (data/factor warm-up), ``executing`` (day loop),
+    ``stopped`` (STOP_SIGNAL), ``finished``, ``error``.
+    """
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "phase": phase,
+        "current_date": current_date,
+        "equity": equity,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    tmp = path.with_suffix(".tmp.json")
+    tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
 
 
 class SimulationRunner:
@@ -78,7 +114,15 @@ class SimulationRunner:
         self,
         start_date: str | None = None,
         end_date: str | None = None,
+        resume: bool = False,
     ) -> dict[str, object]:
+        if not resume and self.portfolio.has_history:
+            raise ValueError(
+                "Portfolio state already contains processed history "
+                f"(last_exec_date={self.portfolio.last_exec_date}). "
+                "Pass resume=True to continue or reset the portfolio first."
+            )
+        self._write_progress("loading")
         if self.loader.factor_tensor is None:
             self.loader.load_data()
         if self.formula_tokens is None:
@@ -95,9 +139,33 @@ class SimulationRunner:
 
         start_idx = 0
         end_idx = len(dates) - 1
+        resume_idx: int | None = None
+        if resume:
+            last = self.portfolio.last_exec_date
+            if not last:
+                raise ValueError(
+                    "resume=True but the portfolio state has no "
+                    "last_exec_date; reset the portfolio before replaying"
+                )
+            resume_idx = next((i for i, d in enumerate(dates) if d == last), None)
+            if resume_idx is None:
+                raise ValueError(
+                    f"last_exec_date {last} is not in the dataset; "
+                    "reset the portfolio or re-sync the data"
+                )
+            # Signals start at the watermark day so the first execution is
+            # the first trading day after it: no overlap, no gap.
+            start_idx = resume_idx
         if start_date:
             start_date = start_date.replace("-", "")
-            start_idx = next((i for i, d in enumerate(dates) if d >= start_date), 0)
+            user_idx = next((i for i, d in enumerate(dates) if d >= start_date), 0)
+            if resume_idx is not None and user_idx < resume_idx:
+                raise ValueError(
+                    f"--start {start_date} precedes the last processed date "
+                    f"({self.portfolio.last_exec_date}); refusing to replay. "
+                    "Use --reset for a full replay."
+                )
+            start_idx = max(start_idx, user_idx)
         if end_date:
             end_date = end_date.replace("-", "")
             end_idx = next(
@@ -115,8 +183,12 @@ class SimulationRunner:
             )
         )
 
+        self._write_progress("executing", current_date=self.portfolio.last_exec_date)
+        last_equity: float | None = None
+        stopped = False
         for signal_idx in range(start_idx, end_idx):
             if self._handle_stop_signal():
+                stopped = True
                 break
             exec_idx = signal_idx + 1
             exec_date = dates[exec_idx]
@@ -166,15 +238,43 @@ class SimulationRunner:
             close_prices = {
                 ts_codes[i]: float(raw["close"][i, exec_idx]) for i in range(len(ts_codes))
             }
-            self.portfolio.record_equity(exec_date, close_prices)
+            last_equity = self.portfolio.record_equity(exec_date, close_prices)
+            # Advance the resume watermark only now: orders/trades files are
+            # on disk and the equity snapshot is about to be saved, so a crash
+            # before this save replays the whole day cleanly instead of
+            # leaving a half-processed day behind.
+            self.portfolio.last_exec_date = exec_date
             self.portfolio.save()
+            self._write_progress(
+                "executing", current_date=exec_date, equity=last_equity
+            )
 
-        self.portfolio.save()
+        phase = "stopped" if stopped else "finished"
+        self._write_progress(
+            phase,
+            current_date=self.portfolio.last_exec_date,
+            equity=last_equity,
+        )
         return {
             "final_cash": self.portfolio.cash,
             "trade_count": self.portfolio.trade_count,
             "equity_history": self.portfolio.equity_history,
         }
+
+    def _write_progress(
+        self,
+        phase: str,
+        current_date: str | None = None,
+        equity: float | None = None,
+    ) -> None:
+        # Progress reporting is auxiliary: a failure here must never abort a
+        # simulation that is otherwise running fine.
+        try:
+            write_progress_file(
+                self.sim_config.progress_path, phase, current_date, equity
+            )
+        except OSError as exc:
+            logger.warning(f"Could not write progress file: {exc}")
 
     def _make_orders(
         self,
@@ -301,6 +401,18 @@ class SimulationRunner:
         )
 
 
+def _clear_stop_signal(sim_config: SimConfig) -> None:
+    """Remove a leftover STOP/STOPPED file so an explicit restart can run."""
+
+    path = Path(sim_config.stop_signal_path)
+    try:
+        if path.exists():
+            path.unlink()
+            logger.debug(f"Cleared stop signal: {path}")
+    except OSError as exc:
+        logger.warning(f"Could not clear stop signal file {path}: {exc}")
+
+
 def main() -> None:
     setup_run_logging(run_name="sim")
     parser = argparse.ArgumentParser(description="Run A-share paper trading")
@@ -308,6 +420,11 @@ def main() -> None:
     parser.add_argument("--start", default=None)
     parser.add_argument("--end", default=None)
     parser.add_argument("--reset", action="store_true")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue from the portfolio state's last processed date",
+    )
     args = parser.parse_args()
 
     try:
@@ -323,8 +440,27 @@ def main() -> None:
         )
         if args.reset:
             runner.portfolio.reset()
-        result = runner.run(args.start, args.end)
+            _clear_stop_signal(sim_config)
+        elif args.resume:
+            _clear_stop_signal(sim_config)
+        elif runner.portfolio.has_history:
+            logger.error(
+                "Portfolio state already contains processed history "
+                "(last_exec_date={}). Pass --resume to continue or --reset "
+                "to start over.",
+                runner.portfolio.last_exec_date,
+            )
+            sys.exit(2)
+        result = runner.run(args.start, args.end, resume=args.resume)
         logger.success(f"Simulation complete: {result}")
+    except Exception:
+        sim_cfg = locals().get("sim_config")
+        if sim_cfg is not None:
+            try:
+                write_progress_file(sim_cfg.progress_path, phase="error")
+            except OSError:
+                pass
+        raise
     finally:
         export_log_txt(run_name="sim")
 

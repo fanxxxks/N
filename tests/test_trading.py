@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -163,3 +164,44 @@ def test_portfolio_save_is_atomic(tmp_path: Path):
     assert not (tmp_path / "state.tmp.json").exists()
     loaded = SimulationPortfolio(100000.0, tmp_path / "state.json")
     assert loaded.positions["000001.SZ"].quantity == 100
+
+
+def test_portfolio_last_exec_date_roundtrip(tmp_path: Path):
+    path = tmp_path / "state.json"
+    portfolio = SimulationPortfolio(100000.0, path)
+    portfolio.last_exec_date = "20240105"
+    portfolio.record_equity("20240105", {})
+    portfolio.save()
+
+    loaded = SimulationPortfolio(100000.0, path)
+    assert loaded.last_exec_date == "20240105"
+    assert loaded.has_history
+
+
+def test_portfolio_legacy_state_derives_last_exec_date(tmp_path: Path):
+    # State files written before last_exec_date existed carry no watermark;
+    # the equity history tail is the best available resume point.
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "initial_capital": 100000.0,
+                "cash": 100000.0,
+                "trade_count": 0,
+                "positions": {},
+                "equity_history": [{"trade_date": "20240103", "equity": 100000.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = SimulationPortfolio(100000.0, path)
+    assert loaded.last_exec_date == "20240103"
+    assert loaded.has_history
+
+
+def test_portfolio_fresh_state_has_no_history(tmp_path: Path):
+    portfolio = SimulationPortfolio(100000.0, tmp_path / "state.json")
+    assert not portfolio.has_history
+    portfolio.reset()
+    assert not portfolio.has_history
+    assert portfolio.last_exec_date is None

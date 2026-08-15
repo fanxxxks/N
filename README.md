@@ -29,6 +29,22 @@ python -m ashare_trading.run_sim
 streamlit run dashboard/app.py
 ```
 
+### 模拟盘的启动 / 续跑 / 重置
+
+`run_sim` 的每个交易日是一个事务：订单/成交流水、资金曲线与 `last_exec_date`
+水位线在同一份原子快照中落盘。因此：
+
+```bash
+python -m ashare_trading.run_sim            # 首次运行：从数据集起点重放
+python -m ashare_trading.run_sim --resume   # 从状态文件最后处理日期续跑
+python -m ashare_trading.run_sim --reset    # 清空状态，从头重放
+```
+
+当状态文件已含历史（`has_history`）时，不带 `--reset` / `--resume` 直接启动会
+报错退出，防止把历史订单在现有持仓上重放一遍污染状态。`--start` 早于
+`last_exec_date` 且非 `--reset` 同样被拒绝。运行进度（phase / 当前日期 / 净值）
+实时写入 `data/sim_progress.json`，供前端状态条轮询。
+
 ## Web 前端（React + FastAPI）
 
 除 Streamlit 看板外，仓库还提供一套现代 Web 前端：FastAPI 后端读取本地
