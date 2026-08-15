@@ -1,0 +1,205 @@
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #0d1117;
+}
+
+.app-sider {
+  border-right: 1px solid #21262d;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 20px 14px;
+}
+
+.app-logo-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #2f81f7, #7b3ff2);
+  color: #fff;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.app-logo-text {
+  font-size: 16px;
+  font-weight: 700;
+  color: #e6edf3;
+}
+
+.app-sider-footer {
+  margin-top: auto;
+  padding: 12px 20px;
+  color: #6e7681;
+  font-size: 12px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: #161b22;
+  border-bottom: 1px solid #21262d;
+  height: 52px;
+  line-height: 52px;
+}
+
+.app-header-title {
+  font-size: 15px;
+  color: #c9d1d9;
+}
+
+.app-content {
+  padding: 20px 24px;
+}
+
+.panel {
+  border: 1px solid #21262d;
+  background: #161b22;
+  margin-bottom: 16px;
+}
+
+.panel .ant-card-head {
+  border-bottom: 1px solid #21262d;
+  min-height: 44px;
+}
+
+.panel .ant-card-head-title {
+  color: #c9d1d9;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.metric-card {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.metric-card-title {
+  color: #8b949e;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.metric-card-value {
+  color: #e6edf3;
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-card-suffix {
+  color: #8b949e;
+  font-size: 13px;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+.formula-box {
+  font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #7ee787;
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-viewer {
+  font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 12px 14px;
+  height: 620px;
+  overflow: auto;
+  white-space: pre;
+  color: #c9d1d9;
+}
+
+.log-file-active {
+  background: #1c2128 !important;
+  outline: 1px solid #2f81f7;
+}
+
+.log-line-error {
+  color: #ff7b72;
+}
+
+.log-line-warning {
+  color: #d29922;
+}
+
+.log-line-success {
+  color: #7ee787;
+}
+
+.log-line-debug {
+  color: #6e7681;
+}
+
+.kv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.kv-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #21262d;
+}
+
+.kv-table td:first-child {
+  color: #8b949e;
+  width: 160px;
+}
+
+.kv-table td:last-child {
+  color: #e6edf3;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.page-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #e6edf3;
+  margin: 0;
+}
+
+.ant-table {
+  font-variant-numeric: tabular-nums;
+}

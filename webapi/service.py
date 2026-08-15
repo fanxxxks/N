@@ -1,0 +1,357 @@
+"""Data access helpers for the AlphaGPT web API.
+
+All reads are defensive: the dashboard must stay alive even while
+artifacts are missing, the DuckDB file is locked by a running sync, or
+a JSON payload is temporarily truncated by an atomic-write rename.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from pathlib import Path
+
+from ashare_data.config import (
+    make_backtest_config,
+    make_data_config,
+    make_model_config,
+    make_sim_config,
+    load_config,
+)
+from ashare_data.db import AshareDB
+
+ROOT = Path(__file__).resolve().parents[1]
+
+_LOG_DIRS = (ROOT / "logs", ROOT / "data")
+_MAX_LOG_READ_BYTES = 16 * 1024 * 1024
+
+_stock_names: dict[str, str] = {}
+
+
+def _load_configs() -> tuple:
+    raw = load_config(None, project_root=ROOT)
+    data_config = make_data_config(raw, ROOT)
+    model_config = make_model_config(raw)
+    backtest_config = make_backtest_config(raw)
+    sim_config = make_sim_config(raw, ROOT)
+    return data_config, model_config, backtest_config, sim_config
+
+
+def _get_configs() -> tuple:
+    try:
+        return _load_configs()
+    except Exception:  # noqa: BLE001 - dashboard must survive bad config.
+        return None, None, None, None
+
+
+def _read_json(path: Path) -> dict | list | None:
+    try:
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def load_stock_names() -> dict[str, str]:
+    """ts_code -> stock name from the local DuckDB (cached)."""
+
+    global _stock_names
+    if _stock_names:
+        return _stock_names
+    data_config, *_ = _get_configs()
+    if data_config is None:
+        return {}
+    try:
+        with AshareDB(data_config.duckdb_path, read_only=True) as db:
+            df = db.query(f"SELECT ts_code, name FROM {data_config.stocks_table}")
+        _stock_names = {
+            str(row.get("ts_code")): str(row.get("name") or row.get("ts_code"))
+            for row in df.to_dict("records")
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+    return _stock_names
+
+
+def get_backtest() -> dict:
+    """Full backtest result minus the (huge) positions history."""
+
+    data_config, *_ = _get_configs()
+    if data_config is None:
+        return {}
+    payload = _read_json(data_config.data_dir / "backtest_result.json") or {}
+    if not isinstance(payload, dict):
+        return {}
+    out = {
+        k: v
+        for k, v in payload.items()
+        if k not in {"positions", "trades"}
+    }
+    positions = payload.get("positions") or []
+    out["positions_count"] = len(positions)
+    return out
+
+
+def get_backtest_positions(offset: int = 0, limit: int = 20) -> dict:
+    """One page of daily holdings snapshots, newest first, name-enriched."""
+
+    data_config, *_ = _get_configs()
+    if data_config is None:
+        return {"items": [], "total": 0}
+    payload = _read_json(data_config.data_dir / "backtest_result.json") or {}
+    positions = payload.get("positions") or [] if isinstance(payload, dict) else []
+    names = load_stock_names()
+    offset = max(0, int(offset))
+    limit = max(1, min(200, int(limit)))
+    page = positions[::-1][offset : offset + limit]
+    items = []
+    for snap in page:
+        ts_codes = snap.get("ts_codes") or []
+        weights = snap.get("weights") or []
+        rows = [
+            {
+                "ts_code": code,
+                "name": names.get(code, ""),
+                "weight": round(float(weights[i]), 6) if i < len(weights) else 0.0,
+            }
+            for i, code in enumerate(ts_codes)
+        ]
+        items.append(
+            {
+                "signal_date": snap.get("signal_date"),
+                "exec_date": snap.get("exec_date"),
+                "count": len(rows),
+                "rows": rows,
+            }
+        )
+    return {"items": items, "total": len(positions)}
+
+
+def get_strategy() -> dict:
+    data_config, *_ = _get_configs()
+    if data_config is None:
+        return {}
+    payload = _read_json(data_config.data_dir / "best_ashare_strategy.json") or {}
+    return payload if isinstance(payload, dict) else {"formula": payload}
+
+
+def get_sim_state() -> dict:
+    """Transformed paper-trading portfolio state."""
+
+    _, _, _, sim_config = _get_configs()
+    if sim_config is None:
+        return {}
+    payload = _read_json(Path(sim_config.state_path)) or {}
+    if not isinstance(payload, dict):
+        return {}
+    positions_raw = payload.get("positions") or {}
+    positions = []
+    market_value = 0.0
+    for key, value in positions_raw.items():
+        qty = int(value.get("quantity", 0))
+        last_price = float(value.get("last_price", 0.0))
+        row = {
+            "ts_code": str(value.get("ts_code", key)),
+            "name": value.get("name", ""),
+            "quantity": qty,
+            "available_quantity": int(value.get("available_quantity", 0)),
+            "avg_cost": value.get("avg_cost"),
+            "last_price": value.get("last_price"),
+            "last_date": value.get("last_date"),
+            "market_value": round(qty * last_price, 2),
+        }
+        market_value += qty * last_price
+        positions.append(row)
+    history = payload.get("equity_history") or []
+    return {
+        "initial_capital": payload.get("initial_capital"),
+        "cash": payload.get("cash"),
+        "trade_count": payload.get("trade_count", 0),
+        "market_value": round(market_value, 2),
+        "total_equity": round(float(payload.get("cash", 0)) + market_value, 2),
+        "positions": positions,
+        "equity_history": history,
+    }
+
+
+def get_sim_days() -> dict:
+    """Dates for which order/trade paper trails exist, newest first."""
+
+    _, _, _, sim_config = _get_configs()
+    if sim_config is None:
+        return {"total": 0, "dates": []}
+    orders_dir = Path(sim_config.orders_dir)
+    dates = sorted(
+        (p.stem for p in orders_dir.glob("*.json") if p.stem[:4].isdigit()),
+        reverse=True,
+    )
+    return {"total": len(dates), "dates": dates[:200]}
+
+
+def get_sim_day(date: str) -> dict:
+    _, _, _, sim_config = _get_configs()
+    if sim_config is None or not date or not date[:4].isdigit():
+        return {"date": date, "orders": [], "trades": []}
+    orders = _read_json(Path(sim_config.orders_dir) / f"{date}.json") or []
+    trades = _read_json(Path(sim_config.trades_dir) / f"{date}.json") or []
+    return {
+        "date": date,
+        "orders": orders if isinstance(orders, list) else [],
+        "trades": trades if isinstance(trades, list) else [],
+    }
+
+
+def get_data_status() -> dict:
+    data_config, model_config, backtest_config, _ = _get_configs()
+    if data_config is None:
+        return {"ready": False, "reason": "config load failed"}
+    db_info: dict = {"ready": False}
+    try:
+        with AshareDB(data_config.duckdb_path, read_only=True) as db:
+            stocks = db.query(f"SELECT COUNT(*) AS n FROM {data_config.stocks_table}")
+            daily = db.query(
+                f"SELECT COUNT(*) AS n, MIN(trade_date) AS first_date, "
+                f"MAX(trade_date) AS last_date FROM {data_config.daily_table}"
+            )
+            db_info = {
+                "ready": True,
+                "path": str(data_config.duckdb_path),
+                "stocks": int(stocks.iloc[0]["n"]),
+                "daily_rows": int(daily.iloc[0]["n"]),
+                "first_trade_date": str(daily.iloc[0]["first_date"]),
+                "last_trade_date": str(daily.iloc[0]["last_date"]),
+            }
+    except Exception as exc:  # noqa: BLE001
+        db_info = {"ready": False, "reason": str(exc)}
+
+    artifacts = []
+    for path in (
+        data_config.data_dir / "backtest_result.json",
+        data_config.data_dir / "best_ashare_strategy.json",
+        data_config.data_dir / "ashare_model.pt",
+        data_config.data_dir / "sim_portfolio_state.json",
+        data_config.data_dir / "ashare.duckdb",
+    ):
+        stat = _stat(path)
+        artifacts.append(stat)
+
+    config_summary = {
+        "date_range": {
+            "start": str(getattr(data_config, "start_date", "")),
+            "end": str(getattr(data_config, "end_date", "")),
+        },
+        "universe": {
+            "indexes": list(getattr(data_config, "index_codes", []) or []),
+            "min_listed_days": getattr(data_config, "min_listed_days", None),
+        },
+        "model": {
+            "d_model": getattr(model_config, "d_model", None),
+            "nhead": getattr(model_config, "nhead", None),
+            "num_layers": getattr(model_config, "num_layers", None),
+            "batch_size": getattr(model_config, "batch_size", None),
+            "train_steps": getattr(model_config, "train_steps", None),
+            "max_formula_len": getattr(model_config, "max_formula_len", None),
+            "validation_fraction": getattr(model_config, "validation_fraction", None),
+        },
+        "backtest": {
+            "train_end_date": getattr(backtest_config, "train_end_date", None),
+            "top_n": getattr(backtest_config, "top_n", None),
+            "single_weight_cap": getattr(backtest_config, "single_weight_cap", None),
+            "commission_rate": getattr(backtest_config, "commission_rate", None),
+            "stamp_tax_rate": getattr(backtest_config, "stamp_tax_rate", None),
+            "slippage_rate": getattr(backtest_config, "slippage_rate", None),
+            "initial_capital": getattr(backtest_config, "initial_capital", None),
+            "benchmark": getattr(backtest_config, "benchmark", None),
+        },
+    }
+    return {"db": db_info, "artifacts": artifacts, "config": config_summary}
+
+
+def _stat(path: Path) -> dict:
+    try:
+        st = path.stat()
+        return {
+            "name": path.name,
+            "size": st.st_size,
+            "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+            "exists": True,
+        }
+    except OSError:
+        return {"name": path.name, "size": 0, "mtime": "", "exists": False}
+
+
+def _log_kind(name: str) -> str:
+    lower = name.lower()
+    for kind in ("train", "backtest", "sim", "sync", "pytest"):
+        if lower.startswith(kind):
+            return kind
+    return "other"
+
+
+def list_logs() -> list[dict]:
+    items = []
+    for directory in _LOG_DIRS:
+        if not directory.exists():
+            continue
+        for path in directory.glob("*"):
+            if path.is_file() and path.suffix.lower() in {".log", ".txt"}:
+                st = _stat(path)
+                st["kind"] = _log_kind(path.name)
+                items.append(st)
+    items.sort(key=lambda x: (x["mtime"], x["name"]), reverse=True)
+    return items
+
+
+def read_log(name: str, tail: int = 1000) -> dict:
+    """Return the tail of a log file. ``name`` is sanitized to a basename."""
+
+    safe = Path(name).name
+    for directory in _LOG_DIRS:
+        candidate = directory / safe
+        if candidate.is_file():
+            try:
+                content = _tail_text(candidate, tail)
+                return {
+                    "name": safe,
+                    "size": candidate.stat().st_size,
+                    "lines": content.count("\n") + (1 if content else 0),
+                    "content": content,
+                    "truncated": candidate.stat().st_size > _MAX_LOG_READ_BYTES,
+                }
+            except OSError as exc:
+                return {"name": safe, "error": str(exc)}
+    return {"name": safe, "error": "file not found"}
+
+
+def _tail_text(path: Path, tail: int) -> str:
+    """Read at most the last ``tail`` lines / 16MB of a UTF-8 log file."""
+
+    size = path.stat().st_size
+    read_size = min(size, _MAX_LOG_READ_BYTES)
+    if read_size <= 0:
+        return ""
+    with open(path, "rb") as handle:
+        if read_size < size:
+            handle.seek(size - read_size)
+            # Skip a possibly partial first line.
+            handle.readline()
+        blob = handle.read(read_size)
+    text = blob.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    tail = max(1, int(tail))
+    if len(lines) > tail:
+        lines = lines[-tail:]
+    return "\n".join(lines)
+
+
+def write_stop_signal() -> dict:
+    _, _, _, sim_config = _get_configs()
+    if sim_config is None:
+        return {"ok": False, "reason": "config load failed"}
+    path = Path(sim_config.stop_signal_path)
+    try:
+        path.write_text("STOP", encoding="utf-8")
+        return {"ok": True, "path": str(path)}
+    except OSError as exc:
+        return {"ok": False, "reason": str(exc)}
