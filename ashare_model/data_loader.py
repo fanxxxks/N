@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import torch
 
+from ashare_data.capital_flow import build_capital_frames
 from ashare_data.config import DataConfig, ModelConfig, make_data_config
 from ashare_data.db import AshareDB
 from ashare_data.fundamentals import build_pit_frames
@@ -144,12 +145,16 @@ class AshareDataLoader:
             )
         self.raw_data_cache = tensor_map
 
-        # Announce-date-aligned point-in-time fundamentals; any failure
-        # (e.g. the table does not exist yet) degrades to neutral frames.
+        # Announce-date-aligned point-in-time fundamentals and capital-flow
+        # frames; any failure (e.g. the tables do not exist yet) degrades
+        # to neutral frames.
         close_wide = pivot_wide(df, self.ts_codes, self.dates, "close")
         pit = build_pit_frames(self.config, self.ts_codes, self.dates, close_wide)
+        capital = build_capital_frames(self.config, self.ts_codes, self.dates)
 
-        factors = compute_factor_tensor(df, self.ts_codes, self.dates, pit_fundamentals=pit)
+        factors = compute_factor_tensor(
+            df, self.ts_codes, self.dates, pit_fundamentals=pit, extra_frames=capital
+        )
         self.factor_tensor = torch.tensor(factors, dtype=torch.float32)
 
         # Next-open to next-open forward return with a missing-data mask, so

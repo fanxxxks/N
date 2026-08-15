@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ashare_data.capital_flow import EXTERNAL_FACTOR_NAMES
 from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 from ashare_model.factors import (
     BAR_COLUMNS,
@@ -111,11 +112,17 @@ def test_pit_fundamentals_injected_and_missing_stay_neutral(bars_data):
 
 def test_registry_covers_every_vocabulary_feature():
     registered = set(FACTOR_REGISTRY)
-    declared = set(FUNDAMENTAL_PIT_NAMES) | set(NEUTRAL_FEATURE_NAMES)
+    declared = (
+        set(FUNDAMENTAL_PIT_NAMES)
+        | set(EXTERNAL_FACTOR_NAMES)
+        | set(NEUTRAL_FEATURE_NAMES)
+    )
     # Every vocabulary feature is either a registered local factor or a
-    # declared PIT-fundamental/neutral one; the three sets never overlap.
+    # declared PIT-fundamental/external/neutral one; the sets never overlap.
     assert registered.isdisjoint(declared)
+    assert set(FUNDAMENTAL_PIT_NAMES).isdisjoint(EXTERNAL_FACTOR_NAMES)
     assert set(FUNDAMENTAL_PIT_NAMES).isdisjoint(NEUTRAL_FEATURE_NAMES)
+    assert set(EXTERNAL_FACTOR_NAMES).isdisjoint(NEUTRAL_FEATURE_NAMES)
     assert registered | declared == set(FEATURE_NAMES)
     assert registered.issubset(FEATURE_NAMES)
 
@@ -131,12 +138,31 @@ def test_registry_metadata_is_valid():
 
 
 def test_fundamental_and_neutral_families_declared():
-    # PIT fundamentals come from the point-in-time pipeline and the
-    # external capital-flow features stay neutral until their sources
-    # land; both are metadata-driven, not hard-coded in the engine loop.
+    # PIT fundamentals come from the point-in-time pipeline, the external
+    # factors from the capital-flow pipeline, and NORTHBOUND_CHG stays
+    # neutral (its daily feed stopped in Aug 2024); all metadata-driven.
     assert FUNDAMENTAL_PIT_NAMES
-    assert NEUTRAL_FEATURE_NAMES == {"NORTHBOUND_CHG", "MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM"}
+    assert set(EXTERNAL_FACTOR_NAMES) == {"MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM"}
+    assert NEUTRAL_FEATURE_NAMES == {"NORTHBOUND_CHG"}
     assert "MARKET_CAP" in FACTOR_REGISTRY  # local daily-bar size proxy
+
+
+def test_extra_frames_injected_and_missing_stay_neutral(bars_data):
+    dates, ts_codes, bars = bars_data
+    margin_frame = pd.DataFrame(np.nan, index=ts_codes, columns=dates)
+    margin_frame.loc["000001.SZ", dates[5]] = 0.5
+    margin_frame.loc["600000.SH", dates[5]] = -0.5
+    tensor = compute_factor_tensor(
+        bars, ts_codes, dates, extra_frames={"MARGIN_BALANCE_CHG": margin_frame}
+    )
+    margin = tensor[FEATURE_NAMES.index("MARGIN_BALANCE_CHG")]
+    assert margin[0, 5] > 0
+    assert margin[1, 5] < 0
+    assert np.allclose(margin[:, :5], 0.0)
+    assert np.allclose(margin[:, 6:], 0.0)
+    # Unprovided external and neutral features stay fully neutral.
+    industry = tensor[FEATURE_NAMES.index("INDUSTRY_MOMENTUM")]
+    assert np.allclose(industry, 0.0)
 
 
 # Golden checksum of the first-generation 34-feature tensor on the

@@ -121,6 +121,36 @@ class AshareDB:
             )
             """
         )
+        self.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {config.margin_table} (
+                ts_code VARCHAR,
+                trade_date VARCHAR,
+                rzye DOUBLE,
+                PRIMARY KEY (ts_code, trade_date)
+            )
+            """
+        )
+        self.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {config.sw_index_table} (
+                index_code VARCHAR,
+                industry_name VARCHAR,
+                trade_date VARCHAR,
+                close DOUBLE,
+                PRIMARY KEY (index_code, trade_date)
+            )
+            """
+        )
+        self.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {config.sw_member_table} (
+                index_code VARCHAR,
+                ts_code VARCHAR,
+                PRIMARY KEY (index_code, ts_code)
+            )
+            """
+        )
 
     def upsert_stocks(self, rows: list[dict[str, Any]], config) -> None:
         if not rows:
@@ -266,5 +296,61 @@ class AshareDB:
             FROM _fund_df
             ON CONFLICT (ts_code, report_date) DO UPDATE SET
                 {updates}
+            """
+        )
+
+    def upsert_margin(self, rows: list[dict[str, Any]], config) -> None:
+        """Insert/update margin-financing balances by (ts_code, trade_date)."""
+
+        if not rows:
+            return
+        import pandas as pd
+
+        df = pd.DataFrame(rows)[["ts_code", "trade_date", "rzye"]]
+        self._conn.register("_margin_df", df)
+        self.execute(
+            f"""
+            INSERT INTO {config.margin_table}
+            SELECT ts_code, trade_date, rzye FROM _margin_df
+            ON CONFLICT (ts_code, trade_date) DO UPDATE SET rzye=EXCLUDED.rzye
+            """
+        )
+
+    def upsert_sw_index(self, rows: list[dict[str, Any]], config) -> None:
+        """Insert/update Shenwan industry index closes."""
+
+        if not rows:
+            return
+        import pandas as pd
+
+        df = pd.DataFrame(rows)[["index_code", "industry_name", "trade_date", "close"]]
+        self._conn.register("_sw_index_df", df)
+        self.execute(
+            f"""
+            INSERT INTO {config.sw_index_table}
+            SELECT index_code, industry_name, trade_date, close FROM _sw_index_df
+            ON CONFLICT (index_code, trade_date) DO UPDATE SET
+                industry_name=EXCLUDED.industry_name,
+                close=EXCLUDED.close
+            """
+        )
+
+    def replace_sw_members(self, index_code: str, ts_codes: list[str], config) -> None:
+        """Replace the (current-snapshot) member list of one industry index."""
+
+        import pandas as pd
+
+        self.execute(
+            f"DELETE FROM {config.sw_member_table} WHERE index_code = ?",
+            [index_code],
+        )
+        if not ts_codes:
+            return
+        df = pd.DataFrame({"index_code": index_code, "ts_code": ts_codes})
+        self._conn.register("_sw_member_df", df)
+        self.execute(
+            f"""
+            INSERT INTO {config.sw_member_table}
+            SELECT index_code, ts_code FROM _sw_member_df
             """
         )

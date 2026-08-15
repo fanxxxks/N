@@ -521,3 +521,108 @@ class AkShareClient:
         return df.dropna(subset=["announce_date"])[
             ["ts_code", "report_date", "announce_date", "dividend_yield"]
         ]
+
+    def get_margin_detail(self, exchange: str, date: str) -> pd.DataFrame:
+        """Margin-financing balance per stock for one trading date.
+
+        ``exchange`` is ``sse`` or ``szse``; both exchange feeds publish
+        the full cross-section for a given date, so backfilling costs one
+        request per exchange per trading day.  Returns ``(ts_code,
+        trade_date, rzye)`` rows with the financing balance in yuan.
+        """
+
+        if self.offline:
+            df = self._load_fixture(f"margin_{exchange}_{date}")
+            if df is None or df.empty:
+                return pd.DataFrame()
+        else:
+            import akshare as ak
+
+            fn = (
+                ak.stock_margin_detail_sse
+                if exchange == "sse"
+                else ak.stock_margin_detail_szse
+            )
+            df = self._fetch(lambda: fn(date=date))
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(
+            columns={
+                "标的证券代码": "symbol",
+                "证券代码": "symbol",
+                "融资余额": "rzye",
+                "融资余额(元)": "rzye",
+            }
+        )
+        if "symbol" not in df.columns or "rzye" not in df.columns:
+            return pd.DataFrame()
+        df["ts_code"] = df["symbol"].astype(str).apply(_ts_code_from_symbol)
+        df = df[df["ts_code"].apply(is_valid_a_share_code)]
+        df["rzye"] = pd.to_numeric(df["rzye"], errors="coerce")
+        df["trade_date"] = date
+        return df.dropna(subset=["rzye"])[["ts_code", "trade_date", "rzye"]]
+
+    def get_sw_industry_list(self) -> pd.DataFrame:
+        """Shenwan first-level industry list (index_code, industry_name)."""
+
+        if self.offline:
+            df = self._load_fixture("sw_industries")
+            if df is None or df.empty:
+                return pd.DataFrame()
+        else:
+            import akshare as ak
+
+            df = self._fetch(lambda: ak.sw_index_first_info())
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={"行业代码": "index_code", "行业名称": "industry_name"})
+        if "index_code" not in df.columns:
+            return pd.DataFrame()
+        df["index_code"] = df["index_code"].astype(str).str.replace(".SI", "", regex=False)
+        return df[["index_code", "industry_name"]].drop_duplicates(subset=["index_code"])
+
+    def get_sw_index_history(self, index_code: str) -> pd.DataFrame:
+        """Shenwan industry index daily closes (since 1999)."""
+
+        if self.offline:
+            df = self._load_fixture(f"sw_index_{index_code}")
+            if df is None or df.empty:
+                return pd.DataFrame()
+        else:
+            import akshare as ak
+
+            df = self._fetch(lambda: ak.index_hist_sw(symbol=index_code, period="day"))
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={"日期": "trade_date", "收盘": "close"})
+        if "trade_date" not in df.columns:
+            return pd.DataFrame()
+        df["trade_date"] = pd.to_datetime(
+            df["trade_date"], errors="coerce"
+        ).dt.strftime("%Y%m%d")
+        df["close"] = pd.to_numeric(df.get("close"), errors="coerce")
+        df["index_code"] = index_code
+        return df.dropna(subset=["trade_date", "close"])[
+            ["index_code", "trade_date", "close"]
+        ]
+
+    def get_sw_components(self, index_code: str) -> pd.DataFrame:
+        """Current member stocks of a Shenwan industry index (snapshot)."""
+
+        if self.offline:
+            df = self._load_fixture(f"sw_components_{index_code}")
+            if df is None or df.empty:
+                return pd.DataFrame()
+        else:
+            import akshare as ak
+
+            df = self._fetch(lambda: ak.index_component_sw(symbol=index_code))
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={"证券代码": "symbol"})
+        if "symbol" not in df.columns:
+            return pd.DataFrame()
+        df["ts_code"] = df["symbol"].astype(str).apply(_ts_code_from_symbol)
+        df = df[df["ts_code"].apply(is_valid_a_share_code)]
+        df["index_code"] = index_code
+        return df[["index_code", "ts_code"]]

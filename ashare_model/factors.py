@@ -22,18 +22,16 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 from ashare_data.processor import normalize_daily_bars, pivot_wide, winsorize_cross_section
 
 from .vocab import FEATURE_NAMES
 
-# Features declared in the vocabulary but not computable from the local data
-# (they need northbound / margin / industry-history sources).  They stay
-# neutral (missing) instead of being fabricated.
+# Features with a local data source outside the daily bars: the PIT
+# fundamentals and the capital-flow factors are injected as pre-built
+# frames by the loader.  Only NORTHBOUND_CHG has no free historical feed
+# (daily disclosure stopped in Aug 2024) and stays neutral.
 NEUTRAL_FEATURE_NAMES = {
     "NORTHBOUND_CHG",
-    "MARGIN_BALANCE_CHG",
-    "INDUSTRY_MOMENTUM",
 }
 
 # Factor family labels: the metadata fields used by diagnostics and
@@ -606,14 +604,18 @@ class AshareFactorEngine:
         ts_codes: list[str],
         dates: list[str],
         pit_fundamentals: dict[str, pd.DataFrame] | None = None,
+        extra_frames: dict[str, pd.DataFrame] | None = None,
     ) -> np.ndarray:
         """Return a ``[feature, stock, date]`` float32 tensor.
 
         ``pit_fundamentals`` maps a PIT feature name to its
-        announce-date-aligned ``[stock x date]`` frame (built by
-        :func:`ashare_data.fundamentals.build_pit_frames`).  Frames are
-        injected verbatim; the no-lookahead guarantee lives in the builder.
-        Missing names/frames stay neutral (0) after standardization.
+        disclosure-aligned ``[stock x date]`` frame (built by
+        :func:`ashare_data.fundamentals.build_pit_frames`); ``extra_frames``
+        carries the other externally fed features (margin/industry, built by
+        :func:`ashare_data.capital_flow.build_capital_frames`).  Frames are
+        injected verbatim; the no-lookahead guarantees live in the
+        builders.  Missing names/frames stay neutral (0) after
+        standardization.
         """
 
         bars = normalize_daily_bars(bars)
@@ -627,13 +629,14 @@ class AshareFactorEngine:
             entry = FACTOR_REGISTRY.get(name)
             raw_factors[name] = entry[1](context) if entry is not None else empty.copy()
 
-        # Point-in-time fundamentals: inject the pre-built frames (already
-        # aligned to announcement dates); everything else stays neutral.
-        pit_fundamentals = pit_fundamentals or {}
-        for name in FUNDAMENTAL_PIT_NAMES:
+        # Point-in-time fundamentals and capital-flow factors: inject the
+        # pre-built frames; everything else stays neutral.
+        injected: dict[str, pd.DataFrame] = {}
+        injected.update(pit_fundamentals or {})
+        injected.update(extra_frames or {})
+        for name, frame in injected.items():
             if name not in self.feature_names:
                 continue
-            frame = pit_fundamentals.get(name)
             if frame is not None and not frame.empty:
                 raw_factors[name] = frame
 
@@ -655,5 +658,8 @@ def compute_factor_tensor(
     ts_codes: list[str],
     dates: list[str],
     pit_fundamentals: dict[str, pd.DataFrame] | None = None,
+    extra_frames: dict[str, pd.DataFrame] | None = None,
 ) -> np.ndarray:
-    return AshareFactorEngine().compute_factor_tensor(bars, ts_codes, dates, pit_fundamentals)
+    return AshareFactorEngine().compute_factor_tensor(
+        bars, ts_codes, dates, pit_fundamentals, extra_frames
+    )

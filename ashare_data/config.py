@@ -31,7 +31,11 @@ class DataConfig:
     constituents_table: str = "constituents"
     factor_table: str = "factor_cache"
     fundamentals_table: str = "fundamental_pit"
+    margin_table: str = "margin_balance"
+    sw_index_table: str = "sw_industry_index"
+    sw_member_table: str = "sw_industry_member"
     sync_fundamentals: bool = True
+    sync_capital_flow: bool = True
     start_date: str = "2015-01-01"
     end_date: str = "2026-12-31"
     adjust: str = "qfq"

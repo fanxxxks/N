@@ -151,13 +151,16 @@ def sync_all(
     offline: bool | None = None,
     limit: int | None = None,
     sync_fundamentals: bool | None = None,
+    sync_capital_flow: bool | None = None,
 ) -> dict[str, Any]:
     """Synchronize calendar, stocks, constituents, daily bars and (unless
-    disabled) quarterly point-in-time fundamentals."""
+    disabled) quarterly fundamentals plus margin/Shenwan-industry data."""
 
     config = _load_data_config(config_path)
     if sync_fundamentals is not None:
         config.sync_fundamentals = sync_fundamentals
+    if sync_capital_flow is not None:
+        config.sync_capital_flow = sync_capital_flow
     config.data_dir.mkdir(parents=True, exist_ok=True)
     config.parquet_dir.mkdir(parents=True, exist_ok=True)
 
@@ -283,6 +286,18 @@ def sync_all(
 
             fundamental_stats = sync_fundamentals(client, db, config, universe)
 
+        capital_stats = {
+            "margin_rows": 0,
+            "margin_dates": 0,
+            "industries": 0,
+            "industry_rows": 0,
+            "capital_failures": 0,
+        }
+        if config.sync_capital_flow and not offline:
+            from .capital_flow import sync_capital_flow
+
+            capital_stats = sync_capital_flow(client, db, config, dates)
+
         logger.info(
             f"Daily bars synced: {total_rows} rows, failures: {len(failures)}, "
             f"purged: {purged}"
@@ -296,6 +311,7 @@ def sync_all(
             "purged_rows": purged,
             "purged_parquet": purged_parquet,
             **fundamental_stats,
+            **capital_stats,
         }
     finally:
         db.close()
@@ -312,6 +328,11 @@ def main() -> None:
         action="store_true",
         help="Skip the quarterly fundamental sync",
     )
+    parser.add_argument(
+        "--no-capital-flow",
+        action="store_true",
+        help="Skip the margin/Shenwan-industry sync",
+    )
     args = parser.parse_args()
     try:
         result = sync_all(
@@ -319,6 +340,7 @@ def main() -> None:
             offline=args.offline,
             limit=args.limit,
             sync_fundamentals=False if args.no_fundamentals else None,
+            sync_capital_flow=False if args.no_capital_flow else None,
         )
         logger.success(f"Sync complete: {result}")
     finally:
