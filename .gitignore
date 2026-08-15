@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Secrets / environment
+.env
+
+# Large local data & artifacts (regenerable; never commit)
+data/
+*.duckdb
+*.duckdb.wal
+STOP_SIGNAL
+best_ashare_strategy.json
+ashare_model.pt
+
+# Logs
+logs/
+*.log
+
+# Web build & dependencies
+webui/node_modules/
+webui/dist/
+*.tsbuildinfo
+
+# Archives
+*.rar
+*.zip
+
+# Research experiment scratch outputs
+phase_diagram.png
+mechanism_analysis.png
