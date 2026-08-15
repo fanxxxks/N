@@ -81,6 +81,40 @@ export interface SimDays {
   dates: string[]
 }
 
+export interface SimRunStatus {
+  state: 'idle' | 'starting' | 'running' | 'stopping' | 'stopped' | 'finished' | 'error'
+  pid: number | null
+  started_at: string | null
+  stopping_at: string | null
+  ended_at: string | null
+  exit_code: number | null
+  error: string | null
+  reset: boolean
+  start_date: string | null
+  end_date: string | null
+  log_path: string | null
+  phase: string | null
+  current_date: string | null
+  equity: number | null
+  progress_updated_at: string | null
+}
+
+export interface SimConfigData {
+  effective: {
+    initial_capital: number
+    max_positions: number
+    commission_rate: number
+    min_commission: number
+    stamp_tax_rate: number
+    transfer_fee_rate: number
+    slippage_rate: number
+  }
+  overrides_path: string
+  overrides: Record<string, unknown>
+  state_initial_capital: number | null
+  pending_reset: boolean
+}
+
 export interface SimDayData {
   date: string
   orders: Record<string, unknown>[]

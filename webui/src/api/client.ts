@@ -6,8 +6,10 @@ import type {
   LogFile,
   OverviewData,
   PositionPage,
+  SimConfigData,
   SimDayData,
   SimDays,
+  SimRunStatus,
   SimState,
   StrategyData,
 } from '../types'
@@ -40,6 +42,24 @@ export const api = {
   simStop: () =>
     request<{ ok: boolean; reason?: string }>('/api/sim/stop', {
       method: 'POST',
+    }),
+  simStatus: () => request<SimRunStatus>('/api/sim/status'),
+  simStart: (body: { reset?: boolean; start?: string | null; end?: string | null } = {}) =>
+    request<SimRunStatus>('/api/sim/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  simReset: () =>
+    request<{ ok: boolean; reason?: string; archive?: string }>('/api/sim/reset', {
+      method: 'POST',
+    }),
+  simConfig: () => request<SimConfigData>('/api/sim/config'),
+  simConfigPut: (patch: Record<string, number | null>) =>
+    request<SimConfigData>('/api/sim/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
     }),
   dataStatus: () => request<DataStatus>('/api/data-status'),
   logs: () => request<LogFile[]>('/api/logs'),
