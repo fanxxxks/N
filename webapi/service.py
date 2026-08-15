@@ -350,18 +350,6 @@ def _tail_text(path: Path, tail: int) -> str:
     return "\n".join(lines)
 
 
-def write_stop_signal() -> dict:
-    _, _, _, sim_config = _get_configs()
-    if sim_config is None:
-        return {"ok": False, "reason": "config load failed"}
-    path = Path(sim_config.stop_signal_path)
-    try:
-        path.write_text("STOP", encoding="utf-8")
-        return {"ok": True, "path": str(path)}
-    except OSError as exc:
-        return {"ok": False, "reason": str(exc)}
-
-
 FEE_KEYS = (
     "commission_rate",
     "min_commission",
@@ -486,3 +474,67 @@ def get_sim_config(root: Path = ROOT) -> dict:
         "state_initial_capital": state_initial,
         "pending_reset": pending_reset,
     }
+
+
+class SimStartRequest(BaseModel):
+    """Start parameters. ``reset`` archives and clears the current state;
+    otherwise the runner resumes from ``last_exec_date`` (or replays when no
+    state exists). Date strings accept YYYY-MM-DD or YYYYMMDD."""
+
+    reset: bool = False
+    start: str | None = Field(default=None, pattern=r"^\d{4}-?\d{2}-?\d{2}$")
+    end: str | None = Field(default=None, pattern=r"^\d{4}-?\d{2}-?\d{2}$")
+
+
+def _job_manager():
+    from ashare_trading.manager import SimJobManager
+
+    _, _, _, sim_config = _get_configs()
+    return SimJobManager(ROOT, sim_config)
+
+
+def sim_start(req: SimStartRequest) -> dict:
+    from ashare_trading.manager import RunConflictError
+
+    data_config, *_ = _get_configs()
+    if data_config is None:
+        return {"ok": False, "reason": "config load failed"}
+    strategy = data_config.data_dir / "best_ashare_strategy.json"
+    if not strategy.exists():
+        return {
+            "ok": False,
+            "reason": f"strategy file missing: {strategy} (train first)",
+        }
+    try:
+        return _job_manager().start(
+            reset=req.reset, start_date=req.start, end_date=req.end
+        )
+    except RunConflictError as exc:
+        return {"ok": False, "conflict": True, "reason": str(exc)}
+    except OSError as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+def sim_stop_run() -> dict:
+    try:
+        return _job_manager().stop()
+    except OSError as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+def sim_reset_run() -> dict:
+    from ashare_trading.manager import RunConflictError
+
+    try:
+        return _job_manager().reset()
+    except RunConflictError as exc:
+        return {"ok": False, "conflict": True, "reason": str(exc)}
+    except OSError as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+def sim_status() -> dict:
+    try:
+        return _job_manager().status()
+    except OSError as exc:
+        return {"ok": False, "reason": str(exc)}
