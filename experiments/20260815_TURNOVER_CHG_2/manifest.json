@@ -1,0 +1,60 @@
+{
+  "run_id": "029abf2a05cc",
+  "created_at": "2026-08-15T16:29:26",
+  "mode": "sim",
+  "slug": "TURNOVER_CHG",
+  "git_commit": "8fc59e286367046fbcf6e67f802aaf2d463ea405",
+  "git_dirty": false,
+  "formula": {
+    "formula": [
+      8,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula_text": "TURNOVER_CHG",
+    "best_reward": -2.0
+  },
+  "config": {
+    "source": "ashare_config.yaml",
+    "sha256": "4a1d07b99458354441b6cfe657523b91566f025cf9a1e73e6ec6542296481d2d",
+    "effective_sha256": "32e461b94b599a7a9735698b5dc089572dce70e97e59c2583e4a619b41402e75"
+  },
+  "metrics": {
+    "source": "sim_portfolio_state.json",
+    "sha256": "141a3b355cd4ccd2f00b8fb086ed0f9e351e6c27510da557e43b3d62e73baf3a",
+    "stored": true
+  },
+  "model": null,
+  "data_end_date": "20260814",
+  "files": [
+    {
+      "name": "formula.json",
+      "bytes": 9285
+    },
+    {
+      "name": "config.yaml",
+      "bytes": 1617
+    },
+    {
+      "name": "config_effective.yaml",
+      "bytes": 1449
+    },
+    {
+      "name": "metrics_summary.json",
+      "bytes": 92
+    },
+    {
+      "name": "metrics.json",
+      "bytes": 234796
+    }
+  ]
+}
