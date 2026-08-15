@@ -1,0 +1,6 @@
+[
+  {"ts_code": "600000.SH", "trade_date": "20240102", "open": 8.0, "high": 8.1, "low": 7.9, "close": 8.05, "pre_close": 7.95, "volume": 900000, "amount": 7245000, "turnover_rate": 0.9, "adj_factor": 1.0},
+  {"ts_code": "600000.SH", "trade_date": "20240103", "open": 8.05, "high": 8.15, "low": 8.0, "close": 8.1, "pre_close": 8.05, "volume": 950000, "amount": 7695000, "turnover_rate": 0.95, "adj_factor": 1.0},
+  {"ts_code": "600000.SH", "trade_date": "20240104", "open": 8.1, "high": 8.2, "low": 8.05, "close": 8.15, "pre_close": 8.1, "volume": 1000000, "amount": 8150000, "turnover_rate": 1.0, "adj_factor": 1.0},
+  {"ts_code": "600000.SH", "trade_date": "20240105", "open": 8.15, "high": 8.25, "low": 8.1, "close": 8.2, "pre_close": 8.15, "volume": 1050000, "amount": 8610000, "turnover_rate": 1.05, "adj_factor": 1.0}
+]
