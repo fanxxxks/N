@@ -17,7 +17,10 @@ from typing import Iterable
 from .ops import OPS_CONFIG
 
 
-FEATURE_NAMES = (
+# First vocabulary generation (v1): the original 34 features.  Kept as a
+# separate constant so legacy formulas saved without metadata can always be
+# remapped by name, even after later generations grow the vocabulary.
+_FEATURE_NAMES_V1 = (
     "RET_1",
     "RET_5",
     "RET_10",
@@ -54,11 +57,62 @@ FEATURE_NAMES = (
     "INDUSTRY_MOMENTUM",
 )
 
-# Feature list of the first released vocabulary generation.  Formulas saved
-# without feature metadata (legacy artifacts) resolve against this pinned
-# list; once the current vocabulary no longer matches it, legacy formulas
-# are rejected instead of being silently misinterpreted.
-LEGACY_FEATURE_NAMES = FEATURE_NAMES
+# Second vocabulary generation (v2): local price-volume families appended
+# after the v1 features so the v1 token ids never shift.
+_FEATURE_NAMES_V2 = (
+    # Intraday decomposition (open/close vs pre_close; all local).
+    "OVERNIGHT_RET",
+    "INTRADAY_RET",
+    # Liquidity (local; free-float turnover is already covered by TURNOVER).
+    "ILLIQ_20",
+    "AMOUNT_SHARE",
+    # Lottery / anchoring.
+    "MAX_20",
+    "HIGH_52W",
+    # Market-model risk family (rolling CAPM vs the equal-weight market).
+    "BETA_60",
+    "IVOL_60",
+    "RSQ_60",
+    # Technical (BIAS is the moving-average distance; MACD keeps DIF/DEA,
+    # HIST is expressible as DIF SUB DEA).
+    "BIAS_20",
+    "RSI_14",
+    "ATR_14",
+    "MACD_DIF",
+    "MACD_DEA",
+    # Microstructure (local).
+    "SUSPEND_DAYS_60",
+    "LIST_AGE",
+)
+
+FEATURE_NAMES = _FEATURE_NAMES_V1 + _FEATURE_NAMES_V2
+
+# Pins of the first released vocabulary generation.  Formulas saved without
+# feature metadata (legacy artifacts) resolve against these lists; the
+# remapping is by name, so it stays correct after vocabulary additions.
+LEGACY_FEATURE_NAMES = _FEATURE_NAMES_V1
+
+# Operator list of the first released vocabulary generation, pinned for the
+# same reason: legacy formulas carry operator token ids in the pre-growth
+# layout and are remapped by name against this list.
+LEGACY_OPERATOR_NAMES = (
+    "ADD",
+    "SUB",
+    "MUL",
+    "DIV",
+    "NEG",
+    "ABS",
+    "SIGN",
+    "GATE",
+    "JUMP",
+    "DECAY",
+    "DELAY1",
+    "MAX3",
+    "DELTA5",
+    "MA20",
+    "STD20",
+    "TS_RANK20",
+)
 
 
 @dataclass(frozen=True)
@@ -134,9 +188,10 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     they were sampled against (``feature_names`` / ``operator_names`` /
     ``feature_version``), so formulas are remapped **by name** and survive
     vocabulary additions.  Legacy payloads without metadata resolve against
-    :data:`LEGACY_FEATURE_NAMES` and are rejected once the current
-    vocabulary no longer matches that pinned list.  A bare token list is
-    accepted as a legacy payload.
+    the pinned first-generation lists (:data:`LEGACY_FEATURE_NAMES` /
+    :data:`LEGACY_OPERATOR_NAMES`); the by-name remapping keeps them valid
+    after vocabulary growth.  A bare token list is accepted as a legacy
+    payload.
     """
 
     vocab = vocab or FORMULA_VOCAB
@@ -147,18 +202,12 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
 
     src_features = payload.get("feature_names")
     if src_features is None:
-        if tuple(vocab.feature_names) != tuple(LEGACY_FEATURE_NAMES):
-            raise ValueError(
-                "saved formula has no feature metadata and the current "
-                "vocabulary no longer matches the legacy feature set; "
-                "re-train the formula instead of silently reinterpreting tokens"
-            )
         src_features = LEGACY_FEATURE_NAMES
     src_features = tuple(str(name) for name in src_features)
 
     src_operators = payload.get("operator_names")
     if src_operators is None:
-        src_operators = vocab.operator_names
+        src_operators = LEGACY_OPERATOR_NAMES
     src_operators = tuple(str(name) for name in src_operators)
 
     src_vocab = FormulaVocab(feature_names=src_features, operator_names=src_operators)

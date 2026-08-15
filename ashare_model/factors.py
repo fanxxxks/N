@@ -15,6 +15,7 @@ metadata drives diagnostics and family-level ablation experiments.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Callable
 
@@ -58,6 +59,12 @@ FAMILIES = (
     "distribution",
     "volume",
     "event",
+    "intraday",
+    "liquidity",
+    "lottery",
+    "risk",
+    "technical",
+    "microstructure",
     "fundamental",
     "external",
 )
@@ -96,6 +103,8 @@ class FactorContext:
     Only the columns required by the requested factors are pivoted; the
     others are empty frames with the correct index/columns so a factor that
     misdeclares its requirements fails loudly instead of reading stale data.
+    ``_cache`` lets related factors (e.g. the CAPM triple) share one
+    computation without duplicating work.
     """
 
     ts_codes: list[str]
@@ -108,6 +117,11 @@ class FactorContext:
     volume: pd.DataFrame
     amount: pd.DataFrame
     turnover: pd.DataFrame
+    _cache: dict | None = None
+
+    def __post_init__(self) -> None:
+        if self._cache is None:
+            self._cache = {}
 
 
 def _returns(close: pd.DataFrame) -> pd.DataFrame:
@@ -135,6 +149,169 @@ def _rolling_skew(returns: pd.DataFrame, window: int) -> pd.DataFrame:
 
 def _rolling_kurt(returns: pd.DataFrame, window: int) -> pd.DataFrame:
     return returns.T.rolling(window, min_periods=4).kurt().T
+
+
+def _rolling_max(values: pd.DataFrame, window: int) -> pd.DataFrame:
+    return values.T.rolling(window, min_periods=1).max().T
+
+
+def _safe_ratio(numerator: pd.DataFrame, denominator: pd.DataFrame) -> pd.DataFrame:
+    return (numerator / denominator - 1.0).replace([np.inf, -np.inf], np.nan)
+
+
+def _rolling_capm(
+    close: pd.DataFrame,
+    window: int = 60,
+    min_periods: int = 20,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Rolling CAPM regression of each stock on the equal-weight market.
+
+    Returns ``(beta, ivol, rsq)`` ``[stock x date]`` frames over trailing
+    windows (expanding before ``window``, at least ``min_periods`` valid
+    days, and a non-degenerate market/stock variance).  Prefix-sum
+    vectorization keeps it cheap on the full cross-section.  The market is
+    the cross-sectional mean return per date, so no external index data is
+    needed.
+    """
+
+    r = _returns(close)
+    arr = r.to_numpy(dtype=float)  # [S, T], NaN on missing days
+    s, t = arr.shape
+    with warnings.catch_warnings():
+        # All-NaN columns (e.g. the first date) legitimately produce an
+        # empty-slice warning; they map to a zero market return below.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        mkt = np.nanmean(arr, axis=0)  # [T] equal-weight market return
+    mkt = np.nan_to_num(mkt, nan=0.0)
+    valid = ~np.isnan(arr)
+    r0 = np.nan_to_num(arr, nan=0.0)
+    m0 = np.nan_to_num(mkt, nan=0.0)
+    rm = r0 * m0
+    r2 = r0 * r0
+    m2 = m0 * m0
+
+    def prefix(mat: np.ndarray) -> np.ndarray:
+        return np.concatenate([np.zeros((s, 1)), np.cumsum(mat, axis=1)], axis=1)
+
+    pv = prefix(valid.astype(float))
+    pr = prefix(r0)
+    prm = prefix(rm)
+    pr2 = prefix(r2)
+    pm = np.concatenate([np.zeros(1), np.cumsum(m0)])
+    pm2 = np.concatenate([np.zeros(1), np.cumsum(m2)])
+
+    idx = np.arange(t)
+    start = np.maximum(idx - window + 1, 0)
+    end = idx + 1
+    n = pv[:, end] - pv[:, start]
+    sr = pr[:, end] - pr[:, start]
+    srm = prm[:, end] - prm[:, start]
+    sr2 = pr2[:, end] - pr2[:, start]
+    sm = pm[end] - pm[start]
+    sm2 = pm2[end] - pm2[start]
+
+    with np.errstate(all="ignore"):
+        cov = srm - sr * sm / n
+        var_m = sm2 - sm * sm / n
+        var_r = sr2 - sr * sr / n
+        beta = cov / var_m
+        resid_var = var_r - beta * cov
+        rsq = cov * cov / (var_r * var_m)
+    ivol = np.sqrt(np.clip(resid_var, 0.0, None))
+
+    good = (n >= min_periods) & (var_m > 1e-12) & (var_r > 1e-12)
+    beta[~good] = np.nan
+    ivol[~good] = np.nan
+    rsq[~good] = np.nan
+    index, columns = close.index, close.columns
+    return (
+        pd.DataFrame(beta, index=index, columns=columns),
+        pd.DataFrame(ivol, index=index, columns=columns),
+        pd.DataFrame(rsq, index=index, columns=columns),
+    )
+
+
+def _factor_amount_share(amount: pd.DataFrame) -> pd.DataFrame:
+    """Cross-sectional share of the day's total turnover amount.
+
+    Days where no stock has a valid amount keep NaN (neutral).
+    """
+
+    denom = amount.fillna(0.0).sum(axis=0).replace(0.0, np.nan)
+    return (amount / denom).replace([np.inf, -np.inf], np.nan)
+
+
+def _factor_capm(ctx: FactorContext, which: int) -> pd.DataFrame:
+    """Shared CAPM triple; ``which`` picks beta (0), ivol (1) or rsq (2)."""
+    triple = ctx._cache.get("capm60")
+    if triple is None:
+        triple = _rolling_capm(ctx.close, window=60, min_periods=20)
+        ctx._cache["capm60"] = triple
+    return triple[which]
+
+
+def _ewm_mean(
+    frame: pd.DataFrame,
+    **kwargs,
+) -> pd.DataFrame:
+    """Exponential moving average along the time axis (pandas 3.0 dropped
+    the ``axis`` kwarg from ``ewm``, so the frame is transposed instead)."""
+
+    return frame.T.ewm(**kwargs).mean().T
+
+
+def _factor_rsi(close: pd.DataFrame, window: int = 14) -> pd.DataFrame:
+    """Wilder-smoothed RSI in [0, 100]; no-movement days stay NaN (neutral)."""
+
+    delta = close.diff(axis=1).replace([np.inf, -np.inf], np.nan)
+    up = delta.clip(lower=0).fillna(0.0)
+    down = (-delta.clip(upper=0)).fillna(0.0)
+    avg_up = _ewm_mean(up, alpha=1.0 / window, adjust=False, min_periods=window)
+    avg_down = _ewm_mean(down, alpha=1.0 / window, adjust=False, min_periods=window)
+    with np.errstate(all="ignore"):
+        rsi = 100.0 * avg_up / (avg_up + avg_down)
+    return rsi.replace([np.inf, -np.inf], np.nan)
+
+
+def _factor_atr(
+    high: pd.DataFrame,
+    low: pd.DataFrame,
+    pre_close: pd.DataFrame,
+    window: int = 14,
+) -> pd.DataFrame:
+    """Wilder-smoothed average true range; missing days contribute 0 so the
+    average decays over suspensions instead of leaking future information."""
+
+    tr = np.maximum.reduce(
+        [
+            (high - low).to_numpy(dtype=float),
+            np.abs(high.to_numpy(dtype=float) - pre_close.to_numpy(dtype=float)),
+            np.abs(low.to_numpy(dtype=float) - pre_close.to_numpy(dtype=float)),
+        ]
+    )
+    tr = pd.DataFrame(tr, index=high.index, columns=high.columns)
+    tr = tr.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return _ewm_mean(tr, alpha=1.0 / window, adjust=False)
+
+
+def _factor_macd(
+    close: pd.DataFrame,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """MACD DIF (EMA fast - EMA slow) and DEA (EMA of DIF).
+
+    Missing days are forward-filled for the EMA recursion (causal); rows
+    without any history stay NaN.
+    """
+
+    filled = close.ffill(axis=1)
+    ema_fast = _ewm_mean(filled, span=fast, adjust=False)
+    ema_slow = _ewm_mean(filled, span=slow, adjust=False)
+    dif = ema_fast - ema_slow
+    dea = _ewm_mean(dif, span=signal, adjust=False)
+    return dif, dea
 
 
 def _limit_events(
@@ -262,6 +439,116 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         2,
         "One-word limit-down close (1.0 on the event day)",
         lambda ctx: _limit_events(ctx.close, ctx.high, ctx.low, ctx.pre_close, ctx.ts_codes, "down"),
+    )
+
+    # Intraday decomposition.  GAP (open/pre_close - 1) is the same quantity
+    # as OVERNIGHT_RET, so it is not a separate feature.
+    add(
+        "OVERNIGHT_RET",
+        "intraday",
+        ("open", "pre_close"),
+        2,
+        "Overnight return open/prev close - 1",
+        lambda ctx: _safe_ratio(ctx.open, ctx.pre_close),
+    )
+    add(
+        "INTRADAY_RET",
+        "intraday",
+        ("open", "close"),
+        1,
+        "Intraday return close/open - 1",
+        lambda ctx: _safe_ratio(ctx.close, ctx.open),
+    )
+
+    # Liquidity.  Free-float turnover is already covered by TURNOVER, so
+    # only the Amihud measure and the amount share are added.
+    add(
+        "ILLIQ_20",
+        "liquidity",
+        ("close", "amount"),
+        20,
+        "Amihud illiquidity: 20-day mean of |return|/amount",
+        lambda ctx: _rolling_mean(
+            (_returns(ctx.close).abs() / ctx.amount).replace([np.inf, -np.inf], np.nan), 20
+        ),
+    )
+    add(
+        "AMOUNT_SHARE",
+        "liquidity",
+        ("amount",),
+        1,
+        "Share of the day's total cross-sectional turnover amount",
+        lambda ctx: _factor_amount_share(ctx.amount),
+    )
+
+    # Lottery / anchoring.
+    add(
+        "MAX_20",
+        "lottery",
+        ("close",),
+        20,
+        "Maximum daily return over the trailing 20 days",
+        lambda ctx: _rolling_max(_returns(ctx.close), 20),
+    )
+    add(
+        "HIGH_52W",
+        "momentum",
+        ("close",),
+        250,
+        "Distance to the 52-week (250-day) high: close/max250 - 1",
+        lambda ctx: _safe_ratio(ctx.close, _rolling_max(ctx.close, 250)),
+    )
+
+    # Market-model risk family (one shared rolling CAPM computation).
+    add("BETA_60", "risk", ("close",), 20, "Rolling CAPM beta vs equal-weight market (60d)", lambda ctx: _factor_capm(ctx, 0))
+    add("IVOL_60", "risk", ("close",), 20, "Idiosyncratic volatility from rolling CAPM (60d)", lambda ctx: _factor_capm(ctx, 1))
+    add("RSQ_60", "risk", ("close",), 20, "R-squared from rolling CAPM (60d)", lambda ctx: _factor_capm(ctx, 2))
+
+    # Technical.  BIAS is the moving-average distance; MACD keeps DIF/DEA
+    # (HIST is expressible as DIF SUB DEA).
+    add(
+        "BIAS_20",
+        "technical",
+        ("close",),
+        20,
+        "20-day moving-average distance close/MA20 - 1",
+        lambda ctx: _safe_ratio(ctx.close, _rolling_mean(ctx.close, 20)),
+    )
+    add("RSI_14", "technical", ("close",), 14, "Wilder RSI over 14 days (0-100)", lambda ctx: _factor_rsi(ctx.close, 14))
+    add("ATR_14", "technical", ("high", "low", "pre_close"), 14, "Average true range, Wilder-smoothed 14 days", lambda ctx: _factor_atr(ctx.high, ctx.low, ctx.pre_close, 14))
+    add(
+        "MACD_DIF",
+        "technical",
+        ("close",),
+        26,
+        "MACD DIF line (EMA12 - EMA26)",
+        lambda ctx: _factor_macd(ctx.close)[0],
+    )
+    add(
+        "MACD_DEA",
+        "technical",
+        ("close",),
+        26,
+        "MACD DEA signal line (EMA9 of DIF)",
+        lambda ctx: _factor_macd(ctx.close)[1],
+    )
+
+    # Microstructure.
+    add(
+        "SUSPEND_DAYS_60",
+        "microstructure",
+        ("close",),
+        60,
+        "Number of missing (suspended) days in the trailing 60",
+        lambda ctx: ctx.close.isna().astype(float).T.rolling(60, min_periods=1).sum().T,
+    )
+    add(
+        "LIST_AGE",
+        "microstructure",
+        ("close",),
+        1,
+        "Trading days since first available bar (listing age proxy)",
+        lambda ctx: (~ctx.close.isna()).cumsum(axis=1).astype(float),
     )
     return registry
 

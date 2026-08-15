@@ -2,9 +2,10 @@
 
 Conventions
 -----------
-* Windowed operators (MA20/STD20/TS_RANK20) only look backwards.  Leading
-  positions use the values actually available (an expanding window), so a
-  constant series has a constant moving average and zero standard deviation.
+* Windowed operators (MA20/STD20/TS_RANK20/CORR20/DOWNVOL20) only look
+  backwards.  Leading positions use the values actually available (an
+  expanding window), so a constant series has a constant moving average and
+  zero standard deviation; CORR20 with a degenerate window yields 0.
 * Delay-based operators (DELAY1/MAX3/DECAY/DELTA5) extend the series with
   the first available value (constant extension) instead of zeros, so the
   leading positions do not fabricate spurious jumps or decay.
@@ -114,6 +115,55 @@ def _safe_div(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return x / denom
 
 
+def _ts_corr(x: torch.Tensor, y: torch.Tensor, d: int) -> torch.Tensor:
+    """Trailing-window Pearson correlation between two series.
+
+    Implemented with prefix sums so it is fully vectorized over batch and
+    time (the VM executes on the full [stock x date] tensor inside the RL
+    loop).  Expanding windows are used for the leading positions; a
+    degenerate window (zero variance) yields correlation 0.
+    """
+
+    if d <= 1:
+        return torch.zeros_like(x)
+    b, t = x.shape
+    pad = torch.zeros(b, 1, device=x.device, dtype=x.dtype)
+    sx = torch.cumsum(torch.cat([pad, x], dim=1), dim=1)
+    sy = torch.cumsum(torch.cat([pad, y], dim=1), dim=1)
+    sxx = torch.cumsum(torch.cat([pad, x * x], dim=1), dim=1)
+    syy = torch.cumsum(torch.cat([pad, y * y], dim=1), dim=1)
+    sxy = torch.cumsum(torch.cat([pad, x * y], dim=1), dim=1)
+    idx = torch.arange(t, device=x.device)
+    start = torch.clamp(idx - d + 1, min=0)  # inclusive window start
+
+    def window_sum(prefix: torch.Tensor) -> torch.Tensor:
+        return prefix[:, idx + 1] - prefix[:, start]
+
+    n = (idx - start + 1).to(x.dtype)
+    xs, ys = window_sum(sx), window_sum(sy)
+    cov = window_sum(sxy) - xs * ys / n
+    vx = torch.clamp(window_sum(sxx) - xs * xs / n, min=0.0)
+    vy = torch.clamp(window_sum(syy) - ys * ys / n, min=0.0)
+    denom = torch.sqrt(vx * vy)
+    return torch.where(
+        denom > 1e-9,
+        cov / torch.clamp(denom, min=1e-9),
+        torch.zeros_like(cov),
+    )
+
+
+def _ts_downvol(x: torch.Tensor, d: int) -> torch.Tensor:
+    """Trailing-window downside volatility: sqrt of the mean of squared
+    negative values (positive values contribute 0, matching the neutral-0
+    convention of the standardized factor stack)."""
+
+    def reducer(w: torch.Tensor, dim: int) -> torch.Tensor:
+        down = torch.clamp(w, max=0.0)
+        return torch.sqrt(torch.nanmean(down * down, dim=dim))
+
+    return _ts_window(x, d, reducer)
+
+
 OPS_CONFIG = [
     ("ADD", lambda x, y: x + y, 2),
     ("SUB", lambda x, y: x - y, 2),
@@ -131,6 +181,8 @@ OPS_CONFIG = [
     ("MA20", lambda x: _ts_ma(x, 20), 1),
     ("STD20", lambda x: _ts_std(x, 20), 1),
     ("TS_RANK20", lambda x: _ts_rank(x, 20), 1),
+    ("CORR20", lambda x, y: _ts_corr(x, y, 20), 2),
+    ("DOWNVOL20", lambda x: _ts_downvol(x, 20), 1),
 ]
 
 

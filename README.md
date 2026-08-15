@@ -121,13 +121,13 @@ python scripts/archive_run.py --mode sim --commit
 - **费用模型**：佣金万 2.5（最低 5 元）、印花税卖出 0.05%、过户费 0.001%、滑点 0.05%；回测与训练奖励使用同一套费用口径。
 - **涨跌停事件因子**：`LIMIT_UP_EVENT`/`LIMIT_DOWN_EVENT` 由一字板真实计算（创业板/科创板 20%，其余 10%）。
 - **训练**：REINFORCE + value baseline；最佳公式在训练窗尾部的验证集上选取（`model.validation_fraction`，默认 0.2），避免纯样本内过拟合。
-- **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式在词表不再匹配首发词表时会被拒绝而非静默误读。
+- **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式对照首发词表（v1：34 特征/16 算子）重映射，语义永不漂移。
 - **回测输出**：包含持仓快照与全市场等权基准（与策略同一 open-to-open 口径），供看板展示。
 
 ## 已知局限（有意保留）
 
 - **成分股为当前快照**：AkShare 免费接口无逐日历史成分，`constituents` 使用当前成分并统一标记为全区间成员，存在幸存者偏差。
-- **中性占位因子**：`NORTHBOUND_CHG`/`MARGIN_BALANCE_CHG`/`INDUSTRY_MOMENTUM` 需要北向、两融与行业历史数据，暂保持中性（0）；词表保持不变以兼容已保存的公式 token。
+- **中性占位因子**：`NORTHBOUND_CHG`/`MARGIN_BALANCE_CHG`/`INDUSTRY_MOMENTUM` 需要北向、两融与行业历史数据，暂保持中性（0）。新特征按"代"追加在词表末尾（v1 的 token id 永不偏移），旧公式经按名重映射后继续有效。
 - **换手率缺失即缺失**：换手率依赖流通股本，无法从 OHLCV 反推；缺失时保持中性而非伪造常数。
 - **基本面因子暂为全中性**：PE/PB/ROE 等 12 个基本面特征暂无本地数据来源（原乐咕估值快照接口在 AkShare 新版已下线，失效代码已移除），统一保持中性（0）；逐期 point-in-time 财报回填在路线图中，落地前基本面特征不参与信号。
 - **离线日历**：`--offline` 模式用工作日近似，包含节假日，仅用于开发与测试。

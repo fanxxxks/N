@@ -72,3 +72,50 @@ def test_delay1_extends_with_first_value():
     assert out[0, 0].item() == 1.0
     assert out[0, 1].item() == 1.0
     assert out[0, 2].item() == 2.0
+
+
+def _op(name):
+    return dict((cfg[0], cfg[1]) for cfg in OPS_CONFIG)[name]
+
+
+def test_corr20_of_identical_series_is_one():
+    x = torch.randn(2, 30)
+    out = _op("CORR20")(x, x)
+    assert torch.isfinite(out).all()
+    # Position 0 has a single-sample window (correlation 0); after that the
+    # identical series correlate at exactly 1.
+    assert torch.allclose(out[:, 0], torch.zeros(2), atol=1e-6)
+    assert torch.allclose(out[:, 1:], torch.ones(2, 29), atol=1e-5)
+
+
+def test_corr20_of_anticorrelated_series_is_minus_one():
+    x = torch.randn(1, 30)
+    out = _op("CORR20")(x, -x)
+    assert torch.allclose(out[:, 1:], -torch.ones(1, 29), atol=1e-5)
+
+
+def test_corr20_of_constant_series_is_zero():
+    x = torch.full((1, 25), 3.0)
+    y = torch.arange(25, dtype=torch.float).unsqueeze(0)
+    out = _op("CORR20")(x, y)
+    assert torch.isfinite(out).all()
+    assert torch.allclose(out, torch.zeros_like(out), atol=1e-6)
+
+
+def test_corr20_respects_trailing_window():
+    # After a regime change the trailing correlation must reflect only the
+    # most recent 20 values, not the whole history.
+    x = torch.cat([torch.full((1, 10), 1.0), torch.full((1, 10), -1.0)], dim=1)
+    out = _op("CORR20")(x, x)
+    assert torch.allclose(out[:, -1], torch.ones(1), atol=1e-5)
+
+
+def test_downvol20_only_penalizes_negative_values():
+    x = torch.cat([torch.full((1, 10), 1.0), torch.full((1, 10), -2.0)], dim=1)
+    out = _op("DOWNVOL20")(x)
+    # Trailing 20-window: 10 zeros and 10 squares of 4 -> sqrt(40/20).
+    assert abs(out[0, -1].item() - 2.0**0.5) < 1e-5
+    # All-positive series has zero downside volatility.
+    pos = torch.full((1, 25), 3.0)
+    out_pos = _op("DOWNVOL20")(pos)
+    assert torch.allclose(out_pos, torch.zeros_like(out_pos), atol=1e-6)
