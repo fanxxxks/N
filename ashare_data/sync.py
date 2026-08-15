@@ -150,10 +150,14 @@ def sync_all(
     config_path: str | Path | None = None,
     offline: bool | None = None,
     limit: int | None = None,
+    sync_fundamentals: bool | None = None,
 ) -> dict[str, Any]:
-    """Synchronize calendar, stocks, constituents, and daily bars."""
+    """Synchronize calendar, stocks, constituents, daily bars and (unless
+    disabled) quarterly point-in-time fundamentals."""
 
     config = _load_data_config(config_path)
+    if sync_fundamentals is not None:
+        config.sync_fundamentals = sync_fundamentals
     config.data_dir.mkdir(parents=True, exist_ok=True)
     config.parquet_dir.mkdir(parents=True, exist_ok=True)
 
@@ -268,6 +272,17 @@ def sync_all(
                 config, set(universe) | set(failures)
             )
 
+        fundamental_stats = {
+            "fundamental_quarters": 0,
+            "fundamental_rows": 0,
+            "fundamental_supplements": 0,
+            "fundamental_failures": 0,
+        }
+        if config.sync_fundamentals and not offline:
+            from .fundamentals import sync_fundamentals
+
+            fundamental_stats = sync_fundamentals(client, db, config, universe)
+
         logger.info(
             f"Daily bars synced: {total_rows} rows, failures: {len(failures)}, "
             f"purged: {purged}"
@@ -280,6 +295,7 @@ def sync_all(
             "failures": failures,
             "purged_rows": purged,
             "purged_parquet": purged_parquet,
+            **fundamental_stats,
         }
     finally:
         db.close()
@@ -291,9 +307,19 @@ def main() -> None:
     parser.add_argument("--config", default=None, help="Path to ashare_config.yaml")
     parser.add_argument("--offline", action="store_true", help="Use local fixtures only")
     parser.add_argument("--limit", type=int, default=None, help="Limit universe size")
+    parser.add_argument(
+        "--no-fundamentals",
+        action="store_true",
+        help="Skip the quarterly fundamental sync",
+    )
     args = parser.parse_args()
     try:
-        result = sync_all(args.config, offline=args.offline, limit=args.limit)
+        result = sync_all(
+            args.config,
+            offline=args.offline,
+            limit=args.limit,
+            sync_fundamentals=False if args.no_fundamentals else None,
+        )
         logger.success(f"Sync complete: {result}")
     finally:
         export_log_txt(run_name="sync")

@@ -98,6 +98,29 @@ class AshareDB:
             )
             """
         )
+        self.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {config.fundamentals_table} (
+                ts_code VARCHAR,
+                report_date VARCHAR,
+                announce_date VARCHAR,
+                dividend_announce VARCHAR,
+                eps_cum DOUBLE,
+                bvps DOUBLE,
+                roe DOUBLE,
+                roa DOUBLE,
+                gross_margin DOUBLE,
+                net_margin DOUBLE,
+                revenue_cum DOUBLE,
+                profit_cum DOUBLE,
+                revenue_yoy DOUBLE,
+                profit_yoy DOUBLE,
+                debt_ratio DOUBLE,
+                dividend_yield DOUBLE,
+                PRIMARY KEY (ts_code, report_date)
+            )
+            """
+        )
 
     def upsert_stocks(self, rows: list[dict[str, Any]], config) -> None:
         if not rows:
@@ -185,5 +208,63 @@ class AshareDB:
             SELECT ts_code, trade_date, factor_name, value FROM _factor_df
             ON CONFLICT (ts_code, trade_date, factor_name) DO UPDATE SET
                 value=EXCLUDED.value
+            """
+        )
+
+    def upsert_fundamentals(self, rows: list[dict[str, Any]], config) -> None:
+        """Insert/update quarterly fundamental rows by (ts_code, report_date).
+
+        NULL fields never overwrite existing values, so a dividend-only row
+        cannot wipe the earnings fields of the same report period.  Each
+        source owns its effective date: ``announce_date`` is written by the
+        earnings/indicator rows and ``dividend_announce`` (the ex-dividend
+        date) by the dividend rows, so merging sources never moves any
+        field's point-in-time visibility.
+        """
+
+        if not rows:
+            return
+        import pandas as pd
+
+        cols = [
+            "ts_code",
+            "report_date",
+            "announce_date",
+            "dividend_announce",
+            "eps_cum",
+            "bvps",
+            "roe",
+            "roa",
+            "gross_margin",
+            "net_margin",
+            "revenue_cum",
+            "profit_cum",
+            "revenue_yoy",
+            "profit_yoy",
+            "debt_ratio",
+            "dividend_yield",
+        ]
+        df = pd.DataFrame(rows).reindex(columns=cols)
+        for date_col in ("announce_date", "dividend_announce"):
+            df[date_col] = (
+                df[date_col].astype("string").where(df[date_col].notna(), None)
+            )
+        self._conn.register("_fund_df", df)
+        updates = ",\n".join(
+            f"{c}=COALESCE(EXCLUDED.{c}, {config.fundamentals_table}.{c})"
+            for c in cols[2:]
+        )
+        self.execute(
+            f"""
+            INSERT INTO {config.fundamentals_table}
+            SELECT ts_code, report_date,
+                   CAST(announce_date AS VARCHAR),
+                   CAST(dividend_announce AS VARCHAR),
+                   eps_cum, bvps, roe, roa, gross_margin, net_margin,
+                   revenue_cum, profit_cum, revenue_yoy, profit_yoy,
+                   debt_ratio, dividend_yield
+            FROM _fund_df
+            ON CONFLICT (ts_code, report_date) DO UPDATE SET
+                {updates}
             """
         )

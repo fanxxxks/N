@@ -6,11 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 from ashare_model.factors import (
     BAR_COLUMNS,
     FACTOR_REGISTRY,
     FAMILIES,
-    FUNDAMENTAL_NAMES,
     NEUTRAL_FEATURE_NAMES,
     AshareFactorEngine,
     _factor_amount_share,
@@ -34,9 +34,9 @@ def test_compute_factor_tensor_shape_and_finite(bars_data):
     assert np.isfinite(tensor).all()
 
 
-def test_compute_factor_tensor_with_empty_fundamentals(bars_data):
+def test_compute_factor_tensor_without_pit_fundamentals(bars_data):
     dates, ts_codes, bars = bars_data
-    tensor = compute_factor_tensor(bars, ts_codes, dates, {"000001.SZ": {}})
+    tensor = compute_factor_tensor(bars, ts_codes, dates, pit_fundamentals={})
     assert tensor.shape == (len(FEATURE_NAMES), len(ts_codes), len(dates))
 
 
@@ -92,24 +92,30 @@ def test_limit_event_features_detect_one_word_moves():
     assert np.isfinite(up).all()
 
 
-def test_fundamentals_applied_only_to_last_date(bars_data):
+def test_pit_fundamentals_injected_and_missing_stay_neutral(bars_data):
     dates, ts_codes, bars = bars_data
-    fundamentals = {"000001.SZ": {"PE_TTM": 15.0}, "600000.SH": {"PE_TTM": 8.0}}
-    tensor = compute_factor_tensor(bars, ts_codes, dates, fundamentals)
+    # A hand-built PIT frame for one feature: informative only on the dates
+    # where the builder placed values; every other feature/date is neutral.
+    pe_frame = pd.DataFrame(np.nan, index=ts_codes, columns=dates)
+    pe_frame.loc["000001.SZ", dates[5]] = 15.0
+    pe_frame.loc["600000.SH", dates[5]] = 8.0
+    tensor = compute_factor_tensor(bars, ts_codes, dates, pit_fundamentals={"PE_TTM": pe_frame})
     pe = tensor[FEATURE_NAMES.index("PE_TTM")]
-    # The snapshot is informative on the final date only (a non-constant
-    # cross-section); every earlier date stays neutral (no lookahead).
-    assert not np.allclose(pe[:, -1], 0.0)
-    assert np.allclose(pe[:, :-1], 0.0)
+    assert pe[0, 5] > 0
+    assert np.allclose(pe[:, :5], 0.0)
+    assert np.allclose(pe[:, 6:], 0.0)
+    # An unprovided fundamental feature stays fully neutral.
+    pb = tensor[FEATURE_NAMES.index("PB")]
+    assert np.allclose(pb, 0.0)
 
 
 def test_registry_covers_every_vocabulary_feature():
     registered = set(FACTOR_REGISTRY)
-    declared = set(FUNDAMENTAL_NAMES) | set(NEUTRAL_FEATURE_NAMES)
+    declared = set(FUNDAMENTAL_PIT_NAMES) | set(NEUTRAL_FEATURE_NAMES)
     # Every vocabulary feature is either a registered local factor or a
-    # declared neutral/fundamental one; the three sets never overlap.
+    # declared PIT-fundamental/neutral one; the three sets never overlap.
     assert registered.isdisjoint(declared)
-    assert set(FUNDAMENTAL_NAMES).isdisjoint(NEUTRAL_FEATURE_NAMES)
+    assert set(FUNDAMENTAL_PIT_NAMES).isdisjoint(NEUTRAL_FEATURE_NAMES)
     assert registered | declared == set(FEATURE_NAMES)
     assert registered.issubset(FEATURE_NAMES)
 
@@ -125,19 +131,21 @@ def test_registry_metadata_is_valid():
 
 
 def test_fundamental_and_neutral_families_declared():
-    # Fundamental features are fed by the point-in-time snapshot path and
-    # the external capital-flow features stay neutral until their sources
+    # PIT fundamentals come from the point-in-time pipeline and the
+    # external capital-flow features stay neutral until their sources
     # land; both are metadata-driven, not hard-coded in the engine loop.
-    assert FUNDAMENTAL_NAMES
+    assert FUNDAMENTAL_PIT_NAMES
     assert NEUTRAL_FEATURE_NAMES == {"NORTHBOUND_CHG", "MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM"}
+    assert "MARKET_CAP" in FACTOR_REGISTRY  # local daily-bar size proxy
 
 
 # Golden checksum of the first-generation 34-feature tensor on the
-# deterministic ``make_bars`` fixture, captured before the registry
-# refactor.  It pins the exact legacy values so any future refactor that
-# silently changes an existing factor fails this test; the slice stays
-# comparable even as the vocabulary grows.
-_GOLDEN_TENSOR_SHA256 = "0966880521fc8d887e9e6bdbfc0b57b3df2563b17b2b9c3707431640e896b4c7"
+# deterministic ``make_bars`` fixture.  It pins the exact legacy values so
+# any refactor that silently changes an existing factor fails this test.
+# The checksum was re-captured once, deliberately, when MARKET_CAP gained
+# real data (float market cap = amount/turnover_rate) in the PIT pipeline
+# phase; all other v1 features kept their pre-refactor values.
+_GOLDEN_TENSOR_SHA256 = "f7a480bc9c20d416d369914ddce7c57197d06a2e133af480e5afe545c343e79b"
 
 
 def test_factor_tensor_matches_pre_refactor_golden_values(bars_data):
@@ -145,7 +153,7 @@ def test_factor_tensor_matches_pre_refactor_golden_values(bars_data):
     tensor = compute_factor_tensor(bars, ts_codes, dates)
     legacy = np.ascontiguousarray(tensor[:34])
     assert hashlib.sha256(legacy.tobytes()).hexdigest() == _GOLDEN_TENSOR_SHA256
-    assert legacy.sum() == pytest.approx(-0.6514627, abs=1e-5)
+    assert legacy.sum() == pytest.approx(199.34854, abs=1e-3)
     ret1 = tensor[FEATURE_NAMES.index("RET_1")]
     assert ret1[0, 10] == pytest.approx(-0.00039433446, abs=1e-6)
     assert tensor[FEATURE_NAMES.index("SKEW_20")][0, 30] == pytest.approx(-0.004940729, abs=1e-6)

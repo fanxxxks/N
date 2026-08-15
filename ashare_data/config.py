@@ -30,6 +30,8 @@ class DataConfig:
     daily_table: str = "daily_bar"
     constituents_table: str = "constituents"
     factor_table: str = "factor_cache"
+    fundamentals_table: str = "fundamental_pit"
+    sync_fundamentals: bool = True
     start_date: str = "2015-01-01"
     end_date: str = "2026-12-31"
     adjust: str = "qfq"

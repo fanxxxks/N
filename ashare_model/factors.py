@@ -5,9 +5,9 @@ metadata (family, required daily-bar columns, warmup, description) and a
 pure function over the shared :class:`FactorContext`.  The engine pivots
 exactly the columns the requested factors need, computes each registered
 factor once, then cross-sectionally standardizes the stack.  Features with
-no local data source are declared separately (fundamental point-in-time
-snapshots, external capital-flow sources) and stay neutral instead of being
-fabricated.
+no local data source are declared separately (point-in-time fundamentals
+from :mod:`ashare_data.fundamentals`, external capital-flow sources) and
+stay neutral instead of being fabricated.
 
 Adding a factor therefore means adding one registry entry plus tests; the
 metadata drives diagnostics and family-level ablation experiments.
@@ -22,25 +22,10 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 from ashare_data.processor import normalize_daily_bars, pivot_wide, winsorize_cross_section
 
 from .vocab import FEATURE_NAMES
-
-# Fundamental feature names that can be fed from point-in-time snapshots.
-FUNDAMENTAL_NAMES = (
-    "PE_TTM",
-    "PB",
-    "PS_TTM",
-    "ROE",
-    "ROA",
-    "GROSS_MARGIN",
-    "NET_MARGIN",
-    "REVENUE_YOY",
-    "PROFIT_YOY",
-    "DEBT_RATIO",
-    "MARKET_CAP",
-    "DIVIDEND_YIELD",
-)
 
 # Features declared in the vocabulary but not computable from the local data
 # (they need northbound / margin / industry-history sources).  They stay
@@ -550,6 +535,19 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         "Trading days since first available bar (listing age proxy)",
         lambda ctx: (~ctx.close.isna()).cumsum(axis=1).astype(float),
     )
+
+    # Size: float market-cap proxy reconstructed from daily bars
+    # (amount / turnover_rate); turnover_rate is the float-share turnover,
+    # so the ratio is the float market cap in yuan.  No share-count
+    # history is needed and the value is available for every trading day.
+    add(
+        "MARKET_CAP",
+        "fundamental",
+        ("amount", "turnover_rate"),
+        1,
+        "Float market cap proxy = amount / turnover_rate (yuan)",
+        lambda ctx: (ctx.amount / ctx.turnover).replace([np.inf, -np.inf], np.nan),
+    )
     return registry
 
 
@@ -607,13 +605,15 @@ class AshareFactorEngine:
         bars: pd.DataFrame,
         ts_codes: list[str],
         dates: list[str],
-        fundamentals: dict[str, dict[str, float | None]] | None = None,
+        pit_fundamentals: dict[str, pd.DataFrame] | None = None,
     ) -> np.ndarray:
         """Return a ``[feature, stock, date]`` float32 tensor.
 
-        ``fundamentals`` maps ts_code -> field snapshot.  Snapshots are
-        point-in-time only for the final date, so they are injected into the
-        last date column exclusively; no future information is fabricated.
+        ``pit_fundamentals`` maps a PIT feature name to its
+        announce-date-aligned ``[stock x date]`` frame (built by
+        :func:`ashare_data.fundamentals.build_pit_frames`).  Frames are
+        injected verbatim; the no-lookahead guarantee lives in the builder.
+        Missing names/frames stay neutral (0) after standardization.
         """
 
         bars = normalize_daily_bars(bars)
@@ -627,22 +627,14 @@ class AshareFactorEngine:
             entry = FACTOR_REGISTRY.get(name)
             raw_factors[name] = entry[1](context) if entry is not None else empty.copy()
 
-        # Point-in-time fundamentals: apply the snapshot to the final date
-        # column only.  All other dates stay missing (neutral).
-        fundamentals = fundamentals or {}
-        if fundamentals and dates:
-            last_date = dates[-1]
-            for name in FUNDAMENTAL_NAMES:
-                if name not in self.feature_names:
-                    continue
-                column = pd.Series(np.nan, index=close.index, dtype=float)
-                for ts_code, snapshot in fundamentals.items():
-                    if ts_code in close.index:
-                        value = snapshot.get(name) if isinstance(snapshot, dict) else None
-                        if value is not None and np.isfinite(float(value)):
-                            column[ts_code] = float(value)
-                frame = pd.DataFrame(index=close.index, columns=close.columns, dtype=float)
-                frame[last_date] = column
+        # Point-in-time fundamentals: inject the pre-built frames (already
+        # aligned to announcement dates); everything else stays neutral.
+        pit_fundamentals = pit_fundamentals or {}
+        for name in FUNDAMENTAL_PIT_NAMES:
+            if name not in self.feature_names:
+                continue
+            frame = pit_fundamentals.get(name)
+            if frame is not None and not frame.empty:
                 raw_factors[name] = frame
 
         standardized = []
@@ -662,6 +654,6 @@ def compute_factor_tensor(
     bars: pd.DataFrame,
     ts_codes: list[str],
     dates: list[str],
-    fundamentals: dict[str, dict[str, float | None]] | None = None,
+    pit_fundamentals: dict[str, pd.DataFrame] | None = None,
 ) -> np.ndarray:
-    return AshareFactorEngine().compute_factor_tensor(bars, ts_codes, dates, fundamentals)
+    return AshareFactorEngine().compute_factor_tensor(bars, ts_codes, dates, pit_fundamentals)

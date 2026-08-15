@@ -8,6 +8,7 @@ from ashare_data import config as data_config_module
 from ashare_data.akshare_client import (
     AkShareClient,
     AkShareUnavailable,
+    _call_with_timeout,
     _retry,
     _symbol_from_ts_code,
 )
@@ -16,6 +17,25 @@ from ashare_data.akshare_client import (
 def test_symbol_from_ts_code():
     assert _symbol_from_ts_code("000001.SZ") == "000001"
     assert _symbol_from_ts_code("600000.SH") == "600000"
+
+
+def test_call_with_timeout_bounds_a_hung_call():
+    import threading
+    import time
+
+    blocker = threading.Event()
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        _call_with_timeout(lambda: blocker.wait(60), timeout=0.2)
+    assert time.monotonic() - started < 10
+
+
+def test_call_with_timeout_returns_value_and_forwards_errors():
+    assert _call_with_timeout(lambda: 42, timeout=1.0) == 42
+    with pytest.raises(RuntimeError):
+        _call_with_timeout(
+            lambda: (_ for _ in ()).throw(RuntimeError("boom")), timeout=1.0
+        )
 
 
 def test_retry_raises_after_exhaustion(monkeypatch: pytest.MonkeyPatch):

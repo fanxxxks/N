@@ -10,6 +10,7 @@ import torch
 
 from ashare_data.config import DataConfig, ModelConfig, make_data_config
 from ashare_data.db import AshareDB
+from ashare_data.fundamentals import build_pit_frames
 from ashare_data.processor import (
     is_valid_a_share_code,
     normalize_daily_bars,
@@ -93,7 +94,6 @@ class AshareDataLoader:
         self,
         ts_codes: list[str] | None = None,
         dates: list[str] | None = None,
-        fundamentals: dict[str, dict[str, float | None]] | None = None,
     ) -> "AshareDataLoader":
         self.load_stock_meta()
         if ts_codes is None:
@@ -144,7 +144,12 @@ class AshareDataLoader:
             )
         self.raw_data_cache = tensor_map
 
-        factors = compute_factor_tensor(df, self.ts_codes, self.dates, fundamentals)
+        # Announce-date-aligned point-in-time fundamentals; any failure
+        # (e.g. the table does not exist yet) degrades to neutral frames.
+        close_wide = pivot_wide(df, self.ts_codes, self.dates, "close")
+        pit = build_pit_frames(self.config, self.ts_codes, self.dates, close_wide)
+
+        factors = compute_factor_tensor(df, self.ts_codes, self.dates, pit_fundamentals=pit)
         self.factor_tensor = torch.tensor(factors, dtype=torch.float32)
 
         # Next-open to next-open forward return with a missing-data mask, so
