@@ -66,6 +66,23 @@ python -m uvicorn webapi.app:app --host 0.0.0.0 --port 8000
 python -m pytest -q tests
 ```
 
+## 实验留档（experiments/）
+
+每次训练 / 回测 / 模拟盘跑完后，用 `scripts/archive_run.py` 把 {配置、公式、模型、指标、日期}
+快照到 `experiments/<YYYYMMDD>_<公式>/` 并提交，让"哪个公式 + 哪份配置 + 什么结果"永久可追溯：
+
+```bash
+python scripts/archive_run.py --mode backtest --commit
+python scripts/archive_run.py --mode train --commit
+python scripts/archive_run.py --mode sim --commit
+```
+
+每个实验目录包含 `manifest.json`（运行模式、代码 commit、脏工作区标记、数据末端日期、
+各产物 SHA-256）、`formula.json`、`config.yaml`、`metrics_summary.json` 与 `metrics.json`
+（超过 `--max-metrics-size-mb` 时仅保留摘要）、`model.*`（超过 `--max-model-size-mb` 时只记录
+哈希、权重留在本地 `data/`）。`--commit` 只提交本次实验目录，不会 push，也不触碰其他改动。
+详见 `experiments/README.md`。
+
 ## 与现实对应的关键设计
 
 - **无未来泄漏**：因子只使用当前及历史截面；`open_to_open_returns` 以 t+1 开盘买入、t+2 开盘卖出为目标收益；停牌/未上市日被掩码为 0，绝不产生虚假收益。
