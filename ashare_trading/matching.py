@@ -140,7 +140,10 @@ class SimBroker:
 
             trades.append(trade)
 
-        portfolio.save()
+        # No save here: the runner persists the portfolio once per completed
+        # day (orders/trades files + equity + last_exec_date in one atomic
+        # snapshot). Saving mid-day would leave a half-processed day in the
+        # state file that --resume cannot safely roll back.
         return trades
 
     def _affordable_shares(

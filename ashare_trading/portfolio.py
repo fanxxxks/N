@@ -33,13 +33,28 @@ class SimulationPortfolio:
         self.positions: dict[str, PositionState] = {}
         self.equity_history: list[dict[str, float | str]] = []
         self.trade_count = 0
+        # Last fully processed execution date (YYYYMMDD). This is the resume
+        # watermark: a day is only recorded here after its orders/trades were
+        # written and its equity snapshot saved, so replay can never overlap.
+        self.last_exec_date: str | None = None
         self.load()
+
+    @property
+    def has_history(self) -> bool:
+        """True when the state carries anything a replay could corrupt."""
+        return bool(
+            self.last_exec_date
+            or self.equity_history
+            or self.positions
+            or self.trade_count
+        )
 
     def reset(self) -> None:
         self.cash = self.initial_capital
         self.positions = {}
         self.equity_history = []
         self.trade_count = 0
+        self.last_exec_date = None
         self.save()
 
     def load(self) -> None:
@@ -53,6 +68,12 @@ class SimulationPortfolio:
                 k: PositionState(**v) for k, v in payload.get("positions", {}).items()
             }
             self.equity_history = payload.get("equity_history", [])
+            last = payload.get("last_exec_date")
+            if not last and self.equity_history:
+                # Legacy state files predate last_exec_date; the tail of the
+                # equity history is the best available resume watermark.
+                last = self.equity_history[-1].get("trade_date")
+            self.last_exec_date = last
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Could not load portfolio state: {exc}")
             self.reset()
@@ -63,6 +84,7 @@ class SimulationPortfolio:
             "initial_capital": self.initial_capital,
             "cash": self.cash,
             "trade_count": self.trade_count,
+            "last_exec_date": self.last_exec_date,
             "positions": {k: asdict(v) for k, v in self.positions.items()},
             "equity_history": self.equity_history,
         }

@@ -71,3 +71,4 @@ sim:
   state_path: data/sim_portfolio_state.json
   orders_dir: data/sim_orders
   trades_dir: data/sim_trades
+  progress_path: data/sim_progress.json
