@@ -70,8 +70,9 @@ python -m uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 # 浏览器打开 http://127.0.0.1:8000
 ```
 
-前端数据以只读展示为主；模拟盘页提供“紧急停止”（写入 `STOP_SIGNAL`）与
-配置编辑（`PUT /api/sim/config`）。配置编辑写入全局运行时覆盖文件
+前端数据以只读展示为主；模拟盘页提供启动/继续、停止、重置按钮组、运行状态条
+（3 秒轮询）与配置弹窗（`PUT /api/sim/config`），危险操作均二次确认。
+配置编辑写入全局运行时覆盖文件
 `config/runtime_overrides.yaml`（已被 gitignore，不污染 YAML 基线），
 `run_sim` / `backtest` / `train` 所有入口都会在 YAML 之上合并它。费用
 （佣金 / 最低佣金 / 印花税 / 过户费 / 滑点）是全项目单一口径（`backtest`
