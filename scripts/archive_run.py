@@ -171,6 +171,13 @@ def resolve_path(root, cli_value, default_rel):
 def load_effective_config(config_path, root):
     """Baseline YAML merged with the runtime overrides file (best effort)."""
     try:
+        import sys as _sys
+
+        # When invoked as `python scripts/archive_run.py`, sys.path[0] is the
+        # scripts dir; make the package roots importable first.
+        for candidate in (str(Path(root)), str(DEFAULT_ROOT)):
+            if candidate not in _sys.path:
+                _sys.path.insert(0, candidate)
         from ashare_data.config import load_config
 
         return load_config(config_path, project_root=root)
