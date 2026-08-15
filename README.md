@@ -70,9 +70,13 @@ python -m uvicorn webapi.app:app --host 0.0.0.0 --port 8000
 # 浏览器打开 http://127.0.0.1:8000
 ```
 
-前端所有数据均为只读展示；模拟盘页的“紧急停止”按钮会写入 `STOP_SIGNAL`
-以停止正在运行的日频模拟盘。日志页仅展示 `logs/` 与 `data/` 下的
-`.log` / `.txt` 文件。
+前端数据以只读展示为主；模拟盘页提供“紧急停止”（写入 `STOP_SIGNAL`）与
+配置编辑（`PUT /api/sim/config`）。配置编辑写入全局运行时覆盖文件
+`config/runtime_overrides.yaml`（已被 gitignore，不污染 YAML 基线），
+`run_sim` / `backtest` / `train` 所有入口都会在 YAML 之上合并它。费用
+（佣金 / 最低佣金 / 印花税 / 过户费 / 滑点）是全项目单一口径（`backtest`
+段），修改后对回测与模拟盘同时生效；初始资金在下次 reset 时生效。日志页
+仅展示 `logs/` 与 `data/` 下的 `.log` / `.txt` 文件。
 
 首次数据同步会拉取沪深 300、中证 500、中证 1000 成分股及日线数据。为避免重复请求 AkShare，可先使用 `--offline` 测试本地流程，或使用 `--limit N` 限制股票数量。日线缓存落后于交易日历时会自动刷新；全量（不带 `--limit`）同步会清理不在股票池中的历史行。
 

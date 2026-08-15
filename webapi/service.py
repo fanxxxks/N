@@ -8,10 +8,15 @@ a JSON payload is temporarily truncated by an atomic-write rename.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+from pydantic import BaseModel, Field
+
 from ashare_data.config import (
+    RUNTIME_OVERRIDES_FILENAME,
     make_backtest_config,
     make_data_config,
     make_model_config,
@@ -355,3 +360,129 @@ def write_stop_signal() -> dict:
         return {"ok": True, "path": str(path)}
     except OSError as exc:
         return {"ok": False, "reason": str(exc)}
+
+
+FEE_KEYS = (
+    "commission_rate",
+    "min_commission",
+    "stamp_tax_rate",
+    "transfer_fee_rate",
+    "slippage_rate",
+)
+
+
+class SimConfigPatch(BaseModel):
+    """Validated runtime config edits for the sim page config dialog.
+
+    Fee keys belong to the shared ``backtest`` section (the single cost
+    model used by backtests, training rewards and the paper trader);
+    sim-only keys belong to the ``sim`` section. A ``None`` value removes
+    the key from the runtime overrides file so the YAML baseline applies
+    again.
+    """
+
+    initial_capital: float | None = Field(default=None, gt=0)
+    max_positions: int | None = Field(default=None, ge=1, le=500)
+    commission_rate: float | None = Field(default=None, ge=0, lt=1)
+    min_commission: float | None = Field(default=None, ge=0)
+    stamp_tax_rate: float | None = Field(default=None, ge=0, lt=1)
+    transfer_fee_rate: float | None = Field(default=None, ge=0, lt=1)
+    slippage_rate: float | None = Field(default=None, ge=0, lt=1)
+
+
+def _config_paths(root: Path) -> tuple[Path, Path]:
+    return (
+        root / "config" / "ashare_config.yaml",
+        root / "config" / RUNTIME_OVERRIDES_FILENAME,
+    )
+
+
+def _read_overrides(path: Path) -> dict:
+    try:
+        if not path.exists():
+            return {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return raw if isinstance(raw, dict) else {}
+    except Exception:  # noqa: BLE001 - dashboard must survive a bad file.
+        return {}
+
+
+def _write_overrides(path: Path, overrides: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp.yaml")
+    tmp.write_text(
+        yaml.safe_dump(overrides, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+
+
+def write_sim_config(patch: SimConfigPatch, root: Path = ROOT) -> dict:
+    """Apply a validated config patch to the runtime overrides file."""
+
+    config_path, overrides_path = _config_paths(root)
+    if not config_path.exists():
+        return {"ok": False, "reason": f"config file not found: {config_path}"}
+
+    overrides = _read_overrides(overrides_path)
+    patch_map = {
+        "sim": {
+            "initial_capital": patch.initial_capital,
+            "max_positions": patch.max_positions,
+        },
+        "backtest": {key: getattr(patch, key) for key in FEE_KEYS},
+    }
+    for section, mapping in patch_map.items():
+        target = overrides.setdefault(section, {})
+        for key, value in mapping.items():
+            if value is None:
+                target.pop(key, None)
+            else:
+                target[key] = value
+    for section in tuple(overrides):
+        if section in ("sim", "backtest") and not overrides[section]:
+            overrides.pop(section, None)
+
+    try:
+        _write_overrides(overrides_path, overrides)
+    except OSError as exc:
+        return {"ok": False, "reason": str(exc)}
+
+    result = get_sim_config(root=root)
+    result["ok"] = True
+    return result
+
+
+def get_sim_config(root: Path = ROOT) -> dict:
+    """Effective sim/fee config (YAML baseline + runtime overrides) and the
+    initial-capital reset pendency."""
+
+    config_path, overrides_path = _config_paths(root)
+    try:
+        raw = load_config(config_path, project_root=root)
+    except Exception:  # noqa: BLE001
+        raw = {}
+    sim = make_sim_config(raw, root)
+    backtest = make_backtest_config(raw)
+
+    effective = {
+        "initial_capital": sim.initial_capital,
+        "max_positions": sim.max_positions,
+        "commission_rate": backtest.commission_rate,
+        "min_commission": backtest.min_commission,
+        "stamp_tax_rate": backtest.stamp_tax_rate,
+        "transfer_fee_rate": backtest.transfer_fee_rate,
+        "slippage_rate": backtest.slippage_rate,
+    }
+    state = _read_json(Path(sim.state_path)) or {}
+    state_initial = state.get("initial_capital") if isinstance(state, dict) else None
+    pending_reset = state_initial is None or float(state_initial) != float(
+        effective["initial_capital"]
+    )
+    return {
+        "effective": effective,
+        "overrides_path": str(overrides_path),
+        "overrides": _read_overrides(overrides_path),
+        "state_initial_capital": state_initial,
+        "pending_reset": pending_reset,
+    }
