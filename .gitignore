@@ -11,6 +11,9 @@ venv/
 # Secrets / environment
 .env
 
+# Runtime config overrides (edited via the web UI; baseline stays in git)
+config/runtime_overrides.yaml
+
 # Large local data & artifacts (regenerable; never commit)
 data/
 *.duckdb

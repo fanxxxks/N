@@ -109,11 +109,38 @@ def _resolve_paths(
     return data
 
 
+RUNTIME_OVERRIDES_FILENAME = "runtime_overrides.yaml"
+
+
+def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Merge ``patch`` over ``base``: dicts recurse, scalars/lists replace."""
+
+    merged = dict(base)
+    for key, value in patch.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def load_config(
     path: str | Path | None = None,
     project_root: str | Path | None = None,
+    overrides_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Load YAML config and merge optional .env overrides.
+    """Load YAML config, merge the global runtime overrides file, then
+    optional .env overrides.
+
+    The runtime overrides file (default: ``runtime_overrides.yaml`` next to
+    the config file) is the single source of web-UI config edits such as
+    initial capital, position count and the shared fee model. It is merged
+    on top of the YAML baseline for every entry point (run_sim, backtest,
+    train), so the effective configuration is identical everywhere.
 
     Paths are resolved relative to the directory containing the YAML file.
     """
@@ -132,6 +159,15 @@ def load_config(
         return {}
 
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+    if overrides_path is None:
+        overrides_path = config_path.parent / RUNTIME_OVERRIDES_FILENAME
+    overrides_path = Path(overrides_path)
+    if overrides_path.exists():
+        overrides_raw = yaml.safe_load(overrides_path.read_text(encoding="utf-8")) or {}
+        if isinstance(overrides_raw, dict):
+            raw = _deep_merge(raw, overrides_raw)
+
     raw = _resolve_paths(raw, project_root)
 
     env_path = config_path.parent / ".env"

@@ -33,6 +33,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 
 # Default artifact locations (relative to repo root) for the standard pipeline modes.
@@ -166,6 +168,16 @@ def resolve_path(root, cli_value, default_rel):
     return None
 
 
+def load_effective_config(config_path, root):
+    """Baseline YAML merged with the runtime overrides file (best effort)."""
+    try:
+        from ashare_data.config import load_config
+
+        return load_config(config_path, project_root=root)
+    except Exception:
+        return None
+
+
 def git_commit_run_dir(run_dir, mode, root):
     """Stage and commit only the archived run dir. Returns (ok, message)."""
     rel = run_dir.relative_to(root).as_posix()
@@ -280,6 +292,17 @@ def main(argv=None):
         record("config.yaml", config_path, config_path.stat().st_size)
         manifest["config"] = {"source": config_path.name, "sha256": sha256_file(config_path)}
         manifest["data_end_date"] = data_end_date(root, config_path)
+        # Snapshot the *effective* config (baseline + runtime overrides) so
+        # the archived run stays reproducible even after web-UI config edits.
+        effective = load_effective_config(config_path, root)
+        if effective:
+            eff_path = run_dir / "config_effective.yaml"
+            eff_path.write_text(
+                yaml.safe_dump(effective, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            record("config_effective.yaml", eff_path, eff_path.stat().st_size)
+            manifest["config"]["effective_sha256"] = sha256_file(eff_path)
 
     if metrics_path:
         data = json.loads(metrics_path.read_text(encoding="utf-8"))

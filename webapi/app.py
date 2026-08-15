@@ -103,6 +103,17 @@ def sim_stop() -> JSONResponse:
     return JSONResponse(result, status_code=200 if result.get("ok") else 500)
 
 
+@app.get("/api/sim/config")
+def sim_config_get() -> dict:
+    return service.get_sim_config()
+
+
+@app.put("/api/sim/config")
+def sim_config_update(patch: service.SimConfigPatch) -> JSONResponse:
+    result = service.write_sim_config(patch)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+
 @app.get("/api/data-status")
 def data_status() -> dict:
     return service.get_data_status()

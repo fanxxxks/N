@@ -47,6 +47,43 @@ def test_load_config_env_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert raw["data_dir"] == str(tmp_path / "env-data")
 
 
+def test_load_config_merges_runtime_overrides(tmp_path: Path):
+    cfg_path = tmp_path / "config" / "ashare_config.yaml"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "sim": {"max_positions": 30, "initial_capital": 100000.0},
+                "backtest": {"top_n": 5, "commission_rate": 0.00025},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (cfg_path.parent / "runtime_overrides.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "sim": {"max_positions": 10},
+                "backtest": {"commission_rate": 0.001},
+            }
+        ),
+        encoding="utf-8",
+    )
+    raw = load_config(cfg_path, project_root=tmp_path)
+    # Overridden keys win, untouched keys keep the baseline (deep merge).
+    assert raw["sim"]["max_positions"] == 10
+    assert raw["sim"]["initial_capital"] == 100000.0
+    assert raw["backtest"]["top_n"] == 5
+    assert raw["backtest"]["commission_rate"] == 0.001
+
+
+def test_load_config_ignores_missing_overrides(tmp_path: Path):
+    cfg_path = tmp_path / "config" / "ashare_config.yaml"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text(yaml.safe_dump({"sim": {"max_positions": 30}}), encoding="utf-8")
+    raw = load_config(cfg_path, project_root=tmp_path)
+    assert raw["sim"]["max_positions"] == 30
+
+
 def test_make_data_config_applies_defaults_and_paths(tmp_path: Path):
     cfg = make_data_config({}, tmp_path)
     assert cfg.data_dir == tmp_path / "data"
