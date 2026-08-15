@@ -1,0 +1,333 @@
+"""Daily A-share paper-trading loop.
+
+Usage:
+    python -m ashare_trading.run_sim [--config config/ashare_config.yaml]
+                                    [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+from loguru import logger
+
+from ashare_data.config import (
+    BacktestConfig,
+    DataConfig,
+    ModelConfig,
+    SimConfig,
+    load_config,
+    make_backtest_config,
+    make_data_config,
+    make_model_config,
+    make_sim_config,
+)
+from ashare_data.schemas import SimOrder
+
+from ashare_model.backtest import AshareBacktestEngine
+from ashare_model.data_loader import AshareDataLoader
+from ashare_model.vm import StackVM, formula_decode
+from ashare_model.vocab import FORMULA_VOCAB
+
+from .matching import SimBroker
+from .portfolio import SimulationPortfolio
+from ashare_logging import export_log_txt, setup_run_logging
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+class SimulationRunner:
+    def __init__(
+        self,
+        data_config: DataConfig,
+        model_config: ModelConfig,
+        backtest_config: BacktestConfig,
+        sim_config: SimConfig,
+        loader: AshareDataLoader,
+    ):
+        self.data_config = data_config
+        self.model_config = model_config
+        self.backtest_config = backtest_config
+        self.sim_config = sim_config
+        self.loader = loader
+        self.portfolio = SimulationPortfolio(
+            sim_config.initial_capital, sim_config.state_path
+        )
+        self.broker = SimBroker(sim_config)
+        self.vm = StackVM(FORMULA_VOCAB)
+        self.formula_tokens: list[int] | None = None
+        self.formula_text = ""
+
+    def load_formula(self) -> None:
+        path = self.data_config.data_dir / "best_ashare_strategy.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Strategy file not found: {path}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        tokens = payload.get("formula", payload) if isinstance(payload, dict) else payload
+        self.formula_tokens = [int(t) for t in tokens]
+        self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
+        logger.success(f"Loaded formula: {self.formula_text}")
+
+    def run(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict[str, object]:
+        if self.loader.factor_tensor is None:
+            self.loader.load_data()
+        if self.formula_tokens is None:
+            self.load_formula()
+
+        factors = self.vm.execute(self.formula_tokens, self.loader.factor_tensor)
+        if factors is None:
+            raise ValueError("Formula is invalid")
+        signals = factors.detach().cpu().numpy()
+        raw = {k: v.numpy() for k, v in self.loader.raw_data_cache.items()}
+        dates = self.loader.dates
+        ts_codes = self.loader.ts_codes
+        stock_names = self._stock_names()
+
+        start_idx = 0
+        end_idx = len(dates) - 1
+        if start_date:
+            start_date = start_date.replace("-", "")
+            start_idx = next((i for i, d in enumerate(dates) if d >= start_date), 0)
+        if end_date:
+            end_date = end_date.replace("-", "")
+            end_idx = next(
+                (i for i, d in enumerate(dates) if d > end_date), len(dates) - 1
+            )
+
+        self.sim_config.orders_dir.mkdir(parents=True, exist_ok=True)
+        self.sim_config.trades_dir.mkdir(parents=True, exist_ok=True)
+        # The paper-trading position count is driven by the sim config, with
+        # the backtest config as a fallback.
+        engine = AshareBacktestEngine(
+            replace(
+                self.backtest_config,
+                top_n=self.sim_config.max_positions or self.backtest_config.top_n,
+            )
+        )
+
+        for signal_idx in range(start_idx, end_idx):
+            if self._handle_stop_signal():
+                break
+            exec_idx = signal_idx + 1
+            exec_date = dates[exec_idx]
+            signal = signals[:, signal_idx]
+            selected = engine._select_top_n(
+                signal,
+                exec_idx,
+                raw["open"],
+                raw["high"],
+                raw["low"],
+                raw["pre_close"],
+                raw["volume"],
+                ts_codes,
+                stock_names,
+                side="buy",
+            )
+            target_weights = self._equal_weights(selected, len(ts_codes))
+            orders = self._make_orders(
+                target_weights,
+                selected,
+                ts_codes,
+                exec_idx,
+                exec_date,
+                raw,
+                stock_names,
+            )
+
+            bars = self.loader.bars
+            trades = self.broker.execute_orders(
+                orders,
+                bars,
+                exec_date,
+                self.portfolio,
+                stock_names,
+                self.backtest_config,
+            )
+            # Persist orders after execution so their final status/reason
+            # (filled, skipped, limit_up, ...) is part of the paper-trail.
+            self._write_json(
+                self.sim_config.orders_dir / f"{exec_date}.json",
+                [o.__dict__ for o in orders],
+            )
+            self._write_json(
+                self.sim_config.trades_dir / f"{exec_date}.json",
+                [t.__dict__ for t in trades],
+            )
+            close_prices = {
+                ts_codes[i]: float(raw["close"][i, exec_idx]) for i in range(len(ts_codes))
+            }
+            self.portfolio.record_equity(exec_date, close_prices)
+            self.portfolio.save()
+
+        self.portfolio.save()
+        return {
+            "final_cash": self.portfolio.cash,
+            "trade_count": self.portfolio.trade_count,
+            "equity_history": self.portfolio.equity_history,
+        }
+
+    def _make_orders(
+        self,
+        target_weights: np.ndarray,
+        selected: list[int],
+        ts_codes: list[str],
+        exec_idx: int,
+        exec_date: str,
+        raw: dict[str, np.ndarray],
+        stock_names: dict[str, str],
+    ) -> list[SimOrder]:
+        open_prices = raw["open"][:, exec_idx]
+        equity = self.portfolio.cash
+        for code, pos in self.portfolio.positions.items():
+            if code in ts_codes:
+                i = ts_codes.index(code)
+                equity += pos.quantity * raw["close"][i, exec_idx - 1]
+            else:
+                equity += pos.quantity * pos.last_price
+
+        target_shares: dict[int, int] = {}
+        for i in selected:
+            weight = target_weights[i]
+            price = open_prices[i]
+            if price > 0:
+                # Buys must be whole lots of 100 shares (A-share rule).
+                target_shares[i] = (
+                    int(equity * weight / price) // 100
+                ) * 100
+
+        orders: list[SimOrder] = []
+        seen: set[str] = set()
+        for i in selected:
+            code = ts_codes[i]
+            pos = self.portfolio.positions.get(code)
+            current = pos.quantity if pos else 0
+            target = target_shares.get(i, 0)
+            delta = target - current
+            if delta == 0:
+                continue
+            if delta > 0:
+                # Whole-lot buys only; skip sub-lot adjustments.
+                buy_qty = (delta // 100) * 100
+                if buy_qty <= 0:
+                    continue
+                side = "buy"
+                quantity = buy_qty
+            else:
+                side = "sell"
+                quantity = abs(delta)
+            orders.append(
+                SimOrder(
+                    order_id=f"{exec_date}-{code}-{side}-{len(orders)}",
+                    ts_code=code,
+                    trade_date=exec_date,
+                    side=side,
+                    quantity=quantity,
+                    price=float(open_prices[i]),
+                )
+            )
+            seen.add(code)
+
+        for code, pos in self.portfolio.positions.items():
+            if code in seen:
+                continue
+            if code not in ts_codes:
+                continue
+            i = ts_codes.index(code)
+            if i in selected:
+                continue
+            orders.append(
+                SimOrder(
+                    order_id=f"{exec_date}-{code}-sell-{len(orders)}",
+                    ts_code=code,
+                    trade_date=exec_date,
+                    side="sell",
+                    quantity=pos.available_quantity,
+                    price=float(open_prices[i]),
+                )
+            )
+        return orders
+
+    @staticmethod
+    def _equal_weights(selected: list[int], n_stocks: int) -> np.ndarray:
+        weights = np.zeros(n_stocks, dtype=np.float64)
+        if not selected:
+            return weights
+        weight = 1.0 / len(selected)
+        for i in selected:
+            weights[i] = weight
+        return weights
+
+    def _stock_names(self) -> dict[str, str]:
+        # Prefer real names from the stocks table (needed for ST limit-rate
+        # detection); fall back to the code itself when metadata is absent.
+        names = dict(self.loader.stock_names)
+        for code in self.loader.ts_codes:
+            names.setdefault(code, code)
+        return names
+
+    def _handle_stop_signal(self) -> bool:
+        path = Path(self.sim_config.stop_signal_path)
+        if not path.exists():
+            return False
+        try:
+            signal = path.read_text(encoding="utf-8").strip().upper()
+        except OSError:
+            return True
+        if signal not in {"", "STOP", "STOPPED"}:
+            return False
+        logger.warning(f"STOP signal received from {path}. Simulation will stop.")
+        try:
+            path.write_text("STOPPED", encoding="utf-8")
+        except OSError:
+            pass
+        return True
+
+    @staticmethod
+    def _write_json(path: Path, payload: object) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+
+def main() -> None:
+    setup_run_logging(run_name="sim")
+    parser = argparse.ArgumentParser(description="Run A-share paper trading")
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--start", default=None)
+    parser.add_argument("--end", default=None)
+    parser.add_argument("--reset", action="store_true")
+    args = parser.parse_args()
+
+    try:
+        root = _project_root()
+        raw = load_config(args.config, project_root=root)
+        data_config = make_data_config(raw, root)
+        model_config = make_model_config(raw)
+        backtest_config = make_backtest_config(raw)
+        sim_config = make_sim_config(raw, root)
+        loader = AshareDataLoader(data_config, model_config)
+        runner = SimulationRunner(
+            data_config, model_config, backtest_config, sim_config, loader
+        )
+        if args.reset:
+            runner.portfolio.reset()
+        result = runner.run(args.start, args.end)
+        logger.success(f"Simulation complete: {result}")
+    finally:
+        export_log_txt(run_name="sim")
+
+
+if __name__ == "__main__":
+    main()
