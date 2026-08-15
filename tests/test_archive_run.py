@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ARCHIVE_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "archive_run.py"
 
@@ -135,3 +136,24 @@ def test_backtest_mode_requires_formula(repo):
     (repo / "data" / "best.json").unlink()
     r = run_archive(repo, "--mode", "backtest")
     assert r.returncode == 2
+
+
+def test_archive_snapshots_effective_config(repo):
+    """config_effective.yaml records the baseline merged with runtime
+    overrides, even when the script runs as `python scripts/archive_run.py`."""
+
+    (repo / "runtime_overrides.yaml").write_text(
+        "sim:\n  max_positions: 10\n", encoding="utf-8"
+    )
+    r = run_archive(repo, "--mode", "manual", "--config", "config.yaml", "--name", "eff")
+    assert r.returncode == 0, r.stderr
+    run_dir = next((repo / "experiments").iterdir())
+    eff_path = run_dir / "config_effective.yaml"
+    assert eff_path.exists()
+    eff = yaml.safe_load(eff_path.read_text(encoding="utf-8"))
+    assert eff["model"]["d_model"] == 64  # baseline kept
+    assert eff["sim"]["max_positions"] == 10  # override applied
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["config"]["effective_sha256"] == hashlib.sha256(
+        eff_path.read_bytes()
+    ).hexdigest()
