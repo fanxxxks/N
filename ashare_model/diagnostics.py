@@ -129,6 +129,9 @@ def correlation_summary(
         if np.count_nonzero(block) == 0:
             continue
         corr = np.corrcoef(block)
+        # A constant cross-section (e.g. a neutral placeholder, or the very
+        # first return) has undefined correlation: contribute 0, never NaN.
+        corr = np.nan_to_num(corr, nan=0.0)
         mean_abs += np.abs(corr)
         n_dates += 1
     if n_dates == 0:

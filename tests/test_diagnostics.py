@@ -72,6 +72,23 @@ def test_correlation_summary_recovers_identical_pairs():
     assert summary["within_family"]  # non-empty family aggregates
 
 
+def test_correlation_summary_survives_constant_cross_sections():
+    # A neutral placeholder row (all zeros) and a first-day constant row
+    # make np.corrcoef produce NaN cells; the summary must stay finite.
+    rng = np.random.default_rng(11)
+    base = rng.normal(size=(10, 6)).astype(np.float32)
+    tensor = np.stack([base, base, np.zeros_like(base)], axis=0)
+    tensor[0, :, 0] = 0.0  # constant cross-section on the first date
+    summary = correlation_summary(tensor)
+    matrix = summary["matrix"]
+    assert all(
+        v == v  # no NaN anywhere in the reported matrix
+        for row in matrix.values()
+        for v in row.values()
+    )
+    assert summary["top_pairs"][0]["abs_corr"] == pytest.approx(5.0 / 6.0, abs=1e-4)
+
+
 def test_ablate_factors_zeros_rows_and_keeps_shape():
     tensor = np.ones((len(FEATURE_NAMES), 3, 4), dtype=np.float32)
     out = ablate_factors(tensor, ["RET_1", "PE_TTM"])
