@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from ashare_model.factors import AshareFactorEngine, compute_factor_tensor
+from ashare_model.factors import (
+    BAR_COLUMNS,
+    FACTOR_REGISTRY,
+    FAMILIES,
+    FUNDAMENTAL_NAMES,
+    NEUTRAL_FEATURE_NAMES,
+    AshareFactorEngine,
+    _returns,
+    _shift_ratio,
+    compute_factor_tensor,
+)
 from ashare_model.vocab import FEATURE_NAMES
 
 
@@ -26,13 +38,13 @@ def test_factor_engine_helpers(bars_data):
     dates, ts_codes, bars = bars_data
     engine = AshareFactorEngine()
     close = engine._pivot(bars, ts_codes, dates, "close")
-    returns = engine._returns(close)
+    returns = _returns(close)
     assert returns.shape == close.shape
     # The first day has no prior close: the honest value is NaN (the
     # cross-sectional standardizer later maps it to the neutral 0).
     assert returns.iloc[:, 0].isna().all()
     assert returns.iloc[0, 1] == pytest.approx(close.iloc[0, 1] / close.iloc[0, 0] - 1.0)
-    shifted = engine._shift_ratio(close, 5)
+    shifted = _shift_ratio(close, 5)
     assert shifted.shape == close.shape
 
 
@@ -83,3 +95,60 @@ def test_fundamentals_applied_only_to_last_date(bars_data):
     # cross-section); every earlier date stays neutral (no lookahead).
     assert not np.allclose(pe[:, -1], 0.0)
     assert np.allclose(pe[:, :-1], 0.0)
+
+
+def test_registry_covers_every_vocabulary_feature():
+    registered = set(FACTOR_REGISTRY)
+    declared = set(FUNDAMENTAL_NAMES) | set(NEUTRAL_FEATURE_NAMES)
+    # Every vocabulary feature is either a registered local factor or a
+    # declared neutral/fundamental one; the three sets never overlap.
+    assert registered.isdisjoint(declared)
+    assert set(FUNDAMENTAL_NAMES).isdisjoint(NEUTRAL_FEATURE_NAMES)
+    assert registered | declared == set(FEATURE_NAMES)
+    assert registered.issubset(FEATURE_NAMES)
+
+
+def test_registry_metadata_is_valid():
+    for name, (spec, fn) in FACTOR_REGISTRY.items():
+        assert spec.name == name
+        assert spec.family in FAMILIES
+        assert spec.warmup >= 1
+        assert spec.description
+        assert all(col in BAR_COLUMNS for col in spec.required_columns)
+        assert callable(fn)
+
+
+def test_fundamental_and_neutral_families_declared():
+    # Fundamental features are fed by the point-in-time snapshot path and
+    # the external capital-flow features stay neutral until their sources
+    # land; both are metadata-driven, not hard-coded in the engine loop.
+    assert FUNDAMENTAL_NAMES
+    assert NEUTRAL_FEATURE_NAMES == {"NORTHBOUND_CHG", "MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM"}
+
+
+# Golden checksum of the full 34-feature tensor on the deterministic
+# ``make_bars`` fixture, captured before the registry refactor.  It pins the
+# exact values so any future refactor that silently changes a factor fails
+# this test.
+_GOLDEN_TENSOR_SHA256 = "0966880521fc8d887e9e6bdbfc0b57b3df2563b17b2b9c3707431640e896b4c7"
+
+
+def test_factor_tensor_matches_pre_refactor_golden_values(bars_data):
+    dates, ts_codes, bars = bars_data
+    tensor = compute_factor_tensor(bars, ts_codes, dates)
+    assert hashlib.sha256(tensor.tobytes()).hexdigest() == _GOLDEN_TENSOR_SHA256
+    assert tensor.sum() == pytest.approx(-0.6514627, abs=1e-5)
+    ret1 = tensor[FEATURE_NAMES.index("RET_1")]
+    assert ret1[0, 10] == pytest.approx(-0.00039433446, abs=1e-6)
+    assert tensor[FEATURE_NAMES.index("SKEW_20")][0, 30] == pytest.approx(-0.004940729, abs=1e-6)
+
+
+def test_engine_computes_subset_of_features(bars_data):
+    dates, ts_codes, bars = bars_data
+    engine = AshareFactorEngine(feature_names=["RET_1", "PE_TTM", "NORTHBOUND_CHG"])
+    tensor = engine.compute_factor_tensor(bars, ts_codes, dates)
+    assert tensor.shape == (3, len(ts_codes), len(dates))
+    # Unbacked features stay neutral 0 everywhere; the local factor works.
+    assert np.allclose(tensor[1], 0.0)
+    assert np.allclose(tensor[2], 0.0)
+    assert tensor[0][0, 1] != 0.0

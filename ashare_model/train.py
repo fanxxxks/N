@@ -197,6 +197,12 @@ class AshareTrainer:
             "formula_text": self.best_formula,
             "best_reward": self.best_reward,
             "history": self.history,
+            # Vocabulary provenance: the formula is always remapped by name
+            # on load, so later vocabulary additions cannot silently
+            # reinterpret these token ids.
+            "feature_names": list(self.vocab.feature_names),
+            "operator_names": list(self.vocab.operator_names),
+            "feature_version": self.vocab.feature_version,
         }
         out_path = self.data_config.data_dir / "best_ashare_strategy.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)

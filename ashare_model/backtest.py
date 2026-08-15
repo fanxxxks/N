@@ -363,7 +363,7 @@ def main() -> None:
     )
     from .data_loader import AshareDataLoader
     from .vm import StackVM, formula_decode
-    from .vocab import FORMULA_VOCAB
+    from .vocab import FORMULA_VOCAB, resolve_formula_tokens
 
     setup_run_logging(run_name="backtest")
     parser = argparse.ArgumentParser(description="Backtest an A-share formula")
@@ -388,7 +388,7 @@ def main() -> None:
         if not formula_file.exists():
             raise SystemExit(f"Formula file not found: {formula_file}")
         payload = json.loads(formula_file.read_text(encoding="utf-8"))
-        tokens = payload.get("formula", payload) if isinstance(payload, dict) else payload
+        tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
 
         vm = StackVM(FORMULA_VOCAB)
         factors = vm.execute(tokens, loader.factor_tensor)

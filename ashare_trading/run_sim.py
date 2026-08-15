@@ -39,7 +39,7 @@ from ashare_data.schemas import SimOrder
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.vm import StackVM, formula_decode
-from ashare_model.vocab import FORMULA_VOCAB
+from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
 
 from .matching import SimBroker
 from .portfolio import SimulationPortfolio
@@ -105,8 +105,7 @@ class SimulationRunner:
         if not path.exists():
             raise FileNotFoundError(f"Strategy file not found: {path}")
         payload = json.loads(path.read_text(encoding="utf-8"))
-        tokens = payload.get("formula", payload) if isinstance(payload, dict) else payload
-        self.formula_tokens = [int(t) for t in tokens]
+        self.formula_tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
         self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
         logger.success(f"Loaded formula: {self.formula_text}")
 

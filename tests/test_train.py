@@ -154,3 +154,38 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
     assert tokens is not None
     assert trainer.best_reward == pytest.approx(5.0, abs=1e-6)
     assert "value_loss" in trainer.history[0]
+
+
+def test_train_artifact_records_vocab_provenance(tmp_path, populated_db: DataConfig, monkeypatch):
+    import json
+
+    from ashare_model.vocab import resolve_formula_tokens
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+    )
+    train_end = trainer._train_end_index()
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            len(loader.ts_codes) * train_end, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end),
+    )
+    tokens = trainer.train(steps=1, batch_size=1)
+    assert tokens is not None
+
+    artifact = json.loads(
+        (populated_db.data_dir / "best_ashare_strategy.json").read_text(encoding="utf-8")
+    )
+    assert artifact["feature_names"] == list(FORMULA_VOCAB.feature_names)
+    assert artifact["operator_names"] == list(FORMULA_VOCAB.operator_names)
+    assert artifact["feature_version"] == FORMULA_VOCAB.feature_version
+    # The recorded metadata must be enough to resolve the formula back.
+    assert resolve_formula_tokens(artifact) == list(tokens)

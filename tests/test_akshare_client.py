@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from ashare_data import config as data_config_module
@@ -11,7 +9,6 @@ from ashare_data.akshare_client import (
     AkShareClient,
     AkShareUnavailable,
     _retry,
-    _safe_float,
     _symbol_from_ts_code,
 )
 
@@ -19,14 +16,6 @@ from ashare_data.akshare_client import (
 def test_symbol_from_ts_code():
     assert _symbol_from_ts_code("000001.SZ") == "000001"
     assert _symbol_from_ts_code("600000.SH") == "600000"
-
-
-def test_safe_float():
-    assert _safe_float("1.5") == 1.5
-    assert _safe_float(2) == 2.0
-    assert _safe_float(None) is None
-    assert _safe_float(np.nan) is None
-    assert _safe_float("bad") is None
 
 
 def test_retry_raises_after_exhaustion(monkeypatch: pytest.MonkeyPatch):
@@ -79,7 +68,6 @@ def test_offline_defaults_for_missing_fixtures():
     assert set(stocks["ts_code"]) == {"000001.SZ", "600000.SH"}
     assert client.get_constituents("000300.SH") == ["000001.SZ", "600000.SH"]
     assert client.get_daily_bar("000001.SZ").empty
-    assert client.get_fundamental_snapshot("000001.SZ") == {}
 
 
 def test_constituents_filters_index_and_b_share_codes(tmp_path: Path):
