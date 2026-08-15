@@ -663,3 +663,20 @@ def compute_factor_tensor(
     return AshareFactorEngine().compute_factor_tensor(
         bars, ts_codes, dates, pit_fundamentals, extra_frames
     )
+
+
+def ablate_factors(
+    tensor: np.ndarray,
+    excluded_names: list[str] | tuple[str, ...],
+) -> np.ndarray:
+    """Zero the rows of the excluded features (family ablation).
+
+    The tensor keeps its full ``[feature, stock, date]`` shape so formula
+    token ids stay valid; the excluded features simply become neutral (0).
+    """
+
+    out = np.asarray(tensor, dtype=np.float32).copy()
+    for name in excluded_names:
+        if name in FEATURE_NAMES:
+            out[FEATURE_NAMES.index(name)] = 0.0
+    return out

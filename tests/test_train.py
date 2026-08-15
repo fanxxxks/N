@@ -189,3 +189,28 @@ def test_train_artifact_records_vocab_provenance(tmp_path, populated_db: DataCon
     assert artifact["feature_version"] == FORMULA_VOCAB.feature_version
     # The recorded metadata must be enough to resolve the formula back.
     assert resolve_formula_tokens(artifact) == list(tokens)
+
+
+def test_train_can_skip_artifacts(populated_db: DataConfig, monkeypatch):
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+    )
+    train_end = trainer._train_end_index()
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            len(loader.ts_codes) * train_end, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end),
+    )
+    tokens = trainer.train(steps=1, batch_size=1, save_artifacts=False)
+    assert tokens is not None
+    # Ablation runs must not clobber the working strategy/model artifacts.
+    assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
+    assert not (populated_db.data_dir / "ashare_model.pt").exists()

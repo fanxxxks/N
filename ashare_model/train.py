@@ -70,6 +70,7 @@ class AshareTrainer:
         steps: int | None = None,
         batch_size: int | None = None,
         seed: int = 42,
+        save_artifacts: bool = True,
     ) -> list[int] | None:
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -191,6 +192,13 @@ class AshareTrainer:
         if self.best_tokens is None:
             logger.warning("No valid formula found")
             return None
+
+        if not save_artifacts:
+            logger.success(
+                f"Training complete (artifacts skipped); "
+                f"best_reward={self.best_reward:.3f} formula={self.best_formula}"
+            )
+            return self.best_tokens
 
         output = {
             "formula": self.best_tokens,

@@ -23,11 +23,25 @@ python -m pip install -r requirements.txt
 
 ```bash
 python -m ashare_data.sync
+python -m ashare_model.diagnostics   # 因子质量报告（覆盖率/IC/相关性 → data/factor_report.json）
 python -m ashare_model.train
 python -m ashare_model.backtest
 python -m ashare_trading.run_sim
 streamlit run dashboard/app.py
 ```
+
+### 因子诊断与家族消融
+
+新增因子族（或怀疑某族退化）时，先看证据再训练：
+
+```bash
+python -m ashare_model.diagnostics                        # 覆盖率 / rank-IC / 相关性
+python scripts/ablate_families.py --steps 50 --batch-size 256   # 逐族消融（同 seed）
+```
+
+消融把每个家族轮流中性化（tensor 形状不变，token id 不变），对比同 seed 下
+验证集奖励相对基线的变化（`data/ablation_results.json`）；奖励掉的多的族就是
+"真正在出力"的族，掉得少的族可以安全精简。
 
 ### 模拟盘的启动 / 续跑 / 重置
 

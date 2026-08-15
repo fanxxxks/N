@@ -30,6 +30,7 @@ AlphaGPT 仓库速读
 - 只需 Python + AkShare 网络访问，无数据库服务依赖；配置在 config/ashare_config.yaml，密钥可选 config/.env。
 - 已知局限：成分股与申万行业成分为当前快照（幸存者偏差；行业指数行情为完整历史）；北向因子中性占位（日度数据 2024-08 起停披露）；财报回填按法定披露季节末日对齐（保守方向；东财业绩报表的公告列实为重述日期不可用；不追踪修正、累计口径、PS 为 PE×扣非净利率近似）；离线日历用工作日近似。
 - 词表版本化：训练产物带 feature_names/feature_version，加载时按名称重映射；无元数据的旧公式对照 v1 首发词表（34 特征/16 算子）重映射，语义永不漂移。
+- 因子治理：`python -m ashare_model.diagnostics` 输出覆盖率/rank-IC/相关性报告；`scripts/ablate_families.py` 逐族消融（同 seed 对比验证集奖励），新因子族先过证据再过训练预算。
 - best_ashare_strategy.json 需先训练或提供，仓库默认不带。
 
 Takeaway（可对外复述）
