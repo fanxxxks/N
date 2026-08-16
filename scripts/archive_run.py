@@ -54,6 +54,10 @@ DEFAULTS = {
         "metrics": "data/sim_portfolio_state.json",
         "config": "config/ashare_config.yaml",
     },
+    "protocol": {
+        "metrics": "data/protocol_result.json",
+        "config": "config/ashare_config.yaml",
+    },
 }
 
 
@@ -121,6 +125,46 @@ def summarize_metrics(data):
             }
         elif isinstance(value, (int, float, str, bool)):
             summary[key] = value
+    return summary
+
+
+def summarize_protocol(data):
+    """Protocol artifact summary: provenance scalars, per-candidate
+    aggregates and the top trial.  The raw per-fold, per-seed rows stay in
+    the archived metrics.json so later analysis can always drill down."""
+
+    summary = {}
+    for key in (
+        "protocol_version",
+        "reward_version",
+        "frequency",
+        "horizon",
+        "tier",
+        "steps",
+        "batch_size",
+        "seeds",
+        "data_end_date",
+        "n_candidates",
+        "dsr",
+        "max_t",
+    ):
+        if key in data:
+            summary[key] = data[key]
+    if "aggregates" in data:
+        summary["aggregates"] = data["aggregates"]
+    top = data.get("top_trial")
+    if top:
+        summary["top_trial"] = {
+            k: top.get(k)
+            for k in (
+                "candidate",
+                "formula_text",
+                "fold_train_end",
+                "fold_test_end",
+                "seed",
+                "sharpe",
+            )
+        }
     return summary
 
 
@@ -209,7 +253,8 @@ def git_commit_run_dir(run_dir, mode, root):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Archive an experiment run into experiments/.")
-    parser.add_argument("--mode", required=True, choices=["train", "backtest", "sim", "manual"],
+    parser.add_argument("--mode", required=True,
+                        choices=["train", "backtest", "sim", "manual", "protocol"],
                         help="run type; sets default artifact paths (manual = explicit paths only)")
     parser.add_argument("--formula", help="path to formula/strategy JSON")
     parser.add_argument("--config", help="path to config file (yaml or json)")
@@ -241,12 +286,18 @@ def main(argv=None):
         print("ERROR: no artifacts provided; nothing to archive", file=sys.stderr)
         return 2
 
-    # Slug: --name > formula_text > generic.
+    # Slug: --name > formula_text > protocol tier > generic.
     if args.name:
         slug = sanitize_slug(args.name)
     elif formula_path:
         info = load_formula_info(formula_path)
         slug = sanitize_slug(info.get("formula_text") or "run")
+    elif args.mode == "protocol" and metrics_path and metrics_path.exists():
+        try:
+            tier = json.loads(metrics_path.read_text(encoding="utf-8")).get("tier")
+            slug = sanitize_slug(f"protocol_{tier}" if tier else "protocol")
+        except Exception:
+            slug = "protocol"
     else:
         slug = "run"
 
@@ -282,6 +333,7 @@ def main(argv=None):
         "config": None,
         "metrics": None,
         "model": None,
+        "protocol": None,
         "data_end_date": None,
         "files": [],
     }
@@ -316,9 +368,11 @@ def main(argv=None):
 
     if metrics_path:
         data = json.loads(metrics_path.read_text(encoding="utf-8"))
+        is_protocol = args.mode == "protocol" and "protocol_version" in data
         summary_path = run_dir / "metrics_summary.json"
+        summary = summarize_protocol(data) if is_protocol else summarize_metrics(data)
         summary_path.write_text(
-            json.dumps(summarize_metrics(data), ensure_ascii=False, indent=2) + "\n",
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         record("metrics_summary.json", summary_path, summary_path.stat().st_size)
@@ -331,6 +385,21 @@ def main(argv=None):
             entry["stored"] = False
             entry["reason"] = "exceeds --max-metrics-size-mb (summary kept)"
         manifest["metrics"] = entry
+        if is_protocol:
+            manifest["protocol"] = {
+                "version": data.get("protocol_version"),
+                "frequency": data.get("frequency"),
+                "horizon": data.get("horizon"),
+                "tier": data.get("tier"),
+                "steps": data.get("steps"),
+                "batch_size": data.get("batch_size"),
+                "n_folds": len(data.get("folds", [])),
+                "n_seeds": len(data.get("seeds", [])),
+                "n_candidates": data.get("n_candidates"),
+                "dsr": data.get("dsr"),
+                "max_t": data.get("max_t"),
+                "top_candidate": (data.get("top_trial") or {}).get("candidate"),
+            }
 
     if model_path:
         model_hash = sha256_file(model_path)

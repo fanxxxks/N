@@ -30,7 +30,7 @@ from ashare_data.config import (
 )
 
 from .alphagpt import AlphaGPTModel, build_action_mask
-from .data_loader import AshareDataLoader
+from .data_loader import AshareDataLoader, date_index
 from .ops import OPS_CONFIG
 from .reward import REWARD_VERSION, fast_basket_reward
 from .vm import StackVM, formula_decode
@@ -75,6 +75,7 @@ class AshareTrainer:
         batch_size: int | None = None,
         seed: int = 42,
         save_artifacts: bool = True,
+        train_end_date: str | None = None,
     ) -> list[int] | None:
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -83,7 +84,7 @@ class AshareTrainer:
         max_len = self.model_config.max_formula_len
         device = next(self.model.parameters()).device
 
-        train_end_idx = self._train_end_index()
+        train_end_idx = self._train_end_index(train_end_date)
         if train_end_idx <= 2:
             logger.warning(
                 f"Training window is degenerate ({train_end_idx} dates); "
@@ -228,12 +229,18 @@ class AshareTrainer:
         logger.success(f"Training complete; best formula saved to {out_path}")
         return self.best_tokens
 
-    def _train_end_index(self) -> int:
-        train_end = self.backtest_config.train_end_date.replace("-", "")
-        for idx, date in enumerate(self.loader.dates):
-            if date >= train_end:
-                return max(idx, 1)
-        return len(self.loader.dates)
+    def _train_end_index(self, train_end_date: str | None = None) -> int:
+        """First column index at or after the training-window end date.
+
+        ``train_end_date`` overrides ``backtest_config.train_end_date`` so
+        the evaluation protocol can train each walk-forward fold against its
+        own absolute cutoff without touching the shared config.
+        """
+
+        train_end = (train_end_date or self.backtest_config.train_end_date).replace(
+            "-", ""
+        )
+        return date_index(self.loader.dates, train_end)
 
     def _validation_start(self, train_end_idx: int) -> int:
         """First index of the validation tail inside the training window.

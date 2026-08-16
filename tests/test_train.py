@@ -142,6 +142,47 @@ def test_train_can_skip_artifacts(populated_db: DataConfig, monkeypatch):
     assert not (populated_db.data_dir / "ashare_model.pt").exists()
 
 
+def test_train_end_date_override_truncates_training_window(
+    tmp_path, populated_db: DataConfig, monkeypatch
+):
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+    )
+    captured: dict[str, int] = {}
+
+    def fake_execute(tokens, ft):
+        captured["cols"] = ft.shape[2]
+        return torch.zeros(ft.shape[1], ft.shape[2])
+
+    monkeypatch.setattr(trainer.vm, "execute", fake_execute)
+    trainer.train(
+        steps=1, batch_size=1, save_artifacts=False, train_end_date="2024-01-10"
+    )
+    override_end = trainer._train_end_index("2024-01-10")
+    assert captured["cols"] == override_end
+    # The override lands strictly before the config-driven window.
+    assert override_end < trainer._train_end_index()
+
+
+def test_validation_start_moves_with_overridden_train_end(populated_db: DataConfig):
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    trainer = _make_trainer(populated_db.data_dir, loader)
+    early = trainer._train_end_index("2024-01-10")
+    late = trainer._train_end_index()
+    early_val = trainer._validation_start(early)
+    late_val = trainer._validation_start(late)
+    assert 1 <= early_val < early
+    assert 1 <= late_val < late
+    assert early_val <= late_val
+
+
 def test_train_invalid_formula_gets_clip_low(populated_db: DataConfig, monkeypatch):
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
