@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pytest
 
 from ashare_data.config import (
@@ -21,12 +22,21 @@ from ashare_model.evaluation import (
     baseline_candidates,
     benchmark_row,
     build_result,
+    deflated_sharpe,
+    dsr_from_rows,
     epoch_slice,
     evaluate_formula,
     evaluate_signal,
+    expected_max_sr,
+    load_trial_rows,
+    max_t_from_rows,
+    norm_cdf,
+    norm_ppf,
+    psr,
     resolve_folds,
     run_fold,
     run_protocol,
+    selfcheck_rows,
     top_trial,
 )
 from ashare_model.reward import REWARD_VERSION
@@ -427,3 +437,223 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
     assert any(r["candidate"] == "benchmark:equal_weight" for r in payload["rows"])
     # The protocol must never clobber the working strategy artifacts.
     assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
+
+
+# --- P1b: Deflated Sharpe and max-t -----------------------------------------
+
+
+def _noise_rows(n=30, t=100, seed=0):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for i in range(n):
+        daily = rng.normal(0.0, 0.01, size=t)
+        rows.append(
+            {
+                "candidate": f"noise{i}",
+                "failed": False,
+                "seed": i,
+                "fold_test_end": "2024-01-25",
+                "val_reward": float(i),
+                "daily_returns": [float(x) for x in daily],
+                "benchmark_daily_returns": [0.0] * t,
+            }
+        )
+    return rows
+
+
+def _strong_row(t=100, seed=1):
+    rng = np.random.default_rng(seed)
+    daily = 0.004 + rng.normal(0.0, 0.001, size=t)
+    return {
+        "candidate": "strong",
+        "failed": False,
+        "seed": None,
+        "fold_test_end": "2024-01-25",
+        "daily_returns": [float(x) for x in daily],
+        "benchmark_daily_returns": [0.0] * t,
+    }
+
+
+def test_norm_cdf_known_values():
+    assert norm_cdf(0.0) == pytest.approx(0.5, abs=1e-12)
+    assert norm_cdf(1.96) == pytest.approx(0.9750021, abs=1e-6)
+    assert norm_cdf(-1.96) == pytest.approx(0.0249979, abs=1e-6)
+
+
+def test_norm_ppf_known_values_and_roundtrip():
+    assert norm_ppf(0.5) == pytest.approx(0.0, abs=1e-9)
+    assert norm_ppf(0.975) == pytest.approx(1.959964, abs=1e-6)
+    assert norm_ppf(0.01) == pytest.approx(-2.326348, abs=1e-5)
+    for x in (-3.0, -1.0, 0.0, 0.5, 2.0):
+        assert norm_ppf(norm_cdf(x)) == pytest.approx(x, abs=1e-7)
+
+
+def test_norm_ppf_rejects_out_of_range():
+    with pytest.raises(ValueError):
+        norm_ppf(0.0)
+    with pytest.raises(ValueError):
+        norm_ppf(1.0)
+
+
+def test_psr_hand_computed():
+    # sr=1.0, sr0=0.5, t=250, skew=0, kurt=3:
+    # num = 0.5*sqrt(249), den = sqrt(1.5) -> cdf ~ 1.0
+    assert psr(1.0, 0.5, 250, 0.0, 3.0) == pytest.approx(1.0, abs=1e-9)
+    # Equal to the benchmark: PSR collapses to 0.5.
+    assert psr(1.0, 1.0, 250, 0.0, 3.0) == pytest.approx(0.5, abs=1e-12)
+
+
+def test_expected_max_sr_increases_with_trials():
+    e10 = expected_max_sr(10, 250, 0.0, 3.0)
+    e100 = expected_max_sr(100, 250, 0.0, 3.0)
+    assert e10 == pytest.approx(0.0998, abs=1e-3)
+    assert e100 == pytest.approx(0.1603, abs=1e-3)
+    assert e10 < e100
+
+
+def test_deflated_sharpe_decreases_with_more_trials():
+    dsr10 = deflated_sharpe(0.3, 10, 250, 0.0, 3.0)
+    dsr100 = deflated_sharpe(0.3, 100, 250, 0.0, 3.0)
+    assert 1.0 > dsr10 > dsr100
+
+
+def test_dsr_noise_rows_insignificant_and_decoupled(monkeypatch):
+    rows = _noise_rows()
+    dsr = dsr_from_rows(rows)
+    assert dsr is not None and dsr["n_trials"] == 30
+    assert dsr["dsr"] < 0.95
+    before = {k: v for k, v in dsr.items() if k != "best_candidate"}
+    # val_reward is archived provenance: it must not move the correction.
+    for row in rows:
+        row["val_reward"] = 999.0 - row["val_reward"]
+    after = {
+        k: v for k, v in dsr_from_rows(rows).items() if k != "best_candidate"
+    }
+    assert after == before
+    monkeypatch.setattr(evaluation, "REWARD_VERSION", "999")
+    assert (
+        {k: v for k, v in dsr_from_rows(rows).items() if k != "best_candidate"}
+        == before
+    )
+
+
+def test_dsr_strong_trial_stands_out():
+    rows = _noise_rows(n=30) + [_strong_row()]
+    dsr = dsr_from_rows(rows)
+    assert dsr["n_trials"] == 31
+    assert dsr["best_candidate"] == "strong"
+    assert dsr["sr_best"] > 3.0
+    assert dsr["dsr"] > 0.9
+
+
+def test_dsr_single_trial_uses_zero_benchmark():
+    rows = [_strong_row()]
+    dsr = dsr_from_rows(rows)
+    assert dsr is not None and dsr["n_trials"] == 1
+    assert dsr["dsr"] == pytest.approx(
+        psr(dsr["sr_best"], 0.0, dsr["t_best"], dsr["skew_best"], dsr["kurt_best"]),
+        rel=1e-12,
+    )
+
+
+def test_max_t_noise_rows_not_significant():
+    mt = max_t_from_rows(_noise_rows(), n_perms=1000, seed=0)
+    assert mt is not None
+    assert mt["p_value"] > 0.05
+    assert not mt["significant_95"]
+
+
+def test_max_t_strong_trial_significant():
+    mt = max_t_from_rows(
+        _noise_rows(n=30) + [_strong_row()], n_perms=2000, seed=0
+    )
+    assert mt is not None
+    assert mt["observed_max_t"] > 3.0
+    assert mt["p_value"] < 0.05
+    assert mt["significant_95"]
+
+
+def test_selfcheck_rows_insignificant_on_synthetic(populated_db: DataConfig):
+    loader = _loader(populated_db)
+    proto = ProtocolConfig(
+        folds=[
+            FoldConfig("2024-01-10", "2024-01-25"),
+            FoldConfig("2024-01-25", "2024-02-10"),
+        ]
+    )
+    rows = selfcheck_rows(loader, proto, BacktestConfig())
+    assert [r["candidate"] for r in rows] == ["selfcheck:noise"] * 2
+    result = build_result(proto, "selfcheck", TierConfig(0, 0), rows)
+    assert result["tier"] == "selfcheck" and result["steps"] == 0
+    assert result["dsr"] is not None and result["dsr"]["dsr"] < 0.95
+    assert result["max_t"] is not None and result["max_t"]["p_value"] > 0.05
+    # Note: annualized Sharpe on this 3-stock / 11-day fixture explodes by
+    # construction ((1+r)^(252/11)); the "OOS median ~ 0" acceptance belongs
+    # to the real-data selfcheck, where test windows span full years.
+
+
+def test_build_result_includes_extra_trial_rows():
+    rows = _noise_rows(n=3)
+    extra = _noise_rows(n=2, seed=7)
+    result = build_result(
+        ProtocolConfig(), "screening", TierConfig(50, 256), rows,
+        extra_trial_rows=extra,
+    )
+    assert result["dsr"]["n_trials"] == 5
+    assert result["dsr_extra_trials"] == 2
+    assert result["n_candidates"] == 3
+
+
+def test_load_trial_rows_reads_protocol_artifacts(tmp_path):
+    p1 = tmp_path / "a.json"
+    p1.write_text(
+        json.dumps({"rows": [{"candidate": "trained", "seed": 42}]}),
+        encoding="utf-8",
+    )
+    p2 = tmp_path / "b.json"
+    p2.write_text(
+        json.dumps({"rows": [{"candidate": "baseline:X"}]}), encoding="utf-8"
+    )
+    rows = load_trial_rows(f"{p1},{p2}")
+    assert [r["candidate"] for r in rows] == ["trained", "baseline:X"]
+    assert load_trial_rows(None) == []
+
+
+def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
+    import yaml
+
+    cfg_path = tmp_path / "config.yaml"
+    out_path = tmp_path / "selfcheck_result.json"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "data_dir": str(populated_db.data_dir),
+                "duckdb_path": str(populated_db.duckdb_path),
+                "parquet_dir": str(populated_db.parquet_dir),
+                "protocol": {
+                    "folds": [
+                        {"train_end": "2024-01-10", "test_end": "2024-01-25"},
+                        {"train_end": "2024-01-25", "test_end": "2024-02-10"},
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = evaluation.main(
+        [
+            "--config",
+            str(cfg_path),
+            "--selfcheck",
+            "--max-t-perms",
+            "200",
+            "--output",
+            str(out_path),
+        ]
+    )
+    assert rc == 0
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["tier"] == "selfcheck"
+    assert payload["steps"] == 0 and payload["batch_size"] == 0
+    assert all(r["candidate"] == "selfcheck:noise" for r in payload["rows"])
+    assert payload["dsr"] is not None and payload["max_t"] is not None

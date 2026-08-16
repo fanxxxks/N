@@ -14,8 +14,8 @@ Contract:
   shared rank-IC code path.  ``val_reward`` is archived for provenance only
   and never used to rank candidates, so results remain comparable across
   ``ashare_model.reward.REWARD_VERSION`` generations.
-* Candidate multiplicity is corrected with Deflated Sharpe and a max-t
-  permutation test (single trial matrix for both).
+* Candidate multiplicity is corrected with Deflated Sharpe and a
+  studentized max-t block bootstrap (single trial matrix for both).
 
 :data:`PROTOCOL_VERSION` is bumped on every semantic change to this module's
 measurement behavior and is recorded in protocol artifacts and experiment
@@ -44,6 +44,7 @@ from ashare_data.config import (
     ModelConfig,
     ProtocolConfig,
     RewardConfig,
+    TierConfig,
     load_config,
     make_backtest_config,
     make_data_config,
@@ -63,7 +64,7 @@ from .train import AshareTrainer
 from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "1"
+PROTOCOL_VERSION = "2"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -192,6 +193,10 @@ def evaluate_signal(
     ic = rank_ic_stats(signal[None, :, :], target, dates, names=["formula"])[
         "formula"
     ]
+    bench_daily: list[float] = []
+    if result.benchmark_equity and len(result.benchmark_equity) >= 2:
+        eq = result.benchmark_equity
+        bench_daily = [float(eq[i + 1] / eq[i] - 1.0) for i in range(len(eq) - 1)]
     return {
         "n_dates": len(dates),
         "total_return": float(m["total_return"]),
@@ -207,6 +212,10 @@ def evaluate_signal(
         "ic_abs_mean": float(ic["ic_abs_mean"]),
         "icir": float(ic["icir"]),
         "n_ic_dates": int(ic["n_dates"]),
+        # Raw per-day series: kept in every row so the DS / max-t corrections
+        # and later analysis never have to reconstruct them from aggregates.
+        "daily_returns": [float(x) for x in result.daily_returns],
+        "benchmark_daily_returns": bench_daily,
     }
 
 
@@ -267,6 +276,8 @@ def benchmark_row(
         "ic_abs_mean": 0.0,
         "icir": 0.0,
         "n_ic_dates": 0,
+        "daily_returns": [float(x) for x in daily],
+        "benchmark_daily_returns": [float(x) for x in daily],
     }
 
 
@@ -423,6 +434,271 @@ def top_trial(rows: list[dict]) -> dict | None:
     return max(scored, key=lambda r: float(r["sharpe"]))
 
 
+# --- multiple-testing corrections (Bailey & Lopez de Prado 2014) ------------
+#
+# Both corrections share the same trial matrix (one trial = one non-failed
+# row with its raw OOS excess-return series), so their conclusions are
+# directly comparable.  scipy is not a project dependency: the normal CDF
+# uses math.erf and the inverse normal CDF uses Acklam's rational
+# approximation plus one Halley refinement (|error| ~ 1e-9).
+
+_SQRT2 = math.sqrt(2.0)
+_EULER_MASCHERONI = 0.5772156649015329
+
+# Acklam's inverse-normal-CDF coefficients.
+_ACKLAM_A = (
+    -3.969683028665376e01, 2.209460984245205e02, -2.759285104469687e02,
+    1.383577518672690e02, -3.066479806614716e01, 2.506628277459239e00,
+)
+_ACKLAM_B = (
+    -5.447609879822406e01, 1.615858368580409e02, -1.556989798598866e02,
+    6.680131188771972e01, -1.328068155288572e01,
+)
+_ACKLAM_C = (
+    -7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e00,
+    -2.549732539343734e00, 4.374664141464968e00, 2.938163982698783e00,
+)
+_ACKLAM_D = (
+    7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00,
+    3.754408661907416e00,
+)
+
+
+def _poly(coeffs, x: float) -> float:
+    result = 0.0
+    for c in coeffs:
+        result = result * x + c
+    return result
+
+
+def norm_ppf(p: float) -> float:
+    """Inverse standard-normal CDF for ``0 < p < 1`` (Acklam + Halley)."""
+
+    if not 0.0 < p < 1.0:
+        raise ValueError(f"norm_ppf undefined for p={p}")
+    if p < 0.02425:
+        q = math.sqrt(-2.0 * math.log(p))
+        x = _poly(_ACKLAM_C, q) / _poly(_ACKLAM_D + (1.0,), q)
+    elif p <= 0.97575:
+        q = p - 0.5
+        r = q * q
+        x = _poly(_ACKLAM_A, r) * q / _poly(_ACKLAM_B + (1.0,), r)
+    else:
+        q = math.sqrt(-2.0 * math.log(1.0 - p))
+        x = -_poly(_ACKLAM_C, q) / _poly(_ACKLAM_D + (1.0,), q)
+    # One Halley refinement step against the true CDF.
+    e = 0.5 * math.erfc(-x / _SQRT2) - p
+    u = e * math.sqrt(2.0 * math.pi) * math.exp(x * x / 2.0)
+    return x - u / (1.0 + x * u / 2.0)
+
+
+def norm_cdf(x: float) -> float:
+    """Standard-normal CDF via ``erf`` (scalar; the only caller is PSR)."""
+
+    return 0.5 * (1.0 + math.erf(float(x) / _SQRT2))
+
+
+def psr(sr: float, sr_benchmark: float, t: int, skew: float, kurt: float) -> float:
+    """Probabilistic Sharpe ratio (B&LdP Eq. 14, incl. skew/kurt terms)."""
+
+    num = (sr - sr_benchmark) * math.sqrt(t - 1)
+    den = math.sqrt(max(1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr * sr, 1e-12))
+    return float(norm_cdf(num / den))
+
+
+def expected_max_sr(n_trials: int, t: int, skew: float, kurt: float) -> float:
+    """Expected maximum SR over ``n_trials`` independent null trials
+    (B&LdP Eq. 13 with the null benchmark SR of zero)."""
+
+    sr0 = 0.0
+    variance = (1.0 - skew * sr0 + (kurt - 1.0) / 4.0 * sr0 * sr0) / (t - 1)
+    z1 = norm_ppf(1.0 - 1.0 / n_trials)
+    z2 = norm_ppf(1.0 - 1.0 / (n_trials * math.e))
+    return sr0 + math.sqrt(variance) * (
+        (1.0 - _EULER_MASCHERONI) * z1 + _EULER_MASCHERONI * z2
+    )
+
+
+def deflated_sharpe(sr_best, n_trials, t, skew, kurt) -> float:
+    """PSR of the best trial against the multiplicity-corrected benchmark."""
+
+    return psr(sr_best, expected_max_sr(n_trials, t, skew, kurt), t, skew, kurt)
+
+
+def excess_series(row: dict) -> np.ndarray | None:
+    """Raw OOS excess (strategy - benchmark) daily returns of a trial row."""
+
+    if row.get("failed") or not row.get("daily_returns"):
+        return None
+    strat = np.asarray(row["daily_returns"], dtype=np.float64)
+    bench = np.asarray(
+        row.get("benchmark_daily_returns") or np.zeros_like(strat),
+        dtype=np.float64,
+    )
+    if bench.shape != strat.shape:
+        bench = np.zeros_like(strat)
+    return strat - bench
+
+
+def _trial_stats(excess: np.ndarray) -> tuple[float, float, float, int]:
+    t = excess.size
+    mean = float(excess.mean())
+    std = float(excess.std(ddof=1)) if t > 1 else 0.0
+    if std < 1e-12:
+        return 0.0, 0.0, 3.0, t
+    sr = mean / std
+    skew = float(((excess - mean) ** 3).mean() / std**3)
+    kurt = float(((excess - mean) ** 4).mean() / std**4)
+    return sr, skew, kurt, t
+
+
+def dsr_from_rows(rows: list[dict]) -> dict | None:
+    """Deflated Sharpe of the best trial in the row pool."""
+
+    trials: list[dict] = []
+    for row in rows:
+        excess = excess_series(row)
+        if excess is None or excess.size < 2:
+            continue
+        sr, skew, kurt, t = _trial_stats(excess)
+        trials.append(
+            {
+                "row": row,
+                "sr": sr,
+                "skew": skew,
+                "kurt": kurt,
+                "t": t,
+            }
+        )
+    if not trials:
+        return None
+    best = max(trials, key=lambda x: x["sr"])
+    if len(trials) == 1:
+        # No multiplicity: the corrected benchmark collapses to SR = 0.
+        dsr = psr(best["sr"], 0.0, best["t"], best["skew"], best["kurt"])
+    else:
+        dsr = deflated_sharpe(
+            best["sr"], len(trials), best["t"], best["skew"], best["kurt"]
+        )
+    return {
+        "dsr": dsr,
+        "n_trials": len(trials),
+        "sr_best": best["sr"],
+        "t_best": best["t"],
+        "skew_best": best["skew"],
+        "kurt_best": best["kurt"],
+        "best_candidate": best["row"].get("candidate"),
+        "best_fold_test_end": best["row"].get("fold_test_end"),
+        "best_seed": best["row"].get("seed"),
+    }
+
+
+def max_t_from_rows(
+    rows: list[dict], n_perms: int = 5000, seed: int = 0, block_size: int = 10
+) -> dict | None:
+    """Studentized max-t block bootstrap (White-style reality check).
+
+    Each trial's excess series is recentered to the zero-mean null; per
+    permutation, circular blocks of ``block_size`` days are resampled per
+    trial, the bootstrapped mean is studentized by the observed per-trial
+    standard deviation, and the max over trials forms the null distribution
+    of the max t-statistic.  Shares the exact trial matrix with
+    :func:`dsr_from_rows`.  (Plain sign-flipping is not used: for a max
+    statistic it can never fall below p = 0.5 by construction.)
+    """
+
+    series: list[np.ndarray] = []
+    for row in rows:
+        excess = excess_series(row)
+        if excess is None or excess.size < 2:
+            continue
+        series.append(excess)
+    if not series:
+        return None
+
+    stds = np.asarray(
+        [float(s.std(ddof=1)) for s in series], dtype=np.float64
+    )
+    centered = [s - float(s.mean()) for s in series]
+    tstats = np.asarray(
+        [
+            math.sqrt(s.size) * (float(s.mean()) / std)
+            if std > 1e-12
+            else 0.0
+            for s, std in zip(series, stds)
+        ],
+        dtype=np.float64,
+    )
+    observed = float(tstats.max())
+
+    rng = np.random.default_rng(seed)
+    block = min(max(int(block_size), 1), min(s.size for s in series))
+    count = 0
+    for _ in range(int(n_perms)):
+        boot_means = np.empty(len(series), dtype=np.float64)
+        for i, s in enumerate(centered):
+            n = s.size
+            n_blocks = int(math.ceil(n / block))
+            starts = rng.integers(0, n, size=n_blocks)
+            offsets = np.arange(block)
+            idx = (starts[:, None] + offsets[None, :]).ravel() % n
+            boot = s[idx[:n]]
+            boot_means[i] = float(boot.mean())
+        boot_t = np.sqrt(
+            np.asarray([s.size for s in series], dtype=np.float64)
+        ) * (boot_means / np.maximum(stds, 1e-12))
+        if float(boot_t.max()) >= observed:
+            count += 1
+
+    p_value = float((count + 1) / (int(n_perms) + 1))
+    return {
+        "observed_max_t": observed,
+        "p_value": p_value,
+        "n_perms": int(n_perms),
+        "block_size": block,
+        "n_trials": len(series),
+        "seed": seed,
+        "significant_95": bool(p_value <= 0.05),
+    }
+
+
+def selfcheck_rows(
+    loader: AshareDataLoader,
+    proto_cfg: ProtocolConfig,
+    backtest_config: BacktestConfig,
+    seed: int = 1234,
+) -> list[dict]:
+    """Pure-noise placeholder candidates: the protocol's dry-run acceptance.
+
+    Noise signals are scored through the identical engine path; the DS and
+    max-t corrections must then both report insignificance.  A deterministic
+    RNG makes the self-check reproducible.
+    """
+
+    rows: list[dict] = []
+    rng = np.random.default_rng(seed)
+    for fold_cfg in proto_cfg.folds:
+        fold = resolve_folds([fold_cfg], loader.dates)[0]
+        _, _, _, dates = epoch_slice(loader, fold)
+        signal = rng.normal(0.0, 1.0, size=(len(loader.ts_codes), len(dates)))
+        metrics = evaluate_signal(signal, loader, fold, backtest_config)
+        rows.append(
+            {
+                "candidate": "selfcheck:noise",
+                "formula_text": "noise",
+                "formula": None,
+                "fold_train_end": fold.train_end,
+                "fold_test_end": fold.test_end,
+                "seed": None,
+                "val_reward": None,
+                "final_avg_reward": None,
+                "failed": False,
+                **metrics,
+            }
+        )
+    return rows
+
+
 def _sanitize(value):
     """Replace non-finite floats with ``None`` so results stay valid JSON."""
 
@@ -441,11 +717,18 @@ def build_result(
     tier,
     rows: list[dict],
     data_end_date: str | None = None,
-    dsr=None,
-    max_t=None,
+    extra_trial_rows: list[dict] | None = None,
+    max_t_perms: int = 5000,
 ) -> dict:
-    """Assemble the protocol artifact (schema contract, see module docstring)."""
+    """Assemble the protocol artifact (schema contract, see module docstring).
 
+    ``extra_trial_rows`` are trial rows from earlier protocol artifacts
+    (e.g. screening runs whose OOS trials must count towards the DS/max-t
+    multiplicity correction); they join the correction pool but are never
+    merged into this run's own rows.
+    """
+
+    trial_pool = list(rows) + list(extra_trial_rows or [])
     return _sanitize(
         {
             "protocol_version": PROTOCOL_VERSION,
@@ -466,8 +749,9 @@ def build_result(
             "rows": rows,
             "aggregates": aggregate_results(rows),
             "top_trial": top_trial(rows),
-            "dsr": dsr,
-            "max_t": max_t,
+            "dsr": dsr_from_rows(trial_pool),
+            "max_t": max_t_from_rows(trial_pool, n_perms=max_t_perms),
+            "dsr_extra_trials": len(extra_trial_rows or []),
         }
     )
 
@@ -482,6 +766,8 @@ def run_protocol(
     tier_name: str,
     fold_indices: list[int] | None = None,
     seeds: list[int] | None = None,
+    extra_trial_rows: list[dict] | None = None,
+    max_t_perms: int = 5000,
 ) -> dict:
     """Run the full protocol: baselines + one trained candidate per
     (fold, seed), all scored by the shared engine path."""
@@ -525,8 +811,29 @@ def run_protocol(
                 )
             )
     return build_result(
-        proto_cfg, tier_name, tier, rows, data_end_date=loader.dates[-1]
+        proto_cfg,
+        tier_name,
+        tier,
+        rows,
+        data_end_date=loader.dates[-1],
+        extra_trial_rows=extra_trial_rows,
+        max_t_perms=max_t_perms,
     )
+
+
+def load_trial_rows(paths: str | None) -> list[dict]:
+    """Trial rows from prior protocol artifacts (comma-separated paths)."""
+
+    rows: list[dict] = []
+    if not paths:
+        return rows
+    for path in paths.split(","):
+        path = path.strip()
+        if not path:
+            continue
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        rows.extend(payload.get("rows", []))
+    return rows
 
 
 def main(argv=None) -> int:
@@ -545,6 +852,21 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--seeds", default=None, help="comma-separated seed override"
     )
+    parser.add_argument(
+        "--selfcheck",
+        action="store_true",
+        help="score pure-noise placeholder candidates and report whether "
+        "the DS/max-t corrections stay insignificant (dry-run acceptance)",
+    )
+    parser.add_argument(
+        "--trials",
+        default=None,
+        help="comma-separated prior protocol_result.json paths whose trial "
+        "rows join the DS/max-t multiplicity correction",
+    )
+    parser.add_argument(
+        "--max-t-perms", type=int, default=5000, help="max-t permutation count"
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -558,23 +880,37 @@ def main(argv=None) -> int:
 
         loader = AshareDataLoader(data_config, model_config)
         loader.load_data()
+        extra_trials = load_trial_rows(args.trials)
 
-        fold_indices = list(range(args.folds)) if args.folds else None
-        seeds = (
-            [int(s) for s in args.seeds.split(",")] if args.seeds else None
-        )
-
-        result = run_protocol(
-            loader,
-            data_config,
-            model_config,
-            backtest_config,
-            reward_config,
-            proto_cfg,
-            args.tier,
-            fold_indices=fold_indices,
-            seeds=seeds,
-        )
+        if args.selfcheck:
+            rows = selfcheck_rows(loader, proto_cfg, backtest_config)
+            result = build_result(
+                proto_cfg,
+                "selfcheck",
+                TierConfig(0, 0),
+                rows,
+                data_end_date=loader.dates[-1],
+                extra_trial_rows=extra_trials,
+                max_t_perms=args.max_t_perms,
+            )
+        else:
+            fold_indices = list(range(args.folds)) if args.folds else None
+            seeds = (
+                [int(s) for s in args.seeds.split(",")] if args.seeds else None
+            )
+            result = run_protocol(
+                loader,
+                data_config,
+                model_config,
+                backtest_config,
+                reward_config,
+                proto_cfg,
+                args.tier,
+                fold_indices=fold_indices,
+                seeds=seeds,
+                extra_trial_rows=extra_trials,
+                max_t_perms=args.max_t_perms,
+            )
         out_path = root / args.output
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(
@@ -589,6 +925,24 @@ def main(argv=None) -> int:
                 f"candidate={top['candidate']} fold_test_end={top['fold_test_end']} "
                 f"seed={top['seed']}"
             )
+        if result["dsr"]:
+            dsr = result["dsr"]
+            print(
+                f"dsr: {dsr['dsr']:.3f} (n_trials={dsr['n_trials']}, "
+                f"best={dsr['best_candidate']} sr={dsr['sr_best']:.3f})"
+            )
+        if result["max_t"]:
+            mt = result["max_t"]
+            print(
+                f"max_t: observed={mt['observed_max_t']:.3f} "
+                f"p={mt['p_value']:.4f} significant_95={mt['significant_95']}"
+            )
+        if args.selfcheck and result["dsr"] and result["max_t"]:
+            passed = (
+                result["dsr"]["dsr"] < 0.95
+                and not result["max_t"]["significant_95"]
+            )
+            print(f"selfcheck passed={passed}")
     finally:
         export_log_txt(run_name="evaluation")
     return 0
