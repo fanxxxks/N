@@ -1,0 +1,71 @@
+{
+  "run_id": "342f816e812f",
+  "created_at": "2026-08-16T13:47:52",
+  "mode": "protocol",
+  "slug": "protocol_confirmation_synthetic",
+  "git_commit": "ee1a81c4d803076f22fb64684c8bd8e394cb3342",
+  "git_dirty": false,
+  "formula": null,
+  "config": {
+    "source": "confirmation.yaml",
+    "sha256": "41755714927ed8c7ca03f2704bcab8b0579235ea5e111abec3525f7a763c7021",
+    "effective_sha256": "34f62535cb5dd1d613ae58c48ecad27dc016a26cedfe061e7add0e3cd444ad39"
+  },
+  "metrics": {
+    "source": "confirmation_result.json",
+    "sha256": "eb0bee2056fef8b72b0dad8230bf4d05eede795299edcb24705f3586cc286f73",
+    "stored": true
+  },
+  "model": null,
+  "protocol": {
+    "version": "2",
+    "frequency": "daily",
+    "horizon": 1,
+    "tier": "confirmation",
+    "steps": 1,
+    "batch_size": 256,
+    "n_folds": 1,
+    "n_seeds": 1,
+    "n_candidates": 5,
+    "dsr": {
+      "dsr": 0.1165142082124207,
+      "n_trials": 5,
+      "sr_best": 0.0,
+      "t_best": 43,
+      "skew_best": 0.0,
+      "kurt_best": 3.0,
+      "best_candidate": "benchmark:equal_weight",
+      "best_fold_test_end": "2024-04-30",
+      "best_seed": null
+    },
+    "max_t": {
+      "observed_max_t": 0.0,
+      "p_value": 1.0,
+      "n_perms": 5000,
+      "block_size": 10,
+      "n_trials": 5,
+      "seed": 0,
+      "significant_95": false
+    },
+    "top_candidate": "baseline:MOMENTUM_20"
+  },
+  "data_end_date": "20240614",
+  "files": [
+    {
+      "name": "config.yaml",
+      "bytes": 405
+    },
+    {
+      "name": "config_effective.yaml",
+      "bytes": 421
+    },
+    {
+      "name": "metrics_summary.json",
+      "bytes": 16464
+    },
+    {
+      "name": "metrics.json",
+      "bytes": 37357
+    }
+  ]
+}

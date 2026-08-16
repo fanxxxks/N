@@ -1,0 +1,15 @@
+data_dir: D:\minequant\AlphaGPT\data
+duckdb_path: D:\minequant\AlphaGPT\data\ashare.duckdb
+parquet_dir: D:\minequant\AlphaGPT\data\parquet
+protocol:
+  folds:
+  - train_end: '2020-12-31'
+    test_end: '2021-12-31'
+  - train_end: '2021-12-31'
+    test_end: '2022-12-31'
+  - train_end: '2022-12-31'
+    test_end: '2023-12-31'
+  - train_end: '2023-12-31'
+    test_end: '2024-12-31'
+  - train_end: '2024-12-31'
+    test_end: '2025-12-31'

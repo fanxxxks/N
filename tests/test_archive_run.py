@@ -291,3 +291,24 @@ def test_manual_mode_with_protocol_metrics_keeps_old_summary(repo):
     run_dir = next((repo / "experiments").iterdir())
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["protocol"] is None
+
+
+def test_data_end_date_reads_duckdb_path_from_config(repo):
+    """The archived config's duckdb_path (not the hardcoded local DB) is the
+    source of data_end_date, so synthetic runs record their own database."""
+    import duckdb
+
+    db_path = repo / "data" / "custom.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute("CREATE TABLE daily_bar (trade_date VARCHAR)")
+    con.execute("INSERT INTO daily_bar VALUES ('20240801'), ('20240802')")
+    con.close()
+    (repo / "config_db.yaml").write_text(
+        "duckdb_path: data/custom.duckdb\ndaily_table: daily_bar\n",
+        encoding="utf-8",
+    )
+    r = run_archive(repo, "--mode", "manual", "--config", "config_db.yaml", "--name", "dbend")
+    assert r.returncode == 0, r.stderr
+    run_dir = next((repo / "experiments").iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["data_end_date"] == "20240802"

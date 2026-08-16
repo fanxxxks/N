@@ -52,6 +52,10 @@ python scripts/ablate_families.py --steps 50 --batch-size 256   # 逐族消融�
 ```bash
 python -m ashare_model.evaluation --tier screening     # 快速筛选档（50 步 x 256）
 python -m ashare_model.evaluation --tier confirmation  # 确认档（200 步 x 512）
+python -m ashare_model.evaluation --selfcheck          # 空转验收：纯噪声候选，DS/max-t 必须不显著
+# 确认档可并入此前筛选档的全部试错，计入多重检验校正：
+python -m ashare_model.evaluation --tier confirmation \
+    --trials experiments/20260816_protocol_screening/metrics.json
 python scripts/archive_run.py --mode protocol --commit # 结果归档进 experiments/
 ```
 
@@ -63,10 +67,13 @@ python scripts/archive_run.py --mode protocol --commit # 结果归档进 experim
 - **裁决指标**：完整回测引擎的净收益 / Sharpe / Sortino / 最大回撤 / 换手 +
   rank-IC / ICIR；**不用** `best_reward` / `fast_basket_reward` 裁决，训练侧
   `val_reward` 只归档、不参与排序。
-- **多重检验**：Deflated Sharpe 与 max-t 排列检验对候选数做校正（共享同一试验矩阵）。
+- **多重检验**：Deflated Sharpe（Bailey & López de Prado 2014，含偏度/峰度修正）
+  与中心化学生化 max-t 块自助法（White 现实检验风格）共享同一试验矩阵——每个
+  非失败候选行是一个试验（excess 逐日收益）；DSR > 0.95 / max-t p ≤ 0.05 才
+  判显著。此前跑批的试错用 `--trials` 并入校正。
 - 产物 `data/protocol_result.json` 记录 `protocol_version` / `reward_version` /
-  `frequency` / `horizon` 与逐折逐种子原始行；`frequency` / `horizon` 目前只是
-  记录字段（周频 / 多周期目标留待后续阶段）。
+  `frequency` / `horizon` 与逐折逐种子原始行（含逐日收益序列，便于下钻）；
+  `frequency` / `horizon` 目前只是记录字段（周频 / 多周期目标留待后续阶段）。
 - `batch_size` 不要低于 256：advantage 归一化（`rewards.std()`）在更小批次下有
   退化风险。
 

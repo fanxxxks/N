@@ -1,0 +1,71 @@
+{
+  "run_id": "fd93ed66c563",
+  "created_at": "2026-08-16T13:51:54",
+  "mode": "protocol",
+  "slug": "selfcheck",
+  "git_commit": "0e14f9321e1bb3edf3e03fc082cbb71b7607f2d4",
+  "git_dirty": false,
+  "formula": null,
+  "config": {
+    "source": "selfcheck.yaml",
+    "sha256": "ac4c5436e8dc5b021fd222e0d83e282c53177f29b75fc3b226b671797baa9bc9",
+    "effective_sha256": "29551396f46080d18f839ddc24476dfa08e1748f082f01a8a6d8ecb15cd4e0c5"
+  },
+  "metrics": {
+    "source": "selfcheck_result.json",
+    "sha256": "73adbf442316974432c2364f9898cc20e56655104645925e96a94cc4c62bad49",
+    "stored": true
+  },
+  "model": null,
+  "protocol": {
+    "version": "2",
+    "frequency": "daily",
+    "horizon": 1,
+    "tier": "selfcheck",
+    "steps": 0,
+    "batch_size": 0,
+    "n_folds": 5,
+    "n_seeds": 3,
+    "n_candidates": 5,
+    "dsr": {
+      "dsr": 0.0,
+      "n_trials": 5,
+      "sr_best": -0.7435695540111954,
+      "t_best": 242,
+      "skew_best": 0.11472532268307126,
+      "kurt_best": 3.5854016709690275,
+      "best_candidate": "selfcheck:noise",
+      "best_fold_test_end": "2021-12-31",
+      "best_seed": null
+    },
+    "max_t": {
+      "observed_max_t": -11.567227626353807,
+      "p_value": 1.0,
+      "n_perms": 5000,
+      "block_size": 10,
+      "n_trials": 5,
+      "seed": 0,
+      "significant_95": false
+    },
+    "top_candidate": "selfcheck:noise"
+  },
+  "data_end_date": "20260814",
+  "files": [
+    {
+      "name": "config.yaml",
+      "bytes": 442
+    },
+    {
+      "name": "config_effective.yaml",
+      "bytes": 448
+    },
+    {
+      "name": "metrics_summary.json",
+      "bytes": 4616
+    },
+    {
+      "name": "metrics.json",
+      "bytes": 100854
+    }
+  ]
+}

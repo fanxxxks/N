@@ -1,0 +1,10 @@
+﻿data_dir: C:\Users\Administrator\AppData\Local\Temp/evalp1b/synth/data
+duckdb_path: C:\Users\Administrator\AppData\Local\Temp/evalp1b/synth/data/synth.duckdb
+parquet_dir: C:\Users\Administrator\AppData\Local\Temp/evalp1b/synth/data/parquet
+model:
+  max_formula_len: 6
+protocol:
+  folds:
+    - {train_end: "2024-02-28", test_end: "2024-04-30"}
+  seeds: [42]
+  confirmation: {steps: 1, batch_size: 256}
