@@ -77,14 +77,6 @@ def test_blocked_mask_suspension_and_limits(populated_db: DataConfig):
     assert blocked_sell[0]
 
 
-def test_evaluate_for_training_returns_reward_and_mean(populated_db: DataConfig):
-    factors, raw, ts_codes, dates = _engine_inputs(populated_db)
-    engine = AshareBacktestEngine(BacktestConfig(top_n=2))
-    reward, mean = engine.evaluate_for_training(factors, raw, ts_codes, dates)
-    assert isinstance(reward, float)
-    assert isinstance(mean, float)
-
-
 def test_run_includes_benchmark_positions_and_aligned_dates(populated_db: DataConfig):
     factors, raw, ts_codes, dates = _engine_inputs(populated_db)
     result = AshareBacktestEngine(BacktestConfig(top_n=2)).run(

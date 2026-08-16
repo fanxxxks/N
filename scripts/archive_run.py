@@ -104,6 +104,9 @@ def load_formula_info(path):
         "formula": data.get("formula"),
         "formula_text": data.get("formula_text"),
         "best_reward": data.get("best_reward"),
+        # Reward provenance: best_reward is only comparable within the same
+        # reward implementation version (absent on legacy artifacts).
+        "reward_version": data.get("reward_version"),
     }
 
 

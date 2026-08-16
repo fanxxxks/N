@@ -45,8 +45,16 @@ model:
   max_formula_len: 12
   learning_rate: 0.001
   validation_fraction: 0.2
+
+# Reward-scoring constants; semantic changes to the reward implementation
+# bump ashare_model.reward.REWARD_VERSION and are recorded in artifacts.
+reward:
   reward_clip_low: -3.0
   reward_clip_high: 5.0
+  bad_reward: -2.0
+  turnover_penalty: 1.0
+  turnover_threshold: 0.5
+  downside_min_obs: 3
 
 backtest:
   start_date: "2015-01-01"

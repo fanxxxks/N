@@ -34,6 +34,7 @@ def repo(tmp_path):
         "formula": [8, 0, 0],
         "formula_text": "TURNOVER_CHG MUL RET_5",
         "best_reward": 0.123,
+        "reward_version": "1",
     }
     (tmp_path / "data" / "best.json").write_text(json.dumps(formula), encoding="utf-8")
     (tmp_path / "config.yaml").write_text("model:\n  d_model: 64\n", encoding="utf-8")
@@ -71,6 +72,7 @@ def test_manual_archive_records_everything(repo):
     assert manifest["mode"] == "manual"
     assert manifest["formula"]["formula_text"] == "TURNOVER_CHG MUL RET_5"
     assert manifest["formula"]["best_reward"] == 0.123
+    assert manifest["formula"]["reward_version"] == "1"
     assert manifest["config"]["sha256"] == hashlib.sha256(
         (repo / "config.yaml").read_bytes()).hexdigest()
     assert manifest["metrics"]["stored"] is True
@@ -87,6 +89,18 @@ def test_manual_archive_records_everything(repo):
     summary = json.loads((run_dir / "metrics_summary.json").read_text(encoding="utf-8"))
     assert summary["metrics"]["sharpe"] == 1.5
     assert "dates" not in summary  # list values are dropped from the summary
+
+
+def test_legacy_formula_without_reward_version_archives(repo):
+    (repo / "data" / "best.json").write_text(
+        json.dumps({"formula": [1, 2], "formula_text": "OLD", "best_reward": 0.5}),
+        encoding="utf-8",
+    )
+    r = run_archive(repo, "--mode", "manual", "--formula", "data/best.json")
+    assert r.returncode == 0, r.stderr
+    run_dir = next((repo / "experiments").iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["formula"]["reward_version"] is None
 
 
 def test_big_model_is_hash_referenced_only(repo):

@@ -12,6 +12,8 @@ from ashare_data.processor import open_to_open_returns
 from ashare_data.schemas import BacktestResult
 from ashare_logging import export_log_txt, setup_run_logging
 
+from .reward import sortino_ratio, trading_cost_fraction
+
 
 class AshareBacktestEngine:
     def __init__(self, config: BacktestConfig | None = None):
@@ -132,9 +134,7 @@ class AshareBacktestEngine:
             sell_weights = np.maximum(prev_weights - target_weights, 0.0)
             turnover = float(np.abs(target_weights - prev_weights).sum())
 
-            cost_fraction = self._cost_fraction(
-                buy_weights, sell_weights, prev_weights, target_weights
-            )
+            cost_fraction = trading_cost_fraction(buy_weights, sell_weights, self.config)
             gross_ret = float(np.dot(target_weights, target_ret[:, t]))
             net_ret = gross_ret - cost_fraction
             daily_returns.append(net_ret)
@@ -172,46 +172,6 @@ class AshareBacktestEngine:
             metrics=metrics,
             positions=positions,
         )
-
-    def evaluate_for_training(
-        self,
-        factors: np.ndarray,
-        raw_cache: dict[str, np.ndarray],
-        ts_codes: list[str],
-        dates: list[str],
-        start_idx: int = 0,
-        end_idx: int | None = None,
-    ) -> tuple[float, float]:
-        """Return a clipped Sortino-style reward and mean net return."""
-
-        end_idx = len(dates) if end_idx is None else end_idx
-        sub_dates = dates[start_idx:end_idx]
-        sub_factors = factors[:, start_idx:end_idx]
-        sub_raw = {k: v[:, start_idx:end_idx] for k, v in raw_cache.items()}
-        result = self.run(sub_factors, sub_raw, ts_codes, sub_dates)
-        if not result.daily_returns:
-            return self.config.reward_clip_low, 0.0
-
-        daily = np.asarray(result.daily_returns)
-        downside = daily[daily < 0]
-        if downside.size >= 3:
-            downside_std = downside.std(ddof=1)
-        else:
-            downside_std = daily.std(ddof=1) + 1e-6
-        ann_mean = daily.mean() * 252
-        sortino = ann_mean / (downside_std * math.sqrt(252) + 1e-9)
-        reward = sortino
-
-        if daily.mean() < 0:
-            reward = -2.0
-        if result.metrics.get("average_turnover", 0.0) > 0.5:
-            reward -= 1.0
-        if result.metrics.get("max_drawdown", 0.0) > 0.4:
-            reward -= 0.5
-        reward = float(
-            np.clip(reward, self.config.reward_clip_low, self.config.reward_clip_high)
-        )
-        return reward, float(daily.mean())
 
     @staticmethod
     def _open_to_open_returns(open_: np.ndarray) -> np.ndarray:
@@ -293,28 +253,6 @@ class AshareBacktestEngine:
             return 0.20
         return 0.10
 
-    def _cost_fraction(
-        self,
-        buy_weights: np.ndarray,
-        sell_weights: np.ndarray,
-        prev_weights: np.ndarray,
-        target_weights: np.ndarray,
-    ) -> float:
-        cfg = self.config
-        min_fee_fraction = cfg.min_commission / self.initial_capital
-        cost = 0.0
-        for w_buy, w_sell in zip(buy_weights, sell_weights):
-            if w_buy > 0:
-                cost += max(min_fee_fraction, cfg.commission_rate * w_buy)
-                cost += cfg.transfer_fee_rate * w_buy
-                cost += cfg.slippage_rate * w_buy
-            if w_sell > 0:
-                cost += max(min_fee_fraction, cfg.commission_rate * w_sell)
-                cost += cfg.stamp_tax_rate * w_sell
-                cost += cfg.transfer_fee_rate * w_sell
-                cost += cfg.slippage_rate * w_sell
-        return float(cost)
-
     @staticmethod
     def _equity_curve(daily_returns: list[float]) -> list[float]:
         equity = [1.0]
@@ -332,9 +270,7 @@ class AshareBacktestEngine:
         ann_return = float((1.0 + total_return) ** (252 / n) - 1.0)
         vol = float(returns.std(ddof=1) * math.sqrt(252)) if n > 1 else 0.0
         sharpe = (ann_return - 0.02) / (vol + 1e-9)
-        downside = returns[returns < 0]
-        downside_std = float(downside.std(ddof=1) * math.sqrt(252)) if downside.size > 1 else vol
-        sortino = ann_return / (downside_std + 1e-9)
+        sortino = sortino_ratio(returns)
         running_max = np.maximum.accumulate(np.asarray(equity))
         drawdown = 1.0 - np.asarray(equity) / (running_max + 1e-12)
         max_drawdown = float(np.max(drawdown))
