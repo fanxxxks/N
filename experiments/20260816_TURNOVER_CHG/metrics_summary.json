@@ -1,0 +1,14 @@
+{
+  "formula_text": "TURNOVER_CHG",
+  "metrics": {
+    "total_return": -0.9999683439375614,
+    "annual_return": -0.6035411333723298,
+    "annual_volatility": 0.3068491580009662,
+    "sharpe": -2.032077048548686,
+    "sortino": -2.6383504791375274,
+    "max_drawdown": 0.9999798736841212,
+    "calmar": -0.603553280072741,
+    "average_turnover": 1.9269537617920287
+  },
+  "benchmark": "全市场等权"
+}
