@@ -26,6 +26,7 @@ python -m ashare_data.sync
 python -m ashare_model.diagnostics   # 因子质量报告（覆盖率/IC/相关性 → data/factor_report.json）
 python -m ashare_model.train
 python -m ashare_model.backtest
+python -m ashare_model.evaluation --tier screening  # 测量协议（见下）
 python -m ashare_trading.run_sim
 streamlit run dashboard/app.py
 ```
@@ -42,6 +43,32 @@ python scripts/ablate_families.py --steps 50 --batch-size 256   # 逐族消融�
 消融把每个家族轮流中性化（tensor 形状不变，token id 不变），对比同 seed 下
 验证集奖励相对基线的变化（`data/ablation_results.json`）；奖励掉的多的族就是
 "真正在出力"的族，掉得少的族可以安全精简。
+
+### 测量协议（walk-forward 评价）
+
+在改动奖励语义之前，先固定"怎么证明公式变好"的测量协议；协议裁决与 RL reward
+完全解耦，所以不同 `reward_version` 代的产物仍然可比：
+
+```bash
+python -m ashare_model.evaluation --tier screening     # 快速筛选档（50 步 x 256）
+python -m ashare_model.evaluation --tier confirmation  # 确认档（200 步 x 512）
+python scripts/archive_run.py --mode protocol --commit # 结果归档进 experiments/
+```
+
+- **折**：`protocol.folds` 按**绝对日期**锚定（默认 5 个日历年测试窗 2021–2025），
+  数据持续增长不会移动折边界；每折训练至 `train_end`，在 `(train_end, test_end]`
+  上做 OOS 打分。
+- **种子**：`protocol.seeds` 每折多种子独立训练（默认 3 个），聚合报中位数 ± IQR
+  （reward 有 clip，均值不可信）。
+- **裁决指标**：完整回测引擎的净收益 / Sharpe / Sortino / 最大回撤 / 换手 +
+  rank-IC / ICIR；**不用** `best_reward` / `fast_basket_reward` 裁决，训练侧
+  `val_reward` 只归档、不参与排序。
+- **多重检验**：Deflated Sharpe 与 max-t 排列检验对候选数做校正（共享同一试验矩阵）。
+- 产物 `data/protocol_result.json` 记录 `protocol_version` / `reward_version` /
+  `frequency` / `horizon` 与逐折逐种子原始行；`frequency` / `horizon` 目前只是
+  记录字段（周频 / 多周期目标留待后续阶段）。
+- `batch_size` 不要低于 256：advantage 归一化（`rewards.std()`）在更小批次下有
+  退化风险。
 
 ### 模拟盘的启动 / 续跑 / 重置
 

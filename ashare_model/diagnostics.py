@@ -72,17 +72,20 @@ def rank_ic_stats(
     tensor: np.ndarray,
     target: np.ndarray,
     dates: list[str],
+    names: list[str] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Per-feature rank IC of the standardized factor vs the forward target.
 
     Returns mean IC, mean |IC| and the IC information ratio
     (mean/std over dates) per feature.  Dates without a usable target
-    cross-section are skipped.
+    cross-section are skipped.  ``names`` overrides the vocabulary-derived
+    row labels (e.g. for a single formula signal the evaluation protocol
+    passes ``["formula"]``).
     """
 
     target = np.asarray(target, dtype=np.float64)
     stats: dict[str, dict[str, float]] = {}
-    names = _names_for(tensor)
+    names = _names_for(tensor) if names is None else list(names)
     for i, name in enumerate(names):
         ics = []
         for t in range(tensor.shape[2]):

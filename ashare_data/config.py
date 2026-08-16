@@ -89,6 +89,106 @@ class RewardConfig:
 
 
 @dataclass
+class FoldConfig:
+    """One walk-forward fold, anchored to absolute dates (YYYY-MM-DD).
+
+    Train on data up to and including ``train_end``; the out-of-sample test
+    window is (``train_end``, ``test_end``].  Absolute anchors keep folds
+    stable as the database grows.
+    """
+
+    train_end: str
+    test_end: str
+
+
+@dataclass
+class TierConfig:
+    """Search budget of one protocol tier (steps x samples-per-step)."""
+
+    steps: int = 50
+    batch_size: int = 256
+
+
+@dataclass
+class ProtocolConfig:
+    """Evaluation-protocol constants (single source: ashare_model.evaluation).
+
+    Semantic changes to the protocol implementation bump
+    ``ashare_model.evaluation.PROTOCOL_VERSION``; these values only tune the
+    current version.  ``frequency``/``horizon`` are record-only for now: no
+    rebalance-calendar mechanism exists yet (weekly/multi-period deferred to
+    a later phase), but they are written into protocol artifacts so future
+    runs can be told apart.
+    """
+
+    frequency: str = "daily"
+    horizon: int = 1
+    seeds: list[int] = field(default_factory=lambda: [42, 7, 2024])
+    folds: list[FoldConfig] = field(
+        default_factory=lambda: [
+            FoldConfig("2020-12-31", "2021-12-31"),
+            FoldConfig("2021-12-31", "2022-12-31"),
+            FoldConfig("2022-12-31", "2023-12-31"),
+            FoldConfig("2023-12-31", "2024-12-31"),
+            FoldConfig("2024-12-31", "2025-12-31"),
+        ]
+    )
+    # Single-factor baselines (one momentum / one quality / one liquidity
+    # feature from the vocabulary).  Names are validated against the vocab
+    # when the protocol is built.
+    baseline_signals: list[str] = field(
+        default_factory=lambda: ["MOMENTUM_20", "ROE", "TURNOVER"]
+    )
+    screening: TierConfig = field(default_factory=TierConfig)
+    confirmation: TierConfig = field(
+        default_factory=lambda: TierConfig(steps=200, batch_size=512)
+    )
+
+
+def validate_folds(folds: list[FoldConfig]) -> list[FoldConfig]:
+    """Return ``folds`` after checking structure.
+
+    Every fold must point forward (``test_end > train_end``); folds must be
+    strictly increasing and non-overlapping (a test window never reaches
+    into the next train window).  Date strings compare lexicographically,
+    which is exact for ``YYYY-MM-DD``.
+    """
+
+    for i, fold in enumerate(folds):
+        if fold.test_end <= fold.train_end:
+            raise ValueError(
+                f"fold {i}: test_end {fold.test_end} must be after "
+                f"train_end {fold.train_end}"
+            )
+        if i > 0:
+            prev = folds[i - 1]
+            if fold.train_end <= prev.train_end or fold.test_end <= prev.test_end:
+                raise ValueError(
+                    f"fold {i} ({fold.train_end} -> {fold.test_end}) is not "
+                    f"strictly after fold {i - 1} "
+                    f"({prev.train_end} -> {prev.test_end})"
+                )
+            if fold.train_end < prev.test_end:
+                raise ValueError(
+                    f"fold {i} train window overlaps fold {i - 1} test window "
+                    f"({fold.train_end} < {prev.test_end})"
+                )
+    return folds
+
+
+def validate_baseline_signals(names: list[str], allowed) -> list[str]:
+    """Return ``names`` after checking every one exists in ``allowed``."""
+
+    allowed_set = set(allowed)
+    unknown = [name for name in names if name not in allowed_set]
+    if unknown:
+        raise ValueError(
+            f"baseline signals not in the vocabulary: {', '.join(unknown)}"
+        )
+    return names
+
+
+@dataclass
 class BacktestConfig:
     start_date: str = "2015-01-01"
     end_date: str = "2026-12-31"
@@ -234,6 +334,44 @@ def make_reward_config(raw: dict[str, Any]) -> RewardConfig:
         for k in RewardConfig.__dataclass_fields__
     }
     return RewardConfig(**data)
+
+
+def _make_tier(tier_raw: dict[str, Any] | None, defaults: TierConfig) -> TierConfig:
+    tier_raw = tier_raw or {}
+    return TierConfig(
+        steps=int(tier_raw.get("steps", defaults.steps)),
+        batch_size=int(tier_raw.get("batch_size", defaults.batch_size)),
+    )
+
+
+def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
+    defaults = ProtocolConfig()
+    proto_raw = raw.get("protocol", {}) or {}
+
+    folds_raw = proto_raw.get("folds")
+    if folds_raw is None:
+        folds = defaults.folds
+    else:
+        folds = [FoldConfig(**dict(f)) for f in folds_raw]
+    folds = validate_folds(folds)
+
+    cfg = ProtocolConfig(
+        frequency=str(proto_raw.get("frequency", defaults.frequency)),
+        horizon=int(proto_raw.get("horizon", defaults.horizon)),
+        seeds=[int(s) for s in proto_raw.get("seeds", defaults.seeds)],
+        folds=folds,
+        baseline_signals=[
+            str(name)
+            for name in proto_raw.get("baseline_signals", defaults.baseline_signals)
+        ],
+        screening=_make_tier(proto_raw.get("screening"), defaults.screening),
+        confirmation=_make_tier(proto_raw.get("confirmation"), defaults.confirmation),
+    )
+    if not cfg.seeds:
+        raise ValueError("protocol.seeds must not be empty")
+    if cfg.horizon < 1:
+        raise ValueError("protocol.horizon must be a positive integer")
+    return cfg
 
 
 def make_backtest_config(raw: dict[str, Any]) -> BacktestConfig:

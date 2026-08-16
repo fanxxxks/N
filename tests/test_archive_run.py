@@ -171,3 +171,123 @@ def test_archive_snapshots_effective_config(repo):
     assert manifest["config"]["effective_sha256"] == hashlib.sha256(
         eff_path.read_bytes()
     ).hexdigest()
+
+
+# --- protocol mode ----------------------------------------------------------
+
+
+def _write_protocol(repo):
+    proto = {
+        "protocol_version": "1",
+        "reward_version": "1",
+        "frequency": "daily",
+        "horizon": 1,
+        "tier": "screening",
+        "steps": 50,
+        "batch_size": 256,
+        "seeds": [42, 7],
+        "folds": [{"train_end": "2020-12-31", "test_end": "2021-12-31"}],
+        "data_end_date": "20250801",
+        "n_candidates": 4,
+        "rows": [
+            {
+                "candidate": "trained",
+                "sharpe": 1.2,
+                "fold_train_end": "2020-12-31",
+                "fold_test_end": "2021-12-31",
+                "seed": 42,
+                "val_reward": 0.8,
+            },
+            {
+                "candidate": "trained",
+                "sharpe": 0.9,
+                "fold_train_end": "2020-12-31",
+                "fold_test_end": "2021-12-31",
+                "seed": 7,
+                "val_reward": 0.6,
+            },
+        ],
+        "aggregates": {
+            "trained": {
+                "n_rows": 1,
+                "metrics": {"sharpe": {"median": 1.2}},
+            }
+        },
+        "top_trial": {"candidate": "trained", "sharpe": 1.2, "seed": 42},
+        "dsr": None,
+        "max_t": None,
+    }
+    (repo / "data" / "protocol_result.json").write_text(
+        json.dumps(proto), encoding="utf-8"
+    )
+
+
+def test_protocol_mode_archives_with_manifest_block(repo):
+    _write_protocol(repo)
+    r = run_archive(repo, "--mode", "protocol")
+    assert r.returncode == 0, r.stderr
+    run_dir = next((repo / "experiments").iterdir())
+    assert run_dir.name.endswith("protocol_screening")
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    block = manifest["protocol"]
+    assert block["version"] == "1"
+    assert block["frequency"] == "daily" and block["horizon"] == 1
+    assert block["tier"] == "screening"
+    assert block["steps"] == 50 and block["batch_size"] == 256
+    assert block["n_folds"] == 1 and block["n_seeds"] == 2
+    assert block["n_candidates"] == 4
+    assert block["top_candidate"] == "trained"
+    assert block["dsr"] is None and block["max_t"] is None
+    assert manifest["metrics"]["stored"] is True
+
+    summary = json.loads(
+        (run_dir / "metrics_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["protocol_version"] == "1"
+    assert summary["reward_version"] == "1"
+    assert summary["aggregates"]["trained"]["n_rows"] == 1
+    assert summary["top_trial"]["candidate"] == "trained"
+    assert "rows" not in summary  # raw rows stay in the archived metrics.json
+
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["rows"][0]["candidate"] == "trained"
+    assert metrics["rows"][0]["val_reward"] == 0.8  # per-fold raw data preserved
+
+
+def test_protocol_mode_does_not_require_formula(repo):
+    (repo / "data" / "best.json").unlink()
+    _write_protocol(repo)
+    r = run_archive(repo, "--mode", "protocol")
+    assert r.returncode == 0, r.stderr
+
+
+def test_protocol_manifest_records_actual_run_scope(repo):
+    """n_folds / n_seeds must reflect the rows that actually ran, not the
+    config's full fold/seed lists (a reduced closeout run must never look
+    like a full 5-fold, 3-seed run in the manifest)."""
+    _write_protocol(repo)
+    proto = json.loads((repo / "data" / "protocol_result.json").read_text(encoding="utf-8"))
+    proto["folds"] = [{"train_end": f"202{i}-12-31", "test_end": f"202{i+1}-12-31"} for i in range(5)]
+    proto["seeds"] = [42, 7, 2024]
+    proto["rows"] = [
+        {"candidate": "trained", "fold_train_end": "2020-12-31", "fold_test_end": "2021-12-31", "seed": 42},
+        {"candidate": "trained", "fold_train_end": "2021-12-31", "fold_test_end": "2022-12-31", "seed": 42},
+    ]
+    (repo / "data" / "protocol_result.json").write_text(json.dumps(proto), encoding="utf-8")
+    r = run_archive(repo, "--mode", "protocol")
+    assert r.returncode == 0, r.stderr
+    run_dir = next((repo / "experiments").iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["protocol"]["n_folds"] == 2  # not 5
+    assert manifest["protocol"]["n_seeds"] == 1  # not 3
+
+
+def test_manual_mode_with_protocol_metrics_keeps_old_summary(repo):
+    """A protocol-shaped metrics file archived as --mode manual must not
+    trigger the protocol block (mode is the discriminator)."""
+    _write_protocol(repo)
+    r = run_archive(repo, "--mode", "manual", "--metrics", "data/protocol_result.json")
+    assert r.returncode == 0, r.stderr
+    run_dir = next((repo / "experiments").iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["protocol"] is None

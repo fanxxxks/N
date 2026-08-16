@@ -11,12 +11,18 @@ from ashare_data.config import (
     BacktestConfig,
     RewardConfig,
     SimConfig,
+    FoldConfig,
+    ProtocolConfig,
+    TierConfig,
     load_config,
     make_backtest_config,
     make_data_config,
     make_model_config,
+    make_protocol_config,
     make_reward_config,
     make_sim_config,
+    validate_baseline_signals,
+    validate_folds,
 )
 
 
@@ -132,3 +138,84 @@ def test_make_sim_config_resolves_absolute_paths(tmp_path: Path):
     assert sim.orders_dir == tmp_path / "orders"
     assert sim.trades_dir == tmp_path / "trades"
     assert sim.stop_signal_path == tmp_path / "STOP"
+
+
+# --- protocol ---------------------------------------------------------------
+
+
+def test_make_protocol_config_defaults():
+    proto = make_protocol_config({})
+    assert proto.frequency == "daily"
+    assert proto.horizon == 1
+    assert proto.seeds == [42, 7, 2024]
+    assert len(proto.folds) == 5
+    assert proto.folds[0] == FoldConfig("2020-12-31", "2021-12-31")
+    assert proto.baseline_signals == ["MOMENTUM_20", "ROE", "TURNOVER"]
+    assert proto.screening == TierConfig(50, 256)
+    assert proto.confirmation == TierConfig(200, 512)
+
+
+def test_make_protocol_config_nested_overrides():
+    proto = make_protocol_config(
+        {
+            "protocol": {
+                "seeds": [1, 2],
+                "folds": [
+                    {"train_end": "2022-06-30", "test_end": "2022-12-31"},
+                    {"train_end": "2022-12-31", "test_end": "2023-06-30"},
+                ],
+                "screening": {"steps": 10, "batch_size": 512},
+            }
+        }
+    )
+    assert proto.seeds == [1, 2]
+    assert [f.test_end for f in proto.folds] == ["2022-12-31", "2023-06-30"]
+    assert proto.screening.steps == 10
+    assert proto.screening.batch_size == 512
+    # Untouched nested defaults survive.
+    assert proto.confirmation == TierConfig(200, 512)
+    assert proto.frequency == "daily"
+
+
+def test_validate_folds_rejects_backward_or_zero_length_fold():
+    with pytest.raises(ValueError, match="must be after"):
+        validate_folds([FoldConfig("2021-12-31", "2021-12-31")])
+    with pytest.raises(ValueError, match="must be after"):
+        validate_folds([FoldConfig("2022-06-30", "2021-12-31")])
+
+
+def test_validate_folds_rejects_unsorted_and_overlapping():
+    with pytest.raises(ValueError, match="strictly after"):
+        validate_folds(
+            [
+                FoldConfig("2022-12-31", "2023-12-31"),
+                FoldConfig("2021-12-31", "2022-12-31"),
+            ]
+        )
+    with pytest.raises(ValueError, match="overlaps"):
+        validate_folds(
+            [
+                FoldConfig("2021-12-31", "2022-12-31"),
+                FoldConfig("2022-06-30", "2023-12-31"),
+            ]
+        )
+
+
+def test_make_protocol_config_validates_folds_and_seeds():
+    with pytest.raises(ValueError, match="must be after"):
+        make_protocol_config(
+            {"protocol": {"folds": [{"train_end": "2022-12-31", "test_end": "2022-06-30"}]}}
+        )
+    with pytest.raises(ValueError, match="seeds"):
+        make_protocol_config({"protocol": {"seeds": []}})
+    with pytest.raises(ValueError, match="horizon"):
+        make_protocol_config({"protocol": {"horizon": 0}})
+
+
+def test_validate_baseline_signals_unknown_name_raises():
+    with pytest.raises(ValueError, match="NOT_A_FACTOR"):
+        validate_baseline_signals(["MOMENTUM_20", "NOT_A_FACTOR"], ["MOMENTUM_20", "ROE"])
+    assert validate_baseline_signals(["ROE", "MOMENTUM_20"], ["MOMENTUM_20", "ROE"]) == [
+        "ROE",
+        "MOMENTUM_20",
+    ]

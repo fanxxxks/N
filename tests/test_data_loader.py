@@ -4,7 +4,7 @@ import pytest
 
 from ashare_data.config import DataConfig, ModelConfig
 from ashare_data.db import AshareDB
-from ashare_model.data_loader import AshareDataLoader, build_loader_from_config
+from ashare_model.data_loader import AshareDataLoader, build_loader_from_config, date_index
 from ashare_model.vocab import FORMULA_VOCAB
 
 
@@ -112,3 +112,21 @@ def test_load_universe_filters_index_codes(data_config: DataConfig):
         )
     loader = AshareDataLoader(data_config, ModelConfig())
     assert loader.load_universe() == ["000001.SZ"]
+
+
+# --- date_index -------------------------------------------------------------
+
+
+def test_date_index_finds_first_column_at_or_after():
+    dates = ["20240101", "20240102", "20240105", "20240108"]
+    assert date_index(dates, "2024-01-02") == 1
+    assert date_index(dates, "20240103") == 2  # falls between columns
+    assert date_index(dates, "2024-01-08") == 3
+
+
+def test_date_index_clamps_and_runs_past_end():
+    dates = ["20240101", "20240102"]
+    # A cutoff before the first column clamps to 1: the window never
+    # collapses to index 0.
+    assert date_index(dates, "2023-12-01") == 1
+    assert date_index(dates, "2024-02-01") == 2
