@@ -169,18 +169,26 @@ def summarize_protocol(data):
 
 
 def data_end_date(root, config_path):
-    """Best-effort: max trade_date in the local DuckDB (table name from config)."""
+    """Best-effort: max trade_date in the local DuckDB.
+
+    Table name and DB path come from the archived config (relative paths are
+    resolved against the repo root), falling back to the standard local DB.
+    """
     try:
         import duckdb
         import yaml
 
         table = "daily_bar"
+        db_path = root / "data" / "ashare.duckdb"
         try:
             cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
             table = cfg.get("daily_table", table)
+            db_raw = cfg.get("duckdb_path")
+            if db_raw:
+                candidate = Path(db_raw)
+                db_path = candidate if candidate.is_absolute() else root / candidate
         except Exception:
             pass
-        db_path = root / "data" / "ashare.duckdb"
         if not db_path.exists():
             return None
         con = duckdb.connect(str(db_path), read_only=True)

@@ -619,6 +619,47 @@ def test_load_trial_rows_reads_protocol_artifacts(tmp_path):
     assert load_trial_rows(None) == []
 
 
+def test_cli_confirmation_smoke(tmp_path, populated_db: DataConfig):
+    """The confirmation tier records its own steps/batch in the artifact."""
+
+    import yaml
+
+    cfg_path = tmp_path / "config.yaml"
+    out_path = tmp_path / "confirmation_result.json"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "data_dir": str(populated_db.data_dir),
+                "duckdb_path": str(populated_db.duckdb_path),
+                "parquet_dir": str(populated_db.parquet_dir),
+                "model": {"max_formula_len": 6},
+                "protocol": {
+                    "folds": [
+                        {"train_end": "2024-01-10", "test_end": "2024-01-25"}
+                    ],
+                    "seeds": [42],
+                    "confirmation": {"steps": 1, "batch_size": 256},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = evaluation.main(
+        [
+            "--config",
+            str(cfg_path),
+            "--tier",
+            "confirmation",
+            "--output",
+            str(out_path),
+        ]
+    )
+    assert rc == 0
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["tier"] == "confirmation"
+    assert payload["steps"] == 1 and payload["batch_size"] == 256
+
+
 def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
     import yaml
 
