@@ -193,10 +193,19 @@ def _write_protocol(repo):
             {
                 "candidate": "trained",
                 "sharpe": 1.2,
+                "fold_train_end": "2020-12-31",
                 "fold_test_end": "2021-12-31",
                 "seed": 42,
                 "val_reward": 0.8,
-            }
+            },
+            {
+                "candidate": "trained",
+                "sharpe": 0.9,
+                "fold_train_end": "2020-12-31",
+                "fold_test_end": "2021-12-31",
+                "seed": 7,
+                "val_reward": 0.6,
+            },
         ],
         "aggregates": {
             "trained": {
@@ -250,6 +259,27 @@ def test_protocol_mode_does_not_require_formula(repo):
     _write_protocol(repo)
     r = run_archive(repo, "--mode", "protocol")
     assert r.returncode == 0, r.stderr
+
+
+def test_protocol_manifest_records_actual_run_scope(repo):
+    """n_folds / n_seeds must reflect the rows that actually ran, not the
+    config's full fold/seed lists (a reduced closeout run must never look
+    like a full 5-fold, 3-seed run in the manifest)."""
+    _write_protocol(repo)
+    proto = json.loads((repo / "data" / "protocol_result.json").read_text(encoding="utf-8"))
+    proto["folds"] = [{"train_end": f"202{i}-12-31", "test_end": f"202{i+1}-12-31"} for i in range(5)]
+    proto["seeds"] = [42, 7, 2024]
+    proto["rows"] = [
+        {"candidate": "trained", "fold_train_end": "2020-12-31", "fold_test_end": "2021-12-31", "seed": 42},
+        {"candidate": "trained", "fold_train_end": "2021-12-31", "fold_test_end": "2022-12-31", "seed": 42},
+    ]
+    (repo / "data" / "protocol_result.json").write_text(json.dumps(proto), encoding="utf-8")
+    r = run_archive(repo, "--mode", "protocol")
+    assert r.returncode == 0, r.stderr
+    run_dir = next((repo / "experiments").iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["protocol"]["n_folds"] == 2  # not 5
+    assert manifest["protocol"]["n_seeds"] == 1  # not 3
 
 
 def test_manual_mode_with_protocol_metrics_keeps_old_summary(repo):

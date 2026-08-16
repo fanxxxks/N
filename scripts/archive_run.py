@@ -394,6 +394,23 @@ def main(argv=None):
             entry["reason"] = "exceeds --max-metrics-size-mb (summary kept)"
         manifest["metrics"] = entry
         if is_protocol:
+            rows = data.get("rows", [])
+            fold_runs = sorted(
+                {
+                    (r.get("fold_train_end"), r.get("fold_test_end"))
+                    for r in rows
+                    if r.get("fold_train_end") is not None
+                    and r.get("fold_test_end") is not None
+                }
+            )
+            trained_seeds = sorted(
+                {
+                    r.get("seed")
+                    for r in rows
+                    if r.get("candidate") == "trained"
+                    and r.get("seed") is not None
+                }
+            )
             manifest["protocol"] = {
                 "version": data.get("protocol_version"),
                 "frequency": data.get("frequency"),
@@ -401,8 +418,10 @@ def main(argv=None):
                 "tier": data.get("tier"),
                 "steps": data.get("steps"),
                 "batch_size": data.get("batch_size"),
-                "n_folds": len(data.get("folds", [])),
-                "n_seeds": len(data.get("seeds", [])),
+                # Actual run scope, derived from the rows (the config's
+                # folds/seeds list may be larger than what actually ran).
+                "n_folds": len(fold_runs) or len(data.get("folds", [])),
+                "n_seeds": len(trained_seeds) or len(data.get("seeds", [])),
                 "n_candidates": data.get("n_candidates"),
                 "dsr": data.get("dsr"),
                 "max_t": data.get("max_t"),
