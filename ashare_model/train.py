@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from pathlib import Path
 
 import numpy as np
@@ -22,15 +21,18 @@ from ashare_data.config import (
     BacktestConfig,
     DataConfig,
     ModelConfig,
+    RewardConfig,
     load_config,
     make_backtest_config,
     make_data_config,
     make_model_config,
+    make_reward_config,
 )
 
 from .alphagpt import AlphaGPTModel, build_action_mask
 from .data_loader import AshareDataLoader
 from .ops import OPS_CONFIG
+from .reward import REWARD_VERSION, fast_basket_reward
 from .vm import StackVM, formula_decode
 from .vocab import FORMULA_VOCAB
 from ashare_logging import export_log_txt, setup_run_logging
@@ -47,10 +49,12 @@ class AshareTrainer:
         model_config: ModelConfig,
         backtest_config: BacktestConfig,
         loader: AshareDataLoader | None = None,
+        reward_config: RewardConfig | None = None,
     ):
         self.data_config = data_config
         self.model_config = model_config
         self.backtest_config = backtest_config
+        self.reward_config = reward_config or RewardConfig()
         self.loader = loader or AshareDataLoader(data_config, model_config)
         if self.loader.factor_tensor is None:
             self.loader.load_data()
@@ -88,7 +92,6 @@ class AshareTrainer:
             )
         factor_tensor = self.loader.factor_tensor[:, :, :train_end_idx]
         target_ret = self.loader.target_ret[:, :train_end_idx].numpy()
-        dates = self.loader.dates[:train_end_idx]
 
         # Hold out the tail of the training window for out-of-sample best
         # formula selection, so the saved formula is not chosen purely on
@@ -126,28 +129,28 @@ class AshareTrainer:
                 tokens = sequences[i].tolist()
                 signal = self.vm.execute(tokens, factor_tensor)
                 if signal is None:
-                    rewards[i] = self.model_config.reward_clip_low
+                    rewards[i] = self.reward_config.reward_clip_low
                     continue
                 signal_np = signal.detach().cpu().numpy()
                 if np.nanstd(signal_np) < 1e-4:
-                    rewards[i] = -2.0
+                    rewards[i] = self.reward_config.bad_reward
                     continue
-                reward, _ = self._fast_reward(
+                reward, _ = fast_basket_reward(
                     signal_np,
                     target_ret,
-                    self.loader.ts_codes,
-                    dates,
+                    self.backtest_config,
+                    self.reward_config,
                 )
                 rewards[i] = reward
 
                 # Out-of-sample selection: the best formula is decided on the
                 # validation slice, while the gradient still sees the full
                 # training window.
-                val_reward, _ = self._fast_reward(
+                val_reward, _ = fast_basket_reward(
                     signal_np[:, val_start:train_end_idx],
                     target_ret[:, val_start:train_end_idx],
-                    self.loader.ts_codes,
-                    dates[val_start:train_end_idx],
+                    self.backtest_config,
+                    self.reward_config,
                 )
                 if val_reward > self.best_reward:
                     self.best_reward = val_reward
@@ -211,6 +214,9 @@ class AshareTrainer:
             "feature_names": list(self.vocab.feature_names),
             "operator_names": list(self.vocab.operator_names),
             "feature_version": self.vocab.feature_version,
+            # Reward provenance: best_reward values are only comparable
+            # within the same reward implementation generation.
+            "reward_version": REWARD_VERSION,
         }
         out_path = self.data_config.data_dir / "best_ashare_strategy.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -273,79 +279,6 @@ class AshareTrainer:
         open_slots.copy_(torch.clamp(open_slots_new, min=0))
         stack_sizes.copy_(new_stack)
 
-    def _fast_reward(
-        self,
-        signal: np.ndarray,
-        target_ret: np.ndarray,
-        ts_codes: list[str],
-        dates: list[str],
-    ) -> tuple[float, float]:
-        """Cheap long-only Sortino reward used inside the RL loop.
-
-        Trading costs are charged per unit of daily turnover using the same
-        fee model as the backtest, so the training reward cannot be gamed by
-        hyperactive strategies that the backtest would bleed dry.
-        """
-
-        cfg = self.backtest_config
-        # Round-trip cost per unit turnover: both sides pay commission,
-        # slippage and transfer fee; sells additionally pay stamp tax.
-        cost_per_turnover = (
-            2.0 * cfg.commission_rate
-            + 2.0 * cfg.slippage_rate
-            + 2.0 * cfg.transfer_fee_rate
-            + cfg.stamp_tax_rate
-        )
-
-        n_stocks, n_dates = signal.shape
-        if n_dates < 2 or n_stocks == 0:
-            # Not enough data for a single daily return: neutral low reward.
-            return float(self.model_config.reward_clip_low), 0.0
-        top_n = min(self.backtest_config.top_n, n_stocks)
-        daily = np.zeros(n_dates - 1, dtype=np.float64)
-        previous: set[int] = set()
-        turnover_total = 0.0
-
-        for t in range(n_dates - 1):
-            if np.isfinite(signal[:, t]).sum() < top_n:
-                daily[t] = 0.0
-                continue
-            top_idx = np.argpartition(signal[:, t], -top_n)[-top_n:]
-            top_idx = top_idx[np.argsort(signal[:, t][top_idx])[::-1]]
-            rets = target_ret[top_idx, t]
-            rets = rets[np.isfinite(rets)]
-            daily[t] = float(np.mean(rets)) if rets.size else 0.0
-            current = set(top_idx.tolist())
-            turnover = (len(current ^ previous) / top_n) if previous else 0.0
-            daily[t] -= turnover * cost_per_turnover
-            turnover_total += turnover
-            previous = current
-
-        mean_daily = float(np.mean(daily))
-        downside = daily[daily < 0]
-        if downside.size >= 3:
-            downside_std = float(downside.std(ddof=1) * math.sqrt(252))
-        else:
-            daily_std = float(daily.std(ddof=1)) if daily.size > 1 else 0.0
-            downside_std = daily_std * math.sqrt(252) + 1e-6
-        ann_mean = mean_daily * 252
-        sortino = ann_mean / (downside_std + 1e-9)
-        reward = sortino
-        avg_turnover = turnover_total / max(n_dates - 1, 1)
-        if avg_turnover > 0.5:
-            reward -= 1.0
-        if mean_daily < 0:
-            reward = -2.0
-        if top_n == 0 or (np.nanstd(daily) < 1e-6 and mean_daily <= 0):
-            reward = -2.0
-        return float(
-            np.clip(
-                reward,
-                self.model_config.reward_clip_low,
-                self.model_config.reward_clip_high,
-            )
-        ), mean_daily
-
 
 def main() -> None:
     setup_run_logging(run_name="train")
@@ -362,8 +295,11 @@ def main() -> None:
         data_config = make_data_config(raw, root)
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
+        reward_config = make_reward_config(raw)
         loader = AshareDataLoader(data_config, model_config)
-        trainer = AshareTrainer(data_config, model_config, backtest_config, loader)
+        trainer = AshareTrainer(
+            data_config, model_config, backtest_config, loader, reward_config
+        )
         trainer.train(steps=args.steps, batch_size=args.batch_size)
     finally:
         export_log_txt(run_name="train")

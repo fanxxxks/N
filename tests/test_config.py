@@ -9,11 +9,13 @@ from ashare_data.config import (
     DataConfig,
     ModelConfig,
     BacktestConfig,
+    RewardConfig,
     SimConfig,
     load_config,
     make_backtest_config,
     make_data_config,
     make_model_config,
+    make_reward_config,
     make_sim_config,
 )
 
@@ -103,6 +105,15 @@ def test_make_model_and_backtest_config_nested(tmp_path: Path):
     assert model.num_layers == ModelConfig().num_layers
     assert backtest.top_n == 5
     assert backtest.commission_rate == BacktestConfig().commission_rate
+
+
+def test_make_reward_config_nested_with_defaults(tmp_path: Path):
+    raw = {"reward": {"bad_reward": -5.0, "turnover_threshold": 0.8}}
+    reward = make_reward_config(raw)
+    assert reward.bad_reward == -5.0
+    assert reward.turnover_threshold == 0.8
+    assert reward.reward_clip_low == RewardConfig().reward_clip_low
+    assert reward.turnover_penalty == RewardConfig().turnover_penalty
 
 
 def test_make_sim_config_resolves_absolute_paths(tmp_path: Path):

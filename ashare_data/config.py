@@ -68,9 +68,24 @@ class ModelConfig:
     learning_rate: float = 1e-3
     validation_fraction: float = 0.2
     value_loss_weight: float = 0.5
+    feature_names: list[str] | None = None
+
+
+@dataclass
+class RewardConfig:
+    """Reward-scoring constants (single source: ashare_model.reward).
+
+    Semantic changes to the reward implementation bump
+    ``ashare_model.reward.REWARD_VERSION``; these values only tune the
+    current version.
+    """
+
     reward_clip_low: float = -3.0
     reward_clip_high: float = 5.0
-    feature_names: list[str] | None = None
+    bad_reward: float = -2.0
+    turnover_penalty: float = 1.0
+    turnover_threshold: float = 0.5
+    downside_min_obs: int = 3
 
 
 @dataclass
@@ -87,8 +102,6 @@ class BacktestConfig:
     transfer_fee_rate: float = 0.00001
     slippage_rate: float = 0.0005
     benchmark: str = "全市场等权"
-    reward_clip_low: float = -3.0
-    reward_clip_high: float = 5.0
 
 
 @dataclass
@@ -211,6 +224,16 @@ def make_model_config(raw: dict[str, Any]) -> ModelConfig:
         for k in ModelConfig.__dataclass_fields__
     }
     return ModelConfig(**data)
+
+
+def make_reward_config(raw: dict[str, Any]) -> RewardConfig:
+    defaults = RewardConfig()
+    reward_raw = raw.get("reward", {}) or {}
+    data = {
+        k: reward_raw.get(k, getattr(defaults, k))
+        for k in RewardConfig.__dataclass_fields__
+    }
+    return RewardConfig(**data)
 
 
 def make_backtest_config(raw: dict[str, Any]) -> BacktestConfig:
