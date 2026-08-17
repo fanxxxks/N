@@ -10,8 +10,27 @@ from torch.distributions import Categorical
 from ashare_data.config import BacktestConfig, DataConfig, ModelConfig
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.reward import REWARD_VERSION
-from ashare_model.train import AshareTrainer
+from ashare_model.train import AshareTrainer, resolve_device
 from ashare_model.vocab import FORMULA_VOCAB
+
+
+def test_resolve_device_auto_prefers_cuda(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_device() == torch.device("cuda")
+    assert resolve_device("auto") == torch.device("cuda")
+    assert resolve_device("cpu") == torch.device("cpu")
+    assert resolve_device("cuda") == torch.device("cuda")
+
+
+def test_resolve_device_auto_falls_back_to_cpu(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert resolve_device() == torch.device("cpu")
+    assert resolve_device("auto") == torch.device("cpu")
+
+
+def test_resolve_device_rejects_unknown_values():
+    with pytest.raises(ValueError):
+        resolve_device("tpu")
 
 
 def _make_trainer(tmp_path, loader=None):
@@ -118,6 +137,100 @@ def test_train_artifact_records_vocab_provenance(tmp_path, populated_db: DataCon
     assert artifact["reward_version"] == REWARD_VERSION
     # The recorded metadata must be enough to resolve the formula back.
     assert resolve_formula_tokens(artifact) == list(tokens)
+
+
+def test_train_artifact_records_device(tmp_path, populated_db: DataConfig, monkeypatch):
+    import json
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+    )
+    train_end = trainer._train_end_index()
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            len(loader.ts_codes) * train_end, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end),
+    )
+    tokens = trainer.train(steps=1, batch_size=1, device="cpu")
+    assert tokens is not None
+    artifact = json.loads(
+        (populated_db.data_dir / "best_ashare_strategy.json").read_text(encoding="utf-8")
+    )
+    assert artifact["device"] == "cpu"
+    assert artifact["init_seed"] == 42
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_train_one_step_on_cuda(populated_db: DataConfig, monkeypatch):
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=4, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+    )
+    train_end = trainer._train_end_index()
+    # The VM must receive the CUDA-resident factor tensor; signals come
+    # back over the .cpu() bridge into the numpy reward path while the
+    # policy itself stays on CPU.
+    captured: dict[str, object] = {}
+
+    def execute_on(tokens, ft):
+        captured["vm_device"] = ft.device.type
+        return (
+            torch.arange(
+                1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
+            )
+            .reshape(len(loader.ts_codes), train_end)
+            .to(ft.device)
+        )
+
+    monkeypatch.setattr(trainer.vm, "execute", execute_on)
+    tokens = trainer.train(steps=1, batch_size=4, device="cuda", save_artifacts=False)
+    assert tokens is not None
+    assert captured["vm_device"] == "cuda"
+    assert next(trainer.model.parameters()).device.type == "cpu"
+    assert np.isfinite(trainer.history[0]["avg_reward"])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_same_seed_samples_same_formulas_on_cpu_and_cuda(
+    populated_db: DataConfig, monkeypatch
+):
+    # The policy and sampling stay on CPU regardless of the VM device, so
+    # the same (init_seed, seed) must produce the identical sampled formula
+    # sequence on CPU and CUDA — the cross-device reproducibility contract.
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_cfg = ModelConfig(batch_size=8, train_steps=1, max_formula_len=6)
+    bt = BacktestConfig(top_n=2, train_end_date="2024-02-01")
+    sequences: dict[str, list[tuple[int, ...]]] = {"cpu": [], "cuda": []}
+
+    def recorder(key: str):
+        def execute(tokens, ft):
+            sequences[key].append(tuple(tokens))
+            return torch.zeros(ft.shape[1], ft.shape[2], device=ft.device)
+
+        return execute
+
+    cpu_trainer = AshareTrainer(populated_db, model_cfg, bt, loader, init_seed=7)
+    cuda_trainer = AshareTrainer(populated_db, model_cfg, bt, loader, init_seed=7)
+    monkeypatch.setattr(cpu_trainer.vm, "execute", recorder("cpu"))
+    monkeypatch.setattr(cuda_trainer.vm, "execute", recorder("cuda"))
+    cpu_trainer.train(steps=1, batch_size=8, seed=11, device="cpu", save_artifacts=False)
+    cuda_trainer.train(steps=1, batch_size=8, seed=11, device="cuda", save_artifacts=False)
+    assert sequences["cpu"]
+    assert sequences["cpu"] == sequences["cuda"]
 
 
 def test_train_can_skip_artifacts(populated_db: DataConfig, monkeypatch):
