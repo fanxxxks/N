@@ -1,0 +1,71 @@
+{
+  "run_id": "6eba048ac4e4",
+  "created_at": "2026-08-17T15:59:19",
+  "mode": "protocol",
+  "slug": "protocol_screening",
+  "git_commit": "9ced3ed6fd832de621dc6a42b8cd06bcdde19ab2",
+  "git_dirty": false,
+  "formula": null,
+  "config": {
+    "source": "ashare_config.yaml",
+    "sha256": "75a0fc42df618ba129e718bc37a1b54f11564240495de798ece0342248f3aa6e",
+    "effective_sha256": "daf53dfa7b2c39441374c49c74cbe869dea98e1d8bb3c75fd099cf05247e863f"
+  },
+  "metrics": {
+    "source": "protocol_result.json",
+    "sha256": "1e62e962e2cffb9061df734b5ab6b0fba72b3ad64ef2aa90cdaa03d39ba61b32",
+    "stored": true
+  },
+  "model": null,
+  "protocol": {
+    "version": "2",
+    "frequency": "daily",
+    "horizon": 1,
+    "tier": "screening",
+    "steps": 50,
+    "batch_size": 256,
+    "n_folds": 2,
+    "n_seeds": 2,
+    "n_candidates": 12,
+    "dsr": {
+      "dsr": 0.0941429825056534,
+      "n_trials": 12,
+      "sr_best": 0.02254905498932603,
+      "t_best": 242,
+      "skew_best": 0.07264790606375494,
+      "kurt_best": 3.0000585787892704,
+      "best_candidate": "trained",
+      "best_fold_test_end": "2022-12-31",
+      "best_seed": 42
+    },
+    "max_t": {
+      "observed_max_t": 0.35078097323061735,
+      "p_value": 0.9880023995200959,
+      "n_perms": 5000,
+      "block_size": 10,
+      "n_trials": 12,
+      "seed": 0,
+      "significant_95": false
+    },
+    "top_candidate": "benchmark:equal_weight"
+  },
+  "data_end_date": "20260814",
+  "files": [
+    {
+      "name": "config.yaml",
+      "bytes": 2776
+    },
+    {
+      "name": "config_effective.yaml",
+      "bytes": 2093
+    },
+    {
+      "name": "metrics_summary.json",
+      "bytes": 18517
+    },
+    {
+      "name": "metrics.json",
+      "bytes": 228194
+    }
+  ]
+}
