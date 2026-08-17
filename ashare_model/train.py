@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +33,7 @@ from ashare_data.config import (
 from .alphagpt import AlphaGPTModel, build_action_mask
 from .data_loader import AshareDataLoader, date_index
 from .ops import OPS_CONFIG
-from .reward import REWARD_VERSION, fast_basket_reward
+from .reward import REWARD_VERSION, batched_basket_rewards
 from .vm import StackVM, formula_decode
 from .vocab import FORMULA_VOCAB
 from ashare_logging import export_log_txt, setup_run_logging
@@ -43,6 +44,11 @@ def _project_root() -> Path:
 
 
 class AshareTrainer:
+    # Bounded LRU of evaluated formulas: rewards are a deterministic function
+    # of the token sequence, so repeats (frequent once the policy
+    # concentrates) are scored once and reused across steps.
+    _REWARD_CACHE_CAP = 16384
+
     def __init__(
         self,
         data_config: DataConfig,
@@ -68,6 +74,18 @@ class AshareTrainer:
         self.best_tokens: list[int] | None = None
         self.best_formula = ""
         self.history: list[dict[str, float]] = []
+        self._reward_cache: OrderedDict[
+            tuple[int, ...], tuple[float, float | None]
+        ] = OrderedDict()
+
+    def _cache_put(self, key: tuple[int, ...], value: tuple[float, float | None]) -> None:
+        self._reward_cache[key] = value
+        self._reward_cache.move_to_end(key)
+        while len(self._reward_cache) > self._REWARD_CACHE_CAP:
+            self._reward_cache.popitem(last=False)
+
+    def _cache_touch(self, key: tuple[int, ...]) -> None:
+        self._reward_cache.move_to_end(key)
 
     def train(
         self,
@@ -99,6 +117,11 @@ class AshareTrainer:
         # in-sample reward.
         val_start = self._validation_start(train_end_idx)
 
+        # Chunk the batched reward evaluation so the stacked signal matrix
+        # stays within a fixed memory budget (~512 MB of float64 signals).
+        signal_bytes = factor_tensor.shape[1] * train_end_idx * 8
+        reward_chunk = max(1, min(64, (512 * (1 << 20)) // max(signal_bytes, 1)))
+
         pbar = tqdm(range(steps))
         for step in pbar:
             inp = torch.zeros((batch_size, 1), dtype=torch.long, device=device)
@@ -126,41 +149,76 @@ class AshareTrainer:
             sequences = torch.stack(sampled_tokens, dim=1)
             rewards = torch.zeros(batch_size, device=device)
 
+            # Batched reward evaluation with formula deduplication: a formula
+            # is executed once per step (and reused across steps through the
+            # bounded cache); valid signals are scored in chunks so the
+            # vectorized basket simulation stays memory-bounded.
+            step_results: dict[
+                tuple[int, ...], tuple[float, float | None]
+            ] = {}
+            pending: list[tuple[tuple[int, ...], np.ndarray]] = []
+            seen: set[tuple[int, ...]] = set()
             for i in range(batch_size):
-                tokens = sequences[i].tolist()
-                signal = self.vm.execute(tokens, factor_tensor)
+                key = tuple(sequences[i].tolist())
+                if key in self._reward_cache:
+                    self._cache_touch(key)
+                    step_results[key] = self._reward_cache[key]
+                    continue
+                if key in seen:
+                    continue
+                seen.add(key)
+                signal = self.vm.execute(key, factor_tensor)
                 if signal is None:
-                    rewards[i] = self.reward_config.reward_clip_low
+                    step_results[key] = (
+                        float(self.reward_config.reward_clip_low),
+                        None,
+                    )
                     continue
                 signal_np = signal.detach().cpu().numpy()
                 if np.nanstd(signal_np) < 1e-4:
-                    rewards[i] = self.reward_config.bad_reward
+                    step_results[key] = (
+                        float(self.reward_config.bad_reward),
+                        None,
+                    )
                     continue
-                reward, _ = fast_basket_reward(
-                    signal_np,
+                pending.append((key, signal_np))
+
+            for start in range(0, len(pending), reward_chunk):
+                chunk = pending[start : start + reward_chunk]
+                chunk_rewards, chunk_val = batched_basket_rewards(
+                    np.stack([signal_np for _, signal_np in chunk]),
                     target_ret,
                     self.backtest_config,
                     self.reward_config,
+                    val_start,
                 )
-                rewards[i] = reward
+                for (key, _), reward, val_reward in zip(
+                    chunk, chunk_rewards, chunk_val
+                ):
+                    step_results[key] = (float(reward), float(val_reward))
 
-                # Out-of-sample selection: the best formula is decided on the
-                # validation slice, while the gradient still sees the full
-                # training window.
-                val_reward, _ = fast_basket_reward(
-                    signal_np[:, val_start:train_end_idx],
-                    target_ret[:, val_start:train_end_idx],
-                    self.backtest_config,
-                    self.reward_config,
-                )
-                if val_reward > self.best_reward:
-                    self.best_reward = val_reward
-                    self.best_tokens = tokens
-                    self.best_formula = formula_decode(tokens, self.vocab)
-                    pbar.write(
-                        f"[+] New best (validation): reward={val_reward:.3f} "
-                        f"formula={self.best_formula}"
-                    )
+            for i in range(batch_size):
+                key = tuple(sequences[i].tolist())
+                reward, val_reward = step_results[key]
+                rewards[i] = reward
+                # Cache every outcome (invalid and constant formulas too):
+                # the token sequence fully determines it, so repeats can
+                # skip the VM execution as well.
+                self._cache_put(key, (reward, val_reward))
+                if val_reward is not None:
+                    # Out-of-sample selection: the best formula is decided on
+                    # the validation slice, while the gradient still sees the
+                    # full training window.
+                    if val_reward > self.best_reward:
+                        self.best_reward = val_reward
+                        self.best_tokens = sequences[i].tolist()
+                        self.best_formula = formula_decode(
+                            self.best_tokens, self.vocab
+                        )
+                        pbar.write(
+                            f"[+] New best (validation): reward={val_reward:.3f} "
+                            f"formula={self.best_formula}"
+                        )
 
             # Actor-critic update: REINFORCE with the learned value as
             # baseline, plus a value regression loss.

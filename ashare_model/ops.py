@@ -74,17 +74,37 @@ def _ts_std(x: torch.Tensor, d: int) -> torch.Tensor:
 
 
 def _ts_rank(x: torch.Tensor, d: int) -> torch.Tensor:
+    """Trailing-window percentile rank of the latest value.
+
+    Vectorized with ``unfold`` (chunked over time to bound the window
+    intermediate), producing the same values as the previous per-column
+    loop: leading columns rank inside the expanding window of real values
+    (NaN padding is excluded from the denominator), later columns rank
+    inside the trailing ``d``-window.  The VM clamps non-finite values to
+    0, so NaN inputs are unreachable through the normal path.
+    """
     if d <= 1:
         return torch.zeros_like(x)
     b, t = x.shape
-    out = torch.zeros_like(x)
-    for i in range(t):
-        start = max(0, i - d + 1)
-        window = x[:, start : i + 1]  # [B, W]
-        last = x[:, i : i + 1]
-        # Fraction of window values below or equal to the latest value.
-        rank = (window <= last).float().mean(dim=1)
-        out[:, i] = rank
+    out = torch.empty_like(x)
+    # Bound the [b, block, d] unfold: budget in float32 elements (~256 MB).
+    block = max(1, (1 << 26) // max(b * d, 1))
+    nan_pad = torch.full((b, d - 1), float("nan"), device=x.device, dtype=x.dtype)
+    for start in range(0, t, block):
+        end = min(start + block, t)
+        seg = x[:, max(0, start - d + 1) : end]
+        lead_pad = max(d - 1 - start, 0)
+        if lead_pad:
+            padded = torch.cat([nan_pad[:, :lead_pad], seg], dim=1)
+        else:
+            padded = seg
+        windows = padded.unfold(1, d, 1)  # [b, end-start, d]
+        last = x[:, start:end].unsqueeze(-1)
+        # NaN comparisons are False (same as the previous loop), and NaN
+        # padding never dilutes the denominator of the expanding window.
+        leq = (windows <= last).float().sum(dim=-1)
+        den = torch.isfinite(windows).sum(dim=-1).clamp(min=1).float()
+        out[:, start:end] = leq / den
     return out
 
 
