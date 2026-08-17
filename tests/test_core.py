@@ -150,6 +150,8 @@ def test_training_smoke(tmp_path):
     model_cfg = ModelConfig(batch_size=4, train_steps=1, max_formula_len=6)
     loader = AshareDataLoader(cfg, model_cfg)
     loader.load_data()
+    # The trainer pins the weight init (init_seed) and train() pins the
+    # sampling seed, so this smoke test is deterministic on every device.
     trainer = AshareTrainer(
         cfg,
         model_cfg,

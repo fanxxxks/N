@@ -19,6 +19,22 @@ python -m pip install -r requirements.txt
 
 复制 `config/.env.example` 为 `config/.env` 并按需填写。
 
+### 可选：启用 NVIDIA GPU 加速
+
+训练/协议入口默认 `--device auto`（有 CUDA 用 CUDA，否则 CPU，CI 无需 GPU）。
+有 NVIDIA 显卡时可用 CUDA 版 torch 替代 CPU 版（训练窗口因子张量约 650MB，
+6GB 显存即可运行）：
+
+```bash
+python -m pip install "torch==2.11.0+cu128" --index-url https://download.pytorch.org/whl/cu128
+python -m ashare_model.train --device auto   # 或显式 --device cuda / cpu
+```
+
+GPU 只加速 VM 因子算子；**策略模型与采样始终在 CPU**（torch 的 CPU 随机流与
+dropout 跨设备一致），因此同一 `(init_seed, seed)` 在任何机器上采样出相同的
+公式序列（有测试固化该不变量）。仅 VM 的 float32 算术在 GPU 上与 CPU 有
+~1e-7 的差异。训练产物记录 `init_seed` 与 `device` 字段供归档溯源。
+
 ## 运行入口
 
 ```bash

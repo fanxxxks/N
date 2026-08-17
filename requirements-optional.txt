@@ -2,3 +2,5 @@
 pytest>=8.0.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
+# pandas 3.x computes rank-IC via scipy.spearmanr at runtime.
+scipy>=1.10.0

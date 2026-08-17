@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
+from ashare_model.ops import OPS_CONFIG
 from ashare_model.vm import StackVM, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB
 
@@ -44,3 +46,27 @@ def test_vm_clamps_nonfinite_results_to_neutral_zero():
     assert out is not None
     assert torch.isfinite(out).all()
     assert (out == 0).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_vm_matches_cpu_on_cuda():
+    # The GPU path only accelerates the VM operators; results must agree
+    # with CPU execution within float32 tolerance.
+    vm = StackVM(FORMULA_VOCAB)
+    torch.manual_seed(3)
+    feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 16)
+    op_id = {name: FORMULA_VOCAB.operator_offset + i for i, (name, _, _) in enumerate(OPS_CONFIG)}
+    formulas = [
+        [1],
+        [1, op_id["MA20"]],
+        [1, op_id["TS_RANK20"]],
+        [1, 2, op_id["CORR20"]],
+        [1, op_id["MA20"], 1, op_id["STD20"], op_id["SUB"]],
+        [1, op_id["DELAY1"], 2, op_id["DECAY"], op_id["ADD"]],
+    ]
+    for tokens in formulas:
+        cpu_out = vm.execute(tokens, feature)
+        assert cpu_out is not None
+        gpu_out = vm.execute(tokens, feature.cuda())
+        assert gpu_out is not None
+        assert torch.allclose(cpu_out, gpu_out.cpu(), atol=1e-4, rtol=1e-4)

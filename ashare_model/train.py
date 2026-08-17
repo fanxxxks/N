@@ -43,6 +43,23 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def resolve_device(requested: str | None = None) -> torch.device:
+    """Resolve a ``--device`` value to a concrete torch device.
+
+    ``auto`` (the default) uses CUDA when available and falls back to CPU,
+    so the same entry point runs accelerated on a GPU machine and unchanged
+    on GPU-less CI.  Unknown values fail loudly.
+    """
+
+    if requested in (None, "", "auto"):
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if requested not in ("cpu", "cuda"):
+        raise ValueError(
+            f"unknown device {requested!r}; expected 'auto', 'cpu' or 'cuda'"
+        )
+    return torch.device(requested)
+
+
 class AshareTrainer:
     # Bounded LRU of evaluated formulas: rewards are a deterministic function
     # of the token sequence, so repeats (frequent once the policy
@@ -56,16 +73,21 @@ class AshareTrainer:
         backtest_config: BacktestConfig,
         loader: AshareDataLoader | None = None,
         reward_config: RewardConfig | None = None,
+        init_seed: int = 42,
     ):
         self.data_config = data_config
         self.model_config = model_config
         self.backtest_config = backtest_config
         self.reward_config = reward_config or RewardConfig()
+        self.init_seed = init_seed
         self.loader = loader or AshareDataLoader(data_config, model_config)
         if self.loader.factor_tensor is None:
             self.loader.load_data()
         self.vocab = FORMULA_VOCAB
         self.vm = StackVM(self.vocab)
+        # Pin the weight initialization so the same (init_seed, seed)
+        # pair reproduces the same training on any machine.
+        torch.manual_seed(init_seed)
         self.model = AlphaGPTModel(model_config, self.vocab)
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(), lr=model_config.learning_rate
@@ -94,13 +116,27 @@ class AshareTrainer:
         seed: int = 42,
         save_artifacts: bool = True,
         train_end_date: str | None = None,
+        device: str | None = None,
     ) -> list[int] | None:
+        """Run REINFORCE training.
+
+        ``device`` follows :func:`resolve_device` (auto/cpu/cuda) and
+        places **only the factor tensor / VM** on the compute device.  The
+        policy model, the sampling loop and the gradient update always
+        stay on CPU: torch's CPU RNG stream (MT19937) and dropout are
+        device-independent, so the same (init_seed, seed) samples the same
+        formula sequence on every machine — a tested invariant.  Only the
+        VM's float32 arithmetic differs between devices (~1e-7), which can
+        matter solely when a signal lands exactly on a scoring threshold.
+        The artifact records ``init_seed`` and ``device``.
+        """
+
         torch.manual_seed(seed)
         np.random.seed(seed)
         steps = steps or self.model_config.train_steps
         batch_size = batch_size or self.model_config.batch_size
         max_len = self.model_config.max_formula_len
-        device = next(self.model.parameters()).device
+        vm_device = resolve_device(device)
 
         train_end_idx = self._train_end_index(train_end_date)
         if train_end_idx <= 2:
@@ -109,7 +145,9 @@ class AshareTrainer:
                 "check backtest.train_end_date against the loaded data range "
                 f"({self.loader.dates[0]} .. {self.loader.dates[-1]})."
             )
-        factor_tensor = self.loader.factor_tensor[:, :, :train_end_idx]
+        factor_tensor = self.loader.factor_tensor[:, :, :train_end_idx].to(
+            vm_device
+        )
         target_ret = self.loader.target_ret[:, :train_end_idx].numpy()
 
         # Hold out the tail of the training window for out-of-sample best
@@ -124,9 +162,18 @@ class AshareTrainer:
 
         pbar = tqdm(range(steps))
         for step in pbar:
-            inp = torch.zeros((batch_size, 1), dtype=torch.long, device=device)
-            open_slots = torch.ones(batch_size, dtype=torch.long, device=device)
-            stack_sizes = torch.zeros(batch_size, dtype=torch.long, device=device)
+            # The policy and sampling stay on CPU (the model's device): its
+            # RNG stream and dropout are device-independent by construction.
+            policy_device = next(self.model.parameters()).device
+            inp = torch.zeros(
+                (batch_size, 1), dtype=torch.long, device=policy_device
+            )
+            open_slots = torch.ones(
+                batch_size, dtype=torch.long, device=policy_device
+            )
+            stack_sizes = torch.zeros(
+                batch_size, dtype=torch.long, device=policy_device
+            )
             log_probs: list[torch.Tensor] = []
             sampled_tokens: list[torch.Tensor] = []
             values: list[torch.Tensor] = []
@@ -147,7 +194,7 @@ class AshareTrainer:
                 )
 
             sequences = torch.stack(sampled_tokens, dim=1)
-            rewards = torch.zeros(batch_size, device=device)
+            rewards = torch.zeros(batch_size, device=policy_device)
 
             # Batched reward evaluation with formula deduplication: a formula
             # is executed once per step (and reused across steps through the
@@ -267,6 +314,11 @@ class AshareTrainer:
             "formula_text": self.best_formula,
             "best_reward": self.best_reward,
             "history": self.history,
+            # Reproducibility provenance: the policy stays on CPU, so
+            # (init_seed, seed) reproduce the same sampled formulas on any
+            # machine; ``device`` records where the VM executed.
+            "init_seed": self.init_seed,
+            "device": str(vm_device),
             # Vocabulary provenance: the formula is always remapped by name
             # on load, so later vocabulary additions cannot silently
             # reinterpret these token ids.
@@ -352,6 +404,13 @@ def main() -> None:
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="VM compute device; policy and sampling always run on CPU "
+        "(default: CUDA when available, else CPU)",
+    )
     args = parser.parse_args()
 
     try:
@@ -365,7 +424,9 @@ def main() -> None:
         trainer = AshareTrainer(
             data_config, model_config, backtest_config, loader, reward_config
         )
-        trainer.train(steps=args.steps, batch_size=args.batch_size)
+        trainer.train(
+            steps=args.steps, batch_size=args.batch_size, device=args.device
+        )
     finally:
         export_log_txt(run_name="train")
 
