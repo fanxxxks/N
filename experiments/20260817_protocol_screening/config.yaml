@@ -1,0 +1,102 @@
+# AlphaGPT A-share configuration
+# Non-sensitive settings live here. Optional secrets go in config/.env.
+
+data_dir: data
+duckdb_path: data/ashare.duckdb
+parquet_dir: data/parquet
+
+calendar_table: trade_calendar
+stocks_table: stocks
+daily_table: daily_bar
+constituents_table: constituents
+factor_table: factor_cache
+
+start_date: "2015-01-01"
+end_date: "2026-12-31"
+adjust: qfq
+
+index_codes:
+  - "000300.SH"
+  - "000905.SH"
+  - "000852.SH"
+
+index_names:
+  - "沪深300"
+  - "中证500"
+  - "中证1000"
+
+min_listed_days: 60
+min_price: 1.0
+max_price: 10000.0
+min_amount: 100000.0
+
+# Daily bar provider: auto (Eastmoney first, Sina fallback), eastmoney, sina.
+daily_provider: auto
+
+model:
+  d_model: 64
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 128
+  num_loops: 3
+  dropout: 0.1
+  batch_size: 4096
+  train_steps: 1000
+  max_formula_len: 12
+  learning_rate: 0.001
+  validation_fraction: 0.2
+
+# Reward-scoring constants; semantic changes to the reward implementation
+# bump ashare_model.reward.REWARD_VERSION and are recorded in artifacts.
+reward:
+  reward_clip_low: -3.0
+  reward_clip_high: 5.0
+  bad_reward: -2.0
+  turnover_penalty: 1.0
+  turnover_threshold: 0.5
+  downside_min_obs: 3
+
+# Evaluation protocol: walk-forward folds anchored to absolute dates, multi
+# seed, IS/OOS metrics; adjudication is reward-independent (backtest-engine
+# metrics + rank IC) and corrected for candidate multiplicity (Deflated
+# Sharpe + max-t). frequency/horizon are record-only for now.
+# batch_size must stay >= 256: below that the advantage normalization
+# (rewards.std) risks degenerating.
+protocol:
+  frequency: daily
+  horizon: 1
+  seeds: [42, 7, 2024]
+  baseline_signals: [MOMENTUM_20, ROE, TURNOVER]
+  folds:
+    - {train_end: "2020-12-31", test_end: "2021-12-31"}
+    - {train_end: "2021-12-31", test_end: "2022-12-31"}
+    - {train_end: "2022-12-31", test_end: "2023-12-31"}
+    - {train_end: "2023-12-31", test_end: "2024-12-31"}
+    - {train_end: "2024-12-31", test_end: "2025-12-31"}
+  screening: {steps: 50, batch_size: 256}
+  confirmation: {steps: 200, batch_size: 512}
+
+backtest:
+  start_date: "2015-01-01"
+  end_date: "2026-12-31"
+  train_end_date: "2023-12-31"
+  initial_capital: 100000.0
+  top_n: 30
+  single_weight_cap: 0.05
+  commission_rate: 0.00025
+  min_commission: 5.0
+  stamp_tax_rate: 0.0005
+  transfer_fee_rate: 0.00001
+  slippage_rate: 0.0005
+  benchmark: "全市场等权"
+
+sim:
+  initial_capital: 100000.0
+  max_positions: 30
+  single_weight_cap: 0.05
+  benchmark: "全市场等权"
+  stop_signal_path: STOP_SIGNAL
+  state_path: data/sim_portfolio_state.json
+  orders_dir: data/sim_orders
+  trades_dir: data/sim_trades
+  progress_path: data/sim_progress.json

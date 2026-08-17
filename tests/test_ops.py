@@ -36,6 +36,30 @@ def test_ts_rank_bounds():
     assert out[0, -1].item() == 1.0
 
 
+def _ts_rank_reference(x: torch.Tensor, d: int) -> torch.Tensor:
+    """The previous per-column implementation, kept as the test oracle."""
+    if d <= 1:
+        return torch.zeros_like(x)
+    out = torch.zeros_like(x)
+    for i in range(x.shape[1]):
+        start = max(0, i - d + 1)
+        window = x[:, start : i + 1]
+        out[:, i] = (window <= x[:, i : i + 1]).float().mean(dim=1)
+    return out
+
+
+def test_ts_rank_matches_per_column_reference():
+    torch.manual_seed(11)
+    for b, t, d in ((1, 50, 20), (3, 7, 20), (2, 40, 5), (1, 25, 1), (4, 60, 20)):
+        x = torch.randn(b, t)
+        assert torch.allclose(
+            _ts_rank(x, d), _ts_rank_reference(x, d), atol=1e-6
+        )
+        # Every column is a valid fraction of its expanding window.
+        out = _ts_rank(x, d)
+        assert torch.all(out >= 0.0) and torch.all(out <= 1.0)
+
+
 def test_div_zero_denominator_is_finite():
     div = dict((cfg[0], cfg[1]) for cfg in OPS_CONFIG)["DIV"]
     x = torch.tensor([[2.0, -2.0, 5.0]])

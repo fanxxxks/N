@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import numpy as np
 import pytest
 import torch
+from torch.distributions import Categorical
 
 from ashare_data.config import BacktestConfig, DataConfig, ModelConfig
 from ashare_model.data_loader import AshareDataLoader
@@ -220,3 +223,110 @@ def test_train_constant_formula_gets_bad_reward(populated_db: DataConfig, monkey
     # best-formula selection, so no formula is saved.
     assert tokens is None
     assert trainer.history[0]["avg_reward"] == trainer.reward_config.bad_reward
+
+
+# --- reward deduplication / cross-step cache --------------------------------
+
+
+def test_reward_cache_reuses_evaluations_across_steps(
+    populated_db: DataConfig, monkeypatch
+):
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=4, train_steps=2, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+    )
+    train_end = trainer._train_end_index()
+    calls: dict[str, int] = {"n": 0}
+
+    def counting_execute(tokens, ft):
+        calls["n"] += 1
+        return torch.arange(
+            1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end)
+
+    monkeypatch.setattr(trainer.vm, "execute", counting_execute)
+    # Force every sampled token to be feature 1: all four sequences in the
+    # batch are the same formula, so only one unique evaluation per step.
+    monkeypatch.setattr(
+        Categorical,
+        "sample",
+        lambda self: torch.full(
+            (self.logits.shape[0],),
+            1,
+            dtype=torch.long,
+            device=self.logits.device,
+        ),
+    )
+    trainer.train(steps=2, batch_size=4, save_artifacts=False)
+    # Step 1 evaluates the unique formula once; step 2 hits the cache and
+    # never touches the VM again (invalid formulas are cached too).
+    assert calls["n"] == 1
+
+
+def test_reward_cache_is_bounded_lru(monkeypatch):
+    from ashare_model.train import AshareTrainer
+
+    monkeypatch.setattr(AshareTrainer, "_REWARD_CACHE_CAP", 4)
+    cache: OrderedDict = OrderedDict()
+    monkeypatch.setattr(
+        AshareTrainer, "_reward_cache", cache, raising=False
+    )
+    trainer = object.__new__(AshareTrainer)
+    for i in range(6):
+        trainer._cache_put((i,), (float(i), None))
+    assert len(cache) == 4
+    assert list(cache.keys()) == [(2,), (3,), (4,), (5,)]
+    # Touching moves the entry to the most-recent end.
+    trainer._cache_touch((2,))
+    assert list(cache.keys()) == [(3,), (4,), (5,), (2,)]
+
+
+def test_duplicate_formulas_share_one_batched_evaluation(
+    populated_db: DataConfig, monkeypatch
+):
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=4, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+    )
+    train_end = trainer._train_end_index()
+    calls: dict[str, int] = {"n": 0}
+    add_token = FORMULA_VOCAB.operator_offset  # first operator (ADD)
+    pattern = [1, 1, add_token, 0]
+    state = {"pos": -1}
+
+    def counting_execute(tokens, ft):
+        calls["n"] += 1
+        return torch.arange(
+            1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end)
+
+    monkeypatch.setattr(trainer.vm, "execute", counting_execute)
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        token = pattern[state["pos"] % len(pattern)]
+        return torch.full(
+            (self.logits.shape[0],),
+            token,
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
+    trainer.train(steps=1, batch_size=4, save_artifacts=False)
+    # Four identical valid formulas: one VM execution, one batched scoring,
+    # and the best formula is recorded from the shared evaluation.
+    assert calls["n"] == 1
+    assert trainer.best_tokens is not None
+    assert trainer.best_tokens[:3] == [1, 1, add_token]
+    assert trainer.best_reward > -float("inf")

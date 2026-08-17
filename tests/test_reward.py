@@ -9,8 +9,10 @@ from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_data.processor import open_to_open_returns
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.reward import (
+    batched_basket_rewards,
     fast_basket_reward,
     simulate_basket_daily_returns,
+    simulate_basket_daily_returns_batch,
     sortino_ratio,
     trading_cost_fraction,
 )
@@ -240,3 +242,112 @@ def test_nonfinite_signal_rows_are_excluded_from_selection():
     )
     _, mean = fast_basket_reward(signal, target, cfg, RewardConfig())
     assert mean == pytest.approx(0.001, abs=1e-12)
+
+
+# --- batched basket simulation: equivalence with the scalar path ------------
+
+
+def _random_batch(rng, b, n_stocks, n_dates, nan_frac=0.1):
+    signals = rng.normal(size=(b, n_stocks, n_dates))
+    signals[rng.random((b, n_stocks, n_dates)) < nan_frac] = np.nan
+    target = rng.normal(0.0, 0.01, size=(n_stocks, n_dates))
+    target[rng.random((n_stocks, n_dates)) < 0.05] = np.nan
+    return signals, target
+
+
+def test_batch_sim_matches_scalar_reference():
+    rng = np.random.default_rng(5)
+    cfg = _cfg(top_n=3, single_weight_cap=1.0)
+    for b, n_stocks, n_dates in ((1, 6, 30), (4, 12, 45), (3, 5, 8)):
+        signals, target = _random_batch(rng, b, n_stocks, n_dates)
+        val_start = n_dates // 2 + 1
+        df, tf, dv, tv = simulate_basket_daily_returns_batch(
+            signals, target, cfg, val_start=val_start
+        )
+        for i in range(b):
+            ref_f, ref_tf = simulate_basket_daily_returns(signals[i], target, cfg)
+            ref_v, ref_tv = simulate_basket_daily_returns(
+                signals[i, :, val_start:], target[:, val_start:], cfg
+            )
+            assert df[i] == pytest.approx(ref_f, rel=1e-9, abs=1e-11)
+            assert tf[i] == pytest.approx(ref_tf, rel=1e-9, abs=1e-11)
+            assert dv[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-11)
+            assert tv[i] == pytest.approx(ref_tv, rel=1e-9, abs=1e-11)
+
+
+def test_batch_sim_val_basket_restarts_from_zero():
+    # The validation basket must behave exactly like the scalar path on the
+    # sliced signal: fresh zero weights at val_start, no carry-in from the
+    # full-window basket even though both share one pass over the dates.
+    rng = np.random.default_rng(6)
+    signals, target = _random_batch(rng, 2, 6, 20, nan_frac=0.0)
+    val_start = 12
+    cfg = _cfg(top_n=2)
+    df, _, dv, _ = simulate_basket_daily_returns_batch(
+        signals, target, cfg, val_start=val_start
+    )
+    for i in range(2):
+        ref_v, _ = simulate_basket_daily_returns(
+            signals[i, :, val_start:], target[:, val_start:], cfg
+        )
+        assert dv[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-11)
+
+
+def test_batch_sim_degenerate_shapes_match_scalar():
+    cfg = _cfg()
+    # Fewer than two dates: empty daily series.
+    df, tf, dv, tv = simulate_basket_daily_returns_batch(
+        np.zeros((2, 3, 1)), np.zeros((3, 1)), cfg, val_start=1
+    )
+    assert df.shape == (2, 0) and dv.shape == (2, 0)
+    assert list(tf) == [0.0, 0.0] and list(tv) == [0.0, 0.0]
+    ref_daily, ref_to = simulate_basket_daily_returns(
+        np.zeros((3, 1)), np.zeros((3, 1)), cfg
+    )
+    assert ref_daily.size == 0 and ref_to == 0.0
+    # top_n <= 0: every day skipped, zero daily and zero turnover.
+    df, tf, dv, tv = simulate_basket_daily_returns_batch(
+        np.zeros((2, 3, 6)), np.zeros((3, 6)), _cfg(top_n=0), val_start=3
+    )
+    assert np.all(df == 0.0) and np.all(dv == 0.0)
+    assert list(tf) == [0.0, 0.0] and list(tv) == [0.0, 0.0]
+    # Not enough finite rows on any day: same zero behavior.
+    sig = np.full((1, 3, 6), np.nan)
+    df, tf, dv, tv = simulate_basket_daily_returns_batch(sig, np.zeros((3, 6)), cfg, val_start=3)
+    assert np.all(df == 0.0) and np.all(dv == 0.0)
+
+
+def test_batched_rewards_match_scalar_rewards():
+    rng = np.random.default_rng(7)
+    cfg = _cfg(top_n=2, single_weight_cap=1.0)
+    reward_cfg = RewardConfig(turnover_threshold=0.4, turnover_penalty=1.5)
+    for _ in range(8):
+        b = int(rng.integers(1, 6))
+        n_stocks = int(rng.integers(3, 15))
+        n_dates = int(rng.integers(10, 60))
+        signals, target = _random_batch(rng, b, n_stocks, n_dates)
+        val_start = max(1, n_dates // 2)
+        rewards, val_rewards = batched_basket_rewards(
+            signals, target, cfg, reward_cfg, val_start
+        )
+        for i in range(b):
+            ref_r, _ = fast_basket_reward(signals[i], target, cfg, reward_cfg)
+            ref_v, _ = fast_basket_reward(
+                signals[i, :, val_start:], target[:, val_start:], cfg, reward_cfg
+            )
+            assert rewards[i] == pytest.approx(ref_r, rel=1e-9, abs=1e-10)
+            assert val_rewards[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-10)
+
+
+def test_batched_rewards_are_deterministic():
+    rng = np.random.default_rng(8)
+    signals, target = _random_batch(rng, 4, 8, 25)
+    cfg = _cfg()
+    reward_cfg = RewardConfig()
+    first = batched_basket_rewards(signals, target, cfg, reward_cfg, 12)
+    second = batched_basket_rewards(signals, target, cfg, reward_cfg, 12)
+    assert np.array_equal(first[0], second[0])
+    assert np.array_equal(first[1], second[1])
+    # Rewards stay inside the configured clip band.
+    assert np.all(first[0] >= reward_cfg.reward_clip_low)
+    assert np.all(first[0] <= reward_cfg.reward_clip_high)
