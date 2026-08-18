@@ -44,6 +44,7 @@ python -m ashare_model.train
 python -m ashare_model.backtest
 python -m ashare_model.evaluation --tier screening  # 测量协议（见下）
 python -m ashare_trading.run_sim
+python scripts/analyze_sim.py               # 模拟盘费用拖累/毛盈亏/现金核对
 streamlit run dashboard/app.py
 ```
 
