@@ -443,3 +443,88 @@ def test_duplicate_formulas_share_one_batched_evaluation(
     assert trainer.best_tokens is not None
     assert trainer.best_tokens[:3] == [1, 1, add_token]
     assert trainer.best_reward > -float("inf")
+
+
+# --- streaming reward scoring (memory-bounded pending buffer) ----------------
+
+
+def test_reward_chunk_size_bounds():
+    f = AshareTrainer._reward_chunk_size
+    # Tiny windows hit the 64 cap; huge signals floor at 1 so a single
+    # oversized signal still makes progress.
+    assert f(0) == 64
+    assert f(1024) == 64
+    assert f(1 << 30) == 1
+    # Monotone: larger signals never allow a larger chunk.
+    sizes = [f(sb) for sb in (1, 2**10, 2**16, 2**20, 2**24, 2**28, 2**30)]
+    assert sizes == sorted(sizes, reverse=True)
+
+
+def test_streamed_reward_chunks_match_single_pass(
+    populated_db: DataConfig, monkeypatch
+):
+    """Scoring pending formulas in small chunks yields the same training
+    outcome as scoring them in one pass: streaming is a memory optimization,
+    not a semantic change."""
+
+    import ashare_model.train as train_module
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=64, train_steps=1, max_formula_len=4)
+    # Capture the real function once: inside run_trainer the module attribute
+    # may already be patched by the previous run.
+    real_batched = train_module.batched_basket_rewards
+
+    def fake_execute(tokens, ft):
+        # Deterministic non-constant signal per formula, shaped [stocks, dates].
+        key = tuple(int(t) for t in tokens)
+        seed = sum((i + 1) * t for i, t in enumerate(key)) % 1000 + 1
+        rng = np.random.default_rng(seed)
+        return torch.tensor(
+            rng.normal(size=(ft.shape[1], ft.shape[2])).astype(np.float32)
+        )
+
+    def run_trainer(chunk_size: int, calls: list[int]) -> AshareTrainer:
+        monkeypatch.setattr(
+            AshareTrainer,
+            "_reward_chunk_size",
+            staticmethod(lambda signal_bytes: chunk_size),
+        )
+        trainer = AshareTrainer(
+            populated_db,
+            model_config,
+            BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+            loader,
+        )
+        monkeypatch.setattr(trainer.vm, "execute", fake_execute)
+
+        def counting(signals, target_ret, bt_cfg, reward_cfg, val_start):
+            calls.append(int(signals.shape[0]))
+            return real_batched(signals, target_ret, bt_cfg, reward_cfg, val_start)
+
+        monkeypatch.setattr(train_module, "batched_basket_rewards", counting)
+        trainer.train(steps=1, batch_size=64, save_artifacts=False)
+        return trainer
+
+    calls_streamed: list[int] = []
+    calls_single: list[int] = []
+    streamed = run_trainer(8, calls_streamed)
+    single = run_trainer(128, calls_single)
+
+    # The streamed path splits the exact same formula set into chunks of at
+    # most 8; the single-pass path scores it in exactly one call.
+    assert calls_streamed and all(c <= 8 for c in calls_streamed)
+    assert len(calls_single) == 1
+    assert sum(calls_streamed) == calls_single[0]
+
+    # Identical sampling (init_seed/seed pinned) and identical scoring:
+    # both paths must agree on every training observable.
+    assert streamed.best_tokens == single.best_tokens
+    assert streamed.best_reward == pytest.approx(single.best_reward)
+    assert streamed.history[0]["avg_reward"] == pytest.approx(
+        single.history[0]["avg_reward"]
+    )
+    assert streamed.history[0]["loss"] == pytest.approx(
+        single.history[0]["loss"]
+    )

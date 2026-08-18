@@ -109,6 +109,41 @@ class AshareTrainer:
     def _cache_touch(self, key: tuple[int, ...]) -> None:
         self._reward_cache.move_to_end(key)
 
+    @staticmethod
+    def _reward_chunk_size(signal_bytes: int) -> int:
+        """Formulas per reward-scoring chunk under the ~512 MB budget.
+
+        One chunk stacks its signals as float64, so ``chunk x signal_bytes``
+        bytes stay below the budget; the chunk is capped at 64 (small
+        windows would otherwise build huge numpy stacks) and floored at 1
+        so a single oversized signal still makes progress.
+        """
+
+        return max(1, min(64, (512 * (1 << 20)) // max(signal_bytes, 1)))
+
+    def _score_pending_chunk(
+        self,
+        pending: list[tuple[tuple[int, ...], np.ndarray]],
+        target_ret: np.ndarray,
+        val_start: int,
+        step_results: dict[tuple[int, ...], tuple[float, float | None]],
+    ) -> None:
+        """Score one chunk of pending formulas and merge the outcomes."""
+
+        if not pending:
+            return
+        chunk_rewards, chunk_val = batched_basket_rewards(
+            np.stack([signal_np for _, signal_np in pending]),
+            target_ret,
+            self.backtest_config,
+            self.reward_config,
+            val_start,
+        )
+        for (key, _), reward, val_reward in zip(
+            pending, chunk_rewards, chunk_val
+        ):
+            step_results[key] = (float(reward), float(val_reward))
+
     def train(
         self,
         steps: int | None = None,
@@ -158,7 +193,7 @@ class AshareTrainer:
         # Chunk the batched reward evaluation so the stacked signal matrix
         # stays within a fixed memory budget (~512 MB of float64 signals).
         signal_bytes = factor_tensor.shape[1] * train_end_idx * 8
-        reward_chunk = max(1, min(64, (512 * (1 << 20)) // max(signal_bytes, 1)))
+        reward_chunk = self._reward_chunk_size(signal_bytes)
 
         pbar = tqdm(range(steps))
         for step in pbar:
@@ -229,20 +264,16 @@ class AshareTrainer:
                     )
                     continue
                 pending.append((key, signal_np))
-
-            for start in range(0, len(pending), reward_chunk):
-                chunk = pending[start : start + reward_chunk]
-                chunk_rewards, chunk_val = batched_basket_rewards(
-                    np.stack([signal_np for _, signal_np in chunk]),
-                    target_ret,
-                    self.backtest_config,
-                    self.reward_config,
-                    val_start,
-                )
-                for (key, _), reward, val_reward in zip(
-                    chunk, chunk_rewards, chunk_val
-                ):
-                    step_results[key] = (float(reward), float(val_reward))
+                # Score as soon as one full chunk is ready: buffering every
+                # unique signal of a step at once costs batch_size x
+                # [stocks, dates] x 4 bytes and exhausts RAM on 16 GB
+                # machines for large batches before any chunk is scored.
+                if len(pending) >= reward_chunk:
+                    self._score_pending_chunk(
+                        pending, target_ret, val_start, step_results
+                    )
+                    pending = []
+            self._score_pending_chunk(pending, target_ret, val_start, step_results)
 
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())
