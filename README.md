@@ -9,7 +9,7 @@
 - `ashare_trading/`：模拟券商撮合、组合管理、风控、日频模拟运行器。
 - `dashboard/`：Streamlit 研究/模拟盘看板。
 - `config/ashare_config.yaml`：非敏感配置。
-- `_obsolete_crypto/`：原加密链路与 `times.py` 等遗留脚本归档，不再参与运行。
+- 原加密链路（`times.py` 等）与独立 grokking 实验（`lord/`）已从主线移除，可在 tag `archive/lord-and-crypto` 检回。
 
 ## 安装
 
