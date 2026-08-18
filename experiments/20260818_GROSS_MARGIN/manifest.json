@@ -1,0 +1,62 @@
+{
+  "run_id": "067b51d4293e",
+  "created_at": "2026-08-18T16:19:49",
+  "mode": "backtest",
+  "slug": "GROSS_MARGIN",
+  "git_commit": "ff207edb4b5688964d9551e605c381f04b16a3e8",
+  "git_dirty": false,
+  "formula": {
+    "formula": [
+      23,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula_text": "GROSS_MARGIN",
+    "best_reward": 0.8764777649615393,
+    "reward_version": "2"
+  },
+  "config": {
+    "source": "ashare_config.yaml",
+    "sha256": "75a0fc42df618ba129e718bc37a1b54f11564240495de798ece0342248f3aa6e",
+    "effective_sha256": "daf53dfa7b2c39441374c49c74cbe869dea98e1d8bb3c75fd099cf05247e863f"
+  },
+  "metrics": {
+    "source": "backtest_result.json",
+    "sha256": "102ce8c9f2ad76a02963eeccb80529ce4f7d1fa6b4a6a0b7ccc7e1813c683007",
+    "stored": true
+  },
+  "model": null,
+  "protocol": null,
+  "data_end_date": "20260814",
+  "files": [
+    {
+      "name": "formula.json",
+      "bytes": 21166
+    },
+    {
+      "name": "config.yaml",
+      "bytes": 2776
+    },
+    {
+      "name": "config_effective.yaml",
+      "bytes": 2093
+    },
+    {
+      "name": "metrics_summary.json",
+      "bytes": 423
+    },
+    {
+      "name": "metrics.json",
+      "bytes": 4114289
+    }
+  ]
+}
