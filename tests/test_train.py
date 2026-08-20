@@ -7,7 +7,7 @@ import pytest
 import torch
 from torch.distributions import Categorical
 
-from ashare_data.config import BacktestConfig, DataConfig, ModelConfig
+from ashare_data.config import BacktestConfig, DataConfig, ModelConfig, RewardConfig
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.reward import REWARD_VERSION
 from ashare_model.train import AshareTrainer, resolve_device
@@ -33,7 +33,15 @@ def test_resolve_device_rejects_unknown_values():
         resolve_device("tpu")
 
 
-def _make_trainer(tmp_path, loader=None):
+def _reward_cfg(**kwargs):
+    # The 3-stock fixtures fall below the production ic_min_stocks; the
+    # floor is relaxed so the fixtures exercise the training loop itself.
+    defaults = dict(ic_min_stocks=3, min_val_reward=-1e9)
+    defaults.update(kwargs)
+    return RewardConfig(**defaults)
+
+
+def _make_trainer(tmp_path, loader=None, reward_config=None):
     data_config = DataConfig(
         data_dir=tmp_path,
         duckdb_path=tmp_path / "ashare.duckdb",
@@ -45,6 +53,7 @@ def _make_trainer(tmp_path, loader=None):
         model_config,
         BacktestConfig(top_n=2, train_end_date="2024-01-20"),
         loader,
+        reward_config=reward_config or _reward_cfg(),
     )
 
 
@@ -74,33 +83,197 @@ def test_validation_split_bounds(populated_db: DataConfig):
     train_end = trainer._train_end_index()
     val_start = trainer._validation_start(train_end)
     assert 1 <= val_start < train_end
+    windows = trainer._validation_windows(train_end)
+    assert windows and windows[0][0] == val_start and windows[-1][1] == train_end
+    assert all(b > a for a, b in windows)
+    assert all(b - a >= 3 for a, b in windows)
+
+
+def test_validation_windows_cover_tail_disjointly():
+    trainer = object.__new__(AshareTrainer)
+    trainer.model_config = ModelConfig(validation_fraction=0.2, validation_splits=3)
+    trainer.reward_config = _reward_cfg()
+    train_end = 100
+    windows = trainer._validation_windows(train_end)
+    assert len(windows) == 3
+    starts = [a for a, _ in windows]
+    ends = [b for _, b in windows]
+    assert starts[0] == trainer._validation_start(train_end)
+    assert ends[-1] == train_end
+    assert ends[:-1] == starts[1:]  # disjoint and contiguous
+
+
+def test_validation_windows_degrade_to_single_window_when_too_short():
+    trainer = object.__new__(AshareTrainer)
+    trainer.model_config = ModelConfig(validation_fraction=0.5, validation_splits=3)
+    trainer.reward_config = _reward_cfg()
+    train_end = 10
+    windows = trainer._validation_windows(train_end)
+    assert windows == [(trainer._validation_start(train_end), train_end)]
 
 
 def test_best_formula_selected_on_validation_window(tmp_path, populated_db: DataConfig, monkeypatch):
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    reward_config = _reward_cfg()
     trainer = AshareTrainer(
         populated_db,
         model_config,
         BacktestConfig(top_n=2, train_end_date="2024-02-01"),
         loader,
+        reward_config=reward_config,
     )
     train_end = trainer._train_end_index()
     val_start = trainer._validation_start(train_end)
     target = loader.target_ret[:, :train_end].numpy()
     # Crafted signal: actively bad in-sample, perfectly aligned in the
-    # validation tail.  Only a validation-driven selection can score 5.0.
+    # validation tail.  Only a validation-driven selection can score the
+    # clip ceiling.
     crafted = np.zeros((len(loader.ts_codes), train_end))
     crafted[:, :val_start] = -target[:, :val_start] * 100.0
     crafted[:, val_start:] = target[:, val_start:] * 100.0
     crafted_t = torch.tensor(crafted, dtype=torch.float32)
     monkeypatch.setattr(trainer.vm, "execute", lambda tokens, ft: crafted_t)
+    # Force an operator-bearing formula so the bare-copy penalty does not
+    # apply: the validation reward then clips at exactly the ceiling.
+    add_token = FORMULA_VOCAB.operator_offset
+    pattern = [1, 1, add_token, 0]
+    state = {"pos": -1}
 
+    def fixed_sample(self):
+        state["pos"] += 1
+        token = pattern[state["pos"] % len(pattern)]
+        return torch.full(
+            (self.logits.shape[0],),
+            token,
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
     tokens = trainer.train(steps=1, batch_size=1)
     assert tokens is not None
-    assert trainer.best_reward == pytest.approx(5.0, abs=1e-6)
+    assert trainer.best_reward == pytest.approx(
+        trainer.reward_config.reward_clip_high, abs=1e-6
+    )
     assert "value_loss" in trainer.history[0]
+    assert "entropy" in trainer.history[0]
+
+
+def test_bare_factor_penalty_applied_but_operator_formula_not(
+    tmp_path, populated_db: DataConfig, monkeypatch
+):
+    """A bare single-feature formula pays complexity_penalty on both the
+    gradient reward and the validation selection; an operator-bearing
+    formula does not."""
+
+    import ashare_model.train as train_module
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
+    reward_config = _reward_cfg(complexity_penalty=0.25)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=reward_config,
+    )
+    train_end = trainer._train_end_index()
+    signal = torch.arange(
+        1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
+    ).reshape(len(loader.ts_codes), train_end)
+    monkeypatch.setattr(trainer.vm, "execute", lambda tokens, ft: signal)
+    monkeypatch.setattr(
+        train_module,
+        "batched_basket_rewards",
+        lambda signals, target, bt, rc, val_windows: (
+            np.full(signals.shape[0], 0.5),
+            np.full(signals.shape[0], 0.4),
+        ),
+    )
+    add_token = FORMULA_VOCAB.operator_offset
+    row_a = [1, 0, 0, 0]
+    row_b = [1, 1, add_token, 0]
+    state = {"pos": -1}
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        pos = state["pos"] % 4
+        return torch.tensor(
+            [row_a[pos], row_b[pos]], dtype=torch.long, device=self.logits.device
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
+    trainer.train(steps=1, batch_size=2, save_artifacts=False)
+    bare = (1, 0, 0, 0)
+    combined = (1, 1, add_token, 0)
+    assert trainer._reward_cache[bare] == pytest.approx((0.25, 0.15))
+    assert trainer._reward_cache[combined] == pytest.approx((0.5, 0.4))
+    # The selection prefers the unpenalized operator formula.
+    assert trainer.best_tokens == list(combined)
+    assert trainer.best_reward == pytest.approx(0.4)
+
+
+def test_quality_floor_blocks_save_and_returns_none(
+    tmp_path, populated_db: DataConfig, monkeypatch
+):
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    reward_config = _reward_cfg(min_val_reward=0.0)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=reward_config,
+    )
+    train_end = trainer._train_end_index()
+    # Perfectly *inverted* alignment: negative ICIR everywhere, so the best
+    # validation reward stays below the quality floor.
+    target = loader.target_ret[:, :train_end].numpy()
+    inverted = torch.tensor(-target * 100.0, dtype=torch.float32)
+    monkeypatch.setattr(trainer.vm, "execute", lambda tokens, ft: inverted)
+    tokens = trainer.train(steps=1, batch_size=1)
+    assert tokens is None
+    assert trainer.best_reward < 0.0
+    assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
+
+
+def test_policy_update_loss_clips_advantage_and_applies_entropy():
+    log_probs = [torch.tensor([-0.5, -0.7]), torch.tensor([-0.2, -0.3])]
+    rewards = torch.tensor([1.0, 1.0])  # zero spread -> unbounded advantage
+    baseline = torch.tensor([0.0, 0.0])
+    entropies = [torch.tensor([1.5, 1.5]), torch.tensor([1.5, 1.5])]
+    loss, policy_loss, value_loss, entropy = AshareTrainer._policy_update_loss(
+        log_probs,
+        rewards,
+        baseline,
+        entropies,
+        value_loss_weight=0.5,
+        advantage_clip=10.0,
+        entropy_coef=0.01,
+    )
+    # Zero spread must not explode: the clipped advantage is bounded.
+    assert torch.isfinite(policy_loss) and abs(float(policy_loss)) <= 10.0
+    assert entropy == pytest.approx(1.5, abs=1e-6)
+    assert torch.isfinite(value_loss)
+    # The entropy bonus shifts the total loss below the plain actor-critic
+    # sum (loss = policy + w * value - coef * entropy).
+    assert loss == pytest.approx(
+        float(policy_loss + 0.5 * value_loss - 0.01 * entropy), abs=1e-6
+    )
+    # Zero spread drives the raw advantage to ~1e6, so the loss is exactly
+    # the clipped value: sum(log_probs) = [-0.7, -1.0], adv = +10 both rows.
+    assert policy_loss == pytest.approx(8.5, abs=1e-6)
+    _, policy_loss_5, _, _ = AshareTrainer._policy_update_loss(
+        log_probs, rewards, baseline, entropies,
+        value_loss_weight=0.5, advantage_clip=5.0, entropy_coef=0.01,
+    )
+    assert policy_loss_5 == pytest.approx(4.25, abs=1e-6)
 
 
 def test_train_artifact_records_vocab_provenance(tmp_path, populated_db: DataConfig, monkeypatch):
@@ -116,6 +289,7 @@ def test_train_artifact_records_vocab_provenance(tmp_path, populated_db: DataCon
         model_config,
         BacktestConfig(top_n=2, train_end_date="2024-02-01"),
         loader,
+        reward_config=_reward_cfg(),
     )
     train_end = trainer._train_end_index()
     monkeypatch.setattr(
@@ -150,6 +324,7 @@ def test_train_artifact_records_device(tmp_path, populated_db: DataConfig, monke
         model_config,
         BacktestConfig(top_n=2, train_end_date="2024-02-01"),
         loader,
+        reward_config=_reward_cfg(),
     )
     train_end = trainer._train_end_index()
     monkeypatch.setattr(
@@ -178,6 +353,7 @@ def test_train_one_step_on_cuda(populated_db: DataConfig, monkeypatch):
         model_config,
         BacktestConfig(top_n=2, train_end_date="2024-02-01"),
         loader,
+        reward_config=_reward_cfg(),
     )
     train_end = trainer._train_end_index()
     # The VM must receive the CUDA-resident factor tensor; signals come
@@ -242,6 +418,7 @@ def test_train_can_skip_artifacts(populated_db: DataConfig, monkeypatch):
         model_config,
         BacktestConfig(top_n=2, train_end_date="2024-02-01"),
         loader,
+        reward_config=_reward_cfg(),
     )
     train_end = trainer._train_end_index()
     monkeypatch.setattr(
@@ -308,6 +485,7 @@ def test_train_invalid_formula_gets_clip_low(populated_db: DataConfig, monkeypat
         model_config,
         BacktestConfig(top_n=2, train_end_date="2024-02-01"),
         loader,
+        reward_config=_reward_cfg(),
     )
     monkeypatch.setattr(trainer.vm, "execute", lambda tokens, ft: None)
     tokens = trainer.train(steps=1, batch_size=1, save_artifacts=False)
@@ -352,6 +530,7 @@ def test_reward_cache_reuses_evaluations_across_steps(
         model_config,
         BacktestConfig(top_n=2, train_end_date="2024-02-01"),
         loader,
+        reward_config=_reward_cfg(),
     )
     train_end = trainer._train_end_index()
     calls: dict[str, int] = {"n": 0}
@@ -410,6 +589,7 @@ def test_duplicate_formulas_share_one_batched_evaluation(
         model_config,
         BacktestConfig(top_n=2, train_end_date="2024-02-01"),
         loader,
+        reward_config=_reward_cfg(),
     )
     train_end = trainer._train_end_index()
     calls: dict[str, int] = {"n": 0}
@@ -496,12 +676,13 @@ def test_streamed_reward_chunks_match_single_pass(
             model_config,
             BacktestConfig(top_n=2, train_end_date="2024-02-01"),
             loader,
+            reward_config=_reward_cfg(),
         )
         monkeypatch.setattr(trainer.vm, "execute", fake_execute)
 
-        def counting(signals, target_ret, bt_cfg, reward_cfg, val_start):
+        def counting(signals, target_ret, bt_cfg, reward_cfg, val_windows):
             calls.append(int(signals.shape[0]))
-            return real_batched(signals, target_ret, bt_cfg, reward_cfg, val_start)
+            return real_batched(signals, target_ret, bt_cfg, reward_cfg, val_windows)
 
         monkeypatch.setattr(train_module, "batched_basket_rewards", counting)
         trainer.train(steps=1, batch_size=64, save_artifacts=False)

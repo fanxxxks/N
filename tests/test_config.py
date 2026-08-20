@@ -114,12 +114,25 @@ def test_make_model_and_backtest_config_nested(tmp_path: Path):
 
 
 def test_make_reward_config_nested_with_defaults(tmp_path: Path):
-    raw = {"reward": {"bad_reward": -5.0, "turnover_threshold": 0.8}}
+    raw = {"reward": {"bad_reward": -5.0, "complexity_penalty": 0.4}}
     reward = make_reward_config(raw)
     assert reward.bad_reward == -5.0
-    assert reward.turnover_threshold == 0.8
+    assert reward.complexity_penalty == 0.4
     assert reward.reward_clip_low == RewardConfig().reward_clip_low
-    assert reward.turnover_penalty == RewardConfig().turnover_penalty
+    assert reward.cost_weight == RewardConfig().cost_weight
+    assert reward.min_val_reward == RewardConfig().min_val_reward
+    assert reward.ic_min_stocks == RewardConfig().ic_min_stocks
+
+
+def test_make_model_config_v3_training_fields(tmp_path: Path):
+    model = make_model_config({})
+    assert model.validation_splits == ModelConfig().validation_splits == 3
+    assert model.entropy_coef == ModelConfig().entropy_coef == 0.01
+    assert model.advantage_clip == ModelConfig().advantage_clip == 10.0
+    raw = {"model": {"validation_splits": 2, "entropy_coef": 0.05}}
+    overridden = make_model_config(raw)
+    assert overridden.validation_splits == 2
+    assert overridden.entropy_coef == 0.05
 
 
 def test_make_sim_config_resolves_absolute_paths(tmp_path: Path):
@@ -150,7 +163,15 @@ def test_make_protocol_config_defaults():
     assert proto.seeds == [42, 7, 2024]
     assert len(proto.folds) == 5
     assert proto.folds[0] == FoldConfig("2020-12-31", "2021-12-31")
-    assert proto.baseline_signals == ["MOMENTUM_20", "ROE", "TURNOVER"]
+    assert proto.baseline_signals == [
+        "REVERSAL_5",
+        "RSQ_60",
+        "ILLIQ_20",
+        "OVERNIGHT_RET",
+        "MOMENTUM_20",
+        "ROE",
+        "TURNOVER",
+    ]
     assert proto.screening == TierConfig(50, 256)
     assert proto.confirmation == TierConfig(200, 512)
 

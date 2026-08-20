@@ -1,0 +1,71 @@
+{
+  "run_id": "c2be45515c65",
+  "created_at": "2026-08-20T15:00:28",
+  "mode": "protocol",
+  "slug": "protocol_screening",
+  "git_commit": "b5f0d2921e6a132c3122d0e5b44e76e95e048d1c",
+  "git_dirty": false,
+  "formula": null,
+  "config": {
+    "source": "ashare_config.yaml",
+    "sha256": "44341ad19ff7e3f6d343993e9dddeb45a939a5efdc6fb2d86683d7615cfb2e57",
+    "effective_sha256": "467225f2c94cc37c03df12453fd7f970d6688658b865cd5f13e8d0f45e19e01e"
+  },
+  "metrics": {
+    "source": "protocol_result.json",
+    "sha256": "ec97f4ed8f91ea60578505571ec8f44ede919ac2c11148028465bf1f8249e706",
+    "stored": true
+  },
+  "model": null,
+  "protocol": {
+    "version": "3",
+    "frequency": "daily",
+    "horizon": 1,
+    "tier": "screening",
+    "steps": 50,
+    "batch_size": 256,
+    "n_folds": 5,
+    "n_seeds": 3,
+    "n_candidates": 55,
+    "dsr": {
+      "dsr": 0.37140793094327723,
+      "n_trials": 40,
+      "sr_best": 0.12008429112573275,
+      "t_best": 241,
+      "skew_best": 0.019112676820516435,
+      "kurt_best": 3.3565511281643126,
+      "best_candidate": "baseline:ILLIQ_20",
+      "best_fold_test_end": "2023-12-31",
+      "best_seed": null
+    },
+    "max_t": {
+      "observed_max_t": 1.8642095137124226,
+      "p_value": 0.6270745850829834,
+      "n_perms": 5000,
+      "block_size": 10,
+      "n_trials": 40,
+      "seed": 0,
+      "significant_95": false
+    },
+    "top_candidate": "baseline:ILLIQ_20"
+  },
+  "data_end_date": "20260814",
+  "files": [
+    {
+      "name": "config.yaml",
+      "bytes": 3248
+    },
+    {
+      "name": "config_effective.yaml",
+      "bytes": 2240
+    },
+    {
+      "name": "metrics_summary.json",
+      "bytes": 29409
+    },
+    {
+      "name": "metrics.json",
+      "bytes": 692721
+    }
+  ]
+}

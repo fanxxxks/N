@@ -9,8 +9,12 @@ from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_data.processor import open_to_open_returns
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.reward import (
+    annualized_turnover_cost,
     batched_basket_rewards,
-    fast_basket_reward,
+    formula_reward,
+    icir_from_series,
+    per_turnover_cost_rate,
+    rank_ic_series,
     simulate_basket_daily_returns,
     simulate_basket_daily_returns_batch,
     sortino_ratio,
@@ -31,6 +35,12 @@ def _cfg(**kwargs) -> BacktestConfig:
     )
     defaults.update(kwargs)
     return BacktestConfig(**defaults)
+
+
+def _reward_cfg(**kwargs) -> RewardConfig:
+    defaults = dict(ic_min_stocks=2)
+    defaults.update(kwargs)
+    return RewardConfig(**defaults)
 
 
 # --- trading_cost_fraction -------------------------------------------------
@@ -103,6 +113,91 @@ def test_sortino_falls_back_to_full_volatility_with_few_negative_days():
     assert sortino_ratio(daily) == pytest.approx(expected, rel=1e-12)
 
 
+# --- rank IC / ICIR --------------------------------------------------------
+
+
+def test_rank_ic_series_perfect_positive_correlation():
+    rng = np.random.default_rng(0)
+    n_stocks, n_dates = 12, 20
+    target = rng.normal(size=(n_stocks, n_dates))
+    signals = np.stack([target, -target]).astype(float)
+    ic = rank_ic_series(signals, target, min_stocks=5)
+    assert np.allclose(ic[0], 1.0)
+    assert np.allclose(ic[1], -1.0)
+    assert icir_from_series(ic)[0] > 100.0  # near-perfect: huge positive ICIR
+    assert icir_from_series(ic)[1] < -100.0
+
+
+def test_rank_ic_series_average_ranks_tie_handling():
+    # A constant signal cross-section has zero variance: the correlation is
+    # undefined, so those dates contribute NaN and the row scores ICIR 0.
+    target = np.array(
+        [[0.01, 0.02], [0.02, 0.01], [-0.01, 0.03], [0.005, 0.001]]
+    )
+    constant = np.ones_like(target)
+    ic = rank_ic_series(constant[None], target, min_stocks=2)
+    assert np.isnan(ic).all()
+    assert icir_from_series(ic)[0] == 0.0
+
+
+def test_rank_ic_series_skips_days_below_min_stocks():
+    # Three valid pairs on day 0, only one on days 1-2: they must be NaN.
+    target = np.array(
+        [[0.01, 0.02, np.nan], [0.02, np.nan, np.nan], [0.03, np.nan, 0.02]]
+    )
+    signal = target.copy()
+    ic = rank_ic_series(signal[None], target, min_stocks=2)
+    assert ic[0, 0] == pytest.approx(1.0)
+    assert np.isnan(ic[0, 1])
+    assert np.isnan(ic[0, 2])
+
+
+def test_rank_ic_series_excludes_nonfinite_signal_cells_per_row():
+    # A NaN signal cell must be excluded (per row): the surviving pairs keep
+    # the exact monotonic correlation.  A finite but extreme replacement
+    # would have polluted the rank and moved the IC away from 1.
+    target = np.tile(np.array([0.01, 0.02, 0.03, 0.04])[:, None], (1, 5))
+    signal = target.copy()
+    signal[0, :] = np.nan
+    ic = rank_ic_series(signal[None], target, min_stocks=2)
+    assert np.allclose(ic[0], 1.0)
+    extreme = target.copy()
+    extreme[0, :] = 1e9
+    ic_extreme = rank_ic_series(extreme[None], target, min_stocks=2)
+    assert not np.allclose(ic_extreme[0], 1.0)
+
+
+def test_icir_zero_with_fewer_than_two_observations():
+    assert icir_from_series(np.array([np.nan, 0.5])).tolist() == [0.0]
+    # Constant positive IC -> mean/std explodes; mean-zero IC -> exact 0.
+    icir = icir_from_series(np.array([[1.0, 1.0], [1.0, -1.0]]))
+    assert icir[0] > 1e8
+    assert icir[1] == 0.0
+
+
+# --- turnover cost (continuous, rate-proportional) --------------------------
+
+
+def test_per_turnover_cost_rate_formula():
+    cfg = _cfg()
+    assert per_turnover_cost_rate(cfg) == pytest.approx(
+        2 * cfg.commission_rate
+        + cfg.stamp_tax_rate
+        + 2 * cfg.transfer_fee_rate
+        + 2 * cfg.slippage_rate,
+        rel=1e-12,
+    )
+
+
+def test_annualized_turnover_cost_is_linear_in_turnover():
+    cfg = _cfg()
+    rate = per_turnover_cost_rate(cfg)
+    assert annualized_turnover_cost(np.array([0.0, 0.5]), cfg).tolist() == [
+        pytest.approx(0.0),
+        pytest.approx(0.5 * rate * 252, rel=1e-12),
+    ]
+
+
 # --- basket simulation vs the full backtest engine -------------------------
 
 
@@ -138,87 +233,6 @@ def test_simulate_basket_matches_backtest_engine_daily_returns():
     )
 
 
-# --- fast_basket_reward ----------------------------------------------------
-
-
-def test_churn_is_charged_more_than_a_static_basket():
-    cfg = _cfg()
-    target = np.full((3, 4), 0.002)
-    static_signal = np.array(
-        [[3.0, 3.0, 3.0, 3.0], [2.0, 2.0, 2.0, 2.0], [1.0, 1.0, 1.0, 1.0]]
-    )
-    churn_signal = np.array(
-        [[3.0, 1.0, 3.0, 1.0], [2.0, 2.0, 2.0, 2.0], [1.0, 3.0, 1.0, 3.0]]
-    )
-    _, mean_static = fast_basket_reward(static_signal, target, cfg, RewardConfig())
-    _, mean_churn = fast_basket_reward(churn_signal, target, cfg, RewardConfig())
-    assert mean_static > mean_churn
-    # The two flip days each pay one full buy + sell round trip on the
-    # swapped positions; the entry day cost is identical for both signals.
-    buy_cost = cfg.commission_rate * 0.5 + (cfg.transfer_fee_rate + cfg.slippage_rate) * 0.5
-    sell_cost = buy_cost + cfg.stamp_tax_rate * 0.5
-    assert mean_static - mean_churn == pytest.approx(
-        2 * (buy_cost + sell_cost) / 3, abs=1e-12
-    )
-
-
-def test_fast_reward_survives_nonfinite_targets():
-    cfg = _cfg()
-    signal = np.array([[3.0] * 4, [2.0] * 4, [1.0] * 4])
-    target = np.array(
-        [
-            [0.01, np.inf, 0.01, np.nan],
-            [0.02, 0.02, 0.02, 0.02],
-            [0.03, 0.03, 0.03, 0.03],
-        ]
-    )
-    reward, mean = fast_basket_reward(signal, target, cfg, RewardConfig())
-    assert np.isfinite(reward)
-    assert np.isfinite(mean)
-
-
-def test_losing_basket_collapses_to_bad_reward():
-    cfg = _cfg(commission_rate=0.0, min_commission=0.0, stamp_tax_rate=0.0,
-               transfer_fee_rate=0.0, slippage_rate=0.0)
-    signal = np.array([[3.0] * 4, [2.0] * 4, [1.0] * 4])
-    target = np.full((3, 4), -0.001)
-    reward, _ = fast_basket_reward(signal, target, cfg, RewardConfig())
-    assert reward == -2.0
-
-
-def test_turnover_penalty_subtracts_when_above_threshold():
-    cfg = _cfg(commission_rate=0.0, min_commission=0.0, stamp_tax_rate=0.0,
-               transfer_fee_rate=0.0, slippage_rate=0.0)
-    # Identical targets per stock make the top-2 basket return equal to the
-    # daily pattern below; a static basket keeps turnover at the entry-day
-    # value only (1/6), between the two thresholds.
-    daily = [0.01, -0.01, 0.005, -0.005, 0.01, -0.008]
-    signal = np.array([[3.0] * 7, [2.0] * 7, [1.0] * 7])
-    target = np.tile(np.asarray(daily), (3, 1)).astype(float)
-    target = np.column_stack([target, np.zeros(3)])
-    penalized, _ = fast_basket_reward(
-        signal, target, cfg,
-        RewardConfig(turnover_threshold=0.1, turnover_penalty=2.5),
-    )
-    unpenalized, _ = fast_basket_reward(
-        signal, target, cfg,
-        RewardConfig(turnover_threshold=1.0, turnover_penalty=2.5),
-    )
-    sortino = sortino_ratio(np.asarray(daily, dtype=np.float64))
-    assert 0.0 < sortino < RewardConfig().reward_clip_high
-    assert unpenalized == pytest.approx(sortino, rel=1e-12)
-    assert penalized == pytest.approx(sortino - 2.5, rel=1e-12)
-
-
-def test_degenerate_input_returns_clip_low():
-    cfg = _cfg()
-    reward, mean = fast_basket_reward(
-        np.zeros((3, 1)), np.zeros((3, 1)), cfg, RewardConfig()
-    )
-    assert reward == RewardConfig().reward_clip_low
-    assert mean == 0.0
-
-
 def test_nonfinite_signal_rows_are_excluded_from_selection():
     cfg = _cfg(top_n=3, commission_rate=0.0, min_commission=0.0,
                stamp_tax_rate=0.0, transfer_fee_rate=0.0, slippage_rate=0.0)
@@ -240,8 +254,65 @@ def test_nonfinite_signal_rows_are_excluded_from_selection():
             [0.001] * 4,
         ]
     )
-    _, mean = fast_basket_reward(signal, target, cfg, RewardConfig())
-    assert mean == pytest.approx(0.001, abs=1e-12)
+    daily, _ = simulate_basket_daily_returns(signal, target, cfg)
+    assert daily == pytest.approx(np.full(3, 0.001), abs=1e-12)
+
+
+# --- v3 reward semantics ----------------------------------------------------
+
+
+def test_formula_reward_is_icir_minus_continuous_cost():
+    cfg = _cfg()
+    rc = _reward_cfg()
+    rng = np.random.default_rng(3)
+    n_stocks, n_dates = 10, 30
+    target = rng.normal(size=(n_stocks, n_dates))
+    signal = target.copy()
+    # Near-perfect IC -> the ICIR term saturates the clip band.
+    reward = formula_reward(signal, target, cfg, rc)
+    assert reward == pytest.approx(rc.reward_clip_high, abs=1e-12)
+
+
+def test_reward_penalizes_churn_continuously():
+    # The cost drag is exactly cost_weight * annualized turnover cost: with
+    # cost_weight 1 vs 0 the reward difference equals the proportional cost,
+    # inside the clip band (no threshold jumps).
+    cfg = _cfg()
+    n_stocks, n_dates = 6, 12
+    rng = np.random.default_rng(11)
+    target = rng.normal(0.001, 0.01, size=(n_stocks, n_dates))
+    static = np.tile(np.arange(n_stocks, dtype=float)[::-1][:, None], (1, n_dates))
+    churn = static.copy()
+    churn[0, 1::2] = 1.0  # odd days: stock 0 drops out of the top-2 basket
+    _, to_static = simulate_basket_daily_returns(static, target, cfg)
+    _, to_churn = simulate_basket_daily_returns(churn, target, cfg)
+    assert to_churn > to_static
+
+    for signal in (static, churn):
+        _, to = simulate_basket_daily_returns(signal, target, cfg)
+        expected_cost = annualized_turnover_cost(np.asarray([to]), cfg)[0]
+        r_free = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=0.0))
+        r_honest = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=1.0))
+        assert -1.0 < r_honest < 1.0  # inside the band: the diff is exact
+        assert r_free - r_honest == pytest.approx(expected_cost, abs=1e-12)
+
+
+def test_degenerate_input_has_zero_icir_and_no_cost():
+    # One date: no IC observations and no daily return -> reward 0.0
+    # (the trainer reserves clip_low/bad_reward for invalid formulas).
+    cfg = _cfg()
+    rc = _reward_cfg()
+    reward = formula_reward(np.zeros((3, 1)), np.zeros((3, 1)), cfg, rc)
+    assert reward == 0.0
+
+
+def test_formula_reward_clips_to_configured_band():
+    cfg = _cfg()
+    rc = _reward_cfg(reward_clip_low=-0.25, reward_clip_high=0.5)
+    rng = np.random.default_rng(4)
+    target = rng.normal(size=(10, 40))
+    signal = -target  # ICIR strongly negative
+    assert formula_reward(signal, target, cfg, rc) == -0.25
 
 
 # --- batched basket simulation: equivalence with the scalar path ------------
@@ -260,94 +331,135 @@ def test_batch_sim_matches_scalar_reference():
     cfg = _cfg(top_n=3, single_weight_cap=1.0)
     for b, n_stocks, n_dates in ((1, 6, 30), (4, 12, 45), (3, 5, 8)):
         signals, target = _random_batch(rng, b, n_stocks, n_dates)
-        val_start = n_dates // 2 + 1
-        df, tf, dv, tv = simulate_basket_daily_returns_batch(
-            signals, target, cfg, val_start=val_start
-        )
+        df, tf = simulate_basket_daily_returns_batch(signals, target, cfg)
         for i in range(b):
             ref_f, ref_tf = simulate_basket_daily_returns(signals[i], target, cfg)
-            ref_v, ref_tv = simulate_basket_daily_returns(
-                signals[i, :, val_start:], target[:, val_start:], cfg
-            )
             assert df[i] == pytest.approx(ref_f, rel=1e-9, abs=1e-11)
             assert tf[i] == pytest.approx(ref_tf, rel=1e-9, abs=1e-11)
-            assert dv[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-11)
-            assert tv[i] == pytest.approx(ref_tv, rel=1e-9, abs=1e-11)
 
 
-def test_batch_sim_val_basket_restarts_from_zero():
-    # The validation basket must behave exactly like the scalar path on the
-    # sliced signal: fresh zero weights at val_start, no carry-in from the
-    # full-window basket even though both share one pass over the dates.
+def test_batch_sim_restarting_a_window_matches_scalar():
+    # A window simulated on its own columns equals the scalar path on the
+    # same slice: the window basket starts from zero weights, exactly like
+    # a fresh out-of-sample deployment.
     rng = np.random.default_rng(6)
     signals, target = _random_batch(rng, 2, 6, 20, nan_frac=0.0)
-    val_start = 12
     cfg = _cfg(top_n=2)
-    df, _, dv, _ = simulate_basket_daily_returns_batch(
-        signals, target, cfg, val_start=val_start
+    start, end = 8, 16
+    df, _ = simulate_basket_daily_returns_batch(
+        signals[:, :, start:end], target[:, start:end], cfg
     )
     for i in range(2):
         ref_v, _ = simulate_basket_daily_returns(
-            signals[i, :, val_start:], target[:, val_start:], cfg
+            signals[i, :, start:end], target[:, start:end], cfg
         )
-        assert dv[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-11)
+        assert df[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-11)
 
 
 def test_batch_sim_degenerate_shapes_match_scalar():
     cfg = _cfg()
     # Fewer than two dates: empty daily series.
-    df, tf, dv, tv = simulate_basket_daily_returns_batch(
-        np.zeros((2, 3, 1)), np.zeros((3, 1)), cfg, val_start=1
+    df, tf = simulate_basket_daily_returns_batch(
+        np.zeros((2, 3, 1)), np.zeros((3, 1)), cfg
     )
-    assert df.shape == (2, 0) and dv.shape == (2, 0)
-    assert list(tf) == [0.0, 0.0] and list(tv) == [0.0, 0.0]
+    assert df.shape == (2, 0)
+    assert list(tf) == [0.0, 0.0]
     ref_daily, ref_to = simulate_basket_daily_returns(
         np.zeros((3, 1)), np.zeros((3, 1)), cfg
     )
     assert ref_daily.size == 0 and ref_to == 0.0
     # top_n <= 0: every day skipped, zero daily and zero turnover.
-    df, tf, dv, tv = simulate_basket_daily_returns_batch(
-        np.zeros((2, 3, 6)), np.zeros((3, 6)), _cfg(top_n=0), val_start=3
+    df, tf = simulate_basket_daily_returns_batch(
+        np.zeros((2, 3, 6)), np.zeros((3, 6)), _cfg(top_n=0)
     )
-    assert np.all(df == 0.0) and np.all(dv == 0.0)
-    assert list(tf) == [0.0, 0.0] and list(tv) == [0.0, 0.0]
+    assert np.all(df == 0.0)
+    assert list(tf) == [0.0, 0.0]
     # Not enough finite rows on any day: same zero behavior.
     sig = np.full((1, 3, 6), np.nan)
-    df, tf, dv, tv = simulate_basket_daily_returns_batch(sig, np.zeros((3, 6)), cfg, val_start=3)
-    assert np.all(df == 0.0) and np.all(dv == 0.0)
+    df, tf = simulate_basket_daily_returns_batch(sig, np.zeros((3, 6)), cfg)
+    assert np.all(df == 0.0)
+    assert list(tf) == [0.0]
 
 
 def test_batched_rewards_match_scalar_rewards():
     rng = np.random.default_rng(7)
     cfg = _cfg(top_n=2, single_weight_cap=1.0)
-    reward_cfg = RewardConfig(turnover_threshold=0.4, turnover_penalty=1.5)
+    reward_cfg = _reward_cfg()
     for _ in range(8):
         b = int(rng.integers(1, 6))
         n_stocks = int(rng.integers(3, 15))
         n_dates = int(rng.integers(10, 60))
         signals, target = _random_batch(rng, b, n_stocks, n_dates)
-        val_start = max(1, n_dates // 2)
+        val_windows = [(n_dates // 2, n_dates)]
         rewards, val_rewards = batched_basket_rewards(
-            signals, target, cfg, reward_cfg, val_start
+            signals, target, cfg, reward_cfg, val_windows
         )
         for i in range(b):
-            ref_r, _ = fast_basket_reward(signals[i], target, cfg, reward_cfg)
-            ref_v, _ = fast_basket_reward(
-                signals[i, :, val_start:], target[:, val_start:], cfg, reward_cfg
+            ref_r = formula_reward(signals[i], target, cfg, reward_cfg)
+            ref_v = formula_reward(
+                signals[i, :, val_windows[0][0] :], target[:, val_windows[0][0] :],
+                cfg, reward_cfg,
             )
             assert rewards[i] == pytest.approx(ref_r, rel=1e-9, abs=1e-10)
             assert val_rewards[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-10)
+
+
+def test_val_reward_is_median_over_windows():
+    rng = np.random.default_rng(9)
+    cfg = _cfg(top_n=2, single_weight_cap=1.0)
+    reward_cfg = _reward_cfg()
+    n_stocks, n_dates = 8, 30
+    target = rng.normal(0.0, 0.01, size=(n_stocks, n_dates))
+    signals = rng.normal(size=(2, n_stocks, n_dates))
+    # Aligned in window 1, inverted in window 2, noise in window 3.
+    aligned = np.stack([target, -target, rng.normal(size=target.shape)])
+    windows = [(0, 10), (10, 20), (20, 30)]
+    rewards, val_rewards = batched_basket_rewards(
+        aligned, target, cfg, reward_cfg, windows
+    )
+    per_window = []
+    for start, end in windows:
+        per_window.append(
+            np.asarray(
+                [
+                    formula_reward(
+                        aligned[i, :, start:end], target[:, start:end], cfg, reward_cfg
+                    )
+                    for i in range(aligned.shape[0])
+                ]
+            )
+        )
+    expected = np.median(np.stack(per_window, axis=1), axis=1)
+    assert val_rewards == pytest.approx(expected, abs=1e-12)
+    # The perfect-alignment window dominates the median for row 0.
+    assert val_rewards[0] == pytest.approx(reward_cfg.reward_clip_high, abs=1e-12)
+    assert rewards[0] == pytest.approx(
+        formula_reward(aligned[0], target, cfg, reward_cfg), abs=1e-12
+    )
+
+
+def test_batched_rewards_without_val_windows_returns_none():
+    rng = np.random.default_rng(10)
+    signals, target = _random_batch(rng, 3, 8, 25)
+    rewards, val_rewards = batched_basket_rewards(
+        signals, target, _cfg(), _reward_cfg()
+    )
+    assert rewards.shape == (3,)
+    assert val_rewards is None
 
 
 def test_batched_rewards_are_deterministic():
     rng = np.random.default_rng(8)
     signals, target = _random_batch(rng, 4, 8, 25)
     cfg = _cfg()
-    reward_cfg = RewardConfig()
-    first = batched_basket_rewards(signals, target, cfg, reward_cfg, 12)
-    second = batched_basket_rewards(signals, target, cfg, reward_cfg, 12)
+    reward_cfg = _reward_cfg()
+    windows = [(0, 8), (8, 16)]
+    first = batched_basket_rewards(signals, target, cfg, reward_cfg, windows)
+    second = batched_basket_rewards(signals, target, cfg, reward_cfg, windows)
     assert np.array_equal(first[0], second[0])
     assert np.array_equal(first[1], second[1])
     # Rewards stay inside the configured clip band.
     assert np.all(first[0] >= reward_cfg.reward_clip_low)
     assert np.all(first[0] <= reward_cfg.reward_clip_high)
+    assert np.all(first[1] >= reward_cfg.reward_clip_low)
+    assert np.all(first[1] <= reward_cfg.reward_clip_high)

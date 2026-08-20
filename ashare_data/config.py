@@ -68,6 +68,14 @@ class ModelConfig:
     learning_rate: float = 1e-3
     validation_fraction: float = 0.2
     value_loss_weight: float = 0.5
+    # Number of independent sub-windows the validation tail is split into;
+    # best-formula selection uses the median reward across them.
+    validation_splits: int = 3
+    # Exploration bonus: policy loss subtracts entropy_coef * mean(entropy).
+    entropy_coef: float = 0.01
+    # Advantage normalization is clipped to [-advantage_clip, advantage_clip]
+    # so a degenerate reward spread cannot explode the policy gradient.
+    advantage_clip: float = 10.0
     feature_names: list[str] | None = None
 
 
@@ -77,15 +85,24 @@ class RewardConfig:
 
     Semantic changes to the reward implementation bump
     ``ashare_model.reward.REWARD_VERSION``; these values only tune the
-    current version.
+    current version (v3: rank-ICIR minus a continuous turnover cost).
     """
 
-    reward_clip_low: float = -3.0
-    reward_clip_high: float = 5.0
+    reward_clip_low: float = -1.0
+    reward_clip_high: float = 1.0
+    # Assigned by the trainer to invalid/constant formulas only; it sits
+    # below ``reward_clip_low`` so unusable formulas stay distinguishable.
     bad_reward: float = -2.0
-    turnover_penalty: float = 1.0
-    turnover_threshold: float = 0.5
-    downside_min_obs: int = 3
+    # Multiplier on the proportional turnover-cost drag (1.0 = honest cost).
+    cost_weight: float = 1.0
+    # Subtracted from the reward of formulas without any operator (bare
+    # single-factor copies), pushing the policy towards combinations.
+    complexity_penalty: float = 0.2
+    # Validation-quality floor: training saves no artifact unless the best
+    # validation reward reaches it (0.0 = at least zero net signal).
+    min_val_reward: float = 0.0
+    # Minimum finite cross-section per date for a rank-IC observation.
+    ic_min_stocks: int = 10
 
 
 @dataclass
@@ -133,11 +150,19 @@ class ProtocolConfig:
             FoldConfig("2024-12-31", "2025-12-31"),
         ]
     )
-    # Single-factor baselines (one momentum / one quality / one liquidity
-    # feature from the vocabulary).  Names are validated against the vocab
-    # when the protocol is built.
+    # Single-factor baselines (momentum / quality / liquidity / risk
+    # features from the vocabulary, chosen by their diagnostic ICIR).
+    # Names are validated against the vocab when the protocol is built.
     baseline_signals: list[str] = field(
-        default_factory=lambda: ["MOMENTUM_20", "ROE", "TURNOVER"]
+        default_factory=lambda: [
+            "REVERSAL_5",
+            "RSQ_60",
+            "ILLIQ_20",
+            "OVERNIGHT_RET",
+            "MOMENTUM_20",
+            "ROE",
+            "TURNOVER",
+        ]
     )
     screening: TierConfig = field(default_factory=TierConfig)
     confirmation: TierConfig = field(

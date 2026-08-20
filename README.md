@@ -81,6 +81,9 @@ python scripts/archive_run.py --mode protocol --commit # 结果归档进 experim
   上做 OOS 打分。
 - **种子**：`protocol.seeds` 每折多种子独立训练（默认 3 个），聚合报中位数 ± IQR
   （reward 有 clip，均值不可信）。
+- **基线**：`protocol.baseline_signals` 按因子诊断 ICIR 选取（默认
+  REVERSAL_5 / RSQ_60 / ILLIQ_20 / OVERNIGHT_RET / MOMENTUM_20 / ROE / TURNOVER），
+  每个裸因子与训练公式走同一回测引擎路径，给出"什么水平算好"的标尺。
 - **裁决指标**：完整回测引擎的净收益 / Sharpe / Sortino / 最大回撤 / 换手 +
   rank-IC / ICIR；**不用** `best_reward` / `fast_basket_reward` 裁决，训练侧
   `val_reward` 只归档、不参与排序。
@@ -195,7 +198,12 @@ python scripts/archive_run.py --mode sim --commit
 - **交易规则**：A 股 T+1、买入 100 股整手、卖出可零股清仓、涨停不买/跌停不卖、一字板判定、ST 股 5% 涨跌停（按股票名称识别）。
 - **费用模型**：佣金万 2.5（最低 5 元）、印花税卖出 0.05%、过户费 0.001%、滑点 0.05%；回测与训练奖励使用同一套费用口径。
 - **涨跌停事件因子**：`LIMIT_UP_EVENT`/`LIMIT_DOWN_EVENT` 由一字板真实计算（创业板/科创板 20%，其余 10%）。
-- **训练**：REINFORCE + value baseline；最佳公式在训练窗尾部的验证集上选取（`model.validation_fraction`，默认 0.2），避免纯样本内过拟合。
+- **训练**：REINFORCE + value baseline + 熵正则（advantage 裁剪防数值爆炸）；训练
+  奖励为**截面 rank-ICIR 减去连续换手成本**（`reward.py` v3：成本按费率比例计入，
+  无阈值跳变），验证段按 `model.validation_splits`（默认 3）个独立子窗口取**中位数**
+  选择最佳公式；不含算子的裸因子公式减 `reward.complexity_penalty`（默认 0.2），
+  最佳公式的验证奖励须达到 `reward.min_val_reward`（默认 0.0）才保存，避免把
+  负质量公式回测/归档。
 - **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式对照首发词表（v1：34 特征/16 算子）重映射，语义永不漂移。
 - **回测输出**：包含持仓快照与全市场等权基准（与策略同一 open-to-open 口径），供看板展示。
 

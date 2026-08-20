@@ -121,11 +121,56 @@ class AshareTrainer:
 
         return max(1, min(64, (512 * (1 << 20)) // max(signal_bytes, 1)))
 
+    def _complexity_penalty(self, key: tuple[int, ...]) -> float:
+        """Reward penalty for operator-free (bare single-factor) formulas.
+
+        A formula whose tokens contain no operator is a copy of one raw
+        feature; it is penalized (not banned) so the policy still has a
+        gradient towards combinations while degenerate copies lose their
+        edge over noise.
+        """
+
+        if any(t >= self.vocab.operator_offset for t in key):
+            return 0.0
+        return float(self.reward_config.complexity_penalty)
+
+    @staticmethod
+    def _policy_update_loss(
+        log_probs: list[torch.Tensor],
+        rewards: torch.Tensor,
+        baseline: torch.Tensor,
+        entropies: list[torch.Tensor],
+        *,
+        value_loss_weight: float,
+        advantage_clip: float,
+        entropy_coef: float,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Actor-critic loss: REINFORCE + value baseline + entropy bonus.
+
+        Advantages are batch-normalized and clipped to
+        ``[-advantage_clip, advantage_clip]`` so a degenerate reward spread
+        (e.g. a fully converged batch) cannot explode the policy gradient;
+        the entropy bonus counteracts mode collapse.  Pure function of its
+        inputs so the numerics are unit-testable.
+        """
+
+        adv = (rewards - baseline.detach()) / (
+            rewards.std(unbiased=False) + 1e-6
+        )
+        adv = adv.clamp(-advantage_clip, advantage_clip)
+        policy_loss = -(
+            torch.stack(log_probs, dim=1).sum(dim=1) * adv
+        ).mean()
+        entropy = torch.stack(entropies, dim=1).mean()
+        value_loss = torch.nn.functional.mse_loss(baseline, rewards)
+        loss = policy_loss + value_loss_weight * value_loss - entropy_coef * entropy
+        return loss, policy_loss, value_loss, entropy
+
     def _score_pending_chunk(
         self,
         pending: list[tuple[tuple[int, ...], np.ndarray]],
         target_ret: np.ndarray,
-        val_start: int,
+        val_windows: list[tuple[int, int]],
         step_results: dict[tuple[int, ...], tuple[float, float | None]],
     ) -> None:
         """Score one chunk of pending formulas and merge the outcomes."""
@@ -137,7 +182,7 @@ class AshareTrainer:
             target_ret,
             self.backtest_config,
             self.reward_config,
-            val_start,
+            val_windows,
         )
         for (key, _), reward, val_reward in zip(
             pending, chunk_rewards, chunk_val
@@ -186,9 +231,10 @@ class AshareTrainer:
         target_ret = self.loader.target_ret[:, :train_end_idx].numpy()
 
         # Hold out the tail of the training window for out-of-sample best
-        # formula selection, so the saved formula is not chosen purely on
-        # in-sample reward.
-        val_start = self._validation_start(train_end_idx)
+        # formula selection, split into independent sub-windows; the best
+        # formula is decided on the *median* validation reward so a single
+        # lucky tail stretch cannot win the selection.
+        val_windows = self._validation_windows(train_end_idx)
 
         # Chunk the batched reward evaluation so the stacked signal matrix
         # stays within a fixed memory budget (~512 MB of float64 signals).
@@ -212,6 +258,7 @@ class AshareTrainer:
             log_probs: list[torch.Tensor] = []
             sampled_tokens: list[torch.Tensor] = []
             values: list[torch.Tensor] = []
+            entropies: list[torch.Tensor] = []
 
             for pos in range(max_len):
                 logits, value, _ = self.model(inp)
@@ -222,6 +269,7 @@ class AshareTrainer:
                 dist = Categorical(logits=logits + mask)
                 action = dist.sample()
                 log_probs.append(dist.log_prob(action))
+                entropies.append(dist.entropy())
                 sampled_tokens.append(action)
                 inp = torch.cat([inp, action.unsqueeze(1)], dim=1)
                 self._update_stack_state(
@@ -270,14 +318,20 @@ class AshareTrainer:
                 # machines for large batches before any chunk is scored.
                 if len(pending) >= reward_chunk:
                     self._score_pending_chunk(
-                        pending, target_ret, val_start, step_results
+                        pending, target_ret, val_windows, step_results
                     )
                     pending = []
-            self._score_pending_chunk(pending, target_ret, val_start, step_results)
+            self._score_pending_chunk(pending, target_ret, val_windows, step_results)
 
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())
                 reward, val_reward = step_results[key]
+                if val_reward is not None:
+                    # Valid, non-constant formulas pay the bare-copy penalty
+                    # on both the gradient reward and the selection value.
+                    penalty = self._complexity_penalty(key)
+                    reward -= penalty
+                    val_reward -= penalty
                 rewards[i] = reward
                 # Cache every outcome (invalid and constant formulas too):
                 # the token sequence fully determines it, so repeats can
@@ -285,8 +339,8 @@ class AshareTrainer:
                 self._cache_put(key, (reward, val_reward))
                 if val_reward is not None:
                     # Out-of-sample selection: the best formula is decided on
-                    # the validation slice, while the gradient still sees the
-                    # full training window.
+                    # the median validation reward, while the gradient still
+                    # sees the full training window.
                     if val_reward > self.best_reward:
                         self.best_reward = val_reward
                         self.best_tokens = sequences[i].tolist()
@@ -299,16 +353,16 @@ class AshareTrainer:
                         )
 
             # Actor-critic update: REINFORCE with the learned value as
-            # baseline, plus a value regression loss.
-            baseline = values[-1]
-            adv = (rewards - baseline.detach()) / (
-                rewards.std(unbiased=False) + 1e-6
+            # baseline, advantage clipping, and an entropy bonus.
+            loss, _, value_loss, entropy = self._policy_update_loss(
+                log_probs,
+                rewards,
+                values[-1],
+                entropies,
+                value_loss_weight=self.model_config.value_loss_weight,
+                advantage_clip=float(self.model_config.advantage_clip),
+                entropy_coef=float(self.model_config.entropy_coef),
             )
-            policy_loss = -(
-                torch.stack(log_probs, dim=1).sum(dim=1) * adv
-            ).mean()
-            value_loss = torch.nn.functional.mse_loss(baseline, rewards)
-            loss = policy_loss + self.model_config.value_loss_weight * value_loss
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -320,6 +374,7 @@ class AshareTrainer:
                     "best_reward": float(self.best_reward),
                     "loss": float(loss.detach()),
                     "value_loss": float(value_loss.detach()),
+                    "entropy": float(entropy.detach()),
                 }
             )
             pbar.set_postfix(
@@ -329,8 +384,15 @@ class AshareTrainer:
                 }
             )
 
-        if self.best_tokens is None:
-            logger.warning("No valid formula found")
+        if self.best_tokens is None or self.best_reward < float(
+            self.reward_config.min_val_reward
+        ):
+            logger.warning(
+                f"No formula met the validation-quality floor "
+                f"(best={self.best_reward:.3f}, "
+                f"min_val_reward={self.reward_config.min_val_reward:.3f}); "
+                "no formula is saved"
+            )
             return None
 
         if not save_artifacts:
@@ -395,6 +457,30 @@ class AshareTrainer:
         val_start = int(round(train_end_idx * (1.0 - val_frac)))
         return max(1, min(val_start, train_end_idx - 2))
 
+    def _validation_windows(self, train_end_idx: int) -> list[tuple[int, int]]:
+        """Independent validation sub-windows covering the training tail.
+
+        The tail is split into ``model_config.validation_splits`` disjoint
+        ``(start, end)`` column intervals of at least 3 columns each
+        (a rank-ICIR needs a minimum number of cross-sections to be
+        meaningful).  Tails too short to split degrade to a single window,
+        preserving the historical single-holdout behavior.
+        """
+
+        val_start = self._validation_start(train_end_idx)
+        val_len = train_end_idx - val_start
+        splits = max(1, int(self.model_config.validation_splits))
+        min_len = 3
+        if val_len < splits * min_len:
+            return [(val_start, train_end_idx)]
+        base = val_len // splits
+        windows: list[tuple[int, int]] = []
+        for k in range(splits):
+            start = val_start + k * base
+            end = val_start + (k + 1) * base if k < splits - 1 else train_end_idx
+            windows.append((start, end))
+        return windows
+
     @staticmethod
     def _update_stack_state(
         action: torch.Tensor,
@@ -455,9 +541,15 @@ def main() -> None:
         trainer = AshareTrainer(
             data_config, model_config, backtest_config, loader, reward_config
         )
-        trainer.train(
-            steps=args.steps, batch_size=args.batch_size, device=args.device
-        )
+        if (
+            trainer.train(
+                steps=args.steps, batch_size=args.batch_size, device=args.device
+            )
+            is None
+        ):
+            # No formula met the validation-quality floor: fail loudly so
+            # scripts and CI never mistag a no-artifact run as success.
+            raise SystemExit(2)
     finally:
         export_log_txt(run_name="train")
 
