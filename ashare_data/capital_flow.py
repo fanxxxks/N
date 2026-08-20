@@ -15,6 +15,8 @@ Sources (all free via AkShare):
 ``[stock x date]`` frames for the two vocabulary features:
 ``MARGIN_BALANCE_CHG`` (20-day financing-balance change) and
 ``INDUSTRY_MOMENTUM`` (20-day industry index return mapped to members).
+:func:`build_industry_member_frame` exposes the raw membership snapshot as
+a ``[stock x date]`` industry-code frame for the industry-relative factors.
 Stocks with no data stay neutral, never fabricated.
 """
 
@@ -139,6 +141,48 @@ def sync_capital_flow(
     }
 
 
+def _industry_map(config) -> dict[str, str]:
+    """``ts_code -> Shenwan first-level industry index code`` (snapshot)."""
+
+    with AshareDB(config.duckdb_path, read_only=True) as db:
+        members = db.query(
+            f"SELECT index_code, ts_code FROM {config.sw_member_table}"
+        )
+    return {
+        str(code): str(index)
+        for code, index in zip(members["ts_code"], members["index_code"])
+    }
+
+
+def build_industry_member_frame(
+    config,
+    ts_codes: list[str],
+    dates: list[str],
+) -> pd.DataFrame:
+    """Build the ``[stock x date]`` Shenwan first-level industry code frame.
+
+    Membership is a current snapshot repeated over all dates (the same
+    survivorship caveat as ``INDUSTRY_MOMENTUM``); unmapped stocks stay
+    NaN so the industry-relative factors never fabricate a grouping.  Any
+    failure (e.g. the table does not exist yet) degrades to an all-NaN
+    frame, keeping the loader independent of this data source.
+    """
+
+    frame = pd.DataFrame(np.nan, index=ts_codes, columns=dates, dtype=object)
+    if not ts_codes:
+        return frame
+    try:
+        industry_map = _industry_map(config)
+    except Exception as exc:  # noqa: BLE001 - table may not exist yet.
+        logger.warning(f"Industry membership frame unavailable: {exc}")
+        return frame
+    for code in ts_codes:
+        industry = industry_map.get(code)
+        if industry is not None:
+            frame.loc[code] = industry
+    return frame
+
+
 def build_capital_frames(
     config,
     ts_codes: list[str],
@@ -163,12 +207,10 @@ def build_capital_frames(
                 f"SELECT ts_code, trade_date, rzye FROM {config.margin_table} "
                 f"WHERE ts_code IN ({quoted})"
             )
-            members = db.query(
-                f"SELECT index_code, ts_code FROM {config.sw_member_table}"
-            )
             sw_index = db.query(
                 f"SELECT index_code, trade_date, close FROM {config.sw_index_table}"
             )
+        industry_map = _industry_map(config)
     except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
         logger.warning(f"Capital-flow frames unavailable: {exc}")
         return frames
@@ -184,11 +226,7 @@ def build_capital_frames(
             change = wide / wide.shift(_MARGIN_WINDOW, axis=1) - 1.0
         frames["MARGIN_BALANCE_CHG"] = change.replace([np.inf, -np.inf], np.nan)
 
-    if not members.empty and not sw_index.empty:
-        industry_map = {
-            str(code): str(index)
-            for code, index in zip(members["ts_code"], members["index_code"])
-        }
+    if industry_map and not sw_index.empty:
         index_wide = sw_index.pivot_table(
             index="index_code", columns="trade_date", values="close", aggfunc="last"
         ).reindex(columns=dates)

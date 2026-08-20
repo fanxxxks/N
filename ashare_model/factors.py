@@ -50,6 +50,7 @@ FAMILIES = (
     "microstructure",
     "fundamental",
     "external",
+    "industry",
 )
 
 # Daily-bar columns a factor may draw from.  Registry metadata is validated
@@ -87,7 +88,11 @@ class FactorContext:
     others are empty frames with the correct index/columns so a factor that
     misdeclares its requirements fails loudly instead of reading stale data.
     ``_cache`` lets related factors (e.g. the CAPM triple) share one
-    computation without duplicating work.
+    computation without duplicating work.  ``industry`` carries the Shenwan
+    first-level industry code per ``[stock x date]`` (a current-snapshot
+    mapping repeated over dates, NaN for unmapped stocks); it is ``None``
+    when no membership data is available, in which case the industry-relative
+    factors stay neutral instead of fabricating groupings.
     """
 
     ts_codes: list[str]
@@ -100,6 +105,7 @@ class FactorContext:
     volume: pd.DataFrame
     amount: pd.DataFrame
     turnover: pd.DataFrame
+    industry: pd.DataFrame | None = None
     _cache: dict | None = None
 
     def __post_init__(self) -> None:
@@ -320,6 +326,113 @@ def _limit_events(
     return pd.DataFrame(event, index=close.index, columns=close.columns)
 
 
+def _limit_event_frame(ctx: FactorContext, direction: str) -> pd.DataFrame:
+    """Cached one-word limit-move frame (computed once per direction)."""
+
+    key = f"limit_{direction}"
+    cached = ctx._cache.get(key)
+    if cached is None:
+        cached = _limit_events(
+            ctx.close, ctx.high, ctx.low, ctx.pre_close, ctx.ts_codes, direction
+        )
+        ctx._cache[key] = cached
+    return cached
+
+
+def _limit_streak(ctx: FactorContext) -> pd.DataFrame:
+    """Consecutive one-word limit-up days ending today (0 on non-event days).
+
+    Trailing-only recursion: the streak at day t depends solely on days
+    <= t, so no future information can leak in.
+    """
+
+    event = _limit_event_frame(ctx, "up").to_numpy(dtype=float)
+    out = np.zeros_like(event)
+    for t in range(event.shape[1]):
+        if t == 0:
+            out[:, t] = event[:, t]
+        else:
+            out[:, t] = np.where(event[:, t] > 0.0, out[:, t - 1] + 1.0, 0.0)
+    return pd.DataFrame(out, index=ctx.close.index, columns=ctx.close.columns)
+
+
+def _limit_up_count(ctx: FactorContext, window: int = 20) -> pd.DataFrame:
+    """Number of one-word limit-up days in the trailing ``window`` days."""
+
+    event = _limit_event_frame(ctx, "up")
+    return event.T.rolling(window, min_periods=1).sum().T
+
+
+def _limit_break(ctx: FactorContext) -> pd.DataFrame:
+    """Limit-up touch without a sealed limit-up close (intraday break, 炸板).
+
+    The high touched the board's limit price but the close fell back below
+    the limit band: 1.0 on such days, 0.0 otherwise.  A close at the limit
+    counts as sealed even when the day was not one-word (e.g. opened below
+    the limit and closed locked).
+    """
+
+    rates = _limit_rate_per_stock(ctx.ts_codes)[:, None]
+    with np.errstate(all="ignore"):
+        limit_price = ctx.pre_close.to_numpy(dtype=float) * (1.0 + rates)
+        touched = ctx.high.to_numpy(dtype=float) >= limit_price - 1e-9
+        change = (
+            ctx.close.to_numpy(dtype=float) / ctx.pre_close.to_numpy(dtype=float)
+            - 1.0
+        )
+        sealed = change >= rates - 0.005
+    touched = np.nan_to_num(touched, nan=False)
+    sealed = np.nan_to_num(sealed, nan=False)
+    return pd.DataFrame(
+        (touched & ~sealed).astype(float),
+        index=ctx.close.index,
+        columns=ctx.close.columns,
+    )
+
+
+def _turnover_smoothed(ctx: FactorContext, window: int) -> pd.DataFrame:
+    """Trailing mean of the turnover rate, neutral where turnover is missing.
+
+    The daily turnover is missing whenever the float share count is
+    unknown (never fabricated); the smoothed value is therefore only
+    reported on days where the current turnover exists, and averages the
+    available trailing values.
+    """
+
+    raw = ctx.turnover.replace([np.inf, -np.inf], np.nan)
+    smoothed = raw.T.rolling(window, min_periods=1).mean().T
+    return smoothed.where(raw.notna())
+
+
+def _turnover_vol(ctx: FactorContext, window: int = 20) -> pd.DataFrame:
+    """Trailing standard deviation of the turnover rate (same missingness rule)."""
+
+    raw = ctx.turnover.replace([np.inf, -np.inf], np.nan)
+    vol = raw.T.rolling(window, min_periods=2).std().T
+    return vol.where(raw.notna())
+
+
+def _industry_demean(ctx: FactorContext, frame: pd.DataFrame) -> pd.DataFrame:
+    """Subtract the per-industry cross-sectional mean of ``frame``.
+
+    Membership comes from the (current-snapshot) Shenwan mapping carried in
+    ``ctx.industry``; stocks without an industry stay NaN (neutral after
+    standardization), and no industry is fabricated when the frame is
+    absent.  Industry means skip missing values, so a stock's own NaN never
+    contaminates its industry's mean.
+    """
+
+    if ctx.industry is None or ctx.industry.empty:
+        return pd.DataFrame(np.nan, index=frame.index, columns=frame.columns)
+    codes = ctx.industry.reindex(frame.index).iloc[:, 0]
+    if int(codes.notna().sum()) == 0:
+        # No usable membership at all: stay neutral rather than asking
+        # groupby to demean an empty set of groups.
+        return pd.DataFrame(np.nan, index=frame.index, columns=frame.columns)
+    means = frame.groupby(codes, dropna=True).transform("mean")
+    return frame - means
+
+
 def _limit_rate_per_stock(ts_codes: list[str]) -> np.ndarray:
     """Board daily limit rate per stock (ST-adjusted rates need stock names,
     which the factor engine does not have; ST stocks are excluded upstream)."""
@@ -328,6 +441,16 @@ def _limit_rate_per_stock(ts_codes: list[str]) -> np.ndarray:
         symbol = code.split(".", 1)[0]
         rates.append(0.20 if symbol[:3] in _CHINEXT_PREFIXES else 0.10)
     return np.asarray(rates, dtype=float)
+
+
+def _factor_macd_cached(ctx: FactorContext) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """MACD pair computed once per context (DIF and DEA share one recursion)."""
+
+    cached = ctx._cache.get("macd")
+    if cached is None:
+        cached = _factor_macd(ctx.close)
+        ctx._cache["macd"] = cached
+    return cached
 
 
 def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd.DataFrame]]]:
@@ -351,7 +474,6 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add("RET_1", "momentum", ("close",), 2, "1-day close-to-close return", lambda ctx: _returns(ctx.close))
     add("RET_5", "momentum", ("close",), 6, "5-day close-to-close return", lambda ctx: _shift_ratio(ctx.close, 5))
     add("RET_10", "momentum", ("close",), 11, "10-day close-to-close return", lambda ctx: _shift_ratio(ctx.close, 10))
-    add("RET_20", "momentum", ("close",), 21, "20-day close-to-close return", lambda ctx: _shift_ratio(ctx.close, 20))
     add("VOL_20", "volatility", ("close",), 20, "20-day return volatility", lambda ctx: _rolling_std(_returns(ctx.close), 20))
     add("VOL_60", "volatility", ("close",), 60, "60-day return volatility", lambda ctx: _rolling_std(_returns(ctx.close), 60))
     add(
@@ -369,6 +491,30 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         2,
         "1-day change in turnover rate",
         lambda ctx: ctx.turnover.pct_change(fill_method=None, axis=1).replace([np.inf, -np.inf], np.nan),
+    )
+    add(
+        "TURNOVER_MA5",
+        "volume",
+        ("turnover_rate",),
+        5,
+        "5-day mean turnover rate (neutral where turnover is missing)",
+        lambda ctx: _turnover_smoothed(ctx, 5),
+    )
+    add(
+        "TURNOVER_MA20",
+        "volume",
+        ("turnover_rate",),
+        20,
+        "20-day mean turnover rate (neutral where turnover is missing)",
+        lambda ctx: _turnover_smoothed(ctx, 20),
+    )
+    add(
+        "TURNOVER_STD20",
+        "volume",
+        ("turnover_rate",),
+        20,
+        "20-day turnover-rate volatility (neutral where turnover is missing)",
+        lambda ctx: _turnover_vol(ctx, 20),
     )
     add(
         "VOLUME_RATIO",
@@ -402,8 +548,11 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         "Close position within the intraday range",
         lambda ctx: (ctx.close - ctx.low) / (ctx.high - ctx.low + 1e-9),
     )
-    add("MOMENTUM_20", "momentum", ("close",), 21, "20-day momentum (same as RET_20)", lambda ctx: _shift_ratio(ctx.close, 20))
+    add("MOMENTUM_20", "momentum", ("close",), 21, "20-day momentum", lambda ctx: _shift_ratio(ctx.close, 20))
     add("MOMENTUM_60", "momentum", ("close",), 61, "60-day momentum", lambda ctx: _shift_ratio(ctx.close, 60))
+    add("RET_120", "momentum", ("close",), 121, "120-day close-to-close return", lambda ctx: _shift_ratio(ctx.close, 120))
+    add("REVERSAL_60", "momentum", ("close",), 61, "Negative 60-day return (medium-term reversal)", lambda ctx: -_shift_ratio(ctx.close, 60))
+    add("REVERSAL_120", "momentum", ("close",), 121, "Negative 120-day return (medium-term reversal)", lambda ctx: -_shift_ratio(ctx.close, 120))
     add("REVERSAL_5", "momentum", ("close",), 6, "Negative 5-day return (short-term reversal)", lambda ctx: -_shift_ratio(ctx.close, 5))
     add("SKEW_20", "distribution", ("close",), 20, "20-day return skewness", lambda ctx: _rolling_skew(_returns(ctx.close), 20))
     add("KURT_20", "distribution", ("close",), 20, "20-day return excess kurtosis", lambda ctx: _rolling_kurt(_returns(ctx.close), 20))
@@ -413,7 +562,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         ("close", "high", "low", "pre_close"),
         2,
         "One-word limit-up close (1.0 on the event day)",
-        lambda ctx: _limit_events(ctx.close, ctx.high, ctx.low, ctx.pre_close, ctx.ts_codes, "up"),
+        lambda ctx: _limit_event_frame(ctx, "up"),
     )
     add(
         "LIMIT_DOWN_EVENT",
@@ -421,7 +570,31 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         ("close", "high", "low", "pre_close"),
         2,
         "One-word limit-down close (1.0 on the event day)",
-        lambda ctx: _limit_events(ctx.close, ctx.high, ctx.low, ctx.pre_close, ctx.ts_codes, "down"),
+        lambda ctx: _limit_event_frame(ctx, "down"),
+    )
+    add(
+        "LIMIT_STREAK",
+        "event",
+        ("close", "high", "low", "pre_close"),
+        2,
+        "Consecutive one-word limit-up days ending today",
+        _limit_streak,
+    )
+    add(
+        "LIMIT_UP_CNT_20",
+        "event",
+        ("close", "high", "low", "pre_close"),
+        20,
+        "One-word limit-up days in the trailing 20 days",
+        _limit_up_count,
+    )
+    add(
+        "LIMIT_BREAK",
+        "event",
+        ("close", "high", "low", "pre_close"),
+        2,
+        "Limit-up touch without a limit-up close (intraday break)",
+        _limit_break,
     )
 
     # Intraday decomposition.  GAP (open/pre_close - 1) is the same quantity
@@ -505,7 +678,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         ("close",),
         26,
         "MACD DIF line (EMA12 - EMA26)",
-        lambda ctx: _factor_macd(ctx.close)[0],
+        lambda ctx: _factor_macd_cached(ctx)[0],
     )
     add(
         "MACD_DEA",
@@ -513,7 +686,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         ("close",),
         26,
         "MACD DEA signal line (EMA9 of DIF)",
-        lambda ctx: _factor_macd(ctx.close)[1],
+        lambda ctx: _factor_macd_cached(ctx)[1],
     )
 
     # Microstructure.
@@ -546,6 +719,45 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         "Float market cap proxy = amount / turnover_rate (yuan)",
         lambda ctx: (ctx.amount / ctx.turnover).replace([np.inf, -np.inf], np.nan),
     )
+
+    # Industry-relative versions of the strongest families.  The industry
+    # code frame is supplied by the loader (Shenwan snapshot); without it
+    # these factors stay neutral.  Raw values are demeaned per industry
+    # *before* the cross-sectional standardization.
+    add(
+        "IND_REL_RET_5",
+        "industry",
+        ("close",),
+        6,
+        "5-day return minus its Shenwan-industry mean",
+        lambda ctx: _industry_demean(ctx, _shift_ratio(ctx.close, 5)),
+    )
+    add(
+        "IND_REL_RET_20",
+        "industry",
+        ("close",),
+        21,
+        "20-day return minus its Shenwan-industry mean",
+        lambda ctx: _industry_demean(ctx, _shift_ratio(ctx.close, 20)),
+    )
+    add(
+        "IND_REL_VOL_20",
+        "industry",
+        ("close",),
+        20,
+        "20-day volatility minus its Shenwan-industry mean",
+        lambda ctx: _industry_demean(ctx, _rolling_std(_returns(ctx.close), 20)),
+    )
+    add(
+        "IND_REL_TURNOVER",
+        "industry",
+        ("turnover_rate",),
+        1,
+        "Turnover rate minus its Shenwan-industry mean",
+        lambda ctx: _industry_demean(
+            ctx, ctx.turnover.replace([np.inf, -np.inf], np.nan)
+        ),
+    )
     return registry
 
 
@@ -573,6 +785,7 @@ class AshareFactorEngine:
         ts_codes: list[str],
         dates: list[str],
         close: pd.DataFrame,
+        industry_frame: pd.DataFrame | None = None,
     ) -> FactorContext:
         """Pivot exactly the columns the requested registered factors need."""
 
@@ -596,6 +809,7 @@ class AshareFactorEngine:
             volume=frames["volume"],
             amount=frames["amount"],
             turnover=frames["turnover_rate"],
+            industry=industry_frame,
         )
 
     def compute_factor_tensor(
@@ -605,6 +819,7 @@ class AshareFactorEngine:
         dates: list[str],
         pit_fundamentals: dict[str, pd.DataFrame] | None = None,
         extra_frames: dict[str, pd.DataFrame] | None = None,
+        industry_frame: pd.DataFrame | None = None,
     ) -> np.ndarray:
         """Return a ``[feature, stock, date]`` float32 tensor.
 
@@ -612,16 +827,19 @@ class AshareFactorEngine:
         disclosure-aligned ``[stock x date]`` frame (built by
         :func:`ashare_data.fundamentals.build_pit_frames`); ``extra_frames``
         carries the other externally fed features (margin/industry, built by
-        :func:`ashare_data.capital_flow.build_capital_frames`).  Frames are
-        injected verbatim; the no-lookahead guarantees live in the
-        builders.  Missing names/frames stay neutral (0) after
+        :func:`ashare_data.capital_flow.build_capital_frames`);
+        ``industry_frame`` is the ``[stock x date]`` Shenwan first-level
+        industry code frame feeding the industry-relative factors (built by
+        :func:`ashare_data.capital_flow.build_industry_member_frame`).
+        Frames are injected verbatim; the no-lookahead guarantees live in
+        the builders.  Missing names/frames stay neutral (0) after
         standardization.
         """
 
         bars = normalize_daily_bars(bars)
         dates = sorted(dates)
         close = self._pivot(bars, ts_codes, dates, "close")
-        context = self._build_context(bars, ts_codes, dates, close)
+        context = self._build_context(bars, ts_codes, dates, close, industry_frame)
 
         empty = pd.DataFrame(index=close.index, columns=close.columns, dtype=float)
         raw_factors: dict[str, pd.DataFrame] = {}
@@ -659,9 +877,10 @@ def compute_factor_tensor(
     dates: list[str],
     pit_fundamentals: dict[str, pd.DataFrame] | None = None,
     extra_frames: dict[str, pd.DataFrame] | None = None,
+    industry_frame: pd.DataFrame | None = None,
 ) -> np.ndarray:
     return AshareFactorEngine().compute_factor_tensor(
-        bars, ts_codes, dates, pit_fundamentals, extra_frames
+        bars, ts_codes, dates, pit_fundamentals, extra_frames, industry_frame
     )
 
 

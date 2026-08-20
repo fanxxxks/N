@@ -14,14 +14,21 @@ from ashare_model.factors import (
     FAMILIES,
     NEUTRAL_FEATURE_NAMES,
     AshareFactorEngine,
+    FactorContext,
     _factor_amount_share,
     _factor_atr,
     _factor_macd,
     _factor_rsi,
+    _industry_demean,
+    _limit_break,
+    _limit_streak,
+    _limit_up_count,
     _returns,
     _rolling_capm,
     _rolling_max,
     _shift_ratio,
+    _turnover_smoothed,
+    _turnover_vol,
     compute_factor_tensor,
 )
 from ashare_model.vocab import FEATURE_NAMES
@@ -165,24 +172,31 @@ def test_extra_frames_injected_and_missing_stay_neutral(bars_data):
     assert np.allclose(industry, 0.0)
 
 
-# Golden checksum of the first-generation 34-feature tensor on the
-# deterministic ``make_bars`` fixture.  It pins the exact legacy values so
-# any refactor that silently changes an existing factor fails this test.
-# The checksum was re-captured once, deliberately, when MARKET_CAP gained
-# real data (float market cap = amount/turnover_rate) in the PIT pipeline
-# phase; all other v1 features kept their pre-refactor values.
-_GOLDEN_TENSOR_SHA256 = "f7a480bc9c20d416d369914ddce7c57197d06a2e133af480e5afe545c343e79b"
+# Golden checksum of the first-generation feature block on the deterministic
+# ``make_bars`` fixture.  It pins the exact legacy values so any refactor
+# that silently changes an existing factor fails this test.  The checksum
+# was re-captured twice, deliberately: once when MARKET_CAP gained real data
+# (float market cap = amount/turnover_rate) in the PIT pipeline phase, and
+# once when the v3 generation retired RET_20 (an exact duplicate of
+# MOMENTUM_20, kept resolvable through FEATURE_ALIASES) - all other v1
+# features keep their pre-refactor values.
+_GOLDEN_TENSOR_SHA256 = "0eabd18dc9f100bdc9f9ac94c72688bf28424e83fc7955ce63edd3d4d43b061f"
 
 
 def test_factor_tensor_matches_pre_refactor_golden_values(bars_data):
     dates, ts_codes, bars = bars_data
     tensor = compute_factor_tensor(bars, ts_codes, dates)
-    legacy = np.ascontiguousarray(tensor[:34])
+    legacy = np.ascontiguousarray(tensor[:33])
     assert hashlib.sha256(legacy.tobytes()).hexdigest() == _GOLDEN_TENSOR_SHA256
-    assert legacy.sum() == pytest.approx(199.34854, abs=1e-3)
+    assert legacy.sum() == pytest.approx(199.50612, abs=1e-3)
     ret1 = tensor[FEATURE_NAMES.index("RET_1")]
     assert ret1[0, 10] == pytest.approx(-0.00039433446, abs=1e-6)
     assert tensor[FEATURE_NAMES.index("SKEW_20")][0, 30] == pytest.approx(-0.004940729, abs=1e-6)
+    # The retired duplicate is gone from the live vocabulary and registry;
+    # MOMENTUM_20 keeps the identical 20-day return semantics in its place.
+    assert "RET_20" not in FEATURE_NAMES
+    assert "RET_20" not in FACTOR_REGISTRY
+    assert "MOMENTUM_20" in FACTOR_REGISTRY
 
 
 def test_engine_computes_subset_of_features(bars_data):
@@ -366,13 +380,243 @@ def test_new_factors_have_no_lookahead(bars_data):
         "OVERNIGHT_RET", "INTRADAY_RET", "ILLIQ_20", "AMOUNT_SHARE", "MAX_20",
         "HIGH_52W", "BETA_60", "IVOL_60", "RSQ_60", "BIAS_20", "RSI_14",
         "ATR_14", "MACD_DIF", "MACD_DEA", "SUSPEND_DAYS_60", "LIST_AGE",
+        "RET_120", "REVERSAL_60", "REVERSAL_120",
+        "TURNOVER_MA5", "TURNOVER_MA20", "TURNOVER_STD20",
+        "LIMIT_STREAK", "LIMIT_UP_CNT_20", "LIMIT_BREAK",
+        "IND_REL_RET_5", "IND_REL_RET_20", "IND_REL_VOL_20", "IND_REL_TURNOVER",
     ]
+    industry = pd.DataFrame(np.nan, index=ts_codes, columns=dates, dtype=object)
+    industry.loc["000001.SZ"] = "801780"
+    industry.loc["600000.SH"] = "801780"
+    industry.loc["300001.SZ"] = "801880"
     engine = AshareFactorEngine(feature_names=names)
-    base = engine.compute_factor_tensor(bars, ts_codes, dates)
+    base = engine.compute_factor_tensor(bars, ts_codes, dates, industry_frame=industry)
     shocked = bars.copy()
     last = dates[-1]
     shocked.loc[shocked["trade_date"] == last, "close"] *= 5.0
     shocked.loc[shocked["trade_date"] == last, "high"] *= 5.0
     shocked.loc[shocked["trade_date"] == last, "low"] *= 5.0
-    after = engine.compute_factor_tensor(shocked, ts_codes, dates)
+    after = engine.compute_factor_tensor(shocked, ts_codes, dates, industry_frame=industry)
     assert np.allclose(base[:, :, :-1], after[:, :, :-1])
+
+
+# --- factor P0 additions (v3 generation) -------------------------------------
+
+
+def _empty_ctx(index: list[str], columns: list[str]) -> FactorContext:
+    empty = pd.DataFrame(np.nan, index=index, columns=columns)
+    return FactorContext(
+        ts_codes=list(index),
+        dates=list(columns),
+        close=empty.copy(),
+        open=empty.copy(),
+        high=empty.copy(),
+        low=empty.copy(),
+        pre_close=empty.copy(),
+        volume=empty.copy(),
+        amount=empty.copy(),
+        turnover=empty.copy(),
+    )
+
+
+def test_industry_demean_subtracts_industry_means():
+    frame = pd.DataFrame(
+        {"d1": [1.0, 2.0, 3.0, 10.0], "d2": [4.0, 6.0, 8.0, 20.0]},
+        index=["A", "B", "C", "D"],
+    )
+    ctx = _empty_ctx(list(frame.index), list(frame.columns))
+    ctx.industry = pd.DataFrame(
+        {"d1": ["X", "X", "Y", np.nan], "d2": ["X", "X", "Y", np.nan]},
+        index=frame.index,
+        columns=frame.columns,
+        dtype=object,
+    )
+    out = _industry_demean(ctx, frame)
+    # X mean d1 = 1.5 -> A: -0.5, B: +0.5; a single-member industry has no
+    # cross-industry dispersion and demeans to exactly 0; unmapped stocks
+    # stay NaN (neutral).
+    assert out.loc["A", "d1"] == pytest.approx(-0.5)
+    assert out.loc["B", "d1"] == pytest.approx(0.5)
+    assert out.loc["A", "d2"] == pytest.approx(-1.0)
+    assert out.loc["C", "d1"] == pytest.approx(0.0)
+    assert np.isnan(out.loc["D", "d1"])
+
+
+def test_industry_demean_without_frame_is_all_neutral():
+    frame = pd.DataFrame([[1.0, 2.0]], index=["A"], columns=["d1", "d2"])
+    out = _industry_demean(_empty_ctx(["A"], ["d1", "d2"]), frame)
+    assert out.isna().all().all()
+
+
+def test_industry_relative_factors_neutral_without_frame(bars_data):
+    dates, ts_codes, bars = bars_data
+    tensor = compute_factor_tensor(bars, ts_codes, dates)
+    for name in ("IND_REL_RET_5", "IND_REL_RET_20", "IND_REL_VOL_20", "IND_REL_TURNOVER"):
+        assert np.allclose(tensor[FEATURE_NAMES.index(name)], 0.0), name
+
+
+def test_industry_relative_tensor_demeaned(bars_data):
+    dates, ts_codes, bars = bars_data
+    industry = pd.DataFrame(np.nan, index=ts_codes, columns=dates, dtype=object)
+    industry.loc["000001.SZ"] = "801780"
+    industry.loc["600000.SH"] = "801780"
+    industry.loc["300001.SZ"] = "801880"
+    tensor = compute_factor_tensor(bars, ts_codes, dates, industry_frame=industry)
+    # The two same-industry stocks have different raw returns, so their
+    # demeaned values are exact opposites; the single-member industry
+    # demeans to exactly zero and stays neutral after standardization.
+    for name in ("IND_REL_RET_5", "IND_REL_RET_20", "IND_REL_VOL_20"):
+        row = tensor[FEATURE_NAMES.index(name)]
+        assert np.allclose(row[0], -row[1]), name
+        assert np.allclose(row[2], 0.0), name
+    # The fixture's turnover is identical across stocks: the demeaned
+    # turnover is zero everywhere by construction.
+    assert np.allclose(tensor[FEATURE_NAMES.index("IND_REL_TURNOVER")], 0.0)
+
+
+def test_turnover_smoothed_means_available_days_and_masks_missing():
+    turnover = pd.DataFrame(
+        {"d1": [1.0, 2.0], "d2": [3.0, np.nan], "d3": [np.nan, 4.0], "d4": [5.0, 6.0]},
+        index=["A", "B"],
+    )
+    ctx = _empty_ctx(["A", "B"], ["d1", "d2", "d3", "d4"])
+    ctx.turnover = turnover
+    ma = _turnover_smoothed(ctx, 5)
+    # Expanding mean over the available trailing values.
+    assert ma.loc["A", "d2"] == pytest.approx(2.0)
+    assert ma.loc["A", "d4"] == pytest.approx(3.0)  # mean(1, 3, 5)
+    assert ma.loc["B", "d4"] == pytest.approx(4.0)  # mean(2, 4, 6)
+    # A missing current turnover never fabricates a smoothed value.
+    assert np.isnan(ma.loc["A", "d3"])
+    assert np.isnan(ma.loc["B", "d2"])
+
+
+def test_turnover_vol_std_and_missing_mask():
+    turnover = pd.DataFrame(
+        {"d1": [1.0, np.nan], "d2": [3.0, 2.0], "d3": [np.nan, 4.0], "d4": [5.0, 6.0]},
+        index=["A", "B"],
+    )
+    ctx = _empty_ctx(["A", "B"], ["d1", "d2", "d3", "d4"])
+    ctx.turnover = turnover
+    vol = _turnover_vol(ctx, 20)
+    # Sample std (ddof=1) over the available trailing values; a single
+    # observation and a missing current day stay NaN.
+    assert np.isnan(vol.loc["A", "d1"])
+    assert vol.loc["A", "d2"] == pytest.approx(np.std([1.0, 3.0], ddof=1))
+    assert np.isnan(vol.loc["A", "d3"])
+    assert vol.loc["B", "d4"] == pytest.approx(np.std([2.0, 4.0, 6.0], ddof=1))
+
+
+def _limit_rows(dates: list[str], closes: list[float], highs=None, lows=None) -> pd.DataFrame:
+    highs = highs or closes
+    lows = lows or closes
+    rows = []
+    for i, d in enumerate(dates):
+        pre = closes[i - 1] if i else closes[0] / 1.1
+        rows.append(
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": d,
+                "open": closes[i],
+                "high": highs[i],
+                "low": lows[i],
+                "close": closes[i],
+                "pre_close": pre,
+                "volume": 1e6,
+                "amount": 1e7,
+                "turnover_rate": 1.0,
+                "adj_factor": 1.0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def test_limit_streak_counts_consecutive_one_word_days():
+    dates = [f"d{i}" for i in range(6)]
+    # 10% board: 4 consecutive locked limit-ups, a normal day, a normal day.
+    closes = [11.0, 12.1, 13.31, 14.64, 15.5, 16.0]
+    highs = [11.0, 12.1, 13.31, 14.64, 15.6, 16.1]
+    lows = [11.0, 12.1, 13.31, 14.64, 15.0, 15.9]
+    ctx = _context_for(_limit_rows(dates, closes, highs, lows), dates, ["000001.SZ"], ["LIMIT_STREAK"])
+    streak = _factor_fn("LIMIT_STREAK")(ctx)
+    assert streak.iloc[0].tolist() == [1.0, 2.0, 3.0, 4.0, 0.0, 0.0]
+
+
+def test_limit_up_count_20_accumulates_events():
+    dates = [f"d{i}" for i in range(6)]
+    closes = [11.0, 12.1, 13.31, 14.64, 15.5, 16.0]
+    highs = [11.0, 12.1, 13.31, 14.64, 15.6, 16.1]
+    lows = [11.0, 12.1, 13.31, 14.64, 15.0, 15.9]
+    ctx = _context_for(_limit_rows(dates, closes, highs, lows), dates, ["000001.SZ"], ["LIMIT_UP_CNT_20"])
+    count = _factor_fn("LIMIT_UP_CNT_20")(ctx)
+    assert count.iloc[0].tolist() == [1.0, 2.0, 3.0, 4.0, 4.0, 4.0]
+
+
+def test_limit_break_detects_touch_without_lock():
+    dates = ["d0", "d1", "d2", "d3"]
+    rows = [
+        # d0: normal day, never touched the limit.
+        {"ts_code": "000001.SZ", "trade_date": "d0", "open": 9.9, "high": 10.2, "low": 9.9,
+         "close": 10.0, "pre_close": 9.9, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
+        # d1: touched the +10% limit (11.0) intraday but closed below: a break.
+        {"ts_code": "000001.SZ", "trade_date": "d1", "open": 10.2, "high": 11.0, "low": 10.2,
+         "close": 10.5, "pre_close": 10.0, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
+        # d2: sealed limit-up close (opened below the limit, closed locked):
+        # touched, but not a break even though the day was not one-word.
+        {"ts_code": "000001.SZ", "trade_date": "d2", "open": 11.0, "high": 11.55, "low": 11.0,
+         "close": 11.55, "pre_close": 10.5, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
+        # d3: normal day after the lock.
+        {"ts_code": "000001.SZ", "trade_date": "d3", "open": 11.0, "high": 11.2, "low": 10.9,
+         "close": 11.0, "pre_close": 11.55, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
+    ]
+    ctx = _context_for(pd.DataFrame(rows), dates, ["000001.SZ"], ["LIMIT_BREAK"])
+    breaks = _factor_fn("LIMIT_BREAK")(ctx)
+    assert breaks.iloc[0].tolist() == [0.0, 1.0, 0.0, 0.0]
+
+
+def test_limit_break_uses_board_specific_limit_rate():
+    # A 20%-board stock (300001.SZ) touching +20% without locking is a
+    # break, while +9% on a 10%-board stock below its limit is not.
+    dates = ["d0", "d1"]
+    rows = [
+        {"ts_code": "300001.SZ", "trade_date": "d0", "open": 10.0, "high": 10.2, "low": 9.9,
+         "close": 10.0, "pre_close": 9.9, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
+        {"ts_code": "300001.SZ", "trade_date": "d1", "open": 11.0, "high": 12.0, "low": 10.9,
+         "close": 11.5, "pre_close": 10.0, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
+        {"ts_code": "600000.SH", "trade_date": "d0", "open": 10.0, "high": 10.2, "low": 9.9,
+         "close": 10.0, "pre_close": 9.9, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
+        {"ts_code": "600000.SH", "trade_date": "d1", "open": 10.5, "high": 10.99, "low": 10.5,
+         "close": 10.9, "pre_close": 10.0, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
+    ]
+    bars = pd.DataFrame(rows)
+    codes = ["300001.SZ", "600000.SH"]
+    tensor = compute_factor_tensor(bars, codes, dates)
+    breaks = tensor[FEATURE_NAMES.index("LIMIT_BREAK")]
+    # 300001 (+15%, touched its 20% limit) is a break; 600000 (+9%, below
+    # its 10% limit) is not.
+    assert breaks[0, 1] > 0
+    assert breaks[1, 1] <= 0
+
+
+def test_medium_term_reversal_and_ret120_values():
+    n = 130
+    dates = pd.bdate_range("2024-01-01", periods=n).strftime("%Y%m%d").tolist()
+    closes = [10.0 + 0.05 * i for i in range(n)]
+    rows = [
+        {"ts_code": "000001.SZ", "trade_date": d, "open": c, "high": c, "low": c,
+         "close": c, "pre_close": closes[i - 1] if i else c, "volume": 1e6,
+         "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0}
+        for i, (d, c) in enumerate(zip(dates, closes))
+    ]
+    ctx = _context_for(pd.DataFrame(rows), dates, ["000001.SZ"],
+                       ["RET_120", "REVERSAL_60", "REVERSAL_120"])
+    ret120 = _factor_fn("RET_120")(ctx)
+    rev60 = _factor_fn("REVERSAL_60")(ctx)
+    rev120 = _factor_fn("REVERSAL_120")(ctx)
+    # RET_120 needs 120 prior closes: defined from day 120 onward.
+    assert np.isnan(ret120.iloc[0, 119])
+    assert ret120.iloc[0, 120] == pytest.approx(closes[120] / closes[0] - 1.0)
+    assert rev60.iloc[0, 120] == pytest.approx(-(closes[120] / closes[60] - 1.0))
+    assert rev120.iloc[0, 120] == pytest.approx(-(closes[120] / closes[0] - 1.0))
+    # Trailing-only: perturbing the last close leaves earlier cells intact.
+    assert np.isnan(rev60.iloc[0, 59])
