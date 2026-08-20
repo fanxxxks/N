@@ -64,7 +64,7 @@ from .train import AshareTrainer
 from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "2"
+PROTOCOL_VERSION = "3"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (

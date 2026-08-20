@@ -5,7 +5,7 @@ used to drift in three separate copies:
 
 * the trading-cost model (identical per-position semantics to the backtest
   engine, including the per-trade minimum-commission floor),
-* the annualized Sortino ratio,
+* the annualized Sortino ratio (used by the backtest engine metrics),
 * the cheap long-only top-n basket simulation used inside the RL loop.
 
 :data:`REWARD_VERSION` is bumped on every semantic change to this module's
@@ -13,18 +13,20 @@ scoring behavior and is recorded in training artifacts and experiment
 archives, so ``best_reward`` values from different reward generations can
 never be compared silently.
 
-Known remaining gaps versus the full backtest engine (planned for a later
-phase): the basket simulation does not apply the blocked mask (limit-up /
-suspension) and does not hold limit-down positions instead of selling them.
-
 Version history
 ---------------
-* v2: the RL loop scores formulas through the vectorized batch path
-  (:func:`batched_basket_rewards`).  Scoring semantics are unchanged except
-  that, when several stocks tie on the exact same signal value, the
-  top-n selection may pick a different (equally valued) tie set than the
-  scalar path did; with no ties the two paths produce the same daily
-  returns and turnover up to floating-point summation order.
+* v3: the reward is a **rank-ICIR minus a continuous turnover cost**.  The
+  daily cross-sectional rank IC of the signal versus the forward target is
+  summarized as an IC information ratio; turnover cost is charged
+  proportionally to the simulated basket's average daily turnover at the
+  configured per-turnover fee rate (no threshold jumps).  Sortino, the
+  losing-basket collapse and the threshold turnover penalty are gone, so
+  weak formulas keep a continuous, informative reward instead of a
+  ``bad_reward`` cliff.  Validation scoring aggregates several independent
+  sub-windows of the training tail by median.
+* v2: the RL loop scored formulas through the vectorized batch path with a
+  Sortino reward, a threshold turnover penalty and a losing-basket
+  collapse (see git history for the exact semantics).
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ import numpy as np
 
 from ashare_data.config import BacktestConfig, RewardConfig
 
-REWARD_VERSION = "2"
+REWARD_VERSION = "3"
 
 _ANNUALIZATION = 252
 
@@ -89,8 +91,7 @@ def sortino_ratio(
 
     With fewer than ``min_downside_obs`` negative days the downside
     deviation is under-identified, so the full-sample volatility
-    substitutes.  Single code path for the fast reward and the backtest
-    metrics.
+    substitutes.  Single code path for the backtest metrics.
     """
 
     daily = np.asarray(daily_returns, dtype=np.float64)
@@ -106,72 +107,117 @@ def sortino_ratio(
     return ann_mean / (downside_std + 1e-9)
 
 
-def _daily_to_rewards(
-    daily: np.ndarray,
-    avg_turnover: np.ndarray,
-    reward_cfg: RewardConfig,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Sortino-based reward for one or many daily-return rows.
+def _rankdata(x: np.ndarray) -> np.ndarray:
+    """Average ranks of ``x`` (ties share the mean of their ranks)."""
 
-    Rows are independent baskets; every step mirrors the scalar
-    :func:`fast_basket_reward` scoring (turnover penalty, losing-basket
-    collapse to ``bad_reward``, constant-zero collapse, clipping).  A
-    zero-length row scores ``reward_clip_low``.
+    n = x.shape[0]
+    order = np.argsort(x, kind="mergesort")
+    x_sorted = x[order]
+    obs = np.empty(n, dtype=bool)
+    obs[0] = True
+    np.not_equal(x_sorted[1:], x_sorted[:-1], out=obs[1:])
+    dense_sorted = np.cumsum(obs) - 1
+    dense = np.empty_like(dense_sorted)
+    dense[order] = dense_sorted
+    counts = np.bincount(dense)
+    cum = np.cumsum(counts)
+    avg = (cum - counts + 1 + cum) / 2.0
+    return avg[dense]
+
+
+def _pearson(a: np.ndarray, b: np.ndarray) -> float:
+    """Pearson correlation; degenerate variance yields NaN."""
+
+    a = a - a.mean()
+    b = b - b.mean()
+    den = math.sqrt(float((a @ a) * (b @ b)))
+    if not math.isfinite(den) or den <= 1e-12:
+        return math.nan
+    return float(a @ b) / den
+
+
+def rank_ic_series(
+    signals: np.ndarray,
+    target_ret: np.ndarray,
+    min_stocks: int = 10,
+) -> np.ndarray:
+    """Per-date cross-sectional rank IC of each signal vs the forward target.
+
+    ``signals`` is ``[B, stocks, dates]`` and ``target_ret`` is
+    ``[stocks, dates]``; the result is ``[B, dates]`` of Spearman rank IC
+    (NaN on days without at least ``min_stocks`` finite pairs).  Non-finite
+    signal cells are excluded per row, so a formula that is invalid on a
+    subset of stocks never fabricates correlation.
     """
 
-    daily = np.atleast_2d(np.asarray(daily, dtype=np.float64))
-    b, n = daily.shape
-    avg_to = np.broadcast_to(
-        np.asarray(avg_turnover, dtype=np.float64).reshape(-1), (b,)
-    )
-    if n == 0:
-        return (
-            np.full(b, float(reward_cfg.reward_clip_low)),
-            np.zeros(b),
-        )
+    signals = np.asarray(signals, dtype=np.float64)
+    target = np.asarray(target_ret, dtype=np.float64)
+    if signals.ndim == 2:
+        signals = signals[None]
+    b, _, t = signals.shape
+    out = np.full((b, t), np.nan)
+    for day in range(t):
+        tgt = target[:, day]
+        base_valid = np.isfinite(tgt)
+        if int(base_valid.sum()) < min_stocks:
+            continue
+        for i in range(b):
+            col = signals[i, :, day]
+            valid = base_valid & np.isfinite(col)
+            if int(valid.sum()) < min_stocks:
+                continue
+            out[i, day] = _pearson(_rankdata(col[valid]), _rankdata(tgt[valid]))
+    return out
 
-    means = daily.mean(axis=1)
-    ann_mean = means * _ANNUALIZATION
-    neg = daily < 0
-    n_neg = neg.sum(axis=1)
-    neg_sum = (daily * neg).sum(axis=1)
-    neg_mean = np.where(n_neg > 0, neg_sum / np.maximum(n_neg, 1), 0.0)
-    dev = np.where(neg, daily - neg_mean[:, None], 0.0)
-    neg_var = np.where(
-        n_neg > 1,
-        (dev**2).sum(axis=1) / np.maximum(n_neg - 1, 1),
-        0.0,
-    )
-    down_std_neg = np.sqrt(np.clip(neg_var, 0.0, None)) * math.sqrt(_ANNUALIZATION)
-    # Full-sample variance with a safe denominator: rows with a single
-    # observation fall back to zero variance without a divide-by-zero
-    # warning (the scalar path guards ``size > 1`` the same way).
-    mu = daily.mean(axis=1, keepdims=True)
-    full_var = np.where(
-        n > 1, ((daily - mu) ** 2).sum(axis=1) / np.maximum(n - 1, 1), 0.0
-    )
-    down_std_fb = (
-        np.sqrt(np.clip(full_var, 0.0, None)) * math.sqrt(_ANNUALIZATION) + 1e-6
-    )
-    down_std = np.where(
-        n_neg >= reward_cfg.downside_min_obs, down_std_neg, down_std_fb
-    )
-    rewards = ann_mean / (down_std + 1e-9)
-    rewards = np.where(
-        avg_to > reward_cfg.turnover_threshold,
-        rewards - reward_cfg.turnover_penalty,
-        rewards,
-    )
-    rewards = np.where(means < 0, float(reward_cfg.bad_reward), rewards)
-    rewards = np.where(
-        (daily.std(axis=1) < 1e-6) & (means <= 0),
-        float(reward_cfg.bad_reward),
-        rewards,
-    )
+
+def icir_from_series(ic: np.ndarray) -> np.ndarray:
+    """IC information ratio (mean / std over dates) per row.
+
+    Rows with fewer than two finite IC observations score 0.0 (an
+    under-identified ratio is not evidence of predictive power).
+    """
+
+    ic = np.asarray(ic, dtype=np.float64)
+    if ic.ndim == 1:
+        ic = ic[None]
+    b, t = ic.shape
+    finite = np.isfinite(ic)
+    n = finite.sum(axis=1)
+    with np.errstate(all="ignore"):
+        mean = np.where(
+            n > 0, np.nansum(np.where(finite, ic, 0.0), axis=1) / np.maximum(n, 1), 0.0
+        )
+        dev = np.where(finite, ic - mean[:, None], 0.0)
+        var = np.where(
+            n > 1, (dev**2).sum(axis=1) / np.maximum(n - 1, 1), 0.0
+        )
+        std = np.sqrt(np.clip(var, 0.0, None))
+        icir = mean / (std + 1e-9)
+    return np.where(n >= 2, icir, 0.0)
+
+
+def per_turnover_cost_rate(cfg: BacktestConfig) -> float:
+    """Fee fraction paid per unit of two-sided turnover.
+
+    Buying weight ``w`` and selling weight ``w`` together pay
+    ``2*commission + stamp + 2*transfer + 2*slippage`` per unit of ``w``;
+    the per-trade minimum-commission floor is ignored (a basket of ~30
+    positions trades far above the floor on average).
+    """
+
     return (
-        np.clip(rewards, reward_cfg.reward_clip_low, reward_cfg.reward_clip_high),
-        means,
+        2.0 * cfg.commission_rate
+        + cfg.stamp_tax_rate
+        + 2.0 * cfg.transfer_fee_rate
+        + 2.0 * cfg.slippage_rate
     )
+
+
+def annualized_turnover_cost(avg_turnover: np.ndarray, cfg: BacktestConfig) -> np.ndarray:
+    """Annualized cost drag of a daily average turnover, in ICIR units."""
+
+    avg_turnover = np.asarray(avg_turnover, dtype=np.float64)
+    return avg_turnover * per_turnover_cost_rate(cfg) * _ANNUALIZATION
 
 
 def simulate_basket_daily_returns(
@@ -186,10 +232,10 @@ def simulate_basket_daily_returns(
     weight ``min(1/top_n, single_weight_cap)``, renormalized) and charges
     the same trading-cost model.  Non-finite target cells contribute a zero
     return; days with fewer than ``top_n`` finite signals contribute a zero
-    return and keep the previous basket (as in the historical fast reward).
+    return and keep the previous basket.
     """
 
-    daily_full, avg_to_full, _, _ = simulate_basket_daily_returns_batch(
+    daily_full, avg_to_full = simulate_basket_daily_returns_batch(
         np.asarray(signal, dtype=np.float64)[None],
         np.asarray(target_ret, dtype=np.float64),
         cfg,
@@ -201,23 +247,18 @@ def simulate_basket_daily_returns_batch(
     signals: np.ndarray,
     target_ret: np.ndarray,
     cfg: BacktestConfig,
-    val_start: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Batched basket simulation: one pass over dates, ``B`` formulas at once.
 
     ``signals`` is ``[B, stocks, dates]``; the result is
-    ``(daily_full [B, dates-1], avg_turnover_full [B],
-    daily_val [B, dates-val_start-1] | None, avg_turnover_val [B] | None)``.
-    With ``val_start`` the validation basket restarts from zero weights at
-    that column, exactly like the scalar implementation applied to
-    ``signal[:, val_start:]``.
-
-    Semantics are the scalar loop's, verified by the equivalence tests:
-    per date the top-n finite signals are selected (a tie between exactly
-    equal values may resolve to a different equally valued set than the
-    scalar path), weights renormalize to ``1/top_n`` each, invalid days
-    earn zero and keep the previous basket, and both baskets share one
-    trading-cost model.
+    ``(daily_full [B, dates-1], avg_turnover_full [B])``.  Per date the
+    top-n finite signals are selected (a tie between exactly equal values
+    may resolve to a different equally valued set than the scalar path),
+    weights renormalize to ``1/top_n`` each, invalid days earn zero and
+    keep the previous basket, and both baskets share one trading-cost
+    model.  The RL reward only consumes the average turnover (for the
+    continuous cost drag); the daily series stays available for diagnostics
+    and tests.
     """
 
     signals = np.asarray(signals, dtype=np.float64)
@@ -225,27 +266,17 @@ def simulate_basket_daily_returns_batch(
     b, n_stocks, n_dates = signals.shape
     daily_full = np.zeros((b, max(n_dates - 1, 0)))
     avg_to_full = np.zeros(b)
-    daily_val: np.ndarray | None = None
-    avg_to_val: np.ndarray | None = None
-    if val_start is not None:
-        daily_val = np.zeros((b, max(n_dates - val_start - 1, 0)))
-        avg_to_val = np.zeros(b)
     if n_dates < 2 or n_stocks == 0:
-        return daily_full, avg_to_full, daily_val, avg_to_val
+        return daily_full, avg_to_full
 
     top_n = min(int(cfg.top_n), n_stocks)
     if top_n <= 0:
-        # Every day is skipped: all-zero daily series (scoring collapses
-        # them to ``bad_reward`` exactly like the scalar path).
-        return daily_full, avg_to_full, daily_val, avg_to_val
+        return daily_full, avg_to_full
 
     weight = min(1.0 / top_n, float(cfg.single_weight_cap))
-    min_fee = cfg.min_commission / cfg.initial_capital
     b_idx = np.arange(b)[:, None]
     prev = np.zeros((b, n_stocks))
-    prev_val = np.zeros((b, n_stocks))
     turn_acc = np.zeros(b)
-    turn_val_acc = np.zeros(b)
     # Non-finite target cells contribute zero; cleaned once outside the loop.
     target_clean = np.where(np.isfinite(target_ret), target_ret, 0.0)
 
@@ -272,41 +303,33 @@ def simulate_basket_daily_returns_batch(
         )
         prev = target
 
-        if val_start is not None and t >= val_start:
-            target_val = np.where(day_ok[:, None], fresh, prev_val)
-            buy_val = np.maximum(target_val - prev_val, 0.0)
-            sell_val = np.maximum(prev_val - target_val, 0.0)
-            cost_val = _trading_cost_columns(buy_val, sell_val, cfg)
-            gross_val = (target_val * rets).sum(axis=1)
-            daily_val[:, t - val_start] = np.where(day_ok, gross_val - cost_val, 0.0)
-            turn_val_acc += np.where(
-                day_ok, np.abs(target_val - prev_val).sum(axis=1), 0.0
-            )
-            prev_val = target_val
-
     avg_to_full = turn_acc / max(n_dates - 1, 1)
-    if val_start is not None:
-        avg_to_val = turn_val_acc / max(n_dates - val_start - 1, 1)
-    return daily_full, avg_to_full, daily_val, avg_to_val
+    return daily_full, avg_to_full
 
 
-def fast_basket_reward(
+def formula_reward(
     signal: np.ndarray,
     target_ret: np.ndarray,
     bt_cfg: BacktestConfig,
     reward_cfg: RewardConfig,
-) -> tuple[float, float]:
-    """Cheap long-only Sortino reward used inside the RL loop.
+) -> float:
+    """Scalar v3 reward of one signal: clipped ICIR minus turnover cost.
 
-    Simulates the same top-n basket and the same trading-cost model as the
-    backtest engine, then scores the daily net returns with the shared
-    Sortino ratio plus a soft turnover penalty.  Losing baskets collapse to
-    ``bad_reward`` so they cannot hide behind a low downside deviation.
+    Reference path for the batched implementation: the IC is computed over
+    the full window and the cost drag over the simulated basket's average
+    daily turnover.
     """
 
-    daily, avg_turnover = simulate_basket_daily_returns(signal, target_ret, bt_cfg)
-    reward, mean_daily = _daily_to_rewards(daily, [avg_turnover], reward_cfg)
-    return float(reward[0]), float(mean_daily[0])
+    ic = icir_from_series(
+        rank_ic_series(
+            np.asarray(signal, dtype=np.float64)[None],
+            target_ret,
+            reward_cfg.ic_min_stocks,
+        )
+    )[0]
+    _, avg_to = simulate_basket_daily_returns(signal, target_ret, bt_cfg)
+    raw = ic - reward_cfg.cost_weight * annualized_turnover_cost(avg_to, bt_cfg)
+    return float(np.clip(raw, reward_cfg.reward_clip_low, reward_cfg.reward_clip_high))
 
 
 def batched_basket_rewards(
@@ -314,19 +337,46 @@ def batched_basket_rewards(
     target_ret: np.ndarray,
     bt_cfg: BacktestConfig,
     reward_cfg: RewardConfig,
-    val_start: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Full-window and validation rewards for a batch of signals, one pass.
+    val_windows: list[tuple[int, int]] | None = None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """v3 rewards for a batch of signals: ICIR minus turnover cost.
 
-    ``signals`` is ``[B, stocks, dates]`` and the training window ends at
-    the last column; ``val_start`` anchors the out-of-sample tail used for
-    best-formula selection.  Returns ``(rewards, val_rewards)`` of length
-    ``B``; both are clipped exactly like the scalar path.
+    ``signals`` is ``[B, stocks, dates]``.  Returns
+    ``(rewards [B], val_rewards [B] | None)``: the full-window reward is
+    clipped ICIR minus the proportional turnover-cost drag; with
+    ``val_windows`` (column index pairs, half-open) the validation reward
+    is the **median** over the windows of the same quantity computed on
+    each window independently (each window's basket restarts from zero
+    weights, mirroring a fresh out-of-sample deployment).  Without
+    ``val_windows`` the second result is ``None``.
     """
 
-    daily_full, avg_to_full, daily_val, avg_to_val = (
-        simulate_basket_daily_returns_batch(signals, target_ret, bt_cfg, val_start)
+    signals = np.asarray(signals, dtype=np.float64)
+    target_ret = np.asarray(target_ret, dtype=np.float64)
+    ic = icir_from_series(
+        rank_ic_series(signals, target_ret, reward_cfg.ic_min_stocks)
     )
-    rewards, _ = _daily_to_rewards(daily_full, avg_to_full, reward_cfg)
-    val_rewards, _ = _daily_to_rewards(daily_val, avg_to_val, reward_cfg)
+    _, avg_to = simulate_basket_daily_returns_batch(signals, target_ret, bt_cfg)
+    raw = ic - reward_cfg.cost_weight * annualized_turnover_cost(avg_to, bt_cfg)
+    rewards = np.clip(raw, reward_cfg.reward_clip_low, reward_cfg.reward_clip_high)
+
+    val_rewards: np.ndarray | None = None
+    if val_windows:
+        per_window = []
+        for start, end in val_windows:
+            win_signals = signals[:, :, start:end]
+            win_target = target_ret[:, start:end]
+            win_ic = icir_from_series(
+                rank_ic_series(win_signals, win_target, reward_cfg.ic_min_stocks)
+            )
+            _, win_to = simulate_basket_daily_returns_batch(
+                win_signals, win_target, bt_cfg
+            )
+            win_raw = win_ic - reward_cfg.cost_weight * annualized_turnover_cost(
+                win_to, bt_cfg
+            )
+            per_window.append(
+                np.clip(win_raw, reward_cfg.reward_clip_low, reward_cfg.reward_clip_high)
+            )
+        val_rewards = np.median(np.stack(per_window, axis=1), axis=1)
     return rewards, val_rewards

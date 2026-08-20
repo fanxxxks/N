@@ -13,6 +13,7 @@ from ashare_data.config import (
     BacktestConfig,
     DataConfig,
     ModelConfig,
+    RewardConfig,
     load_config,
     make_data_config,
 )
@@ -157,6 +158,9 @@ def test_training_smoke(tmp_path):
         model_cfg,
         BacktestConfig(train_end_date="2024-01-20", top_n=2),
         loader,
+        # The smoke fixture's returns are noise: the production validation
+        # floor is relaxed so the smoke test exercises artifact saving.
+        reward_config=RewardConfig(min_val_reward=-1e9),
     )
     tokens = trainer.train(steps=1, batch_size=4)
     assert tokens is not None

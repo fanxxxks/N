@@ -340,7 +340,7 @@ def test_run_protocol_rows_and_determinism(populated_db: DataConfig, monkeypatch
         "screening",
     )
     rows = result["rows"]
-    assert len(rows) == 6  # 1 benchmark + 3 baselines + 2 seeds
+    assert len(rows) == 10  # 1 benchmark + 7 baselines + 2 seeds
     trained = [r for r in rows if r["candidate"] == "trained"]
     assert len(trained) == 2
     assert all(r["formula"] == [1] and r["val_reward"] == 1.5 for r in trained)
