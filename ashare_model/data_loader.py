@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import torch
 
-from ashare_data.capital_flow import build_capital_frames
+from ashare_data.capital_flow import build_capital_frames, build_industry_member_frame
 from ashare_data.config import DataConfig, ModelConfig, make_data_config
 from ashare_data.db import AshareDB
 from ashare_data.fundamentals import build_pit_frames
@@ -168,9 +168,17 @@ class AshareDataLoader:
         close_wide = pivot_wide(df, self.ts_codes, self.dates, "close")
         pit = build_pit_frames(self.config, self.ts_codes, self.dates, close_wide)
         capital = build_capital_frames(self.config, self.ts_codes, self.dates)
+        industry_frame = build_industry_member_frame(
+            self.config, self.ts_codes, self.dates
+        )
 
         factors = compute_factor_tensor(
-            df, self.ts_codes, self.dates, pit_fundamentals=pit, extra_frames=capital
+            df,
+            self.ts_codes,
+            self.dates,
+            pit_fundamentals=pit,
+            extra_frames=capital,
+            industry_frame=industry_frame,
         )
         self.factor_tensor = torch.tensor(factors, dtype=torch.float32)
 

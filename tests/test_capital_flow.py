@@ -11,6 +11,7 @@ from ashare_data.akshare_client import AkShareClient
 from ashare_data.capital_flow import (
     EXTERNAL_FACTOR_NAMES,
     build_capital_frames,
+    build_industry_member_frame,
     sync_capital_flow,
 )
 from ashare_data.db import AshareDB
@@ -123,6 +124,28 @@ def test_build_capital_frames_degrades_without_tables(tmp_path: Path):
     frames = build_capital_frames(cfg, ["000001.SZ"], _dates(5))
     assert set(frames) == set(EXTERNAL_FACTOR_NAMES)
     assert frames["MARGIN_BALANCE_CHG"].isna().all().all()
+
+
+def test_build_industry_member_frame_maps_members_only(tmp_path: Path):
+    cfg = _data_config(tmp_path)
+    dates = _dates(5)
+    codes = ["000001.SZ", "600000.SH", "000505.SZ"]
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        db.replace_sw_members("801010", ["000001.SZ", "000505.SZ"], cfg)
+    frame = build_industry_member_frame(cfg, codes, dates)
+    assert frame.shape == (len(codes), len(dates))
+    # Members carry their industry code on every date; unmapped stocks and
+    # unknown codes stay NaN.
+    assert (frame.loc["000001.SZ"] == "801010").all()
+    assert (frame.loc["000505.SZ"] == "801010").all()
+    assert frame.loc["600000.SH"].isna().all()
+
+
+def test_build_industry_member_frame_degrades_without_tables(tmp_path: Path):
+    cfg = _data_config(tmp_path)
+    frame = build_industry_member_frame(cfg, ["000001.SZ"], _dates(5))
+    assert frame.isna().all().all()
 
 
 def test_sync_capital_flow_offline_skips(tmp_path: Path):

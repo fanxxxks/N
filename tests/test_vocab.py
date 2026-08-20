@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from ashare_model.vocab import (
+    FEATURE_ALIASES,
     FEATURE_NAMES,
     FORMULA_VOCAB,
     LEGACY_FEATURE_NAMES,
@@ -26,19 +27,65 @@ def test_feature_version_pinned():
     # Changing the feature or operator name lists must change this version;
     # the test pins the released vocabulary generation so accidental edits
     # to FEATURE_NAMES are caught in review, not silently in production.
-    assert FORMULA_VOCAB.feature_version == "ac2eb181ba4a"
+    assert FORMULA_VOCAB.feature_version == "cf5116134c84"
     assert len(FORMULA_VOCAB.feature_version) == 12
 
 
 def test_legacy_lists_pinned_to_first_generation():
     # The first generation had 34 features and 16 operators; the pins must
     # survive later vocabulary growth because legacy formulas remap against
-    # them.
+    # them.  The v3 generation retired one duplicate (RET_20 -> alias), so
+    # every legacy name must resolve either directly or through an alias.
     assert len(LEGACY_FEATURE_NAMES) == 34
     assert len(LEGACY_OPERATOR_NAMES) == 16
-    assert LEGACY_FEATURE_NAMES[:8] == FEATURE_NAMES[:8]
     assert tuple(FEATURE_NAMES) != tuple(LEGACY_FEATURE_NAMES)
     assert LEGACY_OPERATOR_NAMES == FORMULA_VOCAB.operator_names[:16]
+    missing = [
+        name
+        for name in LEGACY_FEATURE_NAMES
+        if name not in FEATURE_NAMES and name not in FEATURE_ALIASES
+    ]
+    assert missing == []
+
+
+def test_feature_aliases_are_consistent():
+    # Aliases retire duplicate features: the alias itself must not be
+    # offered to the policy, and its target must be a live feature.
+    assert set(FEATURE_ALIASES).isdisjoint(FEATURE_NAMES)
+    assert set(FEATURE_ALIASES.values()) <= set(FEATURE_NAMES)
+    assert "RET_20" in FEATURE_ALIASES
+    assert "MOMENTUM_20" in FEATURE_NAMES
+
+
+def test_resolve_formula_tokens_aliases_retired_features():
+    # RET_20 was identical to MOMENTUM_20; a formula that references it
+    # (legacy token layout or recorded metadata) resolves to MOMENTUM_20's
+    # current token id with unchanged semantics.
+    legacy_token = 1 + LEGACY_FEATURE_NAMES.index("RET_20")
+    resolved = resolve_formula_tokens({"formula": [legacy_token]})
+    assert resolved == [1 + FEATURE_NAMES.index("MOMENTUM_20")]
+    payload = {
+        "formula": [1],
+        "feature_names": ["RET_20", "MOMENTUM_20"],
+    }
+    assert resolve_formula_tokens(payload) == [1 + FEATURE_NAMES.index("MOMENTUM_20")]
+
+
+def test_resolve_formula_tokens_alias_target_must_exist():
+    # An alias whose target is absent from the active vocabulary is not a
+    # silent substitution: it fails like any other unknown name.
+    src = FormulaVocab(
+        feature_names=tuple(FEATURE_NAMES),
+        operator_names=FORMULA_VOCAB.operator_names,
+    )
+    assert "MOMENTUM_20" in src.feature_names
+    stripped = FormulaVocab(
+        feature_names=tuple(n for n in src.feature_names if n != "MOMENTUM_20"),
+        operator_names=FORMULA_VOCAB.operator_names,
+    )
+    payload = {"formula": [1], "feature_names": ["RET_20"]}
+    with pytest.raises(ValueError, match="RET_20"):
+        resolve_formula_tokens(payload, vocab=stripped)
 
 
 def test_tokens_to_names_roundtrip():

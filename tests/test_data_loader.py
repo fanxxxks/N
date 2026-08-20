@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from ashare_data.config import DataConfig, ModelConfig
 from ashare_data.db import AshareDB
 from ashare_model.data_loader import AshareDataLoader, build_loader_from_config, date_index
-from ashare_model.vocab import FORMULA_VOCAB
+from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 
 
 def test_load_universe_and_data(populated_db: DataConfig):
@@ -25,6 +26,36 @@ def test_load_universe_and_data(populated_db: DataConfig):
         "adj_factor",
     }
     assert loader.target_ret[:, -2:].abs().sum() == 0
+
+
+def test_load_data_feeds_industry_relative_factors(populated_db: DataConfig):
+    # With Shenwan membership present the loader injects the industry code
+    # frame: the industry-relative rows leave the neutral state, and a
+    # single-member industry demeans to exactly zero (stays neutral).
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.replace_sw_members("801780", ["000001.SZ", "600000.SH"], populated_db)
+        db.replace_sw_members("801880", ["300001.SZ"], populated_db)
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    tensor = loader.factor_tensor.numpy()
+    pair_row = tensor[FEATURE_NAMES.index("IND_REL_RET_20")]
+    assert np.count_nonzero(pair_row) > 0
+    # The loader sorts ts_codes; locate the stocks by code.  The two-member
+    # industry demeans to exact opposites, the single-member industry to
+    # exactly zero.
+    a = loader.ts_codes.index("000001.SZ")
+    b = loader.ts_codes.index("600000.SH")
+    c = loader.ts_codes.index("300001.SZ")
+    assert np.allclose(pair_row[a], -pair_row[b])
+    assert np.allclose(pair_row[c], 0.0)
+    # Without any membership table the same factor stays fully neutral.
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.execute(f"DROP TABLE IF EXISTS {populated_db.sw_member_table}")
+    bare = AshareDataLoader(populated_db, ModelConfig())
+    bare.load_data()
+    assert np.allclose(
+        bare.factor_tensor[FEATURE_NAMES.index("IND_REL_RET_20")].numpy(), 0.0
+    )
 
 
 def test_load_data_raises_when_universe_empty(data_config: DataConfig):

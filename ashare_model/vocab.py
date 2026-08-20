@@ -85,7 +85,42 @@ _FEATURE_NAMES_V2 = (
     "LIST_AGE",
 )
 
-FEATURE_NAMES = _FEATURE_NAMES_V1 + _FEATURE_NAMES_V2
+# Third vocabulary generation (v3): factor P0 additions, all local
+# computation (no new data interfaces).  Medium-term windows, smoothed
+# turnover, limit-move statistics and industry-relative versions of the
+# strongest families.
+_FEATURE_NAMES_V3 = (
+    # Medium-term momentum / reversal (slow, low-turnover signals).
+    "RET_120",
+    "REVERSAL_60",
+    "REVERSAL_120",
+    # Smoothed turnover: 5/20-day means and 20-day volatility.
+    "TURNOVER_MA5",
+    "TURNOVER_MA20",
+    "TURNOVER_STD20",
+    # Limit-move statistics (event family, all local).
+    "LIMIT_STREAK",
+    "LIMIT_UP_CNT_20",
+    "LIMIT_BREAK",
+    # Industry-relative versions of the strongest families (industry
+    # membership from the Shenwan snapshot, demeaned per industry).
+    "IND_REL_RET_5",
+    "IND_REL_RET_20",
+    "IND_REL_VOL_20",
+    "IND_REL_TURNOVER",
+)
+
+# Retired feature names, resolvable to their surviving equivalents: a saved
+# formula that references a retired name keeps its exact semantics, so no
+# artifact ever breaks when a duplicate is removed from the live vocabulary.
+# RET_20 was identical to MOMENTUM_20 (same computation, 0.99 correlation).
+FEATURE_ALIASES = {"RET_20": "MOMENTUM_20"}
+
+FEATURE_NAMES = tuple(
+    name
+    for name in _FEATURE_NAMES_V1 + _FEATURE_NAMES_V2 + _FEATURE_NAMES_V3
+    if name not in FEATURE_ALIASES
+)
 
 # Pins of the first released vocabulary generation.  Formulas saved without
 # feature metadata (legacy artifacts) resolve against these lists; the
@@ -221,6 +256,8 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
             resolved.append(vocab.pad_token_id)
         elif name in vocab.feature_names:
             resolved.append(1 + vocab.feature_names.index(name))
+        elif name in FEATURE_ALIASES and FEATURE_ALIASES[name] in vocab.feature_names:
+            resolved.append(1 + vocab.feature_names.index(FEATURE_ALIASES[name]))
         elif name in vocab.operator_names:
             resolved.append(vocab.operator_offset + vocab.operator_names.index(name))
         else:
