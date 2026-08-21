@@ -184,6 +184,94 @@ def _ts_downvol(x: torch.Tensor, d: int) -> torch.Tensor:
     return _ts_window(x, d, reducer)
 
 
+# --- cross-sectional operators -----------------------------------------------
+
+
+def cross_sectional_zscore(signal: torch.Tensor) -> torch.Tensor:
+    """Per-date cross-sectional z-score of a ``[stock, date]`` signal.
+
+    The mean and standard deviation are taken over the stock axis for each
+    date column (only the current cross-section, so no future information
+    enters).  A degenerate column (zero standard deviation, e.g. an
+    all-neutral date) maps to 0: the numerator is 0 there as well, so the
+    ``eps`` guard alone is sufficient.  Shared by the ``CS_ZSCORE``
+    operator and the VM's terminal standardization.
+    """
+
+    mean = signal.mean(dim=0, keepdim=True)
+    std = signal.std(dim=0, keepdim=True, unbiased=False)
+    return (signal - mean) / (std + 1e-6)
+
+
+def _cs_demean(x: torch.Tensor) -> torch.Tensor:
+    """Subtract the per-date cross-sectional mean (full-market demean)."""
+    return x - x.mean(dim=0, keepdim=True)
+
+
+def _cs_rank(x: torch.Tensor) -> torch.Tensor:
+    """Per-date cross-sectional percentile rank in ``[0, 1]``.
+
+    Ties share the *average* rank of their group, so the result depends
+    only on the values — never on the sort order of equal elements — and is
+    therefore identical on CPU and CUDA.  Implemented with a stable argsort
+    and per-group start/end reductions (no quadratic pairwise comparisons,
+    no reliance on running-min scans).
+    """
+
+    n, t = x.shape
+    order = torch.argsort(x, dim=0, stable=True)  # [n, t]
+    sorted_x = x.gather(0, order)
+    # boundary[p] marks the first sorted position of each equal-value group.
+    diff = sorted_x[1:] != sorted_x[:-1]  # [n-1, t]
+    boundary = torch.cat([diff.new_ones((1, t)), diff], dim=0)
+    gid = boundary.cumsum(dim=0) - 1  # [n, t] dense group ids
+    n_groups = int(gid.max()) + 1
+    pos = (
+        torch.arange(n, device=x.device, dtype=x.dtype)
+        .unsqueeze(1)
+        .expand(n, t)
+    )
+    starts = torch.full(
+        (n_groups, t), float("inf"), device=x.device, dtype=x.dtype
+    )
+    starts.scatter_reduce_(0, gid, pos, reduce="amin", include_self=False)
+    ends = torch.full(
+        (n_groups, t), float("-inf"), device=x.device, dtype=x.dtype
+    )
+    ends.scatter_reduce_(0, gid, pos, reduce="amax", include_self=False)
+    # Average rank of the group = mean of its first and last sorted position.
+    avg_sorted = ((starts + ends) / 2.0).gather(0, gid)
+    out = torch.zeros_like(x)
+    out.scatter_(0, order, avg_sorted)
+    return out / n
+
+
+def _cs_neutralize(
+    x: torch.Tensor, group: torch.Tensor | None = None
+) -> torch.Tensor:
+    """Subtract the per-date mean within each group (industry neutralization).
+
+    ``group`` is a ``[stock, date]`` tensor of discrete group ids aligned
+    with ``x``; non-finite cells (stocks without a mapping) belong to no
+    group, so their values are untouched.  Without ``group`` — or when no
+    finite group id exists — the operator degrades to the full-market
+    demean, so a missing industry source never fabricates a grouping.
+    """
+
+    if group is None:
+        return _cs_demean(x)
+    ids = torch.unique(group[torch.isfinite(group)])
+    if ids.numel() == 0:
+        return _cs_demean(x)
+    out = x.clone()
+    for gid in ids:
+        mask = group == gid
+        count = mask.sum(dim=0, keepdim=True)
+        mean = (x * mask).sum(dim=0, keepdim=True) / count.clamp(min=1)
+        out = out - mask * mean
+    return out
+
+
 OPS_CONFIG = [
     ("ADD", lambda x, y: x + y, 2),
     ("SUB", lambda x, y: x - y, 2),
@@ -203,7 +291,32 @@ OPS_CONFIG = [
     ("TS_RANK20", lambda x: _ts_rank(x, 20), 1),
     ("CORR20", lambda x, y: _ts_corr(x, y, 20), 2),
     ("DOWNVOL20", lambda x: _ts_downvol(x, 20), 1),
+    # Cross-sectional operators: the "relative strength" family, enabling
+    # formulas to express rank/zscore/neutral semantics inside the stack.
+    ("CS_RANK", _cs_rank, 1),
+    ("CS_ZSCORE", cross_sectional_zscore, 1),
+    ("CS_DEMEAN", _cs_demean, 1),
+    # CS_NEUTRALIZE groups by the industry codes carried on the VM; without
+    # them it degrades to CS_DEMEAN (the VM substitutes the group tensor).
+    ("CS_NEUTRALIZE", lambda x: _cs_neutralize(x), 1),
+    # Parameterized-window family, enumerated: the 20-day versions above are
+    # the original operators; 5/10/60 give the policy short and long
+    # horizons without changing the sampling grammar.
+    ("MA5", lambda x: _ts_ma(x, 5), 1),
+    ("MA10", lambda x: _ts_ma(x, 10), 1),
+    ("MA60", lambda x: _ts_ma(x, 60), 1),
+    ("STD5", lambda x: _ts_std(x, 5), 1),
+    ("STD10", lambda x: _ts_std(x, 10), 1),
+    ("STD60", lambda x: _ts_std(x, 60), 1),
+    ("TS_RANK5", lambda x: _ts_rank(x, 5), 1),
+    ("TS_RANK10", lambda x: _ts_rank(x, 10), 1),
+    ("TS_RANK60", lambda x: _ts_rank(x, 60), 1),
+    ("CORR5", lambda x, y: _ts_corr(x, y, 5), 2),
+    ("CORR10", lambda x, y: _ts_corr(x, y, 10), 2),
+    ("CORR60", lambda x, y: _ts_corr(x, y, 60), 2),
+    ("DOWNVOL5", lambda x: _ts_downvol(x, 5), 1),
+    ("DOWNVOL10", lambda x: _ts_downvol(x, 10), 1),
+    ("DOWNVOL60", lambda x: _ts_downvol(x, 60), 1),
+    ("DELTA10", lambda x: _ts_delta(x, 10), 1),
+    ("DELTA20", lambda x: _ts_delta(x, 20), 1),
 ]
-
-
-OP_ARITY = {cfg[0]: cfg[2] for cfg in OPS_CONFIG}

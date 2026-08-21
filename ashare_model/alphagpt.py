@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .ops import OP_ARITY, OPS_CONFIG
+from .ops import OPS_CONFIG
 from .vocab import FORMULA_VOCAB
 
 

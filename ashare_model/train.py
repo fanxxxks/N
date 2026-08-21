@@ -326,6 +326,15 @@ class AshareTrainer:
         factor_tensor = self.loader.factor_tensor[:, :, :train_end_idx].to(
             vm_device
         )
+        # The VM executes on the compute device; the industry-group tensor
+        # for CS_NEUTRALIZE moves with the factor stack (None when the
+        # loader carries no industry data).
+        industry_codes = getattr(self.loader, "industry_codes", None)
+        self.vm.industry_codes = (
+            industry_codes[:, :train_end_idx].to(vm_device)
+            if industry_codes is not None
+            else None
+        )
         target_ret = self.loader.target_ret[:, :train_end_idx].numpy()
         # Tradability masks (buy/sell blocked per stock and date) align the
         # training basket with the backtest engine's execution rules; both

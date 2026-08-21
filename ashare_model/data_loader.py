@@ -13,6 +13,7 @@ from ashare_data.config import DataConfig, ModelConfig, make_data_config
 from ashare_data.db import AshareDB
 from ashare_data.fundamentals import build_pit_frames
 from ashare_data.processor import (
+    encode_industry_frame,
     is_valid_a_share_code,
     normalize_daily_bars,
     open_to_open_returns,
@@ -182,6 +183,11 @@ class AshareDataLoader:
             industry_frame=industry_frame,
         )
         self.factor_tensor = torch.tensor(factors, dtype=torch.float32)
+        # Dense industry group ids for the VM's CS_NEUTRALIZE operator
+        # (unmapped stocks stay NaN so no group is fabricated for them).
+        self.industry_codes = torch.tensor(
+            encode_industry_frame(industry_frame), dtype=torch.float32
+        )
 
         # Next-open to next-open forward return with a missing-data mask, so
         # suspended / unlisted days can never fabricate huge fake targets.

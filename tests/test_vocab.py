@@ -20,14 +20,20 @@ def test_formula_vocab_consistency():
     assert FORMULA_VOCAB.token_names[0] == "PAD"
     assert FORMULA_VOCAB.token_names[1] == FEATURE_NAMES[0]
     assert FORMULA_VOCAB.size == len(FORMULA_VOCAB.token_names)
-    assert len(FORMULA_VOCAB.operator_names) == 18
+    # v6 vocabulary: the original 18 operators plus 4 cross-sectional
+    # operators and 17 enumerated windows (5/10/60 + DELTA10/20).
+    assert len(FORMULA_VOCAB.operator_names) == 39
+    assert FORMULA_VOCAB.operator_names[:18] == LEGACY_OPERATOR_NAMES + (
+        "CORR20",
+        "DOWNVOL20",
+    )
 
 
 def test_feature_version_pinned():
     # Changing the feature or operator name lists must change this version;
     # the test pins the released vocabulary generation so accidental edits
     # to FEATURE_NAMES are caught in review, not silently in production.
-    assert FORMULA_VOCAB.feature_version == "cf5116134c84"
+    assert FORMULA_VOCAB.feature_version == "49b58d17e9fd"
     assert len(FORMULA_VOCAB.feature_version) == 12
 
 

@@ -6,6 +6,7 @@ import pytest
 
 from ashare_data.config import DataConfig
 from ashare_data.processor import (
+    encode_industry_frame,
     filter_universe,
     is_valid_a_share_code,
     limit_rate,
@@ -294,3 +295,35 @@ def test_tradability_rejects_bad_inputs():
             np.ones((2, 1)), np.ones((2, 1)), np.ones((2, 1)),
             np.ones((2, 1)), np.ones((2, 1)), ["A", "B"], names, "hold",
         )
+
+
+# --- industry-code encoding for the VM's group neutralization ----------------
+
+
+def test_encode_industry_frame_maps_codes_and_keeps_nan():
+    frame = pd.DataFrame(
+        {
+            "d1": ["801010", "801010", "801030", None],
+            "d2": ["801010", None, "801030", None],
+        },
+        index=["A", "B", "C", "D"],
+    )
+    out = encode_industry_frame(frame)
+    assert out.shape == (4, 2)
+    assert out.dtype == np.float32
+    # Same code -> same id; different code -> different id; NaN stays NaN.
+    assert out[0, 0] == out[1, 0]
+    assert out[0, 0] != out[2, 0]
+    assert np.isnan(out[3, 0])
+    assert np.isnan(out[1, 1])
+    # Ids are dense: 0..n-1 across the mapped cells.
+    mapped = out[np.isfinite(out)]
+    assert set(mapped.tolist()) == set(range(int(np.nanmax(out)) + 1))
+
+
+def test_encode_industry_frame_all_nan_stays_all_nan():
+    frame = pd.DataFrame(
+        np.nan, index=["A", "B"], columns=["d1", "d2"], dtype=object
+    )
+    out = encode_industry_frame(frame)
+    assert np.isnan(out).all()

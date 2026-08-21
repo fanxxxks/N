@@ -201,6 +201,21 @@ def tradability_blocked_matrix(
     return _blocked_columns(o, h, l, pc, v, rates, side)
 
 
+def encode_industry_frame(frame: pd.DataFrame) -> np.ndarray:
+    """Encode a ``[stock x date]`` industry-code frame into dense ids.
+
+    Object/string Shenwan codes are factorized to dense integer ids for the
+    VM's group-neutralization operator; unmapped cells (NaN) stay NaN so
+    the neutralization excludes them instead of fabricating a group.
+    """
+
+    arr = frame.to_numpy(dtype=object)
+    codes, _ = pd.factorize(arr.ravel(), use_na_sentinel=True)
+    out = codes.reshape(arr.shape).astype(np.float32)
+    out[out < 0] = np.nan
+    return out
+
+
 def open_to_open_returns(open_: np.ndarray) -> np.ndarray:
     """Compute ``open[t+2] / open[t+1] - 1`` per stock with missing-data mask.
 

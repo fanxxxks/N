@@ -135,6 +135,9 @@ class SimulationRunner:
         if self.formula_tokens is None:
             self.load_formula()
 
+        # Industry-group context for CS_NEUTRALIZE, aligned with the factor
+        # stack (None when the loader carries no industry data).
+        self.vm.industry_codes = getattr(self.loader, "industry_codes", None)
         factors = self.vm.execute(self.formula_tokens, self.loader.factor_tensor)
         if factors is None:
             raise ValueError("Formula is invalid")

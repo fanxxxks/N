@@ -63,6 +63,14 @@ def test_vm_matches_cpu_on_cuda():
         [1, 2, op_id["CORR20"]],
         [1, op_id["MA20"], 1, op_id["STD20"], op_id["SUB"]],
         [1, op_id["DELAY1"], 2, op_id["DECAY"], op_id["ADD"]],
+        # Cross-sectional operators and enumerated windows.
+        [1, op_id["CS_RANK"]],
+        [1, op_id["CS_ZSCORE"]],
+        [1, op_id["CS_DEMEAN"]],
+        [1, 2, op_id["CS_RANK"], op_id["ADD"]],
+        [1, op_id["MA5"], 1, op_id["STD60"], op_id["SUB"]],
+        [1, 2, op_id["CORR10"]],
+        [1, op_id["DOWNVOL60"], 1, op_id["DELTA20"], op_id["ADD"]],
     ]
     for tokens in formulas:
         cpu_out = vm.execute(tokens, feature)
@@ -70,6 +78,58 @@ def test_vm_matches_cpu_on_cuda():
         gpu_out = vm.execute(tokens, feature.cuda())
         assert gpu_out is not None
         assert torch.allclose(cpu_out, gpu_out.cpu(), atol=1e-4, rtol=1e-4)
+
+
+def test_vm_cs_neutralize_uses_industry_codes():
+    vm = StackVM(FORMULA_VOCAB)
+    op_id = {
+        name: FORMULA_VOCAB.operator_offset + i
+        for i, (name, _, _) in enumerate(OPS_CONFIG)
+    }
+    feature = torch.zeros(FORMULA_VOCAB.feature_count, 4, 3)
+    # Two industries (rows 0-1, rows 2-3) at distinct levels: the raw
+    # neutralized signal is industry-demeaned before the terminal z-score.
+    feature[0, :, :] = torch.tensor(
+        [[10.0, 2.0, 4.0], [20.0, 4.0, 8.0], [100.0, 40.0, 50.0], [140.0, 60.0, 70.0]]
+    )
+    group = torch.tensor(
+        [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]
+    )
+    vm.industry_codes = group
+    out = vm.execute([1, op_id["CS_NEUTRALIZE"]], feature)
+    assert out is not None
+    # Within each industry the demeaned rows are exact opposites, so the
+    # standardized columns of each industry pair cancel out.
+    assert torch.allclose(out[0] + out[1], torch.zeros(3), atol=1e-6)
+    assert torch.allclose(out[2] + out[3], torch.zeros(3), atol=1e-6)
+    # Without groups the operator is the full-market demean: industry 1's
+    # level dominates the market mean, so the standardized outputs differ.
+    vm.industry_codes = None
+    out_demean = vm.execute([1, op_id["CS_NEUTRALIZE"]], feature)
+    assert out_demean is not None
+    assert not torch.allclose(out, out_demean, atol=1e-3)
+
+
+def test_vm_new_operators_decode_and_execute():
+    vm = StackVM(FORMULA_VOCAB)
+    op_id = {
+        name: FORMULA_VOCAB.operator_offset + i
+        for i, (name, _, _) in enumerate(OPS_CONFIG)
+    }
+    torch.manual_seed(41)
+    feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 12)
+    for name in (
+        "CS_RANK", "CS_ZSCORE", "CS_DEMEAN", "CS_NEUTRALIZE",
+        "MA5", "MA10", "MA60", "STD5", "STD10", "STD60",
+        "TS_RANK5", "TS_RANK10", "TS_RANK60",
+        "CORR5", "CORR10", "CORR60",
+        "DOWNVOL5", "DOWNVOL10", "DOWNVOL60", "DELTA10", "DELTA20",
+    ):
+        tokens = [1, 2, op_id[name]] if name.startswith("CORR") else [1, op_id[name]]
+        out = vm.execute(tokens, feature)
+        assert out is not None, name
+        assert torch.isfinite(out).all(), name
+        assert name in formula_decode(tokens, FORMULA_VOCAB), name
 
 
 # --- terminal cross-sectional standardization ---------------------------------
