@@ -35,8 +35,8 @@ def test_resolve_device_rejects_unknown_values():
 
 def _reward_cfg(**kwargs):
     # The 3-stock fixtures fall below the production ic_min_stocks; the
-    # floor is relaxed so the fixtures exercise the training loop itself.
-    defaults = dict(ic_min_stocks=3, min_val_reward=-1e9)
+    # floors are relaxed so the fixtures exercise the training loop itself.
+    defaults = dict(ic_min_stocks=3, min_val_reward=-1e9, min_val_icir=-1e9)
     defaults.update(kwargs)
     return RewardConfig(**defaults)
 
@@ -192,6 +192,8 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
         lambda signals, target, bt, rc, val_windows: (
             np.full(signals.shape[0], 0.5),
             np.full(signals.shape[0], 0.4),
+            np.full(signals.shape[0], 0.45),
+            np.full(signals.shape[0], 0.35),
         ),
     )
     add_token = FORMULA_VOCAB.operator_offset
@@ -210,11 +212,12 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
     trainer.train(steps=1, batch_size=2, save_artifacts=False)
     bare = (1, 0, 0, 0)
     combined = (1, 1, add_token, 0)
-    assert trainer._reward_cache[bare] == pytest.approx((0.25, 0.15))
-    assert trainer._reward_cache[combined] == pytest.approx((0.5, 0.4))
+    assert trainer._reward_cache[bare] == pytest.approx((0.25, 0.15, 0.45, 0.35))
+    assert trainer._reward_cache[combined] == pytest.approx((0.5, 0.4, 0.45, 0.35))
     # The selection prefers the unpenalized operator formula.
     assert trainer.best_tokens == list(combined)
     assert trainer.best_reward == pytest.approx(0.4)
+    assert trainer.best_icir == pytest.approx(0.45)
 
 
 def test_quality_floor_blocks_save_and_returns_none(
@@ -556,8 +559,10 @@ def test_reward_cache_reuses_evaluations_across_steps(
     )
     trainer.train(steps=2, batch_size=4, save_artifacts=False)
     # Step 1 evaluates the unique formula once; step 2 hits the cache and
-    # never touches the VM again (invalid formulas are cached too).
-    assert calls["n"] == 1
+    # never touches the VM again (invalid formulas are cached too).  The
+    # second VM call overall is the single end-of-training execution that
+    # computes the best formula's learned trade direction.
+    assert calls["n"] == 2
 
 
 def test_reward_cache_is_bounded_lru(monkeypatch):
@@ -618,8 +623,9 @@ def test_duplicate_formulas_share_one_batched_evaluation(
     monkeypatch.setattr(Categorical, "sample", fixed_sample)
     trainer.train(steps=1, batch_size=4, save_artifacts=False)
     # Four identical valid formulas: one VM execution, one batched scoring,
-    # and the best formula is recorded from the shared evaluation.
-    assert calls["n"] == 1
+    # and the best formula is recorded from the shared evaluation; the
+    # second VM call is the single end-of-training direction computation.
+    assert calls["n"] == 2
     assert trainer.best_tokens is not None
     assert trainer.best_tokens[:3] == [1, 1, add_token]
     assert trainer.best_reward > -float("inf")
@@ -709,3 +715,208 @@ def test_streamed_reward_chunks_match_single_pass(
     assert streamed.history[0]["loss"] == pytest.approx(
         single.history[0]["loss"]
     )
+
+
+# --- v4: signal-quality gate, direction, collapse monitoring, sampler -------
+
+
+def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkeypatch):
+    import ashare_model.train as train_module
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    reward_config = _reward_cfg(min_val_reward=-1e9, min_val_icir=0.05)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=reward_config,
+    )
+    train_end = trainer._train_end_index()
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            len(loader.ts_codes) * train_end, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end),
+    )
+    # The scorer reports a strong cost-adjusted reward but a sub-threshold
+    # ICIR: the quality gate must block the save even though the
+    # cost-adjusted floor passes.
+    monkeypatch.setattr(
+        train_module,
+        "batched_basket_rewards",
+        lambda signals, target, bt, rc, val_windows: (
+            np.full(signals.shape[0], 0.8),
+            np.full(signals.shape[0], 0.8),
+            np.full(signals.shape[0], 0.01),
+            np.full(signals.shape[0], 0.01),
+        ),
+    )
+    tokens = trainer.train(steps=1, batch_size=1)
+    assert tokens is None
+    # The bare-copy penalty (0.02 by default config) shaves the reported
+    # cost-adjusted reward; the raw ICIR stays below the gate.
+    assert trainer.best_reward == pytest.approx(0.78)
+    assert trainer.best_icir == pytest.approx(0.01)
+    assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
+
+
+def test_icir_gate_passes_strong_signal(tmp_path, populated_db: DataConfig, monkeypatch):
+    import ashare_model.train as train_module
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    reward_config = _reward_cfg(min_val_reward=0.0, min_val_icir=0.05)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=reward_config,
+    )
+    train_end = trainer._train_end_index()
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            len(loader.ts_codes) * train_end, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end),
+    )
+    monkeypatch.setattr(
+        train_module,
+        "batched_basket_rewards",
+        lambda signals, target, bt, rc, val_windows: (
+            np.full(signals.shape[0], 0.3),
+            np.full(signals.shape[0], 0.3),
+            np.full(signals.shape[0], 0.4),
+            np.full(signals.shape[0], 0.4),
+        ),
+    )
+    tokens = trainer.train(steps=1, batch_size=1, save_artifacts=False)
+    assert tokens is not None
+    assert trainer.best_icir == pytest.approx(0.4)
+    assert trainer.best_direction in (-1, 1)
+
+
+def test_artifact_records_direction_and_icir(tmp_path, populated_db: DataConfig, monkeypatch):
+    import json
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    train_end = trainer._train_end_index()
+    # Positive ramp signal with a positively correlated target: the IC is
+    # positive, so the learned direction must be +1 and the artifact must
+    # record it together with the quality-gate ICIR.
+    signal = torch.arange(
+        1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
+    ).reshape(len(loader.ts_codes), train_end)
+    monkeypatch.setattr(trainer.vm, "execute", lambda tokens, ft: signal)
+    monkeypatch.setattr(
+        loader, "target_ret", (signal / 100.0).to(loader.target_ret.dtype)
+    )
+    tokens = trainer.train(steps=1, batch_size=1)
+    assert tokens is not None
+    artifact = json.loads(
+        (populated_db.data_dir / "best_ashare_strategy.json").read_text(encoding="utf-8")
+    )
+    assert artifact["direction"] == trainer.best_direction
+    assert artifact["best_icir"] == pytest.approx(trainer.best_icir)
+
+
+def test_collapse_warning_fires_after_consecutive_collapsed_steps(
+    tmp_path, populated_db: DataConfig, monkeypatch
+):
+    import ashare_model.train as train_module
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        train_module.logger, "warning", lambda msg: warnings.append(msg)
+    )
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(
+        batch_size=4,
+        train_steps=1,
+        max_formula_len=4,
+        collapse_warn_fraction=0.9,
+        collapse_warn_steps=2,
+    )
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            len(loader.ts_codes) * trainer._train_end_index(),
+            dtype=torch.float32,
+        ).reshape(len(loader.ts_codes), trainer._train_end_index()),
+    )
+    # All rows sample the same feature: unique fraction 1/4 < 0.9.
+    monkeypatch.setattr(
+        Categorical,
+        "sample",
+        lambda self: torch.full(
+            (self.logits.shape[0],), 1, dtype=torch.long, device=self.logits.device
+        ),
+    )
+    first = trainer.train(steps=1, batch_size=4, save_artifacts=False)
+    assert first is not None
+    assert not warnings  # first collapsed step: below the streak threshold
+    second = trainer.train(steps=1, batch_size=4, save_artifacts=False)
+    assert second is not None
+    assert trainer.history[-1]["unique_frac"] == pytest.approx(0.25)
+    # The second consecutive collapsed step crosses the threshold.
+    assert len(warnings) == 1
+    assert "policy sampling collapsed" in warnings[0]
+
+
+def test_sample_random_formulas_are_valid_and_deterministic():
+    from ashare_model.train import sample_random_formulas
+    from ashare_model.vm import StackVM
+
+    n, max_len = 200, 12
+    first = sample_random_formulas(7, FORMULA_VOCAB, max_len, n)
+    second = sample_random_formulas(7, FORMULA_VOCAB, max_len, n)
+    assert first == second
+    assert len(first) == n
+    vm = StackVM(FORMULA_VOCAB)
+    factor_tensor = torch.zeros((FORMULA_VOCAB.feature_count, 5, 8))
+    for tokens in first:
+        assert len(tokens) == max_len
+        # Every sampled sequence is a structurally valid postfix formula:
+        # the VM executes it into exactly one result tensor.
+        assert vm.execute(list(tokens), factor_tensor) is not None
+    # Different seeds sample different formula sets.
+    assert sample_random_formulas(8, FORMULA_VOCAB, max_len, n) != first
+
+
+def test_validation_windows_new_defaults_split_longer_tail():
+    from ashare_model.train import validation_start, validation_windows
+
+    train_end = 1000
+    assert validation_start(train_end, ModelConfig()) == 650
+    windows = validation_windows(train_end, ModelConfig())
+    assert len(windows) == 4
+    assert windows[0][0] == 650 and windows[-1][1] == 1000
+    assert windows[0][1] == windows[1][0]  # disjoint and contiguous
+    # Short tails still degrade to a single window.
+    assert validation_windows(10, ModelConfig()) == [
+        (validation_start(10, ModelConfig()), 10)
+    ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import numpy as np
 import pytest
@@ -56,10 +57,18 @@ def _fold(dates, train_end="2024-01-10", test_end="2024-01-25") -> evaluation.Fo
 class _FakeTrainer:
     """Trainer stand-in injected through evaluation._build_trainer."""
 
-    def __init__(self, tokens, best_reward=1.5, best_formula="RET_1", history=None):
+    def __init__(
+        self,
+        tokens,
+        best_reward=1.5,
+        best_formula="RET_1",
+        history=None,
+        best_direction=1,
+    ):
         self._tokens = tokens
         self.best_reward = best_reward
         self.best_formula = best_formula
+        self.best_direction = best_direction
         self.history = history if history is not None else [{"avg_reward": 0.1}]
 
     def train(self, **kwargs):
@@ -319,13 +328,107 @@ def test_run_fold_failure_paths(populated_db: DataConfig, monkeypatch):
     assert row["failed"] and row["reason"] == "formula invalid at eval time"
 
 
+def test_run_fold_applies_learned_direction(populated_db: DataConfig, monkeypatch):
+    loader = _loader(populated_db)
+    fold = _fold(loader.dates)
+    tier = TierConfig(1, 256)
+    monkeypatch.setattr(
+        evaluation,
+        "_build_trainer",
+        lambda *a, **k: _FakeTrainer([1], best_direction=-1),
+    )
+    row = run_fold(
+        loader, populated_db, ModelConfig(), BacktestConfig(), None, tier, fold, 42
+    )
+    assert not row["failed"]
+    assert row["direction"] == -1
+    flipped = evaluate_formula([1], loader, fold, BacktestConfig(), direction=-1)
+    assert row["total_return"] == pytest.approx(flipped["total_return"])
+    assert row["ic_mean"] == pytest.approx(flipped["ic_mean"])
+
+
+def test_baseline_candidates_trade_learned_direction(
+    populated_db: DataConfig, monkeypatch
+):
+    loader = _loader(populated_db)
+    fold = _fold(loader.dates)
+    proto = ProtocolConfig(baseline_signals=["TURNOVER"])
+    monkeypatch.setattr(evaluation, "signal_direction", lambda signal, target, min_stocks=10: -1)
+    rows = baseline_candidates(loader, proto, fold, BacktestConfig())
+    assert len(rows) == 1
+    assert rows[0]["direction"] == -1
+    factors, _, _, _ = epoch_slice(loader, fold)
+    idx = FEATURE_NAMES.index("TURNOVER")
+    ref = evaluate_signal(-factors[idx], loader, fold, BacktestConfig())
+    assert rows[0]["total_return"] == pytest.approx(ref["total_return"])
+    assert rows[0]["ic_mean"] == pytest.approx(ref["ic_mean"])
+
+
+def test_random_search_row_shape(populated_db: DataConfig):
+    loader = _loader(populated_db)
+    fold = _fold(loader.dates)
+    row = evaluation.run_random_search(
+        loader,
+        ModelConfig(max_formula_len=6),
+        BacktestConfig(),
+        None,
+        fold,
+        n_samples=32,
+        seed=7,
+    )
+    assert row["candidate"] == "random_search"
+    assert row["fold_train_end"] == fold.train_end
+    assert row["fold_test_end"] == fold.test_end
+    assert row["seed"] == 7
+    assert row["n_samples"] == 32
+    assert row["direction"] in (-1, 1)
+    if row["failed"]:
+        assert row["reason"]
+    else:
+        assert row["formula"] and row["formula_text"]
+        assert math.isfinite(row["val_reward"])
+
+
+def test_random_search_is_deterministic(populated_db: DataConfig):
+    loader = _loader(populated_db)
+    fold = _fold(loader.dates)
+    kwargs = dict(
+        model_config=ModelConfig(max_formula_len=6),
+        backtest_config=BacktestConfig(),
+        reward_config=None,
+        fold=fold,
+        n_samples=32,
+        seed=7,
+    )
+    first = evaluation.run_random_search(loader, **kwargs)
+    second = evaluation.run_random_search(loader, **kwargs)
+    assert first == second
+
+
+def test_random_search_disabled_by_zero_budget(populated_db: DataConfig):
+    loader = _loader(populated_db)
+    fold = _fold(loader.dates)
+    row = evaluation.run_random_search(
+        loader,
+        ModelConfig(),
+        BacktestConfig(),
+        None,
+        fold,
+        n_samples=0,
+        seed=7,
+    )
+    assert row["failed"] and row["reason"]
+
+
 # --- protocol orchestration -------------------------------------------------
 
 
 def test_run_protocol_rows_and_determinism(populated_db: DataConfig, monkeypatch):
     loader = _loader(populated_db)
     proto = ProtocolConfig(
-        folds=[FoldConfig("2024-01-10", "2024-01-25")], seeds=[42, 7]
+        folds=[FoldConfig("2024-01-10", "2024-01-25")],
+        seeds=[42, 7],
+        random_samples=64,
     )
     monkeypatch.setattr(
         evaluation, "_build_trainer", lambda *a, **k: _FakeTrainer([1])
@@ -340,15 +443,22 @@ def test_run_protocol_rows_and_determinism(populated_db: DataConfig, monkeypatch
         "screening",
     )
     rows = result["rows"]
-    assert len(rows) == 10  # 1 benchmark + 7 baselines + 2 seeds
+    assert len(rows) == 11  # 1 benchmark + 7 baselines + 1 random search + 2 seeds
     trained = [r for r in rows if r["candidate"] == "trained"]
     assert len(trained) == 2
     assert all(r["formula"] == [1] and r["val_reward"] == 1.5 for r in trained)
+    assert all(r["direction"] == 1 for r in trained)
+    random_rows = [r for r in rows if r["candidate"] == "random_search"]
+    assert len(random_rows) == 1
+    assert random_rows[0]["n_samples"] == proto.random_samples
     assert result["aggregates"]["trained"]["n_rows"] == 2
+    assert result["aggregates"]["random_search"]["n_rows"] == 1
     assert result["top_trial"] is not None
     assert result["data_end_date"] == loader.dates[-1]
     assert result["tier"] == "screening"
     assert result["steps"] == proto.screening.steps
+    assert result["random_samples"] == proto.random_samples
+    assert result["random_seed"] == proto.random_seed
 
     again = run_protocol(
         loader,
@@ -412,6 +522,7 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
                     ],
                     "seeds": [42],
                     "screening": {"steps": 1, "batch_size": 256},
+                    "random_samples": 64,
                 },
             }
         ),
@@ -435,6 +546,7 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
     assert payload["seeds"] == [42]
     assert any(r["candidate"] == "baseline:MOMENTUM_20" for r in payload["rows"])
     assert any(r["candidate"] == "benchmark:equal_weight" for r in payload["rows"])
+    assert any(r["candidate"] == "random_search" for r in payload["rows"])
     # The protocol must never clobber the working strategy artifacts.
     assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
 

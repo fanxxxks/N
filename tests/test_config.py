@@ -121,18 +121,35 @@ def test_make_reward_config_nested_with_defaults(tmp_path: Path):
     assert reward.reward_clip_low == RewardConfig().reward_clip_low
     assert reward.cost_weight == RewardConfig().cost_weight
     assert reward.min_val_reward == RewardConfig().min_val_reward
+    assert reward.min_val_icir == RewardConfig().min_val_icir
     assert reward.ic_min_stocks == RewardConfig().ic_min_stocks
 
 
 def test_make_model_config_v3_training_fields(tmp_path: Path):
     model = make_model_config({})
-    assert model.validation_splits == ModelConfig().validation_splits == 3
+    assert model.validation_fraction == ModelConfig().validation_fraction == 0.35
+    assert model.validation_splits == ModelConfig().validation_splits == 4
     assert model.entropy_coef == ModelConfig().entropy_coef == 0.01
     assert model.advantage_clip == ModelConfig().advantage_clip == 10.0
+    assert model.collapse_warn_fraction == ModelConfig().collapse_warn_fraction
     raw = {"model": {"validation_splits": 2, "entropy_coef": 0.05}}
     overridden = make_model_config(raw)
     assert overridden.validation_splits == 2
     assert overridden.entropy_coef == 0.05
+
+
+def test_make_protocol_config_random_search_fields(tmp_path: Path):
+    proto = make_protocol_config({})
+    assert proto.screening.steps == 150
+    assert proto.random_samples == 4096
+    assert proto.random_seed == 1234
+    overridden = make_protocol_config(
+        {"protocol": {"random_samples": 0, "random_seed": 99}}
+    )
+    assert overridden.random_samples == 0
+    assert overridden.random_seed == 99
+    with pytest.raises(ValueError, match="random_samples"):
+        make_protocol_config({"protocol": {"random_samples": -1}})
 
 
 def test_make_sim_config_resolves_absolute_paths(tmp_path: Path):
@@ -172,7 +189,7 @@ def test_make_protocol_config_defaults():
         "ROE",
         "TURNOVER",
     ]
-    assert proto.screening == TierConfig(50, 256)
+    assert proto.screening == TierConfig(150, 256)
     assert proto.confirmation == TierConfig(200, 512)
 
 

@@ -15,6 +15,7 @@ from ashare_model.reward import (
     icir_from_series,
     per_turnover_cost_rate,
     rank_ic_series,
+    signal_direction,
     simulate_basket_daily_returns,
     simulate_basket_daily_returns_batch,
     sortino_ratio,
@@ -391,7 +392,7 @@ def test_batched_rewards_match_scalar_rewards():
         n_dates = int(rng.integers(10, 60))
         signals, target = _random_batch(rng, b, n_stocks, n_dates)
         val_windows = [(n_dates // 2, n_dates)]
-        rewards, val_rewards = batched_basket_rewards(
+        rewards, val_rewards, icir, val_icir = batched_basket_rewards(
             signals, target, cfg, reward_cfg, val_windows
         )
         for i in range(b):
@@ -402,6 +403,19 @@ def test_batched_rewards_match_scalar_rewards():
             )
             assert rewards[i] == pytest.approx(ref_r, rel=1e-9, abs=1e-10)
             assert val_rewards[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-10)
+        # The exposed raw ICIR must match the scalar ICIR decomposition.
+        ref_icir = icir_from_series(
+            rank_ic_series(signals, target, reward_cfg.ic_min_stocks)
+        )
+        assert icir == pytest.approx(ref_icir, rel=1e-9, abs=1e-10)
+        ref_val_icir = icir_from_series(
+            rank_ic_series(
+                signals[:, :, val_windows[0][0] :],
+                target[:, val_windows[0][0] :],
+                reward_cfg.ic_min_stocks,
+            )
+        )
+        assert val_icir == pytest.approx(ref_val_icir, rel=1e-9, abs=1e-10)
 
 
 def test_val_reward_is_median_over_windows():
@@ -414,7 +428,7 @@ def test_val_reward_is_median_over_windows():
     # Aligned in window 1, inverted in window 2, noise in window 3.
     aligned = np.stack([target, -target, rng.normal(size=target.shape)])
     windows = [(0, 10), (10, 20), (20, 30)]
-    rewards, val_rewards = batched_basket_rewards(
+    rewards, val_rewards, _, val_icir = batched_basket_rewards(
         aligned, target, cfg, reward_cfg, windows
     )
     per_window = []
@@ -441,11 +455,13 @@ def test_val_reward_is_median_over_windows():
 def test_batched_rewards_without_val_windows_returns_none():
     rng = np.random.default_rng(10)
     signals, target = _random_batch(rng, 3, 8, 25)
-    rewards, val_rewards = batched_basket_rewards(
+    rewards, val_rewards, icir, val_icir = batched_basket_rewards(
         signals, target, _cfg(), _reward_cfg()
     )
     assert rewards.shape == (3,)
     assert val_rewards is None
+    assert icir.shape == (3,)
+    assert val_icir is None
 
 
 def test_batched_rewards_are_deterministic():
@@ -458,8 +474,28 @@ def test_batched_rewards_are_deterministic():
     second = batched_basket_rewards(signals, target, cfg, reward_cfg, windows)
     assert np.array_equal(first[0], second[0])
     assert np.array_equal(first[1], second[1])
+    assert np.array_equal(first[2], second[2])
+    assert np.array_equal(first[3], second[3])
     # Rewards stay inside the configured clip band.
     assert np.all(first[0] >= reward_cfg.reward_clip_low)
     assert np.all(first[0] <= reward_cfg.reward_clip_high)
     assert np.all(first[1] >= reward_cfg.reward_clip_low)
     assert np.all(first[1] <= reward_cfg.reward_clip_high)
+
+
+# --- signal direction -------------------------------------------------------
+
+
+def test_signal_direction_flips_negative_ic_signals():
+    rng = np.random.default_rng(21)
+    target = rng.normal(size=(20, 40))
+    assert signal_direction(target, target, min_stocks=5) == 1
+    assert signal_direction(-target, target, min_stocks=5) == -1
+
+
+def test_signal_direction_defaults_to_positive_without_observations():
+    rng = np.random.default_rng(22)
+    # Constant signal: undefined correlation -> no finite IC -> neutral +1.
+    assert signal_direction(np.ones((20, 40)), rng.normal(size=(20, 40))) == 1
+    # Below the minimum cross-section: every date is skipped -> neutral +1.
+    assert signal_direction(np.ones((3, 10)), rng.normal(size=(3, 10)), min_stocks=5) == 1

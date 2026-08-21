@@ -44,37 +44,46 @@ model:
   train_steps: 1000
   max_formula_len: 12
   learning_rate: 0.001
-  validation_fraction: 0.2
-  validation_splits: 3
+  validation_fraction: 0.35
+  validation_splits: 4
   entropy_coef: 0.01
   advantage_clip: 10.0
 
 # Reward-scoring constants; semantic changes to the reward implementation
 # bump ashare_model.reward.REWARD_VERSION and are recorded in artifacts.
-# v3 semantics: reward = rank-ICIR - cost_weight * (annualized turnover cost),
+# v4 semantics: reward = rank-ICIR - cost_weight * (annualized turnover cost),
 # clipped to [reward_clip_low, reward_clip_high]; validation reward is the
 # median over validation_splits sub-windows; bare single-factor formulas pay
-# complexity_penalty; artifacts are only saved when the best validation
-# reward reaches min_val_reward.
+# a small complexity_penalty (kept tiny so the validation floor stays
+# reachable); artifacts are saved only when BOTH the best validation reward
+# reaches min_val_reward AND the best formula's full-window rank-ICIR
+# reaches min_val_icir (signal-quality gate against low-IC, low-turnover
+# fundamental copies).
 reward:
   reward_clip_low: -1.0
   reward_clip_high: 1.0
   bad_reward: -2.0
   cost_weight: 1.0
-  complexity_penalty: 0.2
+  complexity_penalty: 0.02
   min_val_reward: 0.0
+  min_val_icir: 0.05
   ic_min_stocks: 10
 
 # Evaluation protocol: walk-forward folds anchored to absolute dates, multi
 # seed, IS/OOS metrics; adjudication is reward-independent (backtest-engine
 # metrics + rank IC) and corrected for candidate multiplicity (Deflated
-# Sharpe + max-t). frequency/horizon are record-only for now.
+# Sharpe + max-t).  Signals are traded in their learned direction.  A
+# uniform random-search baseline (protocol.random_samples formulas, one
+# best per fold) separates "the RL search is ineffective" from "the reward
+# is uninformative".  frequency/horizon are record-only for now.
 # batch_size must stay >= 256: below that the advantage normalization
 # (rewards.std) risks degenerating.
 protocol:
   frequency: daily
   horizon: 1
   seeds: [42, 7, 2024]
+  random_samples: 4096
+  random_seed: 1234
   baseline_signals: [REVERSAL_5, RSQ_60, ILLIQ_20, OVERNIGHT_RET, MOMENTUM_20, ROE, TURNOVER]
   folds:
     - {train_end: "2020-12-31", test_end: "2021-12-31"}
@@ -82,7 +91,7 @@ protocol:
     - {train_end: "2022-12-31", test_end: "2023-12-31"}
     - {train_end: "2023-12-31", test_end: "2024-12-31"}
     - {train_end: "2024-12-31", test_end: "2025-12-31"}
-  screening: {steps: 50, batch_size: 256}
+  screening: {steps: 150, batch_size: 256}
   confirmation: {steps: 200, batch_size: 512}
 
 backtest:

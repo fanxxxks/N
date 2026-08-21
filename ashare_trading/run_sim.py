@@ -37,7 +37,8 @@ from ashare_data.config import (
 from ashare_data.schemas import SimOrder
 
 from ashare_model.backtest import AshareBacktestEngine
-from ashare_model.data_loader import AshareDataLoader
+from ashare_model.data_loader import AshareDataLoader, date_index
+from ashare_model.reward import signal_direction
 from ashare_model.vm import StackVM, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
 
@@ -99,6 +100,8 @@ class SimulationRunner:
         self.vm = StackVM(FORMULA_VOCAB)
         self.formula_tokens: list[int] | None = None
         self.formula_text = ""
+        self.direction = 1
+        self._has_recorded_direction = False
 
     def load_formula(self) -> None:
         path = self.data_config.data_dir / "best_ashare_strategy.json"
@@ -107,6 +110,11 @@ class SimulationRunner:
         payload = json.loads(path.read_text(encoding="utf-8"))
         self.formula_tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
         self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
+        # The trainer records the trade direction it learned on its
+        # validation tail; legacy artifacts without it fall back to an
+        # inference on the training window in run().
+        self.direction = int(payload.get("direction", 1))
+        self._has_recorded_direction = "direction" in payload
         logger.success(f"Loaded formula: {self.formula_text}")
 
     def run(
@@ -131,6 +139,21 @@ class SimulationRunner:
         if factors is None:
             raise ValueError("Formula is invalid")
         signals = factors.detach().cpu().numpy()
+        if not self._has_recorded_direction:
+            # Legacy artifact: infer the direction from the training window
+            # so a negative-IC formula is traded on its learned side.
+            train_idx = date_index(
+                self.loader.dates,
+                self.backtest_config.train_end_date.replace("-", ""),
+            )
+            self.direction = signal_direction(
+                signals[:, :train_idx],
+                self.loader.target_ret[:, :train_idx].numpy(),
+            )
+            logger.info(f"Inferred trade direction from training window: {self.direction}")
+        else:
+            logger.info(f"Trade direction from artifact: {self.direction}")
+        signals = float(self.direction) * signals
         raw = {k: v.numpy() for k, v in self.loader.raw_data_cache.items()}
         dates = self.loader.dates
         ts_codes = self.loader.ts_codes

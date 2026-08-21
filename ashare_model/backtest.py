@@ -297,7 +297,8 @@ def main() -> None:
         make_data_config,
         make_model_config,
     )
-    from .data_loader import AshareDataLoader
+    from .data_loader import AshareDataLoader, date_index
+    from .reward import signal_direction
     from .vm import StackVM, formula_decode
     from .vocab import FORMULA_VOCAB, resolve_formula_tokens
 
@@ -331,9 +332,24 @@ def main() -> None:
         if factors is None:
             raise SystemExit("Formula is invalid")
 
+        # Trade direction: prefer the direction recorded by the trainer
+        # (decided on its validation tail); legacy artifacts without it
+        # infer the direction from the training window's forward rank IC so
+        # a negative-IC formula is never mechanically traded backwards.
+        direction = int(payload.get("direction", 1))
+        if "direction" not in payload:
+            train_idx = date_index(
+                loader.dates, backtest_config.train_end_date.replace("-", "")
+            )
+            direction = signal_direction(
+                factors[:, :train_idx].detach().cpu().numpy(),
+                loader.target_ret[:, :train_idx].numpy(),
+            )
+        signal_np = float(direction) * factors.detach().cpu().numpy()
+
         engine = AshareBacktestEngine(backtest_config)
         result = engine.run(
-            factors.detach().cpu().numpy(),
+            signal_np,
             {k: v.numpy() for k, v in loader.raw_data_cache.items()},
             loader.ts_codes,
             loader.dates,
@@ -342,6 +358,7 @@ def main() -> None:
         output = {
             "formula": tokens,
             "formula_text": formula_decode(tokens, FORMULA_VOCAB),
+            "direction": direction,
             "metrics": result.metrics,
             "dates": result.dates,
             "equity_curve": result.equity_curve,
