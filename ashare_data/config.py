@@ -66,16 +66,24 @@ class ModelConfig:
     train_steps: int = 1000
     max_formula_len: int = 12
     learning_rate: float = 1e-3
-    validation_fraction: float = 0.2
+    # Tail of the training window held out for out-of-sample best-formula
+    # selection (0.35: longer than the v3 default so each sub-window holds
+    # enough cross-sections for a stable rank-ICIR).
+    validation_fraction: float = 0.35
     value_loss_weight: float = 0.5
     # Number of independent sub-windows the validation tail is split into;
     # best-formula selection uses the median reward across them.
-    validation_splits: int = 3
+    validation_splits: int = 4
     # Exploration bonus: policy loss subtracts entropy_coef * mean(entropy).
     entropy_coef: float = 0.01
     # Advantage normalization is clipped to [-advantage_clip, advantage_clip]
     # so a degenerate reward spread cannot explode the policy gradient.
     advantage_clip: float = 10.0
+    # Policy-collapse monitoring: a warning fires after this many consecutive
+    # steps whose unique-formula fraction falls below ``collapse_warn_fraction``
+    # (mode collapse shows up as the batch re-sampling the same formulas).
+    collapse_warn_fraction: float = 0.95
+    collapse_warn_steps: int = 10
     feature_names: list[str] | None = None
 
 
@@ -85,7 +93,8 @@ class RewardConfig:
 
     Semantic changes to the reward implementation bump
     ``ashare_model.reward.REWARD_VERSION``; these values only tune the
-    current version (v3: rank-ICIR minus a continuous turnover cost).
+    current version (v4: rank-ICIR minus a continuous turnover cost, with
+    the ICIR exposed to the trainer's signal-quality gate).
     """
 
     reward_clip_low: float = -1.0
@@ -93,14 +102,25 @@ class RewardConfig:
     # Assigned by the trainer to invalid/constant formulas only; it sits
     # below ``reward_clip_low`` so unusable formulas stay distinguishable.
     bad_reward: float = -2.0
-    # Multiplier on the proportional turnover-cost drag (1.0 = honest cost).
+    # Multiplier on the proportional turnover-cost drag (1.0 = honest cost;
+    # the 20260820 screening showed the v3 ordering of baselines by this
+    # reward reproduces their out-of-sample Sharpe ordering).
     cost_weight: float = 1.0
     # Subtracted from the reward of formulas without any operator (bare
-    # single-factor copies), pushing the policy towards combinations.
-    complexity_penalty: float = 0.2
-    # Validation-quality floor: training saves no artifact unless the best
-    # validation reward reaches it (0.0 = at least zero net signal).
+    # single-factor copies), nudging the policy towards combinations.  Kept
+    # small: the v3 value (0.2) pushed every admissible signal below the
+    # validation floor and made the floor unreachable in practice.
+    complexity_penalty: float = 0.02
+    # Cost-adjusted validation floor: training saves no artifact unless the
+    # best validation reward reaches it (0.0 = at least zero net signal).
     min_val_reward: float = 0.0
+    # Signal-quality gate: the best formula's full-window rank-ICIR must
+    # reach this value before anything is saved.  Guards against low-IC
+    # low-turnover formulas (e.g. quarterly fundamental copies) that pass
+    # the cost-adjusted floor on turnover alone.  Grounded in the factor
+    # diagnostics: the useful families score ICIR >= 0.11 while the dead
+    # ones sit below 0.03.
+    min_val_icir: float = 0.05
     # Minimum finite cross-section per date for a rank-IC observation.
     ic_min_stocks: int = 10
 
@@ -122,7 +142,7 @@ class FoldConfig:
 class TierConfig:
     """Search budget of one protocol tier (steps x samples-per-step)."""
 
-    steps: int = 50
+    steps: int = 150
     batch_size: int = 256
 
 
@@ -168,6 +188,12 @@ class ProtocolConfig:
     confirmation: TierConfig = field(
         default_factory=lambda: TierConfig(steps=200, batch_size=512)
     )
+    # Random-search baseline: uniformly sampled structurally-valid formulas,
+    # scored with the same reward path, one best per fold.  Separates
+    # "the RL search is ineffective" from "the reward is uninformative".
+    # 0 disables the baseline.
+    random_samples: int = 4096
+    random_seed: int = 1234
 
 
 def validate_folds(folds: list[FoldConfig]) -> list[FoldConfig]:
@@ -391,11 +417,17 @@ def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
         ],
         screening=_make_tier(proto_raw.get("screening"), defaults.screening),
         confirmation=_make_tier(proto_raw.get("confirmation"), defaults.confirmation),
+        random_samples=int(
+            proto_raw.get("random_samples", defaults.random_samples)
+        ),
+        random_seed=int(proto_raw.get("random_seed", defaults.random_seed)),
     )
     if not cfg.seeds:
         raise ValueError("protocol.seeds must not be empty")
     if cfg.horizon < 1:
         raise ValueError("protocol.horizon must be a positive integer")
+    if cfg.random_samples < 0:
+        raise ValueError("protocol.random_samples must be >= 0")
     return cfg
 
 

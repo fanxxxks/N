@@ -178,3 +178,37 @@ def test_simulation_runner_reset_allows_clean_replay(tmp_path: Path):
     assert len(history_dates) == len(dates) - 1
     assert len(history_dates) == len(set(history_dates))
     assert runner.portfolio.last_exec_date == dates[-1]
+
+
+def test_simulation_runner_honors_artifact_direction(tmp_path: Path):
+    runner, _ = _make_runner(tmp_path, n_dates=12)
+    # Record a negative direction in the strategy artifact: the runner must
+    # use it verbatim instead of inferring from the training window.
+    path = runner.data_config.data_dir / "best_ashare_strategy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "formula": [1],
+                "formula_text": "RET_1",
+                "direction": -1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner.load_formula()
+    assert runner.direction == -1
+    assert runner._has_recorded_direction
+    runner.run()
+    # A direction of -1 flips the signal: the equity path must differ from
+    # the +1 replay of the same formula (fresh state each side).
+    flipped_equity = [
+        h["equity"] for h in runner.portfolio.equity_history
+    ]
+    runner.portfolio.reset()
+    runner.direction = 1
+    runner._has_recorded_direction = True
+    runner.run()
+    replay_equity = [
+        h["equity"] for h in runner.portfolio.equity_history
+    ]
+    assert flipped_equity != replay_equity

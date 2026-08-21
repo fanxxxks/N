@@ -14,6 +14,15 @@ Contract:
   shared rank-IC code path.  ``val_reward`` is archived for provenance only
   and never used to rank candidates, so results remain comparable across
   ``ashare_model.reward.REWARD_VERSION`` generations.
+* Signals are traded in their **learned direction**: a negative-IC signal is
+  flipped (direction decided on the training window for baselines, on the
+  validation tail for trained formulas) before the long-only top-n engine
+  consumes it, so negative-IC factors are never mechanically traded
+  backwards.
+* A **random-search baseline** (uniform sampling over structurally valid
+  formulas, scored with the same reward path) joins every fold: it
+  separates "the RL search is ineffective" from "the reward is
+  uninformative".
 * Candidate multiplicity is corrected with Deflated Sharpe and a
   studentized max-t block bootstrap (single trial matrix for both).
 
@@ -35,6 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import torch
 from loguru import logger
 
 from ashare_data.config import (
@@ -59,12 +69,20 @@ from ashare_logging import export_log_txt, setup_run_logging
 from .backtest import AshareBacktestEngine
 from .data_loader import AshareDataLoader, date_index
 from .diagnostics import rank_ic_stats
-from .reward import REWARD_VERSION
-from .train import AshareTrainer
-from .vm import StackVM
+from .reward import (
+    REWARD_VERSION,
+    batched_basket_rewards,
+    signal_direction,
+)
+from .train import (
+    AshareTrainer,
+    sample_random_formulas,
+    validation_windows,
+)
+from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "3"
+PROTOCOL_VERSION = "4"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -225,9 +243,12 @@ def evaluate_formula(
     fold: Fold,
     bt_cfg: BacktestConfig,
     vm: StackVM | None = None,
+    direction: int = 1,
 ) -> dict | None:
     """Execute a formula on the full factor history, slice the test window,
-    and score it.  Returns ``None`` for an invalid formula."""
+    and score it in its learned trade direction (``direction`` flips the
+    signal; the direction is decided on data strictly before the test
+    window by the callers).  Returns ``None`` for an invalid formula."""
 
     vm = vm or StackVM(FORMULA_VOCAB)
     signal = vm.execute(list(tokens), loader.factor_tensor)
@@ -236,7 +257,7 @@ def evaluate_formula(
     sliced = signal.detach().cpu().numpy()[
         :, fold.train_end_idx : fold.test_end_idx
     ]
-    return evaluate_signal(sliced, loader, fold, bt_cfg)
+    return evaluate_signal(float(direction) * sliced, loader, fold, bt_cfg)
 
 
 def benchmark_row(
@@ -287,13 +308,24 @@ def baseline_candidates(
     fold: Fold,
     bt_cfg: BacktestConfig,
 ) -> list[dict]:
-    """Single-factor baseline rows: the factor row itself as the signal."""
+    """Single-factor baseline rows: the factor row itself as the signal,
+    traded in its training-window direction (a negative-IC factor is
+    flipped, so the OOS row measures the signal, not a mechanical
+    long-the-top backtest of the wrong side)."""
 
     validate_baseline_signals(proto_cfg.baseline_signals, FEATURE_NAMES)
     factors, _, _, _ = epoch_slice(loader, fold)
+    train_factors = loader.factor_tensor[:, :, : fold.train_end_idx].numpy()
+    train_target = loader.target_ret[:, : fold.train_end_idx].numpy()
     rows: list[dict] = []
     for name in proto_cfg.baseline_signals:
-        metrics = evaluate_signal(factors[FEATURE_NAMES.index(name)], loader, fold, bt_cfg)
+        idx = FEATURE_NAMES.index(name)
+        direction = signal_direction(
+            train_factors[idx], train_target, min_stocks=10
+        )
+        metrics = evaluate_signal(
+            float(direction) * factors[idx], loader, fold, bt_cfg
+        )
         rows.append(
             {
                 "candidate": f"baseline:{name}",
@@ -304,6 +336,7 @@ def baseline_candidates(
                 "seed": None,
                 "val_reward": None,
                 "final_avg_reward": None,
+                "direction": direction,
                 "failed": False,
                 **metrics,
             }
@@ -363,7 +396,13 @@ def run_fold(
     }
     if tokens is None:
         return {**base, "failed": True, "reason": "no valid formula found"}
-    metrics = evaluate_formula(tokens, loader, fold, backtest_config)
+    # The trainer decides the trade direction on its validation tail
+    # (strictly before the test window), so a negative-IC formula is
+    # evaluated flipped, matching how it would actually be deployed.
+    direction = int(getattr(trainer, "best_direction", 1))
+    metrics = evaluate_formula(
+        tokens, loader, fold, backtest_config, direction=direction
+    )
     if metrics is None:
         return {**base, "failed": True, "reason": "formula invalid at eval time"}
     return {
@@ -372,9 +411,117 @@ def run_fold(
         "formula_text": trainer.best_formula,
         "formula": list(tokens),
         "val_reward": float(trainer.best_reward),
+        "direction": direction,
         "final_avg_reward": (
             float(trainer.history[-1]["avg_reward"]) if trainer.history else None
         ),
+        **metrics,
+    }
+
+
+# Random-search formulas are scored in chunks so the float64 signal stack
+# stays memory-bounded (16 x [stocks, dates] x 8 bytes).
+_RANDOM_SEARCH_CHUNK = 16
+
+
+def run_random_search(
+    loader: AshareDataLoader,
+    model_config: ModelConfig,
+    backtest_config: BacktestConfig,
+    reward_config: RewardConfig | None,
+    fold: Fold,
+    n_samples: int,
+    seed: int,
+) -> dict:
+    """Uniform random-search baseline over structurally valid formulas.
+
+    Samples ``n_samples`` formulas with the same legality rules the policy
+    samples under, scores each on the training window with the shared
+    reward path (validation reward = median over the same sub-windows the
+    trainer uses), keeps the best by validation reward and evaluates it
+    out-of-sample in its learned direction.  The row is shaped exactly like
+    a trained row so aggregates and the DS/max-t corrections treat both
+    searches identically.
+    """
+
+    base = {
+        "candidate": "random_search",
+        "fold_train_end": fold.train_end,
+        "fold_test_end": fold.test_end,
+        "seed": seed,
+        "n_samples": int(n_samples),
+    }
+    reward_cfg = reward_config or RewardConfig()
+    train_end = fold.train_end_idx
+    if train_end <= 2 or n_samples <= 0:
+        return {**base, "failed": True, "reason": "degenerate window or budget"}
+
+    vocab = FORMULA_VOCAB
+    vm = StackVM(vocab)
+    # The VM runs on the compute device exactly like the trainer's loop
+    # (CUDA when available); only the sliced windows cross back to numpy
+    # for the reward path.  Device float32 arithmetic may differ by ~1e-7,
+    # the same documented caveat as the trainer.
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    factors = loader.factor_tensor.to(device)
+    target = loader.target_ret[:, :train_end].numpy()
+    val_windows = validation_windows(train_end, model_config)
+
+    formulas = sample_random_formulas(
+        seed, vocab, model_config.max_formula_len, n_samples
+    )
+    best_key: tuple[int, ...] | None = None
+    best_val: float = -float("inf")
+    seen: set[tuple[int, ...]] = set()
+    for start in range(0, len(formulas), _RANDOM_SEARCH_CHUNK):
+        keys: list[tuple[int, ...]] = []
+        signals: list[np.ndarray] = []
+        for key in formulas[start : start + _RANDOM_SEARCH_CHUNK]:
+            if key in seen:
+                continue
+            seen.add(key)
+            signal = vm.execute(list(key), factors)
+            if signal is None:
+                continue
+            sliced = signal.detach().cpu().numpy()[:, :train_end]
+            if np.nanstd(sliced) < 1e-4:
+                continue
+            keys.append(key)
+            signals.append(sliced)
+        if not signals:
+            continue
+        _, val_rewards, _, _ = batched_basket_rewards(
+            np.stack(signals), target, backtest_config, reward_cfg, val_windows
+        )
+        for key, val_reward in zip(keys, val_rewards):
+            if float(val_reward) > best_val:
+                best_val = float(val_reward)
+                best_key = key
+
+    if best_key is None:
+        return {**base, "failed": True, "reason": "no valid formula found"}
+
+    signal = vm.execute(list(best_key), factors)
+    if signal is None:
+        return {**base, "failed": True, "reason": "formula invalid at eval time"}
+    full = signal.detach().cpu().numpy()
+    direction = signal_direction(
+        full[:, :train_end], target, reward_cfg.ic_min_stocks
+    )
+    metrics = evaluate_signal(
+        float(direction) * full[:, train_end : fold.test_end_idx],
+        loader,
+        fold,
+        backtest_config,
+    )
+    return {
+        **base,
+        "failed": False,
+        "formula_text": formula_decode(list(best_key), vocab),
+        "formula": list(best_key),
+        "val_reward": best_val,
+        "final_avg_reward": None,
+        "direction": direction,
         **metrics,
     }
 
@@ -739,6 +886,8 @@ def build_result(
             "steps": tier.steps,
             "batch_size": tier.batch_size,
             "seeds": list(proto_cfg.seeds),
+            "random_samples": proto_cfg.random_samples,
+            "random_seed": proto_cfg.random_seed,
             "folds": [
                 {"train_end": f.train_end, "test_end": f.test_end}
                 for f in proto_cfg.folds
@@ -793,6 +942,23 @@ def run_protocol(
     for fold in folds:
         rows.append(benchmark_row(loader, fold))
         rows.extend(baseline_candidates(loader, proto_cfg, fold, backtest_config))
+        if proto_cfg.random_samples > 0:
+            logger.info(
+                f"fold {fold.train_end} -> {fold.test_end} random-search "
+                f"baseline samples={proto_cfg.random_samples} "
+                f"seed={proto_cfg.random_seed}"
+            )
+            rows.append(
+                run_random_search(
+                    loader,
+                    model_config,
+                    backtest_config,
+                    reward_config,
+                    fold,
+                    proto_cfg.random_samples,
+                    proto_cfg.random_seed,
+                )
+            )
         for seed in seeds:
             logger.info(
                 f"fold {fold.train_end} -> {fold.test_end} seed={seed} "
@@ -865,6 +1031,11 @@ def main(argv=None) -> int:
         "rows join the DS/max-t multiplicity correction",
     )
     parser.add_argument(
+        "--no-random-search",
+        action="store_true",
+        help="skip the random-search baseline (protocol.random_samples=0)",
+    )
+    parser.add_argument(
         "--max-t-perms", type=int, default=5000, help="max-t permutation count"
     )
     args = parser.parse_args(argv)
@@ -877,6 +1048,8 @@ def main(argv=None) -> int:
         backtest_config = make_backtest_config(raw)
         reward_config = make_reward_config(raw)
         proto_cfg = make_protocol_config(raw)
+        if args.no_random_search:
+            proto_cfg.random_samples = 0
 
         loader = AshareDataLoader(data_config, model_config)
         loader.load_data()

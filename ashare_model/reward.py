@@ -15,6 +15,18 @@ never be compared silently.
 
 Version history
 ---------------
+* v4: the scoring quantity is unchanged (rank-ICIR minus the continuous
+  turnover cost), but the batched path now also returns the raw full-window
+  ICIR and the median validation-window ICIR so the trainer can gate
+  artifact saving on signal quality (``min_val_icir``), not only on the
+  cost-adjusted reward.  The cost model keeps v3 semantics: in the
+  20260820 screening the v3 reward's ordering of the single-factor
+  baselines (ILLIQ_20 > RSQ_60 > ROE ~ TURNOVER ~ MOMENTUM_20 >
+  REVERSAL_5) reproduced their out-of-sample Sharpe ordering, so the
+  cost_weight=1.0 calibration is empirically anchored and locked by tests.
+  ``signal_direction`` is added: the learned trade direction of a signal
+  (+1/-1) from its forward rank-IC mean, so negative-IC signals are not
+  mechanically traded backwards by the top-n long-only engine.
 * v3: the reward is a **rank-ICIR minus a continuous turnover cost**.  The
   daily cross-sectional rank IC of the signal versus the forward target is
   summarized as an IC information ratio; turnover cost is charged
@@ -37,7 +49,7 @@ import numpy as np
 
 from ashare_data.config import BacktestConfig, RewardConfig
 
-REWARD_VERSION = "3"
+REWARD_VERSION = "4"
 
 _ANNUALIZATION = 252
 
@@ -313,7 +325,7 @@ def formula_reward(
     bt_cfg: BacktestConfig,
     reward_cfg: RewardConfig,
 ) -> float:
-    """Scalar v3 reward of one signal: clipped ICIR minus turnover cost.
+    """Scalar v4 reward of one signal: clipped ICIR minus turnover cost.
 
     Reference path for the batched implementation: the IC is computed over
     the full window and the cost drag over the simulated basket's average
@@ -338,45 +350,75 @@ def batched_basket_rewards(
     bt_cfg: BacktestConfig,
     reward_cfg: RewardConfig,
     val_windows: list[tuple[int, int]] | None = None,
-) -> tuple[np.ndarray, np.ndarray | None]:
-    """v3 rewards for a batch of signals: ICIR minus turnover cost.
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray | None]:
+    """v4 rewards for a batch of signals: ICIR minus turnover cost, with the
+    raw ICIR values exposed for the trainer's signal-quality gate.
 
     ``signals`` is ``[B, stocks, dates]``.  Returns
-    ``(rewards [B], val_rewards [B] | None)``: the full-window reward is
-    clipped ICIR minus the proportional turnover-cost drag; with
-    ``val_windows`` (column index pairs, half-open) the validation reward
-    is the **median** over the windows of the same quantity computed on
-    each window independently (each window's basket restarts from zero
-    weights, mirroring a fresh out-of-sample deployment).  Without
-    ``val_windows`` the second result is ``None``.
+    ``(rewards [B], val_rewards [B] | None, icir [B], val_icir [B] | None)``:
+    the full-window reward is clipped ICIR minus the proportional
+    turnover-cost drag; with ``val_windows`` (column index pairs, half-open)
+    the validation reward is the **median** over the windows of the same
+    quantity computed on each window independently (each window's basket
+    restarts from zero weights, mirroring a fresh out-of-sample deployment),
+    and ``val_icir`` is the median window ICIR.  Without ``val_windows``
+    the second and fourth results are ``None``.
     """
 
     signals = np.asarray(signals, dtype=np.float64)
     target_ret = np.asarray(target_ret, dtype=np.float64)
-    ic = icir_from_series(
+    icir = icir_from_series(
         rank_ic_series(signals, target_ret, reward_cfg.ic_min_stocks)
     )
     _, avg_to = simulate_basket_daily_returns_batch(signals, target_ret, bt_cfg)
-    raw = ic - reward_cfg.cost_weight * annualized_turnover_cost(avg_to, bt_cfg)
+    raw = icir - reward_cfg.cost_weight * annualized_turnover_cost(avg_to, bt_cfg)
     rewards = np.clip(raw, reward_cfg.reward_clip_low, reward_cfg.reward_clip_high)
 
     val_rewards: np.ndarray | None = None
+    val_icir: np.ndarray | None = None
     if val_windows:
         per_window = []
+        per_window_icir = []
         for start, end in val_windows:
             win_signals = signals[:, :, start:end]
             win_target = target_ret[:, start:end]
-            win_ic = icir_from_series(
+            win_icir = icir_from_series(
                 rank_ic_series(win_signals, win_target, reward_cfg.ic_min_stocks)
             )
             _, win_to = simulate_basket_daily_returns_batch(
                 win_signals, win_target, bt_cfg
             )
-            win_raw = win_ic - reward_cfg.cost_weight * annualized_turnover_cost(
+            win_raw = win_icir - reward_cfg.cost_weight * annualized_turnover_cost(
                 win_to, bt_cfg
             )
             per_window.append(
                 np.clip(win_raw, reward_cfg.reward_clip_low, reward_cfg.reward_clip_high)
             )
+            per_window_icir.append(win_icir)
         val_rewards = np.median(np.stack(per_window, axis=1), axis=1)
-    return rewards, val_rewards
+        val_icir = np.median(np.stack(per_window_icir, axis=1), axis=1)
+    return rewards, val_rewards, icir, val_icir
+
+
+def signal_direction(
+    signal: np.ndarray,
+    target_ret: np.ndarray,
+    min_stocks: int = 10,
+) -> int:
+    """Learned trade direction of one signal: +1 or -1.
+
+    The direction is the sign of the mean forward rank IC (a negative-IC
+    signal is traded by flipping it, so the top-n long-only engine never
+    mechanically buys the wrong side).  Without enough finite IC
+    observations the direction defaults to +1 (neutral).
+    """
+
+    ic = rank_ic_series(
+        np.asarray(signal, dtype=np.float64)[None],
+        np.asarray(target_ret, dtype=np.float64),
+        min_stocks,
+    )[0]
+    finite = ic[np.isfinite(ic)]
+    if finite.size == 0:
+        return 1
+    return 1 if float(finite.mean()) >= 0.0 else -1
