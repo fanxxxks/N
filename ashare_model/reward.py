@@ -15,6 +15,17 @@ never be compared silently.
 
 Version history
 ---------------
+* v5: two alignments to the backtest engine's deployment semantics.
+  (a) The VM now returns every formula signal cross-sectionally z-scored
+  per date (terminal standardization), so stacked arithmetic no longer
+  drifts the scale that GATE/JUMP thresholds compare against; the rank-IC
+  term and the top-n selection are monotone-invariant, so the change is a
+  semantic-stability one.  (b) The basket simulation consumes the engine's
+  tradability masks: buy-blocked stocks (suspended / one-word limit-up
+  opens) can no longer be selected, and sell-blocked positions (suspended /
+  one-word limit-down opens) are force-held and the remaining weights
+  renormalized, exactly like the backtest engine, so the training reward
+  can no longer buy stocks the engine could not have bought.
 * v4: the scoring quantity is unchanged (rank-ICIR minus the continuous
   turnover cost), but the batched path now also returns the raw full-window
   ICIR and the median validation-window ICIR so the trainer can gate
@@ -49,7 +60,7 @@ import numpy as np
 
 from ashare_data.config import BacktestConfig, RewardConfig
 
-REWARD_VERSION = "4"
+REWARD_VERSION = "5"
 
 _ANNUALIZATION = 252
 
@@ -236,6 +247,8 @@ def simulate_basket_daily_returns(
     signal: np.ndarray,
     target_ret: np.ndarray,
     cfg: BacktestConfig,
+    blocked_buy: np.ndarray | None = None,
+    blocked_sell: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float]:
     """Daily net returns of the long-only top-n basket, plus its average
     turnover.
@@ -244,13 +257,17 @@ def simulate_basket_daily_returns(
     weight ``min(1/top_n, single_weight_cap)``, renormalized) and charges
     the same trading-cost model.  Non-finite target cells contribute a zero
     return; days with fewer than ``top_n`` finite signals contribute a zero
-    return and keep the previous basket.
+    return and keep the previous basket.  ``blocked_buy`` / ``blocked_sell``
+    carry the engine's tradability masks (``[stock, date]`` bool); see
+    :func:`simulate_basket_daily_returns_batch` for their semantics.
     """
 
     daily_full, avg_to_full = simulate_basket_daily_returns_batch(
         np.asarray(signal, dtype=np.float64)[None],
         np.asarray(target_ret, dtype=np.float64),
         cfg,
+        blocked_buy=blocked_buy,
+        blocked_sell=blocked_sell,
     )
     return daily_full[0], float(avg_to_full[0])
 
@@ -259,6 +276,8 @@ def simulate_basket_daily_returns_batch(
     signals: np.ndarray,
     target_ret: np.ndarray,
     cfg: BacktestConfig,
+    blocked_buy: np.ndarray | None = None,
+    blocked_sell: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Batched basket simulation: one pass over dates, ``B`` formulas at once.
 
@@ -271,6 +290,18 @@ def simulate_basket_daily_returns_batch(
     model.  The RL reward only consumes the average turnover (for the
     continuous cost drag); the daily series stays available for diagnostics
     and tests.
+
+    ``blocked_buy`` / ``blocked_sell`` (``[stocks, dates]`` bool, both
+    optional) align the simulation with the backtest engine's execution
+    rules: buy-blocked stocks (suspended or opening at a one-word limit-up)
+    are excluded from the top-n selection, and sell-blocked positions
+    (suspended or opening at a one-word limit-down) are force-held with the
+    remaining weights renormalized, so the reward can never credit a trade
+    the engine could not have made.  Selection at signal day ``t`` executes
+    at the ``t+1`` open, so the masks are consumed at column ``t+1`` —
+    the same execution-day alignment as the engine.  Without the masks the
+    simulation keeps the unconstrained semantics (rewards stay comparable
+    across ``REWARD_VERSION`` for callers that never had masks).
     """
 
     signals = np.asarray(signals, dtype=np.float64)
@@ -280,6 +311,21 @@ def simulate_basket_daily_returns_batch(
     avg_to_full = np.zeros(b)
     if n_dates < 2 or n_stocks == 0:
         return daily_full, avg_to_full
+
+    if blocked_buy is not None:
+        blocked_buy = np.asarray(blocked_buy, dtype=bool)
+        if blocked_buy.shape != (n_stocks, n_dates):
+            raise ValueError(
+                f"blocked_buy shape {blocked_buy.shape} does not match "
+                f"({n_stocks}, {n_dates})"
+            )
+    if blocked_sell is not None:
+        blocked_sell = np.asarray(blocked_sell, dtype=bool)
+        if blocked_sell.shape != (n_stocks, n_dates):
+            raise ValueError(
+                f"blocked_sell shape {blocked_sell.shape} does not match "
+                f"({n_stocks}, {n_dates})"
+            )
 
     top_n = min(int(cfg.top_n), n_stocks)
     if top_n <= 0:
@@ -293,8 +339,14 @@ def simulate_basket_daily_returns_batch(
     target_clean = np.where(np.isfinite(target_ret), target_ret, 0.0)
 
     for t in range(n_dates - 1):
+        # Selection uses the signal column t but executes at the t+1 open
+        # (the target return is open[t+1] -> open[t+2]); the tradability
+        # masks therefore use the t+1 columns, exactly like the engine.
+        exec_col = t + 1
         column = signals[:, :, t]  # [B, stocks]
         finite = np.isfinite(column)
+        if blocked_buy is not None:
+            finite &= ~blocked_buy[None, :, exec_col]
         day_ok = finite.sum(axis=1) >= top_n
         fill = np.where(finite, column, -np.inf)
         top_idx = np.argpartition(fill, kth=-top_n, axis=1)[:, -top_n:]  # [B, top_n]
@@ -304,6 +356,16 @@ def simulate_basket_daily_returns_batch(
         fresh = np.where(totals > 0, fresh / totals, 0.0)
 
         target = np.where(day_ok[:, None], fresh, prev)
+        if blocked_sell is not None:
+            # A position that must be reduced but cannot be sold at the
+            # execution open (suspended or one-word limit-down) is held:
+            # the remaining weights renormalize so cash stays consistent,
+            # exactly like the engine.
+            hold = blocked_sell[None, :, exec_col] & (target < prev)
+            target = np.where(hold, prev, target)
+        totals = target.sum(axis=1, keepdims=True)
+        target = np.where(totals > 0, target / np.maximum(totals, 1e-12), 0.0)
+
         buy = np.maximum(target - prev, 0.0)
         sell = np.maximum(prev - target, 0.0)
         cost = _trading_cost_columns(buy, sell, cfg)
@@ -324,12 +386,15 @@ def formula_reward(
     target_ret: np.ndarray,
     bt_cfg: BacktestConfig,
     reward_cfg: RewardConfig,
+    blocked_buy: np.ndarray | None = None,
+    blocked_sell: np.ndarray | None = None,
 ) -> float:
-    """Scalar v4 reward of one signal: clipped ICIR minus turnover cost.
+    """Scalar v5 reward of one signal: clipped ICIR minus turnover cost.
 
     Reference path for the batched implementation: the IC is computed over
     the full window and the cost drag over the simulated basket's average
-    daily turnover.
+    daily turnover.  ``blocked_buy`` / ``blocked_sell`` are the engine's
+    tradability masks (see :func:`simulate_basket_daily_returns_batch`).
     """
 
     ic = icir_from_series(
@@ -339,7 +404,9 @@ def formula_reward(
             reward_cfg.ic_min_stocks,
         )
     )[0]
-    _, avg_to = simulate_basket_daily_returns(signal, target_ret, bt_cfg)
+    _, avg_to = simulate_basket_daily_returns(
+        signal, target_ret, bt_cfg, blocked_buy, blocked_sell
+    )
     raw = ic - reward_cfg.cost_weight * annualized_turnover_cost(avg_to, bt_cfg)
     return float(np.clip(raw, reward_cfg.reward_clip_low, reward_cfg.reward_clip_high))
 
@@ -350,8 +417,10 @@ def batched_basket_rewards(
     bt_cfg: BacktestConfig,
     reward_cfg: RewardConfig,
     val_windows: list[tuple[int, int]] | None = None,
+    blocked_buy: np.ndarray | None = None,
+    blocked_sell: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray | None]:
-    """v4 rewards for a batch of signals: ICIR minus turnover cost, with the
+    """v5 rewards for a batch of signals: ICIR minus turnover cost, with the
     raw ICIR values exposed for the trainer's signal-quality gate.
 
     ``signals`` is ``[B, stocks, dates]``.  Returns
@@ -362,7 +431,9 @@ def batched_basket_rewards(
     quantity computed on each window independently (each window's basket
     restarts from zero weights, mirroring a fresh out-of-sample deployment),
     and ``val_icir`` is the median window ICIR.  Without ``val_windows``
-    the second and fourth results are ``None``.
+    the second and fourth results are ``None``.  ``blocked_buy`` /
+    ``blocked_sell`` are ``[stocks, dates]`` tradability masks shared by all
+    rows (per window they are sliced exactly like the signals).
     """
 
     signals = np.asarray(signals, dtype=np.float64)
@@ -370,7 +441,9 @@ def batched_basket_rewards(
     icir = icir_from_series(
         rank_ic_series(signals, target_ret, reward_cfg.ic_min_stocks)
     )
-    _, avg_to = simulate_basket_daily_returns_batch(signals, target_ret, bt_cfg)
+    _, avg_to = simulate_basket_daily_returns_batch(
+        signals, target_ret, bt_cfg, blocked_buy, blocked_sell
+    )
     raw = icir - reward_cfg.cost_weight * annualized_turnover_cost(avg_to, bt_cfg)
     rewards = np.clip(raw, reward_cfg.reward_clip_low, reward_cfg.reward_clip_high)
 
@@ -382,11 +455,13 @@ def batched_basket_rewards(
         for start, end in val_windows:
             win_signals = signals[:, :, start:end]
             win_target = target_ret[:, start:end]
+            win_buy = blocked_buy[:, start:end] if blocked_buy is not None else None
+            win_sell = blocked_sell[:, start:end] if blocked_sell is not None else None
             win_icir = icir_from_series(
                 rank_ic_series(win_signals, win_target, reward_cfg.ic_min_stocks)
             )
             _, win_to = simulate_basket_daily_returns_batch(
-                win_signals, win_target, bt_cfg
+                win_signals, win_target, bt_cfg, win_buy, win_sell
             )
             win_raw = win_icir - reward_cfg.cost_weight * annualized_turnover_cost(
                 win_to, bt_cfg

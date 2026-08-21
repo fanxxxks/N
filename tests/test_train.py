@@ -189,7 +189,7 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
     monkeypatch.setattr(
         train_module,
         "batched_basket_rewards",
-        lambda signals, target, bt, rc, val_windows: (
+        lambda signals, target, bt, rc, val_windows, **kwargs: (
             np.full(signals.shape[0], 0.5),
             np.full(signals.shape[0], 0.4),
             np.full(signals.shape[0], 0.45),
@@ -686,9 +686,11 @@ def test_streamed_reward_chunks_match_single_pass(
         )
         monkeypatch.setattr(trainer.vm, "execute", fake_execute)
 
-        def counting(signals, target_ret, bt_cfg, reward_cfg, val_windows):
+        def counting(signals, target_ret, bt_cfg, reward_cfg, val_windows, **kwargs):
             calls.append(int(signals.shape[0]))
-            return real_batched(signals, target_ret, bt_cfg, reward_cfg, val_windows)
+            return real_batched(
+                signals, target_ret, bt_cfg, reward_cfg, val_windows, **kwargs
+            )
 
         monkeypatch.setattr(train_module, "batched_basket_rewards", counting)
         trainer.train(steps=1, batch_size=64, save_artifacts=False)
@@ -748,7 +750,7 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
     monkeypatch.setattr(
         train_module,
         "batched_basket_rewards",
-        lambda signals, target, bt, rc, val_windows: (
+        lambda signals, target, bt, rc, val_windows, **kwargs: (
             np.full(signals.shape[0], 0.8),
             np.full(signals.shape[0], 0.8),
             np.full(signals.shape[0], 0.01),
@@ -789,7 +791,7 @@ def test_icir_gate_passes_strong_signal(tmp_path, populated_db: DataConfig, monk
     monkeypatch.setattr(
         train_module,
         "batched_basket_rewards",
-        lambda signals, target, bt, rc, val_windows: (
+        lambda signals, target, bt, rc, val_windows, **kwargs: (
             np.full(signals.shape[0], 0.3),
             np.full(signals.shape[0], 0.3),
             np.full(signals.shape[0], 0.4),

@@ -17,6 +17,7 @@ from ashare_data.processor import (
     normalize_daily_bars,
     open_to_open_returns,
     pivot_wide,
+    tradability_blocked_matrix,
 )
 
 from .factors import compute_factor_tensor
@@ -189,6 +190,46 @@ class AshareDataLoader:
             open_to_open_returns(open_tensor.numpy()), dtype=torch.float32
         )
         return self
+
+    def tradability_masks(self) -> tuple[np.ndarray, np.ndarray]:
+        """``(blocked_buy, blocked_sell)`` ``[stock x date]`` bool matrices.
+
+        Built once from the raw OHLCV cache with the exact rule the backtest
+        engine applies per execution day (0-filled missing cells mark
+        suspension, one-word limit-up opens block buys, one-word limit-down
+        opens block sells).  The reward path consumes these masks so the
+        training basket can never trade what the engine could not have
+        traded; callers slice them to the same date window as the signals.
+        """
+
+        cached = getattr(self, "_tradability_cache", None)
+        if cached is not None:
+            return cached
+        if not self.raw_data_cache:
+            raise ValueError("tradability masks require loaded raw bars")
+        raw = self.raw_data_cache
+        blocked_buy = tradability_blocked_matrix(
+            raw["open"].numpy(),
+            raw["high"].numpy(),
+            raw["low"].numpy(),
+            raw["pre_close"].numpy(),
+            raw["volume"].numpy(),
+            self.ts_codes,
+            self.stock_names,
+            "buy",
+        )
+        blocked_sell = tradability_blocked_matrix(
+            raw["open"].numpy(),
+            raw["high"].numpy(),
+            raw["low"].numpy(),
+            raw["pre_close"].numpy(),
+            raw["volume"].numpy(),
+            self.ts_codes,
+            self.stock_names,
+            "sell",
+        )
+        self._tradability_cache = (blocked_buy, blocked_sell)
+        return self._tradability_cache
 
 
 def build_loader_from_config(

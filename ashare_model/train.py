@@ -259,6 +259,8 @@ class AshareTrainer:
         step_results: dict[
             tuple[int, ...], tuple[float, float | None, float, float | None]
         ],
+        blocked_buy: np.ndarray | None = None,
+        blocked_sell: np.ndarray | None = None,
     ) -> None:
         """Score one chunk of pending formulas and merge the outcomes."""
 
@@ -271,6 +273,8 @@ class AshareTrainer:
                 self.backtest_config,
                 self.reward_config,
                 val_windows,
+                blocked_buy=blocked_buy,
+                blocked_sell=blocked_sell,
             )
         )
         for (key, _), reward, val_reward, icir, val_icir in zip(
@@ -323,6 +327,12 @@ class AshareTrainer:
             vm_device
         )
         target_ret = self.loader.target_ret[:, :train_end_idx].numpy()
+        # Tradability masks (buy/sell blocked per stock and date) align the
+        # training basket with the backtest engine's execution rules; both
+        # matrices are shared by every formula scored this run.
+        blocked_buy, blocked_sell = self.loader.tradability_masks()
+        blocked_buy = blocked_buy[:, :train_end_idx]
+        blocked_sell = blocked_sell[:, :train_end_idx]
 
         # Hold out the tail of the training window for out-of-sample best
         # formula selection, split into independent sub-windows; the best
@@ -416,10 +426,17 @@ class AshareTrainer:
                 # machines for large batches before any chunk is scored.
                 if len(pending) >= reward_chunk:
                     self._score_pending_chunk(
-                        pending, target_ret, val_windows, step_results
+                        pending,
+                        target_ret,
+                        val_windows,
+                        step_results,
+                        blocked_buy,
+                        blocked_sell,
                     )
                     pending = []
-            self._score_pending_chunk(pending, target_ret, val_windows, step_results)
+            self._score_pending_chunk(
+                pending, target_ret, val_windows, step_results, blocked_buy, blocked_sell
+            )
 
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())

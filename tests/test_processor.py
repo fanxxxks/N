@@ -8,10 +8,13 @@ from ashare_data.config import DataConfig
 from ashare_data.processor import (
     filter_universe,
     is_valid_a_share_code,
+    limit_rate,
     long_factor_frame,
     normalize_daily_bars,
     open_to_open_returns,
     pivot_wide,
+    tradability_blocked,
+    tradability_blocked_matrix,
     winsorize_cross_section,
 )
 
@@ -179,3 +182,115 @@ def test_winsorize_constant_cross_section_maps_to_zero():
     out2 = winsorize_cross_section(event_like)
     assert np.isfinite(out2.to_numpy()).all()
     assert out2["d"].abs().max() <= 5.0
+
+
+# --- tradability masks (shared by the backtest engine and the reward path) ---
+
+
+def test_limit_rate_by_board_and_st():
+    assert limit_rate("000001.SZ", "平安银行") == 0.10
+    assert limit_rate("600000.SH", "") == 0.10
+    assert limit_rate("300001.SZ", "") == 0.20
+    assert limit_rate("688001.SH", "") == 0.20
+    assert limit_rate("000001.SZ", "ST 风险") == 0.05
+    assert limit_rate("000001.SZ", "st 星源") == 0.05
+
+
+def test_tradability_blocked_suspension_variants():
+    names = {"000001.SZ": "平安银行"}
+    ts_codes = ["000001.SZ"]
+    ones = np.ones((1, 1))
+    for col, value in (
+        ("open", 0.0),
+        ("volume", 0.0),
+        ("pre_close", 0.0),
+    ):
+        kwargs = dict(
+            open_col=ones.copy(),
+            high_col=ones.copy(),
+            low_col=ones.copy(),
+            pre_close_col=ones.copy(),
+            volume_col=ones.copy(),
+        )
+        kwargs[col + "_col"] = np.full((1, 1), value)
+        assert tradability_blocked(**kwargs, ts_codes=ts_codes, stock_names=names, side="buy")[0]
+        assert tradability_blocked(**kwargs, ts_codes=ts_codes, stock_names=names, side="sell")[0]
+
+
+def test_tradability_blocked_limit_moves_are_side_specific():
+    names = {"000001.SZ": "平安银行"}
+    ts_codes = ["000001.SZ"]
+
+    def blocked(open_, side, rate=0.10):
+        price = np.asarray([[open_]], dtype=np.float64)
+        return tradability_blocked(
+            price, price, price, np.full((1, 1), 1.0), np.ones((1, 1)),
+            ts_codes, names, side,
+        )[0]
+
+    # One-word +10% open: buy side blocked, sell side free.
+    assert blocked(1.10, "buy")
+    assert not blocked(1.10, "sell")
+    # One-word -10% open: sell side blocked, buy side free (buying at the
+    # limit-down board is legal).
+    assert blocked(0.90, "sell")
+    assert not blocked(0.90, "buy")
+    # Not one-word (high above the open): the limit-up is breakable -> free.
+    price = np.asarray([[1.10]], dtype=np.float64)
+    assert not tradability_blocked(
+        price, np.full((1, 1), 1.11), price, np.full((1, 1), 1.0),
+        np.ones((1, 1)), ts_codes, names, "buy",
+    )[0]
+
+
+def test_tradability_blocked_matrix_matches_per_day_columns():
+    rng = np.random.default_rng(31)
+    ts_codes = [f"{i:06d}.SZ" for i in range(1, 6)]
+    names = {c: "普通股票" for c in ts_codes}
+    open_ = np.abs(rng.normal(10.0, 0.5, (5, 8)))
+    pre_close = np.roll(open_, 1, axis=1)
+    pre_close[:, 0] = open_[:, 0]
+    high = open_ * 1.03
+    low = open_ * 0.97
+    volume = np.abs(rng.normal(1e6, 1e5, (5, 8)))
+    # A forced suspension and two one-word limit opens.
+    open_[0, 3] = 0.0
+    open_[1, 4] = pre_close[1, 4] * 1.10
+    high[1, 4] = low[1, 4] = open_[1, 4]
+    open_[2, 5] = pre_close[2, 5] * 0.90
+    high[2, 5] = low[2, 5] = open_[2, 5]
+
+    for side in ("buy", "sell"):
+        matrix = tradability_blocked_matrix(
+            open_, high, low, pre_close, volume, ts_codes, names, side
+        )
+        for day in range(8):
+            per_day = tradability_blocked(
+                open_[:, day], high[:, day], low[:, day],
+                pre_close[:, day], volume[:, day], ts_codes, names, side,
+            )
+            assert (matrix[:, day] == per_day).all()
+    buy = tradability_blocked_matrix(open_, high, low, pre_close, volume, ts_codes, names, "buy")
+    sell = tradability_blocked_matrix(open_, high, low, pre_close, volume, ts_codes, names, "sell")
+    assert buy[0, 3] and sell[0, 3]  # suspension blocks both sides
+    assert buy[1, 4] and not sell[1, 4]  # one-word limit-up blocks buys only
+    assert sell[2, 5] and not buy[2, 5]  # one-word limit-down blocks sells only
+
+
+def test_tradability_rejects_bad_inputs():
+    names: dict[str, str] = {}
+    with pytest.raises(ValueError, match="share one shape"):
+        tradability_blocked_matrix(
+            np.ones((2, 3)), np.ones((2, 3)), np.ones((2, 3)),
+            np.ones((2, 3)), np.ones((2, 4)), ["A", "B"], names, "buy",
+        )
+    with pytest.raises(ValueError, match="expected \\[stock x date\\]"):
+        tradability_blocked_matrix(
+            np.ones(3), np.ones(3), np.ones(3), np.ones(3), np.ones(3),
+            ["A", "B", "C"], names, "buy",
+        )
+    with pytest.raises(ValueError, match="unknown side"):
+        tradability_blocked(
+            np.ones((2, 1)), np.ones((2, 1)), np.ones((2, 1)),
+            np.ones((2, 1)), np.ones((2, 1)), ["A", "B"], names, "hold",
+        )

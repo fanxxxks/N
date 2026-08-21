@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from ashare_data.config import BacktestConfig, RewardConfig
-from ashare_data.processor import open_to_open_returns
+from ashare_data.processor import open_to_open_returns, tradability_blocked_matrix
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.reward import (
     annualized_turnover_cost,
@@ -380,6 +380,115 @@ def test_batch_sim_degenerate_shapes_match_scalar():
     df, tf = simulate_basket_daily_returns_batch(sig, np.zeros((3, 6)), cfg)
     assert np.all(df == 0.0)
     assert list(tf) == [0.0]
+
+
+# --- v5 tradability masks ----------------------------------------------------
+
+
+def test_blocked_buy_excludes_candidates_from_selection():
+    cfg = _cfg(top_n=1, single_weight_cap=1.0, commission_rate=0.0,
+               min_commission=0.0, stamp_tax_rate=0.0, transfer_fee_rate=0.0,
+               slippage_rate=0.0)
+    n_stocks, n_dates = 4, 5
+    target = np.zeros((n_stocks, n_dates))
+    # Stock 0 is always the top signal but is blocked at the day-1 execution
+    # open; the next-best stock must be selected instead.
+    signal = np.tile(np.array([4.0, 3.0, 2.0, 1.0])[:, None], (1, n_dates))
+    blocked_buy = np.zeros((n_stocks, n_dates), dtype=bool)
+    blocked_buy[0, 1] = True
+    # Zero targets and zero costs: returns are 0 everywhere, so the mask's
+    # effect shows up purely in the turnover of the forced selection switch.
+    _, to_free = simulate_basket_daily_returns(signal, target, cfg)
+    _, to_blocked = simulate_basket_daily_returns(
+        signal, target, cfg, blocked_buy=blocked_buy
+    )
+    # Free path: the single entry into stock 0 (1 unit over 4 days = 0.25).
+    assert to_free == pytest.approx(0.25, abs=1e-12)
+    # Blocked path: stock 0 skipped at the day-1 execution and re-selected
+    # afterwards, adding two forced switches (2 extra units over 4 days).
+    assert to_blocked == pytest.approx(to_free + 0.5, abs=1e-12)
+
+
+def test_blocked_sell_force_holds_positions():
+    cfg = _cfg(top_n=1, single_weight_cap=1.0, commission_rate=0.0,
+               min_commission=0.0, stamp_tax_rate=0.0, transfer_fee_rate=0.0,
+               slippage_rate=0.0)
+    n_stocks, n_dates = 4, 5
+    target = np.zeros((n_stocks, n_dates))
+    # Stock 0 leads every signal column except day 2, where stock 1 leads:
+    # the natural rebalance would sell stock 0 at the day-3 execution open.
+    # With stock 0 sell-blocked there, the position must be held.
+    signal = np.tile(np.array([4.0, 3.0, 2.0, 1.0])[:, None], (1, n_dates))
+    signal[0, 2] = 0.5
+    blocked_sell = np.zeros((n_stocks, n_dates), dtype=bool)
+    blocked_sell[0, 3] = True
+    _, to_free = simulate_basket_daily_returns(signal, target, cfg)
+    _, to_held = simulate_basket_daily_returns(
+        signal, target, cfg, blocked_sell=blocked_sell
+    )
+    # The forced hold suppresses the day-3 sell exactly like the engine.
+    assert to_held < to_free
+
+
+def test_blocked_batch_matches_scalar_reference():
+    rng = np.random.default_rng(12)
+    cfg = _cfg(top_n=3, single_weight_cap=1.0)
+    n_stocks, n_dates = 8, 20
+    signals, target = _random_batch(rng, 3, n_stocks, n_dates)
+    blocked_buy = rng.random((n_stocks, n_dates)) < 0.1
+    blocked_sell = rng.random((n_stocks, n_dates)) < 0.1
+    df, tf = simulate_basket_daily_returns_batch(
+        signals, target, cfg, blocked_buy, blocked_sell
+    )
+    for i in range(signals.shape[0]):
+        ref_f, ref_tf = simulate_basket_daily_returns(
+            signals[i], target, cfg, blocked_buy, blocked_sell
+        )
+        assert df[i] == pytest.approx(ref_f, rel=1e-9, abs=1e-11)
+        assert tf[i] == pytest.approx(ref_tf, rel=1e-9, abs=1e-11)
+
+
+def test_blocked_mask_shape_validation():
+    cfg = _cfg()
+    with pytest.raises(ValueError, match="blocked_buy shape"):
+        simulate_basket_daily_returns_batch(
+            np.zeros((2, 3, 6)), np.zeros((3, 6)), cfg,
+            blocked_buy=np.zeros((3, 5), dtype=bool),
+        )
+    with pytest.raises(ValueError, match="blocked_sell shape"):
+        simulate_basket_daily_returns_batch(
+            np.zeros((2, 3, 6)), np.zeros((3, 6)), cfg,
+            blocked_sell=np.zeros((2, 6), dtype=bool),
+        )
+
+
+def test_blocked_basket_matches_backtest_engine_with_limits():
+    # The strongest consistency check: the masked basket simulation must
+    # reproduce the engine's daily returns on a market where limit moves
+    # actually occur, day for day.
+    ts_codes, dates, raw, signal, _ = _synthetic_market(n_stocks=6, n_dates=8)
+    # Day 3: stock 0 opens at a one-word limit-up (cannot buy).
+    raw["high"][0, 3] = raw["open"][0, 3] = raw["pre_close"][0, 3] * 1.10
+    raw["low"][0, 3] = raw["open"][0, 3]
+    # Day 5: stock 1 opens at a one-word limit-down (cannot sell).
+    raw["high"][1, 5] = raw["open"][1, 5] = raw["pre_close"][1, 5] * 0.90
+    raw["low"][1, 5] = raw["open"][1, 5]
+    target = open_to_open_returns(raw["open"])
+    cfg = _cfg(top_n=3, single_weight_cap=1.0)
+    result = AshareBacktestEngine(cfg).run(signal, raw, ts_codes, dates, stock_names={})
+    blocked_buy = tradability_blocked_matrix(
+        raw["open"], raw["high"], raw["low"], raw["pre_close"], raw["volume"],
+        ts_codes, {}, "buy",
+    )
+    blocked_sell = tradability_blocked_matrix(
+        raw["open"], raw["high"], raw["low"], raw["pre_close"], raw["volume"],
+        ts_codes, {}, "sell",
+    )
+    daily, avg_turnover = simulate_basket_daily_returns(
+        signal, target, cfg, blocked_buy, blocked_sell
+    )
+    assert daily == pytest.approx(np.asarray(result.daily_returns), abs=1e-12)
+    assert avg_turnover == pytest.approx(float(np.mean(result.turnover)), abs=1e-12)
 
 
 def test_batched_rewards_match_scalar_rewards():
