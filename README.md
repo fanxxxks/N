@@ -210,6 +210,12 @@ python scripts/archive_run.py --mode sim --commit
 - **公式输出终标准化**：VM 执行的每个公式信号按日做**截面 z-score** 后再进入
   评分/回测/模拟盘（单调变换，不改变 rank-IC 与 top-n 排序），消除叠加运算的
   尺度漂移，使 GATE/JUMP 的 0 阈值语义稳定，并为多公式合成提供统一尺度。
+- **横截面算子与参数化窗口**（v6 词表）：公式栈内可直接表达截面语义——
+  `CS_RANK`（平均秩百分位，ties 共享平均秩、CPU/GPU 一致）、`CS_ZSCORE`、
+  `CS_DEMEAN`（减截面均值）、`CS_NEUTRALIZE`（按申万一级行业去均值，分组张量
+  由数据加载器注入 VM；无行业数据时退化为全市场去均值）；时序窗口算子由
+  硬编码 20 日扩展为 5/10/60 日枚举（MA/STD/TS_RANK/CORR/DOWNVOL）及
+  DELTA10/20，采样语法不变。截面算子只消费当日截面，无未来泄漏。
 - **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式对照首发词表（v1：34 特征/16 算子）重映射，退役重复特征经 `FEATURE_ALIASES`（`RET_20` → `MOMENTUM_20`，两者原为同一计算）解析，语义永不漂移。
 - **回测输出**：包含持仓快照与全市场等权基准（与策略同一 open-to-open 口径），供看板展示。
 

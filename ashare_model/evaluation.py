@@ -37,6 +37,13 @@ consumes the backtest engine's tradability masks.  Baselines (raw factors,
 already winsorized + robustly standardized) and the benchmark are
 unchanged.
 
+v6 grows the formula search space: four cross-sectional operators
+(CS_RANK / CS_ZSCORE / CS_DEMEAN / CS_NEUTRALIZE) and enumerated windows
+(5/10/60 for MA, STD, TS_RANK, CORR, DOWNVOL; DELTA10/20) join the
+vocabulary.  Scoring semantics are unchanged, but the candidate pool is
+drawn from a strictly larger operator set, so artifacts record the new
+version for comparability.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -89,7 +96,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "5"
+PROTOCOL_VERSION = "6"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -258,6 +265,7 @@ def evaluate_formula(
     window by the callers).  Returns ``None`` for an invalid formula."""
 
     vm = vm or StackVM(FORMULA_VOCAB)
+    vm.industry_codes = getattr(loader, "industry_codes", None)
     signal = vm.execute(list(tokens), loader.factor_tensor)
     if signal is None:
         return None
@@ -471,6 +479,13 @@ def run_random_search(
     # the same documented caveat as the trainer.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     factors = loader.factor_tensor.to(device)
+    # Full-history alignment: the VM executes on the unsliced factor stack
+    # (factor columns carry their own lookback), so the group tensor stays
+    # unsliced too; the train-window slice happens on the executed signal.
+    industry_codes = getattr(loader, "industry_codes", None)
+    vm.industry_codes = (
+        industry_codes.to(device) if industry_codes is not None else None
+    )
     target = loader.target_ret[:, :train_end].numpy()
     val_windows = validation_windows(train_end, model_config)
     # Tradability masks shared by every sampled formula, sliced to the

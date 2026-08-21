@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import torch
 
 from ashare_data.config import DataConfig, ModelConfig
 from ashare_data.db import AshareDB
@@ -48,6 +49,31 @@ def test_load_data_feeds_industry_relative_factors(populated_db: DataConfig):
     c = loader.ts_codes.index("300001.SZ")
     assert np.allclose(pair_row[a], -pair_row[b])
     assert np.allclose(pair_row[c], 0.0)
+
+
+def test_load_data_exposes_industry_codes_for_vm(populated_db: DataConfig):
+    # The VM's CS_NEUTRALIZE consumes dense industry group ids aligned with
+    # the factor stack: same industry -> same id, unmapped stock -> NaN.
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.replace_sw_members("801780", ["000001.SZ", "600000.SH"], populated_db)
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    codes = loader.industry_codes
+    assert codes.dtype == torch.float32
+    assert codes.shape == (len(loader.ts_codes), len(loader.dates))
+    a = loader.ts_codes.index("000001.SZ")
+    b = loader.ts_codes.index("600000.SH")
+    c = loader.ts_codes.index("300001.SZ")
+    assert codes[a, 0] == codes[b, 0]
+    assert torch.isnan(codes[c, 0])
+
+
+def test_industry_codes_all_nan_without_membership(populated_db: DataConfig):
+    # Without a Shenwan membership table the codes degrade to all-NaN: the
+    # neutralization operator then falls back to the full-market demean.
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    assert torch.isnan(loader.industry_codes).all()
     # Without any membership table the same factor stays fully neutral.
     with AshareDB(populated_db.duckdb_path) as db:
         db.execute(f"DROP TABLE IF EXISTS {populated_db.sw_member_table}")

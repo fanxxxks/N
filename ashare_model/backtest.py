@@ -309,7 +309,9 @@ def main() -> None:
         payload = json.loads(formula_file.read_text(encoding="utf-8"))
         tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
 
-        vm = StackVM(FORMULA_VOCAB)
+        vm = StackVM(
+            FORMULA_VOCAB, industry_codes=getattr(loader, "industry_codes", None)
+        )
         factors = vm.execute(tokens, loader.factor_tensor)
         if factors is None:
             raise SystemExit("Formula is invalid")

@@ -1,13 +1,17 @@
 """StackVM interpreter for A-share factor formulas.
 
 Output contract: every executed formula returns its signal **cross-sectionally
-z-scored per date** (:func:`cross_sectional_zscore`), applied as the final
-step of :meth:`StackVM.execute`.  Stacked arithmetic (MUL/DIV/ADD chains) can
-drift the raw scale by orders of magnitude; the terminal standardization keeps
-the scale meaningful for threshold semantics (GATE/JUMP compare against 0)
-and gives every formula a common scale for future signal combination.  It is
-a monotone per-date transformation, so it changes neither the rank IC nor the
-top-n selection of a signal.
+z-scored per date** (:func:`ashare_model.ops.cross_sectional_zscore`), applied
+as the final step of :meth:`StackVM.execute`.  Stacked arithmetic (MUL/DIV/ADD
+chains) can drift the raw scale by orders of magnitude; the terminal
+standardization keeps the scale meaningful for threshold semantics (GATE/JUMP
+compare against 0) and gives every formula a common scale for future signal
+combination.  It is a monotone per-date transformation, so it changes neither
+the rank IC nor the top-n selection of a signal.
+
+The VM also carries an optional ``industry_codes`` tensor (``[stock, date]``
+discrete group ids) consumed by the ``CS_NEUTRALIZE`` operator; without it
+the operator degrades to the full-market demean.
 """
 
 from __future__ import annotations
@@ -16,27 +20,12 @@ from typing import Iterable
 
 import torch
 
-from .ops import OP_ARITY, OPS_CONFIG
+from .ops import OPS_CONFIG, _cs_neutralize, cross_sectional_zscore
 from .vocab import FORMULA_VOCAB
 
 
-def cross_sectional_zscore(signal: torch.Tensor) -> torch.Tensor:
-    """Per-date cross-sectional z-score of a ``[stock, date]`` signal.
-
-    The mean and standard deviation are taken over the stock axis for each
-    date column (only the current cross-section, so no future information
-    enters).  A degenerate column (zero standard deviation, e.g. an
-    all-neutral date) maps to 0: the numerator is 0 there as well, so the
-    ``eps`` guard alone is sufficient.
-    """
-
-    mean = signal.mean(dim=0, keepdim=True)
-    std = signal.std(dim=0, keepdim=True, unbiased=False)
-    return (signal - mean) / (std + 1e-6)
-
-
 class StackVM:
-    def __init__(self, vocab=None):
+    def __init__(self, vocab=None, industry_codes: torch.Tensor | None = None):
         self.vocab = vocab or FORMULA_VOCAB
         self.feature_offset = 1
         self.operator_offset = self.vocab.operator_offset
@@ -46,6 +35,14 @@ class StackVM:
         self.arity_map = {
             self.operator_offset + i: cfg[2] for i, cfg in enumerate(OPS_CONFIG)
         }
+        # Execution-context data for the CS_NEUTRALIZE operator: discrete
+        # industry group ids aligned with the [stock, date] factor columns.
+        # The trainer (re)assigns this attribute when it moves the factor
+        # tensor to the compute device.
+        self.industry_codes = industry_codes
+        self._neutralize_token = self.operator_offset + next(
+            i for i, (name, _, _) in enumerate(OPS_CONFIG) if name == "CS_NEUTRALIZE"
+        )
 
     def execute(
         self,
@@ -55,9 +52,10 @@ class StackVM:
         """Execute a postfix formula over ``[Feature, Stock, Time]`` input.
 
         The resulting ``[Stock, Time]`` signal is cross-sectionally z-scored
-        per date before it is returned (see :func:`cross_sectional_zscore`),
-        so all consumers — training reward, protocol scoring, backtest and
-        the simulation runner — see one standardized formula semantics.
+        per date before it is returned (see
+        :func:`ashare_model.ops.cross_sectional_zscore`), so all consumers —
+        training reward, protocol scoring, backtest and the simulation
+        runner — see one standardized formula semantics.
         """
 
         stack: list[torch.Tensor] = []
@@ -79,7 +77,10 @@ class StackVM:
                     return None
                 args = [stack.pop() for _ in range(arity)]
                 args.reverse()
-                result = self.op_map[token](*args)
+                if token == self._neutralize_token:
+                    result = _cs_neutralize(args[0], self.industry_codes)
+                else:
+                    result = self.op_map[token](*args)
                 # Non-finite results are clamped to the neutral value 0 so a
                 # single degenerate operator cannot fabricate extreme signals.
                 result = torch.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
