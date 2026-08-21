@@ -200,11 +200,16 @@ python scripts/archive_run.py --mode sim --commit
 - **费用模型**：佣金万 2.5（最低 5 元）、印花税卖出 0.05%、过户费 0.001%、滑点 0.05%；回测与训练奖励使用同一套费用口径。
 - **涨跌停事件因子**：`LIMIT_UP_EVENT`/`LIMIT_DOWN_EVENT` 由一字板真实计算（创业板/科创板 20%，其余 10%）。
 - **训练**：REINFORCE + value baseline + 熵正则（advantage 裁剪防数值爆炸）；训练
-  奖励为**截面 rank-ICIR 减去连续换手成本**（`reward.py` v3：成本按费率比例计入，
-  无阈值跳变），验证段按 `model.validation_splits`（默认 3）个独立子窗口取**中位数**
+  奖励为**截面 rank-ICIR 减去连续换手成本**（`reward.py` v5：成本按费率比例计入，
+  无阈值跳变；篮子模拟按执行日（t+1 开盘）对齐回测引擎的**可交易性屏蔽**——
+  停牌/一字涨停不买、停牌/一字跌停持仓强制保留），验证段按
+  `model.validation_splits`（默认 3）个独立子窗口取**中位数**
   选择最佳公式；不含算子的裸因子公式减 `reward.complexity_penalty`（默认 0.2），
   最佳公式的验证奖励须达到 `reward.min_val_reward`（默认 0.0）才保存，避免把
   负质量公式回测/归档。
+- **公式输出终标准化**：VM 执行的每个公式信号按日做**截面 z-score** 后再进入
+  评分/回测/模拟盘（单调变换，不改变 rank-IC 与 top-n 排序），消除叠加运算的
+  尺度漂移，使 GATE/JUMP 的 0 阈值语义稳定，并为多公式合成提供统一尺度。
 - **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式对照首发词表（v1：34 特征/16 算子）重映射，退役重复特征经 `FEATURE_ALIASES`（`RET_20` → `MOMENTUM_20`，两者原为同一计算）解析，语义永不漂移。
 - **回测输出**：包含持仓快照与全市场等权基准（与策略同一 open-to-open 口径），供看板展示。
 
