@@ -83,6 +83,124 @@ def is_valid_a_share_code(ts_code: str) -> bool:
     return False
 
 
+# Board daily-limit prefixes (ST stocks get 5% via the name check).
+_CHINEXT_LIMIT_PREFIXES = {"300", "301", "688", "689"}
+
+
+def limit_rate(ts_code: str, name: str = "") -> float:
+    """Daily price-limit rate of one stock.
+
+    ST stocks trade under a 5% band (detected by name, so pass the stock
+    name when available); ChiNext / STAR markets trade under 20%; every
+    other board 10%.  Single code path shared by the factor engine (which
+    has no names because ST stocks are excluded upstream) and the backtest /
+    reward tradability masks.
+    """
+
+    if "ST" in name.upper():
+        return 0.05
+    prefix = ts_code.split(".")[0][:3]
+    if prefix in _CHINEXT_LIMIT_PREFIXES:
+        return 0.20
+    return 0.10
+
+
+def _blocked_columns(
+    o: np.ndarray,
+    h: np.ndarray,
+    l: np.ndarray,
+    pc: np.ndarray,
+    v: np.ndarray,
+    rates: np.ndarray,
+    side: str,
+) -> np.ndarray:
+    """Blocked mask core: suspended stocks plus one-word limit moves.
+
+    ``o``/``h``/``l``/``pc``/``v`` share one shape (a single date column or
+    the full ``[stock x date]`` matrix); ``rates`` is broadcastable to it.
+    Missing cells are 0 (the raw-cache convention), which marks suspension.
+    The buy side blocks one-word limit-up opens (cannot buy at the board);
+    the sell side blocks one-word limit-down opens (cannot sell at the
+    board).
+    """
+
+    suspended = (o <= 0) | (v <= 0) | (pc <= 0)
+    one_word = np.isclose(o, h) & np.isclose(o, l)
+    change = np.zeros_like(o)
+    valid = pc > 0
+    change[valid] = o[valid] / pc[valid] - 1.0
+    if side == "buy":
+        limit = one_word & (change >= rates - 0.005)
+    elif side == "sell":
+        limit = one_word & (change <= -rates + 0.005)
+    else:
+        raise ValueError(f"unknown side {side!r}; expected 'buy' or 'sell'")
+    return suspended | limit
+
+
+def tradability_blocked(
+    open_col: np.ndarray,
+    high_col: np.ndarray,
+    low_col: np.ndarray,
+    pre_close_col: np.ndarray,
+    volume_col: np.ndarray,
+    ts_codes: list[str],
+    stock_names: dict[str, str],
+    side: str,
+) -> np.ndarray:
+    """Buy/sell blocked mask for one date column (``[stock]`` bool).
+
+    Same semantics as :func:`tradability_blocked_matrix`, vectorized per
+    column; the backtest engine calls this per execution day.
+    """
+
+    o = np.asarray(open_col, dtype=np.float64).reshape(-1, 1)
+    h = np.asarray(high_col, dtype=np.float64).reshape(-1, 1)
+    l = np.asarray(low_col, dtype=np.float64).reshape(-1, 1)
+    pc = np.asarray(pre_close_col, dtype=np.float64).reshape(-1, 1)
+    v = np.asarray(volume_col, dtype=np.float64).reshape(-1, 1)
+    if not (o.shape == h.shape == l.shape == pc.shape == v.shape):
+        raise ValueError("open/high/low/pre_close/volume columns must share one shape")
+    if o.shape[0] != len(ts_codes):
+        raise ValueError(f"{len(ts_codes)} ts_codes but {o.shape[0]} rows")
+    rates = np.asarray(
+        [limit_rate(c, stock_names.get(c, "")) for c in ts_codes], dtype=np.float64
+    )[:, None]
+    return _blocked_columns(o, h, l, pc, v, rates, side)[:, 0]
+
+
+def tradability_blocked_matrix(
+    open_: np.ndarray,
+    high: np.ndarray,
+    low: np.ndarray,
+    pre_close: np.ndarray,
+    volume: np.ndarray,
+    ts_codes: list[str],
+    stock_names: dict[str, str],
+    side: str,
+) -> np.ndarray:
+    """Buy/sell blocked mask over the full ``[stock x date]`` window.
+
+    The reward path precomputes this matrix once and shares it across the
+    whole formula batch; per date it is the exact rule the backtest engine
+    applies through :func:`tradability_blocked`.
+    """
+
+    o = np.asarray(open_, dtype=np.float64)
+    h = np.asarray(high, dtype=np.float64)
+    l = np.asarray(low, dtype=np.float64)
+    pc = np.asarray(pre_close, dtype=np.float64)
+    v = np.asarray(volume, dtype=np.float64)
+    if not (o.shape == h.shape == l.shape == pc.shape == v.shape):
+        raise ValueError("open/high/low/pre_close/volume must share one shape")
+    if o.ndim != 2 or o.shape[0] != len(ts_codes):
+        raise ValueError(f"expected [stock x date] matrices for {len(ts_codes)} ts_codes")
+    rates = np.asarray(
+        [limit_rate(c, stock_names.get(c, "")) for c in ts_codes], dtype=np.float64
+    )[:, None]
+    return _blocked_columns(o, h, l, pc, v, rates, side)
+
+
 def open_to_open_returns(open_: np.ndarray) -> np.ndarray:
     """Compute ``open[t+2] / open[t+1] - 1`` per stock with missing-data mask.
 

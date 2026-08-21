@@ -22,7 +22,12 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from ashare_data.processor import normalize_daily_bars, pivot_wide, winsorize_cross_section
+from ashare_data.processor import (
+    limit_rate,
+    normalize_daily_bars,
+    pivot_wide,
+    winsorize_cross_section,
+)
 
 from .vocab import FEATURE_NAMES
 
@@ -65,8 +70,6 @@ BAR_COLUMNS = (
     "amount",
     "turnover_rate",
 )
-
-_CHINEXT_PREFIXES = {"300", "301", "688", "689"}
 
 
 @dataclass(frozen=True)
@@ -434,13 +437,9 @@ def _industry_demean(ctx: FactorContext, frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _limit_rate_per_stock(ts_codes: list[str]) -> np.ndarray:
-    """Board daily limit rate per stock (ST-adjusted rates need stock names,
-    which the factor engine does not have; ST stocks are excluded upstream)."""
-    rates = []
-    for code in ts_codes:
-        symbol = code.split(".", 1)[0]
-        rates.append(0.20 if symbol[:3] in _CHINEXT_PREFIXES else 0.10)
-    return np.asarray(rates, dtype=float)
+    """Board daily limit rate per stock (ST stocks are excluded from the
+    universe upstream, so the shared rule is evaluated without names)."""
+    return np.asarray([limit_rate(code, "") for code in ts_codes], dtype=float)
 
 
 def _factor_macd_cached(ctx: FactorContext) -> tuple[pd.DataFrame, pd.DataFrame]:

@@ -1,4 +1,14 @@
-"""StackVM interpreter for A-share factor formulas."""
+"""StackVM interpreter for A-share factor formulas.
+
+Output contract: every executed formula returns its signal **cross-sectionally
+z-scored per date** (:func:`cross_sectional_zscore`), applied as the final
+step of :meth:`StackVM.execute`.  Stacked arithmetic (MUL/DIV/ADD chains) can
+drift the raw scale by orders of magnitude; the terminal standardization keeps
+the scale meaningful for threshold semantics (GATE/JUMP compare against 0)
+and gives every formula a common scale for future signal combination.  It is
+a monotone per-date transformation, so it changes neither the rank IC nor the
+top-n selection of a signal.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +18,21 @@ import torch
 
 from .ops import OP_ARITY, OPS_CONFIG
 from .vocab import FORMULA_VOCAB
+
+
+def cross_sectional_zscore(signal: torch.Tensor) -> torch.Tensor:
+    """Per-date cross-sectional z-score of a ``[stock, date]`` signal.
+
+    The mean and standard deviation are taken over the stock axis for each
+    date column (only the current cross-section, so no future information
+    enters).  A degenerate column (zero standard deviation, e.g. an
+    all-neutral date) maps to 0: the numerator is 0 there as well, so the
+    ``eps`` guard alone is sufficient.
+    """
+
+    mean = signal.mean(dim=0, keepdim=True)
+    std = signal.std(dim=0, keepdim=True, unbiased=False)
+    return (signal - mean) / (std + 1e-6)
 
 
 class StackVM:
@@ -27,7 +52,13 @@ class StackVM:
         formula_tokens: Iterable[int],
         factor_tensor: torch.Tensor,
     ) -> torch.Tensor | None:
-        """Execute a postfix formula over ``[Feature, Stock, Time]`` input."""
+        """Execute a postfix formula over ``[Feature, Stock, Time]`` input.
+
+        The resulting ``[Stock, Time]`` signal is cross-sectionally z-scored
+        per date before it is returned (see :func:`cross_sectional_zscore`),
+        so all consumers — training reward, protocol scoring, backtest and
+        the simulation runner — see one standardized formula semantics.
+        """
 
         stack: list[torch.Tensor] = []
         try:
@@ -53,7 +84,9 @@ class StackVM:
                 # single degenerate operator cannot fabricate extreme signals.
                 result = torch.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
                 stack.append(result)
-            return stack[-1] if len(stack) == 1 else None
+            if len(stack) != 1:
+                return None
+            return cross_sectional_zscore(stack[-1])
         except Exception:
             return None
 

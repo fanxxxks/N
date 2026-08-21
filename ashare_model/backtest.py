@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from ashare_data.config import BacktestConfig
-from ashare_data.processor import open_to_open_returns
+from ashare_data.processor import limit_rate, open_to_open_returns, tradability_blocked
 from ashare_data.schemas import BacktestResult
 from ashare_logging import export_log_txt, setup_run_logging
 
@@ -218,40 +218,22 @@ class AshareBacktestEngine:
         side: str,
     ) -> np.ndarray:
         n_stocks = open_.shape[0]
-        blocked = np.zeros(n_stocks, dtype=bool)
         if exec_day >= open_.shape[1]:
-            blocked[:] = True
-            return blocked
-
-        o = open_[:, exec_day]
-        h = high[:, exec_day]
-        l = low[:, exec_day]
-        pc = pre_close[:, exec_day]
-        v = volume[:, exec_day]
-        suspended = (o <= 0) | (v <= 0) | (pc <= 0)
-        blocked |= suspended
-
-        one_word = np.isclose(o, h) & np.isclose(o, l)
-        change = np.zeros_like(o)
-        valid = pc > 0
-        change[valid] = o[valid] / pc[valid] - 1.0
-        limit_rate = np.array([AshareBacktestEngine._limit_rate(c, stock_names.get(c, "")) for c in ts_codes])
-        limit_up = one_word & (change >= limit_rate - 0.005)
-        limit_down = one_word & (change <= -limit_rate + 0.005)
-        if side == "buy":
-            blocked |= limit_up
-        else:
-            blocked |= limit_down
-        return blocked
+            return np.ones(n_stocks, dtype=bool)
+        return tradability_blocked(
+            open_[:, exec_day],
+            high[:, exec_day],
+            low[:, exec_day],
+            pre_close[:, exec_day],
+            volume[:, exec_day],
+            ts_codes,
+            stock_names,
+            side,
+        )
 
     @staticmethod
     def _limit_rate(ts_code: str, name: str) -> float:
-        if "ST" in name.upper():
-            return 0.05
-        prefix = ts_code.split(".")[0][:3]
-        if prefix in {"300", "301", "688", "689"}:
-            return 0.20
-        return 0.10
+        return limit_rate(ts_code, name)
 
     @staticmethod
     def _equity_curve(daily_returns: list[float]) -> list[float]:

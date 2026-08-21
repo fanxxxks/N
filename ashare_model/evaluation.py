@@ -30,6 +30,13 @@ Contract:
 measurement behavior and is recorded in protocol artifacts and experiment
 archives, exactly like :data:`ashare_model.reward.REWARD_VERSION`.
 
+v5 changes the scored signal for formula candidates: the VM now returns
+every formula signal cross-sectionally z-scored per date (terminal
+standardization), and the training-side reward that selects candidates
+consumes the backtest engine's tradability masks.  Baselines (raw factors,
+already winsorized + robustly standardized) and the benchmark are
+unchanged.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -82,7 +89,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "4"
+PROTOCOL_VERSION = "5"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -466,6 +473,11 @@ def run_random_search(
     factors = loader.factor_tensor.to(device)
     target = loader.target_ret[:, :train_end].numpy()
     val_windows = validation_windows(train_end, model_config)
+    # Tradability masks shared by every sampled formula, sliced to the
+    # training window like the signals (the same path the trainer uses).
+    blocked_buy, blocked_sell = loader.tradability_masks()
+    blocked_buy = blocked_buy[:, :train_end]
+    blocked_sell = blocked_sell[:, :train_end]
 
     formulas = sample_random_formulas(
         seed, vocab, model_config.max_formula_len, n_samples
@@ -491,7 +503,13 @@ def run_random_search(
         if not signals:
             continue
         _, val_rewards, _, _ = batched_basket_rewards(
-            np.stack(signals), target, backtest_config, reward_cfg, val_windows
+            np.stack(signals),
+            target,
+            backtest_config,
+            reward_cfg,
+            val_windows,
+            blocked_buy=blocked_buy,
+            blocked_sell=blocked_sell,
         )
         for key, val_reward in zip(keys, val_rewards):
             if float(val_reward) > best_val:
