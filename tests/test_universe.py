@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from ashare_data.config import DataConfig, ModelConfig
@@ -7,11 +8,359 @@ from ashare_data.db import AshareDB
 from ashare_data.universe import (
     UniverseContractError,
     UniverseDevelopmentFallbackWarning,
+    UniverseMask,
+    UniversePolicy,
+    UniverseReason,
+    build_universe_mask,
     require_production_universe,
     resolve_universe_contract,
 )
 from ashare_model.data_loader import AshareDataLoader
 from tests.conftest import make_bars
+
+
+INDEX_300 = "000300.SH"
+INDEX_500 = "000905.SH"
+STOCK = "000001.SZ"
+
+
+def _policy(
+    *,
+    index_codes: tuple[str, ...] = (INDEX_300,),
+    min_listed_sessions: int = 1,
+    membership_end_inclusive: bool = False,
+) -> UniversePolicy:
+    return UniversePolicy(
+        index_codes=index_codes,
+        min_listed_sessions=min_listed_sessions,
+        membership_end_inclusive=membership_end_inclusive,
+    )
+
+
+def _membership(
+    in_date: str,
+    out_date: str,
+    *,
+    index_code: str = INDEX_300,
+    ts_code: str = STOCK,
+) -> dict[str, str]:
+    return {
+        "index_code": index_code,
+        "ts_code": ts_code,
+        "in_date": in_date,
+        "out_date": out_date,
+    }
+
+
+def _has_reason(value: np.uint16, reason: UniverseReason) -> bool:
+    return bool(int(value) & int(reason))
+
+
+def test_build_universe_mask_uses_half_open_membership_boundaries():
+    dates = ["20240102", "20240103", "20240104", "20240105"]
+    result = build_universe_mask(
+        [STOCK],
+        dates,
+        dates,
+        [_membership("20240103", "20240105")],
+        {STOCK: "20200101"},
+        np.ones((1, 4), dtype=bool),
+        _policy(),
+    )
+
+    assert result.eligible.tolist() == [[False, True, True, False]]
+    assert _has_reason(result.reasons[0, 0], UniverseReason.NOT_MEMBER)
+    assert not _has_reason(result.reasons[0, 1], UniverseReason.NOT_MEMBER)
+    assert _has_reason(result.reasons[0, 3], UniverseReason.NOT_MEMBER)
+
+
+@pytest.mark.parametrize(
+    ("inclusive", "expected"),
+    [
+        (False, [[True, False]]),
+        (True, [[True, True]]),
+    ],
+)
+def test_membership_end_semantics_are_converted_once(
+    inclusive: bool, expected: list[list[bool]]
+):
+    dates = ["20240102", "20240103"]
+    result = build_universe_mask(
+        [STOCK],
+        dates,
+        dates,
+        [_membership("20240102", "20240103")],
+        {STOCK: "20200101"},
+        [[True, True]],
+        _policy(membership_end_inclusive=inclusive),
+    )
+
+    assert result.eligible.tolist() == expected
+
+
+def test_inclusive_open_ended_membership_does_not_overflow():
+    result = build_universe_mask(
+        [STOCK],
+        ["20240102"],
+        ["20240102"],
+        [_membership("20240102", "99991231")],
+        {STOCK: "20200101"},
+        [[True]],
+        _policy(membership_end_inclusive=True),
+    )
+
+    assert result.eligible.tolist() == [[True]]
+
+
+def test_all_domain_dates_are_normalized_to_yyyymmdd():
+    result = build_universe_mask(
+        [STOCK],
+        ["2024-01-02"],
+        ["2024-01-02"],
+        [_membership("2020-01-01", "9999-12-31")],
+        {STOCK: "2020-01-01"},
+        [[True]],
+        _policy(),
+    )
+
+    assert result.eligible.tolist() == [[True]]
+
+
+def test_multi_index_union_allows_cross_index_overlap():
+    dates = ["20240102", "20240103", "20240104"]
+    result = build_universe_mask(
+        [STOCK],
+        dates,
+        dates,
+        [
+            _membership("20240102", "20240104", index_code=INDEX_300),
+            _membership("20240103", "20240105", index_code=INDEX_500),
+        ],
+        {STOCK: "20200101"},
+        [[True, True, True]],
+        _policy(index_codes=(INDEX_300, INDEX_500)),
+    )
+
+    assert result.eligible.tolist() == [[True, True, True]]
+
+
+@pytest.mark.parametrize(
+    "intervals",
+    [
+        [
+            _membership("20240102", "20240104"),
+            _membership("20240102", "20240104"),
+        ],
+        [
+            _membership("20240102", "20240105"),
+            _membership("20240104", "20240106"),
+        ],
+    ],
+)
+def test_same_index_duplicate_or_overlapping_intervals_are_rejected(
+    intervals: list[dict[str, str]],
+):
+    with pytest.raises(UniverseContractError, match="duplicate or overlapping"):
+        build_universe_mask(
+            [STOCK],
+            ["20240102"],
+            ["20240102"],
+            intervals,
+            {STOCK: "20200101"},
+            [[True]],
+            _policy(),
+        )
+
+
+def test_non_overlapping_reentry_intervals_are_preserved():
+    dates = ["20240102", "20240103", "20240104"]
+    result = build_universe_mask(
+        [STOCK],
+        dates,
+        dates,
+        [
+            _membership("20240102", "20240103"),
+            _membership("20240104", "20240105"),
+        ],
+        {STOCK: "20200101"},
+        [[True, True, True]],
+        _policy(),
+    )
+
+    assert result.eligible.tolist() == [[True, False, True]]
+
+
+def test_listing_age_counts_open_sessions_and_nth_session_passes():
+    sessions = ["20240105", "20240108", "20240109"]
+    result = build_universe_mask(
+        [STOCK],
+        sessions,
+        sessions,
+        [_membership("20200101", "99991231")],
+        {STOCK: "20240105"},
+        [[True, True, True]],
+        _policy(min_listed_sessions=2),
+    )
+
+    assert result.eligible.tolist() == [[False, True, True]]
+    assert _has_reason(
+        result.reasons[0, 0], UniverseReason.LISTING_AGE_INSUFFICIENT
+    )
+    assert not _has_reason(
+        result.reasons[0, 1], UniverseReason.LISTING_AGE_INSUFFICIENT
+    )
+
+
+def test_not_yet_listed_and_listing_age_reasons_are_mutually_exclusive():
+    dates = ["20240105", "20240108", "20240109"]
+    result = build_universe_mask(
+        [STOCK],
+        dates,
+        dates,
+        [_membership("20200101", "99991231")],
+        {STOCK: "20240108"},
+        [[True, True, True]],
+        _policy(min_listed_sessions=2),
+    )
+
+    assert _has_reason(result.reasons[0, 0], UniverseReason.NOT_YET_LISTED)
+    assert not _has_reason(
+        result.reasons[0, 0], UniverseReason.LISTING_AGE_INSUFFICIENT
+    )
+    assert not _has_reason(result.reasons[0, 1], UniverseReason.NOT_YET_LISTED)
+    assert _has_reason(
+        result.reasons[0, 1], UniverseReason.LISTING_AGE_INSUFFICIENT
+    )
+    assert result.eligible.tolist() == [[False, False, True]]
+
+
+def test_missing_bar_reason_combines_with_membership_reason():
+    dates = ["20240102", "20240103"]
+    result = build_universe_mask(
+        [STOCK],
+        dates,
+        dates,
+        [_membership("20240103", "99991231")],
+        {STOCK: "20200101"},
+        [[False, False]],
+        _policy(),
+    )
+
+    assert _has_reason(result.reasons[0, 0], UniverseReason.NOT_MEMBER)
+    assert _has_reason(result.reasons[0, 0], UniverseReason.MISSING_BAR)
+    assert not _has_reason(result.reasons[0, 1], UniverseReason.NOT_MEMBER)
+    assert _has_reason(result.reasons[0, 1], UniverseReason.MISSING_BAR)
+    assert result.eligible.tolist() == [[False, False]]
+
+
+def test_unknown_listing_status_is_a_non_blocking_audit_reason():
+    result = build_universe_mask(
+        [STOCK],
+        ["20240102"],
+        ["20240102"],
+        [_membership("20200101", "99991231")],
+        {},
+        [[True]],
+        _policy(),
+    )
+
+    assert result.eligible.tolist() == [[True]]
+    assert _has_reason(result.reasons[0, 0], UniverseReason.STATUS_UNKNOWN)
+
+
+def test_nan_listing_status_is_a_non_blocking_audit_reason():
+    result = build_universe_mask(
+        [STOCK],
+        ["20240102"],
+        ["20240102"],
+        [_membership("20200101", "99991231")],
+        {STOCK: np.nan},
+        [[True]],
+        _policy(),
+    )
+
+    assert result.eligible.tolist() == [[True]]
+    assert _has_reason(result.reasons[0, 0], UniverseReason.STATUS_UNKNOWN)
+
+
+def test_universe_mask_arrays_have_fixed_dtypes_and_are_read_only():
+    result = UniverseMask(
+        eligible=np.array([[1]], dtype=np.int8),
+        reasons=np.array([[UniverseReason.STATUS_UNKNOWN]], dtype=object),
+    )
+
+    assert result.eligible.dtype == np.bool_
+    assert result.reasons.dtype == np.uint16
+    assert result.eligible.shape == result.reasons.shape == (1, 1)
+    assert result.eligible.flags.writeable is False
+    assert result.reasons.flags.writeable is False
+    with pytest.raises(ValueError, match="read-only"):
+        result.eligible[0, 0] = False
+    with pytest.raises(ValueError, match="read-only"):
+        result.reasons[0, 0] = 0
+
+
+@pytest.mark.parametrize(
+    ("field", "signal_dates", "open_sessions", "list_dates", "match"),
+    [
+        ("signal", ["20240230"], ["20240102"], {STOCK: "20200101"}, "signal_dates"),
+        ("session", ["20240102"], ["bad-date"], {STOCK: "20200101"}, "open_sessions"),
+        ("listing", ["20240102"], ["20240102"], {STOCK: "20241301"}, "list_dates"),
+    ],
+)
+def test_invalid_input_dates_are_rejected(
+    field: str,
+    signal_dates: list[str],
+    open_sessions: list[str],
+    list_dates: dict[str, str],
+    match: str,
+):
+    del field
+    with pytest.raises(UniverseContractError, match=match):
+        build_universe_mask(
+            [STOCK],
+            signal_dates,
+            open_sessions,
+            [_membership("20200101", "99991231")],
+            list_dates,
+            [[True]],
+            _policy(),
+        )
+
+
+def test_bar_presence_shape_is_validated():
+    with pytest.raises(UniverseContractError, match=r"\[stock, date\] shape"):
+        build_universe_mask(
+            [STOCK],
+            ["20240102", "20240103"],
+            ["20240102", "20240103"],
+            [_membership("20200101", "99991231")],
+            {STOCK: "20200101"},
+            [[True]],
+            _policy(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("in_date", "out_date", "inclusive"),
+    [
+        ("20240103", "20240103", False),
+        ("20240104", "20240103", True),
+    ],
+)
+def test_invalid_membership_intervals_are_rejected(
+    in_date: str, out_date: str, inclusive: bool
+):
+    with pytest.raises(UniverseContractError, match="invalid .* interval"):
+        build_universe_mask(
+            [STOCK],
+            ["20240103"],
+            ["20240103"],
+            [_membership(in_date, out_date)],
+            {STOCK: "20200101"},
+            [[True]],
+            _policy(membership_end_inclusive=inclusive),
+        )
 
 
 def _seed_contract(
