@@ -109,7 +109,8 @@ def test_build_run_sim_argv_reset_and_resume(tmp_path: Path):
 def test_start_and_status_running(tmp_path: Path):
     progress = tmp_path / "progress.json"
     manager = _manager(
-        tmp_path, cmd_builder=lambda: _progress_then_sleep_cmd(progress)
+        tmp_path,
+        cmd_builder=lambda _reset, _start, _end: _progress_then_sleep_cmd(progress),
     )
     status = manager.start()
     assert status["state"] in ("starting", "running")
@@ -125,7 +126,7 @@ def test_start_and_status_running(tmp_path: Path):
 
 
 def test_start_conflict_while_running(tmp_path: Path):
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     manager.start()
     with pytest.raises(RunConflictError):
         manager.start()
@@ -138,7 +139,7 @@ def test_start_clears_leftover_stop_signal_and_progress(tmp_path: Path):
     (tmp_path / "progress.json").write_text(
         json.dumps({"phase": "finished"}), encoding="utf-8"
     )
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     manager.start()
     assert not stop.exists()
     assert not (tmp_path / "progress.json").exists()
@@ -146,7 +147,7 @@ def test_start_clears_leftover_stop_signal_and_progress(tmp_path: Path):
 
 
 def test_start_steals_stale_lock_and_dead_record(tmp_path: Path):
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     (tmp_path / "run.lock").write_text("999999", encoding="utf-8")
     (tmp_path / "run.json").write_text(
         json.dumps(
@@ -164,11 +165,11 @@ def test_start_steals_stale_lock_and_dead_record(tmp_path: Path):
 
 
 def test_start_refuses_live_lock_holder(tmp_path: Path):
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     manager.start()
     holder_pid = manager.status()["pid"]
     # A second manager instance sees the live record and refuses.
-    other = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    other = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     with pytest.raises(RunConflictError):
         other.start()
     assert manager.status()["pid"] == holder_pid
@@ -179,7 +180,9 @@ def test_start_refuses_live_lock_holder(tmp_path: Path):
 
 
 def test_stop_escalates_after_grace(tmp_path: Path):
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd(600))
+    manager = _manager(
+        tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd(600)
+    )
     manager.start()
     result = manager.stop()
     assert result["ok"] and result["state"] == "stopping"
@@ -190,7 +193,7 @@ def test_stop_escalates_after_grace(tmp_path: Path):
 
 
 def test_stop_when_idle_is_a_noop(tmp_path: Path):
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     result = manager.stop()
     assert result["ok"]
     assert result["state"] == "idle"
@@ -201,7 +204,9 @@ def test_stop_when_idle_is_a_noop(tmp_path: Path):
 
 def test_status_reconciles_finished_process(tmp_path: Path):
     progress = tmp_path / "progress.json"
-    manager = _manager(tmp_path, cmd_builder=lambda: _finish_cmd(progress))
+    manager = _manager(
+        tmp_path, cmd_builder=lambda _reset, _start, _end: _finish_cmd(progress)
+    )
     manager.start()
     _wait_for(lambda: manager.status()["state"] == "finished")
     status = manager.status()
@@ -213,7 +218,7 @@ def test_status_reconciles_finished_process(tmp_path: Path):
 
 def test_status_reconciles_crash_as_error(tmp_path: Path):
     cmd = [sys.executable, "-c", "raise SystemExit(3)"]
-    manager = _manager(tmp_path, cmd_builder=lambda: cmd)
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: cmd)
     manager.start()
     _wait_for(lambda: manager.status()["state"] == "error")
     status = manager.status()
@@ -222,7 +227,7 @@ def test_status_reconciles_crash_as_error(tmp_path: Path):
 
 
 def test_status_idle_without_record(tmp_path: Path):
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     status = manager.status()
     assert status["state"] == "idle"
     assert status["pid"] is None
@@ -259,7 +264,7 @@ def test_reset_archives_then_resets(tmp_path: Path):
         encoding="utf-8",
     )
     _write_history_state(tmp_path)
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     result = manager.reset()
     assert result["ok"], result
     assert marker.exists()
@@ -281,7 +286,7 @@ def test_reset_aborts_when_archive_fails(tmp_path: Path):
         "import sys; sys.exit(1)", encoding="utf-8"
     )
     _write_history_state(tmp_path)
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     result = manager.reset()
     assert not result["ok"]
     assert "archive failed" in result["reason"]
@@ -291,7 +296,7 @@ def test_reset_aborts_when_archive_fails(tmp_path: Path):
 
 
 def test_reset_skips_archive_without_history(tmp_path: Path):
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     result = manager.reset()
     assert result["ok"]
     assert result["archive"] == "no history to archive"
@@ -299,7 +304,7 @@ def test_reset_skips_archive_without_history(tmp_path: Path):
 
 
 def test_reset_conflict_while_running(tmp_path: Path):
-    manager = _manager(tmp_path, cmd_builder=lambda: _sleep_cmd())
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
     manager.start()
     with pytest.raises(RunConflictError):
         manager.reset()

@@ -29,15 +29,23 @@ from ashare_data.config import (
     make_model_config,
     make_reward_config,
 )
+from ashare_data.processor import open_to_open_returns
 
 from .alphagpt import AlphaGPTModel, build_action_mask
-from .data_loader import AshareDataLoader, date_index
+from .candidates import (
+    CandidateScore,
+    CandidateScorer,
+    CandidateSelector,
+    CandidateSpec,
+    SelectionResult,
+)
+from .data_loader import AshareDataLoader
 from .ops import OPS_CONFIG
 from .reward import (
     REWARD_VERSION,
     batched_basket_rewards,
-    signal_direction,
 )
+from .time_contract import TrainingTimeContract
 from .vm import StackVM, formula_decode
 from .vocab import FORMULA_VOCAB
 from ashare_logging import export_log_txt, setup_run_logging
@@ -47,22 +55,22 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def validation_start(train_end_idx: int, model_config) -> int:
+def validation_start(train_signal_end: int, model_config) -> int:
     """First index of the validation tail inside the training window.
 
     The tail keeps at least two dates (a reward needs one daily return);
     windows too small to hold anything out validate on the full window.
     """
 
-    if train_end_idx <= 2:
+    if train_signal_end <= 2:
         return 0
     val_frac = float(np.clip(model_config.validation_fraction, 0.0, 0.5))
-    val_start = int(round(train_end_idx * (1.0 - val_frac)))
-    return max(1, min(val_start, train_end_idx - 2))
+    val_start = int(round(train_signal_end * (1.0 - val_frac)))
+    return max(1, min(val_start, train_signal_end - 2))
 
 
 def validation_windows(
-    train_end_idx: int, model_config
+    train_signal_end: int, model_config
 ) -> list[tuple[int, int]]:
     """Independent validation sub-windows covering the training tail.
 
@@ -75,17 +83,17 @@ def validation_windows(
     against the identical selection windows.
     """
 
-    val_start = validation_start(train_end_idx, model_config)
-    val_len = train_end_idx - val_start
+    val_start = validation_start(train_signal_end, model_config)
+    val_len = train_signal_end - val_start
     splits = max(1, int(model_config.validation_splits))
     min_len = 3
     if val_len < splits * min_len:
-        return [(val_start, train_end_idx)]
+        return [(val_start, train_signal_end)]
     base = val_len // splits
     windows: list[tuple[int, int]] = []
     for k in range(splits):
         start = val_start + k * base
-        end = val_start + (k + 1) * base if k < splits - 1 else train_end_idx
+        end = val_start + (k + 1) * base if k < splits - 1 else train_signal_end
         windows.append((start, end))
     return windows
 
@@ -170,21 +178,36 @@ class AshareTrainer:
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(), lr=model_config.learning_rate
         )
-        self.best_reward = -float("inf")
-        self.best_icir = -float("inf")
+        self.best_val_reward = -float("inf")
+        self.best_val_icir = -float("inf")
+        self.best_full_window_reward = -float("inf")
+        self.best_full_window_icir = -float("inf")
         self.best_direction = 1
         self.best_tokens: list[int] | None = None
         self.best_formula = ""
         self.history: list[dict[str, float]] = []
         self._collapse_streak = 0
-        self._reward_cache: OrderedDict[
-            tuple[int, ...], tuple[float, float | None, float, float | None]
-        ] = OrderedDict()
+        self.candidate_scorer = CandidateScorer(
+            self.backtest_config,
+            self.reward_config,
+            operator_offset=self.vocab.operator_offset,
+            # Resolve through the train module at call time so test/adaptor
+            # injection and every generation path still share one scorer.
+            reward_function=lambda *args, **kwargs: batched_basket_rewards(
+                *args, **kwargs
+            ),
+        )
+        self.candidate_selector = CandidateSelector()
+        self.selection_result = SelectionResult(None, None, ())
+        self._candidate_scores: OrderedDict[tuple[int, ...], CandidateScore] = (
+            OrderedDict()
+        )
+        self._reward_cache: OrderedDict[tuple[int, ...], CandidateScore] = OrderedDict()
 
     def _cache_put(
         self,
         key: tuple[int, ...],
-        value: tuple[float, float | None, float, float | None],
+        value: CandidateScore,
     ) -> None:
         self._reward_cache[key] = value
         self._reward_cache.move_to_end(key)
@@ -205,19 +228,6 @@ class AshareTrainer:
         """
 
         return max(1, min(64, (512 * (1 << 20)) // max(signal_bytes, 1)))
-
-    def _complexity_penalty(self, key: tuple[int, ...]) -> float:
-        """Reward penalty for operator-free (bare single-factor) formulas.
-
-        A formula whose tokens contain no operator is a copy of one raw
-        feature; it is penalized (not banned) so the policy still has a
-        gradient towards combinations while degenerate copies lose their
-        edge over noise.
-        """
-
-        if any(t >= self.vocab.operator_offset for t in key):
-            return 0.0
-        return float(self.reward_config.complexity_penalty)
 
     @staticmethod
     def _policy_update_loss(
@@ -253,39 +263,30 @@ class AshareTrainer:
 
     def _score_pending_chunk(
         self,
-        pending: list[tuple[tuple[int, ...], np.ndarray]],
+        pending: list[tuple[CandidateSpec, np.ndarray]],
         target_ret: np.ndarray,
         val_windows: list[tuple[int, int]],
-        step_results: dict[
-            tuple[int, ...], tuple[float, float | None, float, float | None]
-        ],
+        step_results: dict[tuple[int, ...], CandidateScore],
         blocked_buy: np.ndarray | None = None,
         blocked_sell: np.ndarray | None = None,
+        full_signal_range: tuple[int, int] | None = None,
     ) -> None:
         """Score one chunk of pending formulas and merge the outcomes."""
 
         if not pending:
             return
-        chunk_rewards, chunk_val, chunk_icir, chunk_val_icir = (
-            batched_basket_rewards(
-                np.stack([signal_np for _, signal_np in pending]),
-                target_ret,
-                self.backtest_config,
-                self.reward_config,
-                val_windows,
-                blocked_buy=blocked_buy,
-                blocked_sell=blocked_sell,
-            )
+        scores = self.candidate_scorer.score_many(
+            [spec for spec, _ in pending],
+            [signal_np for _, signal_np in pending],
+            target_ret,
+            val_windows,
+            blocked_buy=blocked_buy,
+            blocked_sell=blocked_sell,
+            full_signal_range=full_signal_range,
         )
-        for (key, _), reward, val_reward, icir, val_icir in zip(
-            pending, chunk_rewards, chunk_val, chunk_icir, chunk_val_icir
-        ):
-            step_results[key] = (
-                float(reward),
-                float(val_reward) if val_reward is not None else None,
-                float(icir),
-                float(val_icir) if val_icir is not None else None,
-            )
+        for score in scores:
+            assert score.tokens is not None
+            step_results[score.tokens] = score
 
     def train(
         self,
@@ -316,13 +317,12 @@ class AshareTrainer:
         max_len = self.model_config.max_formula_len
         vm_device = resolve_device(device)
 
-        train_end_idx = self._train_end_index(train_end_date)
-        if train_end_idx <= 2:
-            logger.warning(
-                f"Training window is degenerate ({train_end_idx} dates); "
-                "check backtest.train_end_date against the loaded data range "
-                f"({self.loader.dates[0]} .. {self.loader.dates[-1]})."
-            )
+        contract = self._training_contract(train_end_date)
+        train_end_idx = contract.train_label_end
+        train_signal_range = (
+            contract.train_signal_start,
+            contract.train_signal_end,
+        )
         factor_tensor = self.loader.factor_tensor[:, :, :train_end_idx].to(
             vm_device
         )
@@ -335,7 +335,11 @@ class AshareTrainer:
             if industry_codes is not None
             else None
         )
-        target_ret = self.loader.target_ret[:, :train_end_idx].numpy()
+        # Recompute labels only from prices inside the inclusive training
+        # anchor. Precomputed global targets at the tail may reference fold-
+        # external t+1/t+2 prices and are intentionally never sliced here.
+        train_open = self.loader.raw_data_cache["open"][:, :train_end_idx].numpy()
+        target_ret = open_to_open_returns(train_open)
         # Tradability masks (buy/sell blocked per stock and date) align the
         # training basket with the backtest engine's execution rules; both
         # matrices are shared by every formula scored this run.
@@ -347,7 +351,7 @@ class AshareTrainer:
         # formula selection, split into independent sub-windows; the best
         # formula is decided on the *median* validation reward so a single
         # lucky tail stretch cannot win the selection.
-        val_windows = self._validation_windows(train_end_idx)
+        val_windows = self._validation_windows(contract.train_signal_end)
 
         # Chunk the batched reward evaluation so the stacked signal matrix
         # stays within a fixed memory budget (~512 MB of float64 signals).
@@ -396,10 +400,8 @@ class AshareTrainer:
             # is executed once per step (and reused across steps through the
             # bounded cache); valid signals are scored in chunks so the
             # vectorized basket simulation stays memory-bounded.
-            step_results: dict[
-                tuple[int, ...], tuple[float, float | None, float, float | None]
-            ] = {}
-            pending: list[tuple[tuple[int, ...], np.ndarray]] = []
+            step_results: dict[tuple[int, ...], CandidateScore] = {}
+            pending: list[tuple[CandidateSpec, np.ndarray]] = []
             seen: set[tuple[int, ...]] = set()
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())
@@ -410,25 +412,27 @@ class AshareTrainer:
                 if key in seen:
                     continue
                 seen.add(key)
+                spec = CandidateSpec(
+                    candidate_id="rl:" + ",".join(str(token) for token in key),
+                    formula_text=formula_decode(list(key), self.vocab),
+                    source="rl",
+                    tokens=key,
+                )
                 signal = self.vm.execute(key, factor_tensor)
                 if signal is None:
-                    step_results[key] = (
-                        float(self.reward_config.reward_clip_low),
+                    step_results[key] = self.candidate_scorer.score(
+                        spec,
                         None,
-                        0.0,
-                        None,
+                        target_ret,
+                        val_windows,
+                        blocked_buy=blocked_buy,
+                        blocked_sell=blocked_sell,
+                        formula_valid=False,
+                        full_signal_range=train_signal_range,
                     )
                     continue
                 signal_np = signal.detach().cpu().numpy()
-                if np.nanstd(signal_np) < 1e-4:
-                    step_results[key] = (
-                        float(self.reward_config.bad_reward),
-                        None,
-                        0.0,
-                        None,
-                    )
-                    continue
-                pending.append((key, signal_np))
+                pending.append((spec, signal_np))
                 # Score as soon as one full chunk is ready: buffering every
                 # unique signal of a step at once costs batch_size x
                 # [stocks, dates] x 4 bytes and exhausts RAM on 16 GB
@@ -441,42 +445,46 @@ class AshareTrainer:
                         step_results,
                         blocked_buy,
                         blocked_sell,
+                        train_signal_range,
                     )
                     pending = []
             self._score_pending_chunk(
-                pending, target_ret, val_windows, step_results, blocked_buy, blocked_sell
+                pending,
+                target_ret,
+                val_windows,
+                step_results,
+                blocked_buy,
+                blocked_sell,
+                train_signal_range,
             )
 
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())
-                reward, val_reward, icir, val_icir = step_results[key]
-                if val_reward is not None:
-                    # Valid, non-constant formulas pay the bare-copy penalty
-                    # on both the gradient reward and the selection value.
-                    penalty = self._complexity_penalty(key)
-                    reward -= penalty
-                    val_reward -= penalty
-                rewards[i] = reward
+                score = step_results[key]
+                rewards[i] = score.full_window_reward
                 # Cache every outcome (invalid and constant formulas too):
                 # the token sequence fully determines it, so repeats can
                 # skip the VM execution as well.
-                self._cache_put(key, (reward, val_reward, icir, val_icir))
-                if val_reward is not None:
-                    # Out-of-sample selection: the best formula is decided on
-                    # the median validation reward, while the gradient still
-                    # sees the full training window.  The full-window ICIR is
-                    # tracked alongside for the signal-quality gate.
-                    if val_reward > self.best_reward:
-                        self.best_reward = val_reward
-                        self.best_icir = icir
-                        self.best_tokens = sequences[i].tolist()
-                        self.best_formula = formula_decode(
-                            self.best_tokens, self.vocab
-                        )
-                        pbar.write(
-                            f"[+] New best (validation): reward={val_reward:.3f} "
-                            f"icir={icir:.3f} formula={self.best_formula}"
-                        )
+                self._cache_put(key, score)
+                self._candidate_scores[key] = score
+
+            previous_key = (
+                self.selection_result.selected.deterministic_key
+                if self.selection_result.selected
+                else None
+            )
+            self.selection_result = self.candidate_selector.select(
+                self._candidate_scores.values()
+            )
+            self._sync_best_from_selection()
+            selected = self.selection_result.selected
+            if selected is not None and selected.deterministic_key != previous_key:
+                pbar.write(
+                    "[+] New eligible best: "
+                    f"val_reward={selected.val_reward:.3f} "
+                    f"val_icir={selected.val_icir:.3f} "
+                    f"formula={selected.formula_text}"
+                )
 
             # Policy-collapse monitoring: when the batch keeps re-sampling
             # the same few formulas the REINFORCE search has collapsed.
@@ -513,7 +521,7 @@ class AshareTrainer:
                 {
                     "step": float(step),
                     "avg_reward": float(rewards.mean()),
-                    "best_reward": float(self.best_reward),
+                    "best_val_reward": float(self.best_val_reward),
                     "loss": float(loss.detach()),
                     "value_loss": float(value_loss.detach()),
                     "entropy": float(entropy.detach()),
@@ -523,60 +531,57 @@ class AshareTrainer:
             pbar.set_postfix(
                 {
                     "avg_reward": f"{rewards.mean().item():.3f}",
-                    "best": f"{self.best_reward:.3f}",
+                    "best": f"{self.best_val_reward:.3f}",
                 }
             )
 
-        # Learned trade direction of the best formula, decided on the
-        # validation tail only (out-of-sample-safe for deployment): a
-        # negative-IC signal is flipped so the top-n long-only engines never
-        # mechanically trade it backwards.
-        if self.best_tokens is not None:
-            signal = self.vm.execute(self.best_tokens, factor_tensor)
-            if signal is not None:
-                sig_np = signal.detach().cpu().numpy()
-                val_start = self._validation_start(train_end_idx)
-                self.best_direction = signal_direction(
-                    sig_np[:, val_start:train_end_idx],
-                    target_ret[:, val_start:train_end_idx],
-                    self.reward_config.ic_min_stocks,
-                )
-
-        if self.best_tokens is None or self.best_reward < float(
-            self.reward_config.min_val_reward
-        ):
-            logger.warning(
-                f"No formula met the validation-quality floor "
-                f"(best={self.best_reward:.3f}, "
-                f"min_val_reward={self.reward_config.min_val_reward:.3f}); "
-                "no formula is saved"
+        selection_path = self.data_config.data_dir / "training_selection.json"
+        if save_artifacts:
+            selection_path.parent.mkdir(parents=True, exist_ok=True)
+            selection_payload = {
+                "reward_version": REWARD_VERSION,
+                "train_end": contract.train_end,
+                "train_anchor_end_exclusive": contract.train_anchor_end_exclusive,
+                "train_signal_start": contract.train_signal_start,
+                "train_signal_end": contract.train_signal_end,
+                "train_label_end": contract.train_label_end,
+                **self.selection_result.to_dict(compact=True),
+            }
+            selection_path.write_text(
+                json.dumps(selection_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
-            return None
-        if self.best_icir < float(self.reward_config.min_val_icir):
+
+        selected = self.selection_result.selected
+        if selected is None:
+            rejected = self.selection_result.best_rejected
+            rejected_detail = (
+                f" best rejected={rejected.formula_text!r} "
+                f"reasons={list(rejected.rejection_reasons)}"
+                if rejected is not None
+                else " no candidates were scored"
+            )
             logger.warning(
-                f"No formula met the signal-quality gate "
-                f"(best_icir={self.best_icir:.3f}, "
-                f"min_val_icir={self.reward_config.min_val_icir:.3f}); "
-                "no formula is saved"
+                "No eligible formula met every validation gate;"
+                f"{rejected_detail}. No strategy artifact is written."
             )
             return None
 
         if not save_artifacts:
             logger.success(
                 f"Training complete (artifacts skipped); "
-                f"best_reward={self.best_reward:.3f} "
-                f"best_icir={self.best_icir:.3f} "
+                f"val_reward={selected.val_reward:.3f} "
+                f"val_icir={selected.val_icir:.3f} "
                 f"direction={self.best_direction} "
                 f"formula={self.best_formula}"
             )
             return self.best_tokens
 
+        score_payload = selected.to_dict()
+        score_payload.pop("tokens", None)
         output = {
             "formula": self.best_tokens,
-            "formula_text": self.best_formula,
-            "best_reward": self.best_reward,
-            "best_icir": self.best_icir,
-            "direction": self.best_direction,
+            **score_payload,
             "history": self.history,
             # Reproducibility provenance: the policy stays on CPU, so
             # (init_seed, seed) reproduce the same sampled formulas on any
@@ -589,8 +594,8 @@ class AshareTrainer:
             "feature_names": list(self.vocab.feature_names),
             "operator_names": list(self.vocab.operator_names),
             "feature_version": self.vocab.feature_version,
-            # Reward provenance: best_reward values are only comparable
-            # within the same reward implementation generation.
+            # Reward provenance: reward values are only comparable within
+            # the same scoring implementation generation.
             "reward_version": REWARD_VERSION,
         }
         out_path = self.data_config.data_dir / "best_ashare_strategy.json"
@@ -604,17 +609,47 @@ class AshareTrainer:
         return self.best_tokens
 
     def _train_end_index(self, train_end_date: str | None = None) -> int:
-        """First column index at or after the training-window end date.
+        """Exclusive inclusive-anchor price end (legacy index accessor).
 
         ``train_end_date`` overrides ``backtest_config.train_end_date`` so
         the evaluation protocol can train each walk-forward fold against its
         own absolute cutoff without touching the shared config.
         """
 
-        train_end = (train_end_date or self.backtest_config.train_end_date).replace(
-            "-", ""
+        return self._training_contract(train_end_date).train_label_end
+
+    def _training_contract(
+        self, train_end_date: str | None = None
+    ) -> TrainingTimeContract:
+        return TrainingTimeContract.resolve(
+            self.loader.dates,
+            train_end_date or self.backtest_config.train_end_date,
         )
-        return date_index(self.loader.dates, train_end)
+
+    def _sync_best_from_selection(self) -> None:
+        selected = self.selection_result.selected
+        if selected is None:
+            self.best_val_reward = -float("inf")
+            self.best_val_icir = -float("inf")
+            self.best_full_window_reward = -float("inf")
+            self.best_full_window_icir = -float("inf")
+            self.best_direction = 1
+            self.best_tokens = None
+            self.best_formula = ""
+            return
+        self.best_val_reward = selected.val_reward
+        self.best_val_icir = selected.val_icir
+        self.best_full_window_reward = selected.full_window_reward
+        self.best_full_window_icir = selected.full_window_icir
+        self.best_direction = selected.direction
+        self.best_tokens = list(selected.tokens) if selected.tokens is not None else None
+        self.best_formula = selected.formula_text
+
+    @property
+    def best_reward(self) -> float:
+        """Deprecated read-only alias for the explicit validation reward."""
+
+        return self.best_val_reward
 
     def _validation_start(self, train_end_idx: int) -> int:
         """First index of the validation tail inside the training window.

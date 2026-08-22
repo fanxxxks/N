@@ -81,7 +81,7 @@ class SimJobManager:
         sim_config: SimConfig | None = None,
         run_file: str | Path | None = None,
         lock_file: str | Path | None = None,
-        cmd_builder: Callable[[], list[str]] | None = None,
+        cmd_builder: Callable[[bool, str | None, str | None], list[str]] | None = None,
         stop_grace: float = DEFAULT_STOP_GRACE_SECONDS,
         kill_grace: float = DEFAULT_KILL_GRACE_SECONDS,
     ) -> None:
@@ -96,9 +96,19 @@ class SimJobManager:
 
     # ------------------------------------------------------------------ state
 
-    def _default_cmd(self) -> list[str]:
+    def _default_cmd(
+        self,
+        reset: bool,
+        start_date: str | None,
+        end_date: str | None,
+    ) -> list[str]:
         state_path = self.sim_config.state_path if self.sim_config else None
-        return build_run_sim_argv(state_path=state_path)
+        return build_run_sim_argv(
+            reset=reset,
+            start_date=start_date,
+            end_date=end_date,
+            state_path=state_path,
+        )
 
     def _read_run(self) -> dict | None:
         try:
@@ -218,7 +228,19 @@ class SimJobManager:
                 raise RunConflictError("could not acquire the sim run lock")
 
         try:
-            return self._spawn(reset, start_date, end_date)
+            archive_note: str | None = None
+            if reset:
+                reset_result = self._reset_locked()
+                if not reset_result.get("ok"):
+                    self._release_lock()
+                    reason = str(reset_result.get("reason", "reset failed"))
+                    return {
+                        **reset_result,
+                        "action": "reset_failed",
+                        "message": reason,
+                    }
+                archive_note = str(reset_result.get("archive", ""))
+            return self._spawn(reset, start_date, end_date, archive_note)
         except Exception:
             self._release_lock()
             raise
@@ -228,17 +250,13 @@ class SimJobManager:
         reset: bool,
         start_date: str | None,
         end_date: str | None,
+        archive_note: str | None = None,
     ) -> dict:
-        argv = list(self.cmd_builder())
-        if start_date:
-            argv += ["--start", start_date]
-        if end_date:
-            argv += ["--end", end_date]
-
         # A leftover STOP/STOPPED signal or stale progress would make the new
         # run stop instantly or show a wrong phase; clear both.
         self._clear_stop_signal()
         self._remove(self.sim_config.progress_path if self.sim_config else None)
+        argv = list(self.cmd_builder(reset, start_date, end_date))
 
         log_path = self.root / "logs" / (
             f"sim_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -278,7 +296,28 @@ class SimJobManager:
         }
         self._write_run(record)
         logger.info(f"Simulation started: pid={proc.pid} args={argv}")
-        return self.status()
+        status = self.status()
+        if reset:
+            action = "reset_and_started"
+            message = (
+                "历史已归档并重置，模拟已启动"
+                if archive_note and archive_note != "no history to archive"
+                else "模拟已重置并启动"
+            )
+        elif "--resume" in argv:
+            action = "resumed"
+            message = "模拟已续跑"
+        else:
+            action = "started"
+            message = "模拟已启动"
+        return {
+            "ok": True,
+            "action": action,
+            "message": message,
+            "archive": archive_note,
+            "args": argv,
+            **status,
+        }
 
     # ----------------------------------------------------------------- status
 
@@ -445,6 +484,21 @@ class SimJobManager:
         record = self._read_run()
         if record and self._is_alive(record.get("pid"), record.get("started_at")):
             raise RunConflictError("cannot reset while a sim run is active")
+        if not self._acquire_lock():
+            record = self._read_run()
+            if record and self._is_alive(record.get("pid"), record.get("started_at")):
+                raise RunConflictError("sim run lock is held by a live process")
+            self._release_lock()
+            if not self._acquire_lock():
+                raise RunConflictError("could not acquire the sim run lock")
+        try:
+            return self._reset_locked()
+        finally:
+            self._release_lock()
+
+    def _reset_locked(self) -> dict:
+        """Archive and clear state while the caller holds the manager lock."""
+
         if self.sim_config is None:
             return {"ok": False, "reason": "config load failed"}
 
@@ -469,7 +523,12 @@ class SimJobManager:
         self._remove(self.sim_config.progress_path)
         self._clear_stop_signal()
         logger.success(f"Simulation reset. {archive_note}")
-        return {"ok": True, "archive": archive_note}
+        return {
+            "ok": True,
+            "action": "reset",
+            "message": "模拟盘已重置",
+            "archive": archive_note,
+        }
 
     def _archive_run(self) -> tuple[bool, str]:
         script = self.root / "scripts" / "archive_run.py"

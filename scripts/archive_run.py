@@ -107,9 +107,12 @@ def load_formula_info(path):
     return {
         "formula": data.get("formula"),
         "formula_text": data.get("formula_text"),
-        "best_reward": data.get("best_reward"),
-        # Reward provenance: best_reward is only comparable within the same
-        # reward implementation version (absent on legacy artifacts).
+        "val_reward": data.get("val_reward", data.get("best_reward")),
+        "val_icir": data.get("val_icir"),
+        "full_window_reward": data.get("full_window_reward"),
+        "full_window_icir": data.get(
+            "full_window_icir", data.get("best_icir")
+        ),
         "reward_version": data.get("reward_version"),
     }
 
@@ -293,6 +296,23 @@ def main(argv=None):
     if not any([formula_path, config_path, metrics_path, model_path]):
         print("ERROR: no artifacts provided; nothing to archive", file=sys.stderr)
         return 2
+
+    if args.mode in ("backtest", "sim"):
+        effective = load_effective_config(config_path, root) if config_path else None
+        if effective is None:
+            print("ERROR: could not load effective execution config", file=sys.stderr)
+            return 2
+        try:
+            from ashare_data.config import make_backtest_config, make_sim_config
+            from ashare_execution import validate_execution_config
+
+            validate_execution_config(
+                make_backtest_config(effective),
+                make_sim_config(effective, root),
+            )
+        except (ImportError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
 
     # Slug: --name > formula_text > protocol tier > generic.
     if args.name:

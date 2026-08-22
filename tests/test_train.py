@@ -8,6 +8,7 @@ import torch
 from torch.distributions import Categorical
 
 from ashare_data.config import BacktestConfig, DataConfig, ModelConfig, RewardConfig
+from ashare_data.processor import open_to_open_returns
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.reward import REWARD_VERSION
 from ashare_model.train import AshareTrainer, resolve_device
@@ -125,8 +126,11 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
         reward_config=reward_config,
     )
     train_end = trainer._train_end_index()
-    val_start = trainer._validation_start(train_end)
-    target = loader.target_ret[:, :train_end].numpy()
+    train_signal_end = trainer._training_contract().train_signal_end
+    val_start = trainer._validation_start(train_signal_end)
+    target = open_to_open_returns(
+        loader.raw_data_cache["open"][:, :train_end].numpy()
+    )
     # Crafted signal: actively bad in-sample, perfectly aligned in the
     # validation tail.  Only a validation-driven selection can score the
     # clip ceiling.
@@ -212,12 +216,22 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
     trainer.train(steps=1, batch_size=2, save_artifacts=False)
     bare = (1, 0, 0, 0)
     combined = (1, 1, add_token, 0)
-    assert trainer._reward_cache[bare] == pytest.approx((0.25, 0.15, 0.45, 0.35))
-    assert trainer._reward_cache[combined] == pytest.approx((0.5, 0.4, 0.45, 0.35))
+    bare_score = trainer._reward_cache[bare]
+    combined_score = trainer._reward_cache[combined]
+    assert bare_score.full_window_reward == pytest.approx(0.25)
+    assert bare_score.val_reward == pytest.approx(0.15)
+    assert bare_score.full_window_icir == pytest.approx(0.45)
+    assert bare_score.val_icir == pytest.approx(0.35)
+    assert combined_score.full_window_reward == pytest.approx(0.5)
+    assert combined_score.val_reward == pytest.approx(0.4)
+    assert combined_score.full_window_icir == pytest.approx(0.45)
+    assert combined_score.val_icir == pytest.approx(0.35)
     # The selection prefers the unpenalized operator formula.
     assert trainer.best_tokens == list(combined)
-    assert trainer.best_reward == pytest.approx(0.4)
-    assert trainer.best_icir == pytest.approx(0.45)
+    assert trainer.best_val_reward == pytest.approx(0.4)
+    assert trainer.best_val_icir == pytest.approx(0.35)
+    assert trainer.best_full_window_reward == pytest.approx(0.5)
+    assert trainer.best_full_window_icir == pytest.approx(0.45)
 
 
 def test_quality_floor_blocks_save_and_returns_none(
@@ -235,14 +249,28 @@ def test_quality_floor_blocks_save_and_returns_none(
         reward_config=reward_config,
     )
     train_end = trainer._train_end_index()
-    # Perfectly *inverted* alignment: negative ICIR everywhere, so the best
-    # validation reward stays below the quality floor.
-    target = loader.target_ret[:, :train_end].numpy()
-    inverted = torch.tensor(-target * 100.0, dtype=torch.float32)
-    monkeypatch.setattr(trainer.vm, "execute", lambda tokens, ft: inverted)
+    # Both orientations score below the validation floor. Direction symmetry
+    # must not allow an ineligible candidate to become the saved best.
+    signal = torch.arange(
+        1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
+    ).reshape(len(loader.ts_codes), train_end)
+    monkeypatch.setattr(trainer.vm, "execute", lambda tokens, ft: signal)
+    import ashare_model.train as train_module
+    monkeypatch.setattr(
+        train_module,
+        "batched_basket_rewards",
+        lambda signals, target, bt, rc, val_windows, **kwargs: (
+            np.full(signals.shape[0], -0.5),
+            np.full(signals.shape[0], -0.5),
+            np.full(signals.shape[0], 0.2),
+            np.full(signals.shape[0], 0.2),
+        ),
+    )
     tokens = trainer.train(steps=1, batch_size=1)
     assert tokens is None
-    assert trainer.best_reward < 0.0
+    assert trainer.best_val_reward == -float("inf")
+    assert trainer.selection_result.best_rejected is not None
+    assert trainer.selection_result.best_rejected.val_reward < 0.0
     assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
 
 
@@ -560,9 +588,9 @@ def test_reward_cache_reuses_evaluations_across_steps(
     trainer.train(steps=2, batch_size=4, save_artifacts=False)
     # Step 1 evaluates the unique formula once; step 2 hits the cache and
     # never touches the VM again (invalid formulas are cached too).  The
-    # second VM call overall is the single end-of-training execution that
-    # computes the best formula's learned trade direction.
-    assert calls["n"] == 2
+    # Direction is scored in the same shared +/- batch, so no late VM
+    # execution is needed after selection.
+    assert calls["n"] == 1
 
 
 def test_reward_cache_is_bounded_lru(monkeypatch):
@@ -624,8 +652,8 @@ def test_duplicate_formulas_share_one_batched_evaluation(
     trainer.train(steps=1, batch_size=4, save_artifacts=False)
     # Four identical valid formulas: one VM execution, one batched scoring,
     # and the best formula is recorded from the shared evaluation; the
-    # second VM call is the single end-of-training direction computation.
-    assert calls["n"] == 2
+    # Direction is selected by the same batched evaluation.
+    assert calls["n"] == 1
     assert trainer.best_tokens is not None
     assert trainer.best_tokens[:3] == [1, 1, add_token]
     assert trainer.best_reward > -float("inf")
@@ -703,7 +731,9 @@ def test_streamed_reward_chunks_match_single_pass(
 
     # The streamed path splits the exact same formula set into chunks of at
     # most 8; the single-pass path scores it in exactly one call.
-    assert calls_streamed and all(c <= 8 for c in calls_streamed)
+    # Each pending candidate contributes both +signal and -signal to the
+    # shared direction-symmetric scoring call.
+    assert calls_streamed and all(c <= 2 * 8 for c in calls_streamed)
     assert len(calls_single) == 1
     assert sum(calls_streamed) == calls_single[0]
 
@@ -761,8 +791,11 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
     assert tokens is None
     # The bare-copy penalty (0.02 by default config) shaves the reported
     # cost-adjusted reward; the raw ICIR stays below the gate.
-    assert trainer.best_reward == pytest.approx(0.78)
-    assert trainer.best_icir == pytest.approx(0.01)
+    assert trainer.best_val_reward == -float("inf")
+    rejected = trainer.selection_result.best_rejected
+    assert rejected is not None
+    assert rejected.val_reward == pytest.approx(0.78)
+    assert rejected.val_icir == pytest.approx(0.01)
     assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
 
 
@@ -800,7 +833,8 @@ def test_icir_gate_passes_strong_signal(tmp_path, populated_db: DataConfig, monk
     )
     tokens = trainer.train(steps=1, batch_size=1, save_artifacts=False)
     assert tokens is not None
-    assert trainer.best_icir == pytest.approx(0.4)
+    assert trainer.best_val_icir == pytest.approx(0.4)
+    assert trainer.best_full_window_icir == pytest.approx(0.4)
     assert trainer.best_direction in (-1, 1)
 
 
@@ -834,7 +868,15 @@ def test_artifact_records_direction_and_icir(tmp_path, populated_db: DataConfig,
         (populated_db.data_dir / "best_ashare_strategy.json").read_text(encoding="utf-8")
     )
     assert artifact["direction"] == trainer.best_direction
-    assert artifact["best_icir"] == pytest.approx(trainer.best_icir)
+    assert artifact["val_reward"] == pytest.approx(trainer.best_val_reward)
+    assert artifact["val_icir"] == pytest.approx(trainer.best_val_icir)
+    assert artifact["full_window_reward"] == pytest.approx(
+        trainer.best_full_window_reward
+    )
+    assert artifact["full_window_icir"] == pytest.approx(
+        trainer.best_full_window_icir
+    )
+    assert "best_reward" not in artifact and "best_icir" not in artifact
 
 
 def test_collapse_warning_fires_after_consecutive_collapsed_steps(

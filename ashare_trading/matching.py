@@ -8,6 +8,7 @@ import pandas as pd
 
 from ashare_data.config import SimConfig
 from ashare_data.schemas import SimOrder, SimTrade
+from ashare_execution import ExecutionCostModel
 
 from .portfolio import SimulationPortfolio
 from .risk import is_one_word_limit_down, is_one_word_limit_up, is_suspended
@@ -39,6 +40,7 @@ class SimBroker:
         }
         trades: list[SimTrade] = []
         portfolio.mark_new_day()
+        cost_model = ExecutionCostModel.from_config(backtest_config)
 
         for order in orders:
             if order.trade_date != date:
@@ -71,20 +73,18 @@ class SimBroker:
                     portfolio.cash,
                     price,
                     order.quantity,
-                    backtest_config,
+                    cost_model,
                 )
                 if shares <= 0:
                     order.status = "skipped"
                     order.reason = "insufficient_cash"
                     continue
                 amount = shares * price
-                commission = max(
-                    backtest_config.min_commission,
-                    backtest_config.commission_rate * amount,
-                )
-                transfer = backtest_config.transfer_fee_rate * amount
-                slippage = backtest_config.slippage_rate * amount
-                fees = commission + transfer + slippage
+                costs = cost_model.buy_cost(amount)
+                commission = float(costs.commission)
+                transfer = float(costs.transfer_fee)
+                slippage = float(costs.slippage)
+                fees = float(costs.total)
                 portfolio.add_buy(order.ts_code, name, shares, price, date)
                 portfolio.cash -= fees
                 trade = self._make_trade(
@@ -115,14 +115,12 @@ class SimBroker:
                     order.reason = "no_available_position"
                     continue
                 amount = shares * price
-                commission = max(
-                    backtest_config.min_commission,
-                    backtest_config.commission_rate * amount,
-                )
-                stamp = backtest_config.stamp_tax_rate * amount
-                transfer = backtest_config.transfer_fee_rate * amount
-                slippage = backtest_config.slippage_rate * amount
-                fees = commission + stamp + transfer + slippage
+                costs = cost_model.sell_cost(amount)
+                commission = float(costs.commission)
+                stamp = float(costs.stamp_tax)
+                transfer = float(costs.transfer_fee)
+                slippage = float(costs.slippage)
+                fees = float(costs.total)
                 portfolio.add_sell(order.ts_code, shares, price, date)
                 portfolio.cash -= fees
                 trade = self._make_trade(
@@ -151,25 +149,9 @@ class SimBroker:
         cash: float,
         price: float,
         requested: int,
-        backtest_config,
+        cost_model: ExecutionCostModel,
     ) -> int:
-        if price <= 0:
-            return 0
-        bc = backtest_config
-        # Solve for the share count whose cost plus commission (with the
-        # minimum fee floor), transfer fee and slippage fits the cash.
-        per_share_flat = price * (1.0 + bc.slippage_rate + bc.transfer_fee_rate)
-        per_share_full = price * (
-            1.0 + bc.slippage_rate + bc.commission_rate + bc.transfer_fee_rate
-        )
-        max_shares = int(
-            (cash - bc.min_commission) / (per_share_flat + 1e-9)
-        )
-        max_shares = min(max_shares, int(cash / (per_share_full + 1e-9)))
-        # A-share buys must be whole lots of 100 shares.
-        max_shares = (max(0, max_shares) // 100) * 100
-        shares = (min(requested, max_shares) // 100) * 100
-        return max(0, shares)
+        return cost_model.affordable_shares(cash, price, requested, lot_size=100)
 
     def _make_trade(
         self,

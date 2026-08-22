@@ -23,7 +23,7 @@ def _write_sim_db(data_config: DataConfig, dates, ts_codes, bars):
 def _make_runner(
     tmp_path: Path,
     n_dates: int = 40,
-    top_n: int = 3,
+    top_n: int = 2,
     max_positions: int | None = None,
 ) -> tuple[SimulationRunner, list[str]]:
     """A runner over ``n_dates`` synthetic bars with all paths under tmp_path."""
@@ -44,9 +44,10 @@ def _make_runner(
         json.dumps({"formula": [1], "formula_text": "RET_1"}), encoding="utf-8"
     )
 
+    position_count = max_positions if max_positions is not None else top_n
     sim_config = SimConfig(
         initial_capital=100000.0,
-        max_positions=max_positions or 2,
+        max_positions=position_count,
         single_weight_cap=0.5,
         state_path=tmp_path / "state.json",
         orders_dir=tmp_path / "orders",
@@ -57,7 +58,12 @@ def _make_runner(
     runner = SimulationRunner(
         data_config,
         model_config,
-        BacktestConfig(top_n=top_n, train_end_date="2024-01-20"),
+        BacktestConfig(
+            initial_capital=sim_config.initial_capital,
+            top_n=position_count,
+            single_weight_cap=sim_config.single_weight_cap,
+            train_end_date="2024-01-20",
+        ),
         sim_config,
         loader,
     )
@@ -199,16 +205,18 @@ def test_simulation_runner_honors_artifact_direction(tmp_path: Path):
     assert runner.direction == -1
     assert runner._has_recorded_direction
     runner.run()
-    # A direction of -1 flips the signal: the equity path must differ from
-    # the +1 replay of the same formula (fresh state each side).
-    flipped_equity = [
-        h["equity"] for h in runner.portfolio.equity_history
-    ]
+    # A direction of -1 flips the signal: the selected paper orders must
+    # differ from a +1 replay of the same formula (fresh state each side).
+    flipped_orders = {
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted(runner.sim_config.orders_dir.glob("*.json"))
+    }
     runner.portfolio.reset()
     runner.direction = 1
     runner._has_recorded_direction = True
     runner.run()
-    replay_equity = [
-        h["equity"] for h in runner.portfolio.equity_history
-    ]
-    assert flipped_equity != replay_equity
+    replay_orders = {
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted(runner.sim_config.orders_dir.glob("*.json"))
+    }
+    assert flipped_orders != replay_orders
