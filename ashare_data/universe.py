@@ -1,4 +1,4 @@
-"""Point-in-time universe contract and production-data gate.
+"""Point-in-time universe domain model, contract and production-data gate.
 
 The production universe has three independent sources of truth:
 
@@ -15,8 +15,11 @@ variables, pytest detection and call-stack inspection are deliberately absent.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from enum import IntFlag
+from numbers import Integral
 from typing import Iterable
 
 import numpy as np
@@ -39,6 +42,49 @@ class UniverseContractError(ValueError):
 
 class UniverseDevelopmentFallbackWarning(UserWarning):
     """An explicitly requested non-production universe fallback is active."""
+
+
+class UniverseReason(IntFlag):
+    """Auditable reasons for a stock/date universe decision."""
+
+    NOT_MEMBER = 1 << 0
+    NOT_YET_LISTED = 1 << 1
+    LISTING_AGE_INSUFFICIENT = 1 << 2
+    STATUS_UNKNOWN = 1 << 3
+    MISSING_BAR = 1 << 4
+
+
+@dataclass(frozen=True)
+class UniversePolicy:
+    """Pure eligibility policy applied to point-in-time source records."""
+
+    index_codes: tuple[str, ...]
+    min_listed_sessions: int
+    membership_end_inclusive: bool
+
+
+@dataclass(frozen=True)
+class UniverseMask:
+    """Immutable ``[stock, signal-date]`` eligibility and audit reasons."""
+
+    eligible: np.ndarray
+    reasons: np.ndarray
+
+    def __post_init__(self) -> None:
+        eligible = np.array(self.eligible, dtype=np.bool_, copy=True)
+        reasons = np.array(self.reasons, dtype=np.uint16, copy=True)
+        if eligible.ndim != 2:
+            raise UniverseContractError("eligible must be a two-dimensional array")
+        if reasons.ndim != 2:
+            raise UniverseContractError("reasons must be a two-dimensional array")
+        if eligible.shape != reasons.shape:
+            raise UniverseContractError(
+                "eligible and reasons must have the same [stock, date] shape"
+            )
+        eligible.setflags(write=False)
+        reasons.setflags(write=False)
+        object.__setattr__(self, "eligible", eligible)
+        object.__setattr__(self, "reasons", reasons)
 
 
 @dataclass(frozen=True)
@@ -126,6 +172,268 @@ def _valid_date(value: object) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _require_date(value: object, field: str) -> str:
+    normalized = _normalize_date(value)
+    if not _valid_date(normalized):
+        raise UniverseContractError(
+            f"{field} must be a valid date in YYYYMMDD form: {value!r}"
+        )
+    return normalized
+
+
+def _normalize_date_axis(values: Iterable[object], field: str) -> list[str]:
+    try:
+        raw_values = list(values)
+    except TypeError as exc:
+        raise UniverseContractError(f"{field} must be an iterable of dates") from exc
+    normalized = [
+        _require_date(value, f"{field}[{position}]")
+        for position, value in enumerate(raw_values)
+    ]
+    if len(set(normalized)) != len(normalized):
+        raise UniverseContractError(f"{field} contains duplicate normalized dates")
+    return normalized
+
+
+def _validate_policy(policy: UniversePolicy) -> tuple[str, ...]:
+    if not isinstance(policy, UniversePolicy):
+        raise UniverseContractError("policy must be a UniversePolicy")
+    if not isinstance(policy.index_codes, tuple) or not policy.index_codes:
+        raise UniverseContractError("policy.index_codes must be a non-empty tuple")
+    index_codes = tuple(str(code).strip() for code in policy.index_codes)
+    if any(not code for code in index_codes):
+        raise UniverseContractError("policy.index_codes cannot contain blank values")
+    if len(set(index_codes)) != len(index_codes):
+        raise UniverseContractError("policy.index_codes cannot contain duplicates")
+    if (
+        isinstance(policy.min_listed_sessions, bool)
+        or not isinstance(policy.min_listed_sessions, Integral)
+        or policy.min_listed_sessions < 0
+    ):
+        raise UniverseContractError(
+            "policy.min_listed_sessions must be a non-negative integer"
+        )
+    if not isinstance(policy.membership_end_inclusive, bool):
+        raise UniverseContractError(
+            "policy.membership_end_inclusive must be a boolean"
+        )
+    return index_codes
+
+
+def _normalize_codes(ts_codes: Iterable[str]) -> list[str]:
+    try:
+        codes = [str(code).strip() for code in ts_codes]
+    except TypeError as exc:
+        raise UniverseContractError("ts_codes must be an iterable") from exc
+    if any(not code for code in codes):
+        raise UniverseContractError("ts_codes cannot contain blank values")
+    if len(set(codes)) != len(codes):
+        raise UniverseContractError("ts_codes cannot contain duplicates")
+    return codes
+
+
+def _exclusive_membership_end(out_date: str, inclusive: bool) -> str:
+    if not inclusive or out_date == OPEN_ENDED_OUT_DATE:
+        return out_date
+    return (
+        datetime.strptime(out_date, "%Y%m%d") + timedelta(days=1)
+    ).strftime("%Y%m%d")
+
+
+def _normalize_membership_intervals(
+    constituents: Iterable[Mapping[str, object]] | pd.DataFrame,
+    *,
+    end_inclusive: bool,
+) -> dict[tuple[str, str], list[tuple[str, str]]]:
+    if isinstance(constituents, pd.DataFrame):
+        missing = _missing_columns(constituents, MEMBERSHIP_COLUMNS)
+        if missing:
+            raise UniverseContractError(
+                "constituents missing required columns: " + ", ".join(missing)
+            )
+        raw_rows: list[object] = constituents.to_dict("records")
+    else:
+        try:
+            raw_rows = list(constituents)
+        except TypeError as exc:
+            raise UniverseContractError(
+                "constituents must be a DataFrame or iterable of mappings"
+            ) from exc
+
+    intervals: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for position, raw_row in enumerate(raw_rows):
+        if not isinstance(raw_row, Mapping):
+            raise UniverseContractError(
+                f"constituents[{position}] must be a mapping"
+            )
+        missing = [column for column in MEMBERSHIP_COLUMNS if column not in raw_row]
+        if missing:
+            raise UniverseContractError(
+                f"constituents[{position}] missing required fields: "
+                + ", ".join(missing)
+            )
+        index_code = str(raw_row["index_code"]).strip()
+        ts_code = str(raw_row["ts_code"]).strip()
+        if not index_code or not ts_code:
+            raise UniverseContractError(
+                f"constituents[{position}] index_code and ts_code cannot be blank"
+            )
+        in_date = _require_date(
+            raw_row["in_date"], f"constituents[{position}].in_date"
+        )
+        provider_out_date = _require_date(
+            raw_row["out_date"], f"constituents[{position}].out_date"
+        )
+        if end_inclusive:
+            invalid = provider_out_date < in_date
+        else:
+            invalid = provider_out_date <= in_date
+        if invalid:
+            interval_kind = "inclusive" if end_inclusive else "half-open"
+            raise UniverseContractError(
+                f"constituents[{position}] has an invalid {interval_kind} interval: "
+                f"{in_date} to {provider_out_date}"
+            )
+        out_date = _exclusive_membership_end(
+            provider_out_date, end_inclusive
+        )
+        intervals.setdefault((index_code, ts_code), []).append(
+            (in_date, out_date)
+        )
+
+    for (index_code, ts_code), values in intervals.items():
+        values.sort()
+        previous_out: str | None = None
+        for in_date, out_date in values:
+            if previous_out is not None and in_date < previous_out:
+                raise UniverseContractError(
+                    "duplicate or overlapping constituent intervals for "
+                    f"({index_code}, {ts_code}); {in_date} < {previous_out}"
+                )
+            previous_out = out_date
+    return intervals
+
+
+def _normalize_bar_presence(
+    bar_presence: object,
+    expected_shape: tuple[int, int],
+) -> np.ndarray:
+    raw = np.asarray(bar_presence)
+    if raw.shape != expected_shape:
+        raise UniverseContractError(
+            "bar_presence must have [stock, date] shape "
+            f"{expected_shape}, got {raw.shape}"
+        )
+    if raw.dtype != np.bool_:
+        try:
+            boolean_like = np.isin(raw, (0, 1)).all()
+        except TypeError as exc:
+            raise UniverseContractError(
+                "bar_presence values must be boolean or zero/one"
+            ) from exc
+        if not boolean_like:
+            raise UniverseContractError(
+                "bar_presence values must be boolean or zero/one"
+            )
+    return raw.astype(np.bool_, copy=False)
+
+
+def build_universe_mask(
+    ts_codes: Iterable[str],
+    signal_dates: Iterable[object],
+    open_sessions: Iterable[object],
+    constituents: Iterable[Mapping[str, object]] | pd.DataFrame,
+    list_dates: Mapping[str, object],
+    bar_presence: object,
+    policy: UniversePolicy,
+) -> UniverseMask:
+    """Build a pure, auditable point-in-time eligibility mask.
+
+    Membership is evaluated as the union of ``policy.index_codes``.  Provider
+    inclusive end dates are converted once to the module's canonical half-open
+    form.  Missing listing metadata is retained as the non-blocking
+    ``STATUS_UNKNOWN`` audit bit; malformed supplied dates are rejected.
+    """
+
+    index_codes = set(_validate_policy(policy))
+    codes = _normalize_codes(ts_codes)
+    dates = _normalize_date_axis(signal_dates, "signal_dates")
+    sessions = _normalize_date_axis(open_sessions, "open_sessions")
+    if not sessions:
+        raise UniverseContractError("open_sessions cannot be empty")
+    session_set = set(sessions)
+    non_sessions = [date for date in dates if date not in session_set]
+    if non_sessions:
+        raise UniverseContractError(
+            "signal_dates contains date(s) absent from open_sessions: "
+            + ", ".join(non_sessions[:3])
+        )
+    sorted_sessions = np.asarray(sorted(sessions), dtype="U8")
+    signal_axis = np.asarray(dates, dtype="U8")
+    presence = _normalize_bar_presence(
+        bar_presence, (len(codes), len(dates))
+    )
+    if not isinstance(list_dates, Mapping):
+        raise UniverseContractError("list_dates must be a mapping by ts_code")
+
+    all_intervals = _normalize_membership_intervals(
+        constituents,
+        end_inclusive=policy.membership_end_inclusive,
+    )
+    selected_intervals: dict[str, list[tuple[str, str]]] = {}
+    for (index_code, ts_code), values in all_intervals.items():
+        if index_code in index_codes:
+            selected_intervals.setdefault(ts_code, []).extend(values)
+
+    reasons = np.zeros((len(codes), len(dates)), dtype=np.uint16)
+    not_member_value = np.uint16(UniverseReason.NOT_MEMBER)
+    not_yet_listed_value = np.uint16(UniverseReason.NOT_YET_LISTED)
+    insufficient_age_value = np.uint16(
+        UniverseReason.LISTING_AGE_INSUFFICIENT
+    )
+    unknown_status_value = np.uint16(UniverseReason.STATUS_UNKNOWN)
+    missing_bar_value = np.uint16(UniverseReason.MISSING_BAR)
+
+    for row, code in enumerate(codes):
+        member = np.zeros(len(dates), dtype=np.bool_)
+        for in_date, out_date in selected_intervals.get(code, ()):
+            member |= (signal_axis >= in_date) & (signal_axis < out_date)
+        reasons[row, ~member] |= not_member_value
+
+        raw_list_date = list_dates.get(code)
+        normalized_list_date = _normalize_date(raw_list_date)
+        if not normalized_list_date:
+            reasons[row, :] |= unknown_status_value
+        else:
+            list_date = _require_date(
+                normalized_list_date, f"list_dates[{code!r}]"
+            )
+            not_yet_listed = signal_axis < list_date
+            reasons[row, not_yet_listed] |= not_yet_listed_value
+            listed_session_start = int(
+                np.searchsorted(sorted_sessions, list_date, side="left")
+            )
+            session_positions = np.searchsorted(
+                sorted_sessions, signal_axis, side="right"
+            )
+            listed_session_age = session_positions - listed_session_start
+            insufficient_age = (
+                ~not_yet_listed
+                & (listed_session_age < int(policy.min_listed_sessions))
+            )
+            reasons[row, insufficient_age] |= insufficient_age_value
+
+    reasons[~presence] |= missing_bar_value
+    blocking_reasons = np.uint16(
+        UniverseReason.NOT_MEMBER
+        | UniverseReason.NOT_YET_LISTED
+        | UniverseReason.LISTING_AGE_INSUFFICIENT
+        | UniverseReason.MISSING_BAR
+    )
+    eligible = (reasons & blocking_reasons) == 0
+    return UniverseMask(eligible=eligible, reasons=reasons)
 
 
 def _missing_columns(frame: pd.DataFrame, required: Iterable[str]) -> list[str]:
