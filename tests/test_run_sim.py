@@ -18,6 +18,24 @@ def _write_sim_db(data_config: DataConfig, dates, ts_codes, bars):
     with AshareDB(data_config.duckdb_path) as db:
         db.create_schema(data_config)
         db.upsert_daily(bars.to_dict("records"), data_config)
+        db.upsert_stocks(
+            [
+                {"ts_code": code, "name": code, "industry": None, "list_date": "20200101", "is_st": False}
+                for code in ts_codes
+            ],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": date, "is_open": True} for date in dates],
+            data_config,
+        )
+        db.upsert_constituents(
+            [
+                {"index_code": "000300.SH", "ts_code": code, "in_date": f"2020010{i + 1}", "out_date": "99991231"}
+                for i, code in enumerate(ts_codes)
+            ],
+            data_config,
+        )
 
 
 def _make_runner(
@@ -35,6 +53,8 @@ def _make_runner(
         parquet_dir=tmp_path / "parquet",
         start_date="2024-01-01",
         end_date="2024-12-31",
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
     )
     _write_sim_db(data_config, dates, ts_codes, bars)
     model_config = ModelConfig(max_formula_len=6)

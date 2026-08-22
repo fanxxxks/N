@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from ashare_data.config import BacktestConfig, DataConfig, ModelConfig, SimConfig
+from ashare_data.db import AshareDB
 from webapi import service
 
 
@@ -126,3 +128,34 @@ def test_sim_config_patch_validation(tmp_path: Path):
     with pytest.raises(ValueError):
         service.SimConfigPatch(min_commission=-1.0)
     assert service.get_sim_config(root=root)["overrides"] == {}
+
+
+def test_sim_start_enforces_production_universe_before_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    data_config = DataConfig(
+        data_dir=tmp_path,
+        duckdb_path=tmp_path / "ashare.duckdb",
+        parquet_dir=tmp_path / "parquet",
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
+    )
+    with AshareDB(data_config.duckdb_path) as db:
+        db.create_schema(data_config)
+    monkeypatch.setattr(
+        service,
+        "_get_configs",
+        lambda: (data_config, ModelConfig(), BacktestConfig(), SimConfig()),
+    )
+    spawned = False
+
+    def fail_if_spawned():
+        nonlocal spawned
+        spawned = True
+        raise AssertionError("job manager must not be constructed")
+
+    monkeypatch.setattr(service, "_job_manager", fail_if_spawned)
+    result = service.sim_start(service.SimStartRequest())
+    assert result["ok"] is False
+    assert "production universe contract violation" in result["reason"]
+    assert spawned is False

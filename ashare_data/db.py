@@ -75,10 +75,11 @@ class AshareDB:
                 ts_code VARCHAR,
                 in_date VARCHAR,
                 out_date VARCHAR,
-                PRIMARY KEY (index_code, ts_code)
+                PRIMARY KEY (index_code, ts_code, in_date)
             )
             """
         )
+        self._ensure_constituents_primary_key(config)
         self.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {config.calendar_table} (
@@ -198,17 +199,75 @@ class AshareDB:
             return
         import pandas as pd
 
-        df = pd.DataFrame(rows)
+        from .universe import validate_membership_intervals
+
+        df = validate_membership_intervals(pd.DataFrame(rows))
+        existing = self.query(
+            f"SELECT index_code, ts_code, in_date, out_date "
+            f"FROM {config.constituents_table}"
+        )
+        combined = pd.concat([existing, df], ignore_index=True)
+        combined = combined.drop_duplicates(
+            subset=["index_code", "ts_code", "in_date"], keep="last"
+        )
+        validate_membership_intervals(combined)
         self._conn.register("_cons_df", df)
         self.execute(
             f"""
             INSERT INTO {config.constituents_table}
             SELECT index_code, ts_code, in_date, out_date FROM _cons_df
-            ON CONFLICT (index_code, ts_code) DO UPDATE SET
-                in_date=EXCLUDED.in_date,
+            ON CONFLICT (index_code, ts_code, in_date) DO UPDATE SET
                 out_date=EXCLUDED.out_date
             """
         )
+
+    def _ensure_constituents_primary_key(self, config) -> None:
+        """Migrate the legacy two-column PK without inventing interval data."""
+
+        table = config.constituents_table
+        constraints = self.query(
+            """
+            SELECT constraint_column_names
+            FROM duckdb_constraints()
+            WHERE table_name = ? AND constraint_type = 'PRIMARY KEY'
+            """,
+            [table],
+        )
+        current: list[str] = []
+        if not constraints.empty:
+            value = constraints.iloc[0]["constraint_column_names"]
+            current = [str(column) for column in value]
+        expected = ["index_code", "ts_code", "in_date"]
+        if current == expected:
+            return
+
+        migration_table = f"{table}__pit_pk_migration"
+        self.execute("BEGIN TRANSACTION")
+        try:
+            self.execute(f"DROP TABLE IF EXISTS {migration_table}")
+            self.execute(
+                f"""
+                CREATE TABLE {migration_table} (
+                    index_code VARCHAR,
+                    ts_code VARCHAR,
+                    in_date VARCHAR,
+                    out_date VARCHAR,
+                    PRIMARY KEY (index_code, ts_code, in_date)
+                )
+                """
+            )
+            self.execute(
+                f"""
+                INSERT INTO {migration_table}
+                SELECT index_code, ts_code, in_date, out_date FROM {table}
+                """
+            )
+            self.execute(f"DROP TABLE {table}")
+            self.execute(f"ALTER TABLE {migration_table} RENAME TO {table}")
+            self.execute("COMMIT")
+        except Exception:
+            self.execute("ROLLBACK")
+            raise
 
     def upsert_calendar(self, rows: list[dict[str, Any]], config) -> None:
         if not rows:

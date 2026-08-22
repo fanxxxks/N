@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+from ashare_data.config import DataConfig
+from ashare_data.db import AshareDB
+
 ARCHIVE_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "archive_run.py"
 
 
@@ -30,6 +33,7 @@ def repo(tmp_path):
     git(tmp_path, "config", "user.email", "tester@example.com")
     (tmp_path / "README.md").write_text("x", encoding="utf-8")
     (tmp_path / "data").mkdir()
+    (tmp_path / "config").mkdir()
     formula = {
         "formula": [8, 0, 0],
         "formula_text": "TURNOVER_CHG MUL RET_5",
@@ -40,7 +44,43 @@ def repo(tmp_path):
         "reward_version": "6",
     }
     (tmp_path / "data" / "best.json").write_text(json.dumps(formula), encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model:\n  d_model: 64\n", encoding="utf-8")
+    config_text = (
+        "data_dir: data\n"
+        "duckdb_path: data/ashare.duckdb\n"
+        "parquet_dir: data/parquet\n"
+        "index_codes: [000300.SH]\n"
+        "model:\n  d_model: 64\n"
+    )
+    (tmp_path / "config.yaml").write_text(config_text, encoding="utf-8")
+    (tmp_path / "config" / "ashare_config.yaml").write_text(
+        config_text, encoding="utf-8"
+    )
+    data_config = DataConfig(
+        data_dir=tmp_path / "data",
+        duckdb_path=tmp_path / "data" / "ashare.duckdb",
+        parquet_dir=tmp_path / "data" / "parquet",
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
+    )
+    with AshareDB(data_config.duckdb_path) as db:
+        db.create_schema(data_config)
+        db.upsert_stocks(
+            [
+                {"ts_code": "000001.SZ", "name": "A", "industry": None, "list_date": "20100101", "is_st": False},
+                {"ts_code": "600000.SH", "name": "B", "industry": None, "list_date": "20100101", "is_st": False},
+            ],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": "20240102", "is_open": True}], data_config
+        )
+        db.upsert_constituents(
+            [
+                {"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20150101", "out_date": "99991231"},
+                {"index_code": "000300.SH", "ts_code": "600000.SH", "in_date": "20160101", "out_date": "99991231"},
+            ],
+            data_config,
+        )
     metrics = {
         "formula_text": "TURNOVER_CHG MUL RET_5",
         "metrics": {"sharpe": 1.5, "max_drawdown": 0.2},
@@ -266,6 +306,20 @@ def test_protocol_mode_does_not_require_formula(repo):
     _write_protocol(repo)
     r = run_archive(repo, "--mode", "protocol")
     assert r.returncode == 0, r.stderr
+
+
+def test_formal_archive_refuses_invalid_production_universe(repo):
+    import duckdb
+
+    _write_protocol(repo)
+    con = duckdb.connect(str(repo / "data" / "ashare.duckdb"))
+    con.execute("UPDATE stocks SET list_date = NULL WHERE ts_code = '000001.SZ'")
+    con.close()
+    r = run_archive(repo, "--mode", "protocol")
+    assert r.returncode == 2
+    assert "production universe contract violation" in r.stderr
+    assert "stocks.list_date" in r.stderr
+    assert not (repo / "experiments").exists()
 
 
 def test_protocol_manifest_records_actual_run_scope(repo):

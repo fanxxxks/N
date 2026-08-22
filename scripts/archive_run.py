@@ -243,6 +243,19 @@ def load_effective_config(config_path, root):
         return None
 
 
+def require_archive_production_universe(config_path, root):
+    """Validate the non-degradable data gate before a formal archive write."""
+
+    effective = load_effective_config(config_path, root) if config_path else None
+    if effective is None:
+        raise ValueError("could not load effective data config for production gate")
+    from ashare_data.config import make_data_config
+    from ashare_data.universe import require_production_universe
+
+    data_config = make_data_config(effective, Path(root))
+    require_production_universe(data_config)
+
+
 def git_commit_run_dir(run_dir, mode, root):
     """Stage and commit only the archived run dir. Returns (ok, message)."""
     rel = run_dir.relative_to(root).as_posix()
@@ -344,6 +357,13 @@ def main(argv=None):
         if args.commit:
             print("[dry-run] would git-commit experiments/ dir")
         return 0
+
+    if args.mode != "manual":
+        try:
+            require_archive_production_universe(config_path, root)
+        except (ImportError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
 
     # Capture repo state before touching the tree (so the run dir itself isn't "dirty").
     commit_sha = git_commit_sha(root)

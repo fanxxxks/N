@@ -30,6 +30,7 @@ from ashare_data.config import (
     make_reward_config,
 )
 from ashare_data.processor import open_to_open_returns
+from ashare_data.universe import require_production_universe
 
 from .alphagpt import AlphaGPTModel, build_action_mask
 from .candidates import (
@@ -340,6 +341,7 @@ class AshareTrainer:
         # external t+1/t+2 prices and are intentionally never sliced here.
         train_open = self.loader.raw_data_cache["open"][:, :train_end_idx].numpy()
         target_ret = open_to_open_returns(train_open)
+        target_ret = self.loader.mask_by_universe(target_ret)
         # Tradability masks (buy/sell blocked per stock and date) align the
         # training basket with the backtest engine's execution rules; both
         # matrices are shared by every formula scored this run.
@@ -720,6 +722,7 @@ def main() -> None:
         root = _project_root()
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
+        require_production_universe(data_config)
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         reward_config = make_reward_config(raw)

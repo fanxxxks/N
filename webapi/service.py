@@ -25,6 +25,7 @@ from ashare_data.config import (
 )
 from ashare_execution import execution_config_mismatches, validate_execution_config
 from ashare_data.db import AshareDB
+from ashare_data.universe import UniverseContractError, require_production_universe
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -517,7 +518,8 @@ def sim_start(req: SimStartRequest) -> dict:
         return {"ok": False, "reason": "config load failed"}
     try:
         validate_execution_config(backtest_config, sim_config)
-    except ValueError as exc:
+        require_production_universe(data_config)
+    except (ValueError, UniverseContractError) as exc:
         return {"ok": False, "reason": str(exc)}
     strategy = data_config.data_dir / "best_ashare_strategy.json"
     if not strategy.exists():

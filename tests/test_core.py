@@ -63,6 +63,8 @@ def _make_config(tmp_path: Path) -> DataConfig:
         parquet_dir=tmp_path / "parquet",
         start_date="2024-01-01",
         end_date="2024-12-31",
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
         min_listed_days=1,
         min_amount=1.0,
     )
@@ -85,8 +87,8 @@ def _write_db(tmp_path: Path, dates: list[str], ts_codes: list[str], bars: pd.Da
         db.upsert_calendar([{"trade_date": d, "is_open": True} for d in dates], cfg)
         db.upsert_constituents(
             [
-                {"index_code": "000300.SH", "ts_code": c, "in_date": "20240101", "out_date": "99991231"}
-                for c in ts_codes
+                {"index_code": "000300.SH", "ts_code": c, "in_date": f"2020010{i + 1}", "out_date": "99991231"}
+                for i, c in enumerate(ts_codes)
             ],
             cfg,
         )

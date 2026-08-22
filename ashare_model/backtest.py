@@ -35,12 +35,17 @@ class AshareBacktestEngine:
         benchmark_returns: list[float] | None = None,
         stock_names: dict[str, str] | None = None,
         signal_range: range | tuple[int, int] | None = None,
+        universe_mask: np.ndarray | None = None,
     ) -> BacktestResult:
         factors = np.asarray(factors, dtype=np.float64)
         if factors.ndim != 2:
             raise ValueError("factors must be [stock, date]")
         if factors.shape != (len(ts_codes), len(dates)):
             raise ValueError("factor shape does not match ts_codes/dates")
+        if universe_mask is not None:
+            universe_mask = np.asarray(universe_mask, dtype=bool)
+            if universe_mask.shape != factors.shape:
+                raise ValueError("universe_mask shape does not match factors")
 
         open_ = np.nan_to_num(
             np.asarray(raw_cache["open"], dtype=np.float64),
@@ -97,9 +102,18 @@ class AshareBacktestEngine:
         if benchmark_returns is None:
             # Default benchmark: equal-weight universe return on the same
             # complete t+2 periods as the strategy itself.
-            benchmark_returns = [
-                float(np.mean(target_ret[:, t])) for t in signal_indices
-            ]
+            benchmark_returns = []
+            for t in signal_indices:
+                eligible = (
+                    (universe_mask[:, t] & universe_mask[:, t + 1])
+                    if universe_mask is not None
+                    else np.ones(n_stocks, dtype=bool)
+                )
+                values = target_ret[eligible, t]
+                values = values[np.isfinite(values)]
+                benchmark_returns.append(
+                    float(np.mean(values)) if values.size else 0.0
+                )
         elif len(benchmark_returns) != len(signal_indices):
             raise ValueError("benchmark_returns must align with signal_range")
         prev_weights = np.zeros(n_stocks, dtype=np.float64)
@@ -109,8 +123,11 @@ class AshareBacktestEngine:
         positions: list[dict[str, Any]] = []
 
         for t in signal_indices:
-            signal = factors[:, t]
             entry_day = t + 1
+            signal = factors[:, t]
+            if universe_mask is not None:
+                eligible = universe_mask[:, t] & universe_mask[:, entry_day]
+                signal = np.where(eligible, signal, np.nan)
             exit_day = t + 2
             selected = self._select_top_n(
                 signal,
@@ -315,6 +332,7 @@ def main() -> None:
         make_model_config,
         make_sim_config,
     )
+    from ashare_data.universe import require_production_universe
     from .data_loader import AshareDataLoader
     from .reward import signal_direction
     from .vm import StackVM, formula_decode
@@ -331,6 +349,7 @@ def main() -> None:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
+        require_production_universe(data_config)
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         sim_config = make_sim_config(raw, root)
@@ -368,6 +387,7 @@ def main() -> None:
             train_target = open_to_open_returns(
                 loader.raw_data_cache["open"][:, :price_end].numpy()
             )
+            train_target = loader.mask_by_universe(train_target)
             direction = signal_direction(
                 factors[:, :signal_end].detach().cpu().numpy(),
                 train_target[:, :signal_end],
@@ -381,6 +401,7 @@ def main() -> None:
             loader.ts_codes,
             loader.dates,
             stock_names=loader.stock_names,
+            universe_mask=loader.universe_mask.numpy(),
         )
         output = {
             "formula": tokens,

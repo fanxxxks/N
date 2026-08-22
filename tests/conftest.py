@@ -60,6 +60,8 @@ def data_config(tmp_path: Path) -> DataConfig:
         parquet_dir=tmp_path / "parquet",
         start_date="2024-01-01",
         end_date="2024-12-31",
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
         min_listed_days=1,
         min_amount=1.0,
     )
@@ -100,10 +102,10 @@ def populated_db(data_config: DataConfig, bars_data) -> DataConfig:
                 {
                     "index_code": "000300.SH",
                     "ts_code": c,
-                    "in_date": "20240101",
+                    "in_date": f"2020010{i + 1}",
                     "out_date": "99991231",
                 }
-                for c in ts_codes
+                for i, c in enumerate(ts_codes)
             ],
             data_config,
         )
