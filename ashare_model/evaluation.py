@@ -432,6 +432,7 @@ def baseline_candidates(
         blocked_buy=blocked_buy[:, :train_price_end],
         blocked_sell=blocked_sell[:, :train_price_end],
         full_signal_range=(contract.train_signal_start, train_signal_end),
+        universe_mask=loader.universe_mask[:, :train_price_end],
     )
     # The selector is invoked even though the protocol reports every bare
     # factor; this keeps ranking/eligibility behavior on the same code path.
@@ -642,6 +643,15 @@ def run_random_search(
         if universe_mask is not None
         else None
     )
+    # The scorer gates every quality statistic to signal-date eligible
+    # cells; the mask is sliced to the exact training window like the
+    # signals and targets (no off-by-one with the val windows, which are
+    # index ranges inside the same slice).
+    train_universe_mask = (
+        universe_mask[:, :train_price_end]
+        if universe_mask is not None
+        else None
+    )
     target = open_to_open_returns(
         loader.raw_data_cache["open"][:, :train_price_end].numpy()
     )
@@ -702,6 +712,7 @@ def run_random_search(
                     contract.train_signal_start,
                     contract.train_signal_end,
                 ),
+                universe_mask=train_universe_mask,
             )
         )
 

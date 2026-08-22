@@ -234,6 +234,62 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
     assert trainer.best_full_window_icir == pytest.approx(0.45)
 
 
+def test_trainer_passes_universe_mask_to_scorer(
+    tmp_path, populated_db: DataConfig, monkeypatch
+):
+    """The RL loop must hand the PIT universe mask to the candidate scorer
+    (sliced to the exact training window), not rely on NaN VM outputs."""
+
+    import ashare_model.train as train_module
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    train_end = trainer._train_end_index()
+    captured: dict[str, object] = {}
+
+    def fake_rewards(signals, target, bt, rc, val_windows, **kwargs):
+        captured["universe_mask"] = kwargs.get("universe_mask")
+        n = signals.shape[0]
+        return (
+            np.full(n, 0.5),
+            np.full(n, 0.4),
+            np.full(n, 0.45),
+            np.full(n, 0.35),
+        )
+
+    monkeypatch.setattr(train_module, "batched_basket_rewards", fake_rewards)
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end),
+    )
+
+    def fixed_sample(self):
+        return torch.full(
+            (self.logits.shape[0],),
+            1,
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
+    trainer.train(steps=1, batch_size=1, save_artifacts=False)
+    mask = captured.get("universe_mask")
+    assert mask is not None
+    assert mask.shape == (len(loader.ts_codes), train_end)
+    assert np.array_equal(mask, loader.universe_mask[:, :train_end])
+
+
 def test_quality_floor_blocks_save_and_returns_none(
     tmp_path, populated_db: DataConfig, monkeypatch
 ):

@@ -208,6 +208,33 @@ def test_baseline_candidates_match_factor_rows(populated_db: DataConfig):
         assert row["direction"] in (-1, 1)
 
 
+def test_baseline_candidates_pass_universe_mask_to_scorer(
+    populated_db: DataConfig, monkeypatch
+):
+    """Bare-factor baselines never pass through the VM, so the scorer must
+    receive the explicit PIT mask sliced to the training window."""
+
+    loader = _loader(populated_db)
+    proto = ProtocolConfig(baseline_signals=["MOMENTUM_20"])
+    fold = _fold(loader.dates)
+    contract = fold.contract
+    captured: dict[str, object] = {}
+    original = evaluation.CandidateScorer.score_many
+
+    def spy(self, specs, signals, target, windows, **kwargs):
+        captured["universe_mask"] = kwargs.get("universe_mask")
+        return original(self, specs, signals, target, windows, **kwargs)
+
+    monkeypatch.setattr(evaluation.CandidateScorer, "score_many", spy)
+    baseline_candidates(loader, proto, fold, BacktestConfig())
+    mask = captured["universe_mask"]
+    assert mask is not None
+    assert mask.shape == (len(loader.ts_codes), contract.train_label_end)
+    assert np.array_equal(
+        mask, loader.universe_mask[:, : contract.train_label_end]
+    )
+
+
 # --- aggregation and selection ---------------------------------------------
 
 
@@ -410,6 +437,37 @@ def test_random_search_is_deterministic(populated_db: DataConfig):
     first = evaluation.run_random_search(loader, **kwargs)
     second = evaluation.run_random_search(loader, **kwargs)
     assert first == second
+
+
+def test_random_search_passes_universe_mask_to_scorer(
+    populated_db: DataConfig, monkeypatch
+):
+    loader = _loader(populated_db)
+    fold = _fold(loader.dates)
+    captured: dict[str, object] = {}
+    original = evaluation.CandidateScorer.score_many
+
+    def spy(self, specs, signals, target, windows, **kwargs):
+        captured["universe_mask"] = kwargs.get("universe_mask")
+        return original(self, specs, signals, target, windows, **kwargs)
+
+    monkeypatch.setattr(evaluation.CandidateScorer, "score_many", spy)
+    evaluation.run_random_search(
+        loader,
+        ModelConfig(max_formula_len=6),
+        BacktestConfig(),
+        None,
+        fold,
+        n_samples=8,
+        seed=7,
+    )
+    mask = captured["universe_mask"]
+    contract = fold.contract
+    assert mask is not None
+    assert mask.shape == (len(loader.ts_codes), contract.train_label_end)
+    assert np.array_equal(
+        mask, loader.universe_mask[:, : contract.train_label_end]
+    )
 
 
 def test_random_search_disabled_by_zero_budget(populated_db: DataConfig):

@@ -226,7 +226,13 @@ python scripts/archive_run.py --mode sim --commit
   `model.validation_splits`（默认 3）个独立子窗口取**中位数**
   选择最佳公式；不含算子的裸因子公式减 `reward.complexity_penalty`（默认 0.2），
   最佳公式的验证奖励须达到 `reward.min_val_reward`（默认 0.0）才保存，避免把
-  负质量公式回测/归档。
+  负质量公式回测/归档。v7 起，IC/ICIR、候选打分、RL 训练、随机搜索与裸因子
+  baseline 的全部质量统计只使用 **signal-date eligible** 股票
+  （`universe_mask[:, t]`；买入可交易性仍用 `blocked_buy[:, t+1]`、卖出
+  `blocked_sell[:, t+1]`），near-constant 拒绝与方向打平时的 canonical
+  orientation 也只扫描 eligible 观测——未来成分在加入前的有限极端值既不能改变
+  排名 IC/ICIR/方向/拒绝原因，也不能进入奖励篮子；退出成员池后目标权重经正常
+  卖出路径归零（执行日无法卖出则 force-hold，绝不凭空消失）。
 - **公式输出终标准化**：VM 执行的每个公式信号按日做**截面 z-score** 后再进入
   评分/回测/模拟盘（单调变换，不改变 rank-IC 与 top-n 排序），消除叠加运算的
   尺度漂移，使 GATE/JUMP 的 0 阈值语义稳定，并为多公式合成提供统一尺度。

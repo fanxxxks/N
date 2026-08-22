@@ -400,6 +400,11 @@ def main() -> None:
             direction = signal_direction(
                 factors[:, :signal_end].detach().cpu().numpy(),
                 train_target[:, :signal_end],
+                universe_mask=(
+                    loader.universe_mask[:, :signal_end]
+                    if loader.universe_mask is not None
+                    else None
+                ),
             )
         signal_np = float(direction) * factors.detach().cpu().numpy()
 
