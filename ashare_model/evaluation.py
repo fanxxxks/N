@@ -265,7 +265,6 @@ def evaluate_signal(
         raw,
         loader.ts_codes,
         dates,
-        stock_names=loader.stock_names,
         signal_range=fold_data.local_signal_range,
         universe_mask=fold_data.universe_mask,
     )

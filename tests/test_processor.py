@@ -6,6 +6,7 @@ import pytest
 
 from ashare_data.config import DataConfig
 from ashare_data.processor import (
+    blocked_components,
     encode_industry_frame,
     is_valid_a_share_code,
     limit_rate,
@@ -190,17 +191,21 @@ def test_winsorize_rejects_mask_shape_mismatch():
 # --- tradability masks (shared by the backtest engine and the reward path) ---
 
 
-def test_limit_rate_by_board_and_st():
-    assert limit_rate("000001.SZ", "平安银行") == 0.10
-    assert limit_rate("600000.SH", "") == 0.10
-    assert limit_rate("300001.SZ", "") == 0.20
-    assert limit_rate("688001.SH", "") == 0.20
-    assert limit_rate("000001.SZ", "ST 风险") == 0.05
-    assert limit_rate("000001.SZ", "st 星源") == 0.05
+def test_limit_rate_by_board_and_explicit_st_flag():
+    assert limit_rate("000001.SZ") == 0.10
+    assert limit_rate("600000.SH") == 0.10
+    assert limit_rate("300001.SZ") == 0.20
+    assert limit_rate("301001.SZ") == 0.20
+    assert limit_rate("688001.SH") == 0.20
+    assert limit_rate("689001.SH") == 0.20
+    assert limit_rate("830001.BJ") == 0.10
+    # The 5% band requires an explicit as-of flag: a name is display data
+    # and can never imply ST status for any date.
+    assert limit_rate("000001.SZ", is_st=True) == 0.05
+    assert limit_rate("300001.SZ", is_st=True) == 0.05
 
 
 def test_tradability_blocked_suspension_variants():
-    names = {"000001.SZ": "平安银行"}
     ts_codes = ["000001.SZ"]
     ones = np.ones((1, 1))
     for col, value in (
@@ -216,19 +221,18 @@ def test_tradability_blocked_suspension_variants():
             volume_col=ones.copy(),
         )
         kwargs[col + "_col"] = np.full((1, 1), value)
-        assert tradability_blocked(**kwargs, ts_codes=ts_codes, stock_names=names, side="buy")[0]
-        assert tradability_blocked(**kwargs, ts_codes=ts_codes, stock_names=names, side="sell")[0]
+        assert tradability_blocked(**kwargs, ts_codes=ts_codes, side="buy")[0]
+        assert tradability_blocked(**kwargs, ts_codes=ts_codes, side="sell")[0]
 
 
 def test_tradability_blocked_limit_moves_are_side_specific():
-    names = {"000001.SZ": "平安银行"}
     ts_codes = ["000001.SZ"]
 
     def blocked(open_, side, rate=0.10):
         price = np.asarray([[open_]], dtype=np.float64)
         return tradability_blocked(
             price, price, price, np.full((1, 1), 1.0), np.ones((1, 1)),
-            ts_codes, names, side,
+            ts_codes, side,
         )[0]
 
     # One-word +10% open: buy side blocked, sell side free.
@@ -242,14 +246,89 @@ def test_tradability_blocked_limit_moves_are_side_specific():
     price = np.asarray([[1.10]], dtype=np.float64)
     assert not tradability_blocked(
         price, np.full((1, 1), 1.11), price, np.full((1, 1), 1.0),
-        np.ones((1, 1)), ts_codes, names, "buy",
+        np.ones((1, 1)), ts_codes, "buy",
     )[0]
+
+
+def test_tradability_st_mask_controls_5pct_band():
+    # A one-word +5.2% / -5.2% open is inside the 10% board band but
+    # outside the ST 5% band: only the explicit as-of st_mask applies the
+    # 5% band, exactly what same-day execution needs.
+    ts_codes = ["000001.SZ", "600000.SH"]
+    price = np.asarray([[1.052], [1.0]], dtype=np.float64)
+    pc = np.ones((2, 1))
+    vol = np.ones((2, 1))
+    assert not tradability_blocked(
+        price, price, price, pc, vol, ts_codes, "buy"
+    )[0]
+    assert tradability_blocked(
+        price, price, price, pc, vol, ts_codes, "buy",
+        st_mask=np.asarray([True, False]),
+    )[0]
+    assert not tradability_blocked(
+        price, price, price, pc, vol, ts_codes, "buy",
+        st_mask=np.asarray([True, False]),
+    )[1]
+
+    down = np.asarray([[0.948], [1.0]], dtype=np.float64)
+    assert not tradability_blocked(
+        down, down, down, pc, vol, ts_codes, "sell"
+    )[0]
+    assert tradability_blocked(
+        down, down, down, pc, vol, ts_codes, "sell",
+        st_mask=np.asarray([True, False]),
+    )[0]
+
+
+def test_tradability_rejects_mismatched_st_mask():
+    price = np.asarray([[1.052], [1.052]], dtype=np.float64)
+    ones = np.ones((2, 1))
+    with pytest.raises(ValueError, match="st_mask"):
+        tradability_blocked(
+            price, price, price, ones, ones, ["000001.SZ", "600000.SH"], "buy",
+            st_mask=np.asarray([True]),
+        )
+
+
+def test_tradability_blocked_matrix_uses_board_rates_only():
+    # The full-window matrix is historical by construction: a +5.2%
+    # one-word open on a main-board stock is not a limit-up, regardless of
+    # what the stock's current name says.
+    open_ = np.full((1, 3), 1.052)
+    ones = np.ones((1, 3))
+    buy = tradability_blocked_matrix(
+        open_, open_, open_, ones, ones, ["000001.SZ"], "buy"
+    )
+    assert not buy.any()
+    sell = tradability_blocked_matrix(
+        np.full((1, 3), 0.948), np.full((1, 3), 0.948), np.full((1, 3), 0.948),
+        ones, ones, ["000001.SZ"], "sell",
+    )
+    assert not sell.any()
+
+
+def test_blocked_components_decomposes_suspension_and_limit():
+    ts_codes = ["000001.SZ"]
+    one_word_up = np.asarray([[1.10]], dtype=np.float64)
+    ones = np.ones((1, 1))
+    suspended, limit = blocked_components(
+        one_word_up, one_word_up, one_word_up, ones, ones, ts_codes, "buy"
+    )
+    assert not suspended[0] and limit[0]
+    suspended, limit = blocked_components(
+        one_word_up, one_word_up, one_word_up, ones, ones, ts_codes, "sell"
+    )
+    assert not suspended[0] and not limit[0]
+
+    suspended, limit = blocked_components(
+        np.zeros((1, 1)), ones, ones, ones, ones, ts_codes, "buy"
+    )
+    assert suspended[0] and not limit[0]
 
 
 def test_tradability_blocked_matrix_matches_per_day_columns():
     rng = np.random.default_rng(31)
     ts_codes = [f"{i:06d}.SZ" for i in range(1, 6)]
-    names = {c: "普通股票" for c in ts_codes}
     open_ = np.abs(rng.normal(10.0, 0.5, (5, 8)))
     pre_close = np.roll(open_, 1, axis=1)
     pre_close[:, 0] = open_[:, 0]
@@ -265,37 +344,36 @@ def test_tradability_blocked_matrix_matches_per_day_columns():
 
     for side in ("buy", "sell"):
         matrix = tradability_blocked_matrix(
-            open_, high, low, pre_close, volume, ts_codes, names, side
+            open_, high, low, pre_close, volume, ts_codes, side
         )
         for day in range(8):
             per_day = tradability_blocked(
                 open_[:, day], high[:, day], low[:, day],
-                pre_close[:, day], volume[:, day], ts_codes, names, side,
+                pre_close[:, day], volume[:, day], ts_codes, side,
             )
             assert (matrix[:, day] == per_day).all()
-    buy = tradability_blocked_matrix(open_, high, low, pre_close, volume, ts_codes, names, "buy")
-    sell = tradability_blocked_matrix(open_, high, low, pre_close, volume, ts_codes, names, "sell")
+    buy = tradability_blocked_matrix(open_, high, low, pre_close, volume, ts_codes, "buy")
+    sell = tradability_blocked_matrix(open_, high, low, pre_close, volume, ts_codes, "sell")
     assert buy[0, 3] and sell[0, 3]  # suspension blocks both sides
     assert buy[1, 4] and not sell[1, 4]  # one-word limit-up blocks buys only
     assert sell[2, 5] and not buy[2, 5]  # one-word limit-down blocks sells only
 
 
 def test_tradability_rejects_bad_inputs():
-    names: dict[str, str] = {}
     with pytest.raises(ValueError, match="share one shape"):
         tradability_blocked_matrix(
             np.ones((2, 3)), np.ones((2, 3)), np.ones((2, 3)),
-            np.ones((2, 3)), np.ones((2, 4)), ["A", "B"], names, "buy",
+            np.ones((2, 3)), np.ones((2, 4)), ["A", "B"], "buy",
         )
     with pytest.raises(ValueError, match="expected \\[stock x date\\]"):
         tradability_blocked_matrix(
             np.ones(3), np.ones(3), np.ones(3), np.ones(3), np.ones(3),
-            ["A", "B", "C"], names, "buy",
+            ["A", "B", "C"], "buy",
         )
     with pytest.raises(ValueError, match="unknown side"):
         tradability_blocked(
             np.ones((2, 1)), np.ones((2, 1)), np.ones((2, 1)),
-            np.ones((2, 1)), np.ones((2, 1)), ["A", "B"], names, "hold",
+            np.ones((2, 1)), np.ones((2, 1)), ["A", "B"], "hold",
         )
 
 

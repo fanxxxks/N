@@ -230,6 +230,9 @@ def test_current_st_stock_is_retained_with_unknown_status_reason(
     assert "300001.SZ" in loader.ts_codes
     assert not hasattr(loader, "st_stocks")
     assert loader.stock_list_dates["300001.SZ"] == "20200101"
+    # The current snapshot is exposed explicitly for same-day execution
+    # only (run_sim consumes it); nothing else may read it as history.
+    assert loader.current_st_codes == {"300001.SZ"}
     assert loader.universe_reason_codes is not None
     unknown = int(UniverseReason.STATUS_UNKNOWN)
     assert np.all(loader.universe_reason_codes & unknown)

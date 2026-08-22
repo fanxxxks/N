@@ -83,21 +83,24 @@ def is_valid_a_share_code(ts_code: str) -> bool:
     return False
 
 
-# Board daily-limit prefixes (ST stocks get 5% via the name check).
+# Board daily-limit prefixes (ST stocks trade under 5% via an explicit
+# as-of flag — see :func:`limit_rate`).
 _CHINEXT_LIMIT_PREFIXES = {"300", "301", "688", "689"}
 
 
-def limit_rate(ts_code: str, name: str = "") -> float:
+def limit_rate(ts_code: str, *, is_st: bool = False) -> float:
     """Daily price-limit rate of one stock.
 
-    ST stocks trade under a 5% band (detected by name, so pass the stock
-    name when available); ChiNext / STAR markets trade under 20%; every
-    other board 10%.  Single code path shared by the factor engine (which
-    has no names because ST stocks are excluded upstream) and the backtest /
-    reward tradability masks.
+    ST stocks trade under a 5% band.  There is no dated ST history, so the
+    caller must supply the as-of ``is_st`` flag explicitly: the current
+    ``stocks.is_st`` snapshot is only valid for same-day execution and must
+    never be projected onto historical dates.  Stock names are display data
+    and never influence the rate.  ChiNext / STAR markets trade under 20%;
+    every other board 10%.  Single code path shared by the factor engine,
+    the backtest / reward tradability masks and the paper-trading matcher.
     """
 
-    if "ST" in name.upper():
+    if is_st:
         return 0.05
     prefix = ts_code.split(".")[0][:3]
     if prefix in _CHINEXT_LIMIT_PREFIXES:
@@ -105,7 +108,7 @@ def limit_rate(ts_code: str, name: str = "") -> float:
     return 0.10
 
 
-def _blocked_columns(
+def _blocked_parts(
     o: np.ndarray,
     h: np.ndarray,
     l: np.ndarray,
@@ -113,8 +116,9 @@ def _blocked_columns(
     v: np.ndarray,
     rates: np.ndarray,
     side: str,
-) -> np.ndarray:
-    """Blocked mask core: suspended stocks plus one-word limit moves.
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(suspended, limit)`` mask pair: one implementation of the exchange
+    rule shared by the per-date column and full-matrix paths.
 
     ``o``/``h``/``l``/``pc``/``v`` share one shape (a single date column or
     the full ``[stock x date]`` matrix); ``rates`` is broadcastable to it.
@@ -135,23 +139,48 @@ def _blocked_columns(
         limit = one_word & (change <= -rates + 0.005)
     else:
         raise ValueError(f"unknown side {side!r}; expected 'buy' or 'sell'")
-    return suspended | limit
+    return suspended, limit
 
 
-def tradability_blocked(
+def _limit_rates(ts_codes: list[str], st_mask: np.ndarray | None) -> np.ndarray:
+    """Per-stock daily limit rates for one date column.
+
+    ``st_mask`` optionally marks the stocks that are ST as of that exact
+    date; without dated ST history the caller leaves it None and only the
+    board rates apply.
+    """
+
+    if st_mask is not None:
+        st = np.asarray(st_mask, dtype=bool)
+        if st.shape != (len(ts_codes),):
+            raise ValueError(
+                f"st_mask shape {st.shape} does not match {len(ts_codes)} ts_codes"
+            )
+        return np.asarray(
+            [limit_rate(code, is_st=bool(flag)) for code, flag in zip(ts_codes, st)],
+            dtype=np.float64,
+        )
+    return np.asarray([limit_rate(code) for code in ts_codes], dtype=np.float64)
+
+
+def blocked_components(
     open_col: np.ndarray,
     high_col: np.ndarray,
     low_col: np.ndarray,
     pre_close_col: np.ndarray,
     volume_col: np.ndarray,
     ts_codes: list[str],
-    stock_names: dict[str, str],
     side: str,
-) -> np.ndarray:
-    """Buy/sell blocked mask for one date column (``[stock]`` bool).
+    *,
+    st_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(suspended, limit)`` per-stock bool masks for one date column.
 
-    Same semantics as :func:`tradability_blocked_matrix`, vectorized per
-    column; the backtest engine calls this per execution day.
+    The exact rule behind :func:`tradability_blocked`, split so callers
+    that need distinct reasons (the paper-trading matcher) do not
+    re-derive them.  ``st_mask`` optionally supplies per-stock as-of ST
+    flags for same-day execution; historical paths leave it None so a
+    current ``*ST`` name can never rewrite the past.
     """
 
     o = np.asarray(open_col, dtype=np.float64).reshape(-1, 1)
@@ -163,10 +192,43 @@ def tradability_blocked(
         raise ValueError("open/high/low/pre_close/volume columns must share one shape")
     if o.shape[0] != len(ts_codes):
         raise ValueError(f"{len(ts_codes)} ts_codes but {o.shape[0]} rows")
-    rates = np.asarray(
-        [limit_rate(c, stock_names.get(c, "")) for c in ts_codes], dtype=np.float64
-    )[:, None]
-    return _blocked_columns(o, h, l, pc, v, rates, side)[:, 0]
+    rates = _limit_rates(ts_codes, st_mask)[:, None]
+    suspended, limit = _blocked_parts(o, h, l, pc, v, rates, side)
+    return suspended[:, 0], limit[:, 0]
+
+
+def tradability_blocked(
+    open_col: np.ndarray,
+    high_col: np.ndarray,
+    low_col: np.ndarray,
+    pre_close_col: np.ndarray,
+    volume_col: np.ndarray,
+    ts_codes: list[str],
+    side: str,
+    *,
+    st_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Buy/sell blocked mask for one date column (``[stock]`` bool).
+
+    Same semantics as :func:`tradability_blocked_matrix`, vectorized per
+    column; the backtest engine calls this per execution day.  ``st_mask``
+    optionally marks the stocks that are ST as of that exact execution
+    date (the only valid use of the current snapshot); historical callers
+    leave it None, so limit rates come from the board alone and stock
+    names never influence the result.
+    """
+
+    suspended, limit = blocked_components(
+        open_col,
+        high_col,
+        low_col,
+        pre_close_col,
+        volume_col,
+        ts_codes,
+        side,
+        st_mask=st_mask,
+    )
+    return suspended | limit
 
 
 def tradability_blocked_matrix(
@@ -176,14 +238,15 @@ def tradability_blocked_matrix(
     pre_close: np.ndarray,
     volume: np.ndarray,
     ts_codes: list[str],
-    stock_names: dict[str, str],
     side: str,
 ) -> np.ndarray:
     """Buy/sell blocked mask over the full ``[stock x date]`` window.
 
     The reward path precomputes this matrix once and shares it across the
     whole formula batch; per date it is the exact rule the backtest engine
-    applies through :func:`tradability_blocked`.
+    applies through :func:`tradability_blocked`.  The matrix is historical
+    by construction: there is no dated ST status, so only board limit
+    rates apply and stock names never influence the result.
     """
 
     o = np.asarray(open_, dtype=np.float64)
@@ -195,10 +258,9 @@ def tradability_blocked_matrix(
         raise ValueError("open/high/low/pre_close/volume must share one shape")
     if o.ndim != 2 or o.shape[0] != len(ts_codes):
         raise ValueError(f"expected [stock x date] matrices for {len(ts_codes)} ts_codes")
-    rates = np.asarray(
-        [limit_rate(c, stock_names.get(c, "")) for c in ts_codes], dtype=np.float64
-    )[:, None]
-    return _blocked_columns(o, h, l, pc, v, rates, side)
+    rates = np.asarray([limit_rate(code) for code in ts_codes], dtype=np.float64)[:, None]
+    suspended, limit = _blocked_parts(o, h, l, pc, v, rates, side)
+    return suspended | limit
 
 
 def encode_industry_frame(frame: pd.DataFrame) -> np.ndarray:

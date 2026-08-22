@@ -77,6 +77,7 @@ class AshareDataLoader:
         self.target_ret: torch.Tensor | None = None
         self.stock_names: dict[str, str] = {}
         self.stock_list_dates: dict[str, object] = {}
+        self.current_st_codes: set[str] = set()
         self.universe: UniverseMask | None = None
         self.universe_policy: UniversePolicy | None = None
         self.universe_status: UniverseContractStatus | None = None
@@ -107,18 +108,23 @@ class AshareDataLoader:
         return self._universe_contract
 
     def load_stock_meta(self) -> None:
-        """Load names and listing dates without interpreting current ST state.
+        """Load names, listing dates and the current ST snapshot.
 
-        Failures (e.g. the table does not exist yet) leave the maps empty so
-        the loader still works on a bare daily-bar database.
+        ``stocks.is_st`` is a current snapshot: it is exposed as
+        :attr:`current_st_codes` and may only be consumed by same-day
+        execution (the paper-trading runner); historical paths must never
+        use it because it proves no past cell's status.  Failures (e.g.
+        the table does not exist yet) leave the maps empty so the loader
+        still works on a bare daily-bar database.
         """
 
         self.stock_names = {}
         self.stock_list_dates = {}
+        self.current_st_codes = set()
         try:
             with AshareDB(self.config.duckdb_path, read_only=True) as db:
                 df = db.query(
-                    f"SELECT ts_code, name, list_date "
+                    f"SELECT ts_code, name, list_date, is_st "
                     f"FROM {self.config.stocks_table}"
                 )
         except Exception:  # noqa: BLE001 - table may not exist in minimal DBs.
@@ -130,6 +136,8 @@ class AshareDataLoader:
             name = str(row.get("name") or code)
             self.stock_names[code] = name
             self.stock_list_dates[code] = row.get("list_date")
+            if bool(row.get("is_st") or False):
+                self.current_st_codes.add(code)
 
     def load_universe(self) -> list[str]:
         """Validated union of configured PIT constituent intervals.
@@ -353,7 +361,6 @@ class AshareDataLoader:
             raw["pre_close"].numpy(),
             raw["volume"].numpy(),
             self.ts_codes,
-            self.stock_names,
             "buy",
         )
         blocked_sell = tradability_blocked_matrix(
@@ -363,7 +370,6 @@ class AshareDataLoader:
             raw["pre_close"].numpy(),
             raw["volume"].numpy(),
             self.ts_codes,
-            self.stock_names,
             "sell",
         )
         if self.universe_mask is None:

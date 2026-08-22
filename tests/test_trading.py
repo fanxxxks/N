@@ -10,23 +10,6 @@ from ashare_data.config import BacktestConfig, SimConfig
 from ashare_data.schemas import SimOrder
 from ashare_trading.matching import SimBroker
 from ashare_trading.portfolio import SimulationPortfolio
-from ashare_trading.risk import (
-    is_one_word_limit_down,
-    is_one_word_limit_up,
-    is_suspended,
-    limit_rate,
-)
-
-
-def test_risk_helpers():
-    assert limit_rate("000001.SZ") == 0.10
-    assert limit_rate("300001.SZ") == 0.20
-    assert limit_rate("000001.SZ", "ST 风险") == 0.05
-    assert is_suspended(0.0, 100.0)
-    assert is_suspended(10.0, 0.0)
-    assert not is_suspended(10.0, 100.0)
-    assert is_one_word_limit_up(1.1, 1.1, 1.1, 1.0, "000001.SZ")
-    assert is_one_word_limit_down(0.9, 0.9, 0.9, 1.0, "000001.SZ")
 
 
 def _sim_config(tmp_path: Path) -> SimConfig:
@@ -76,7 +59,7 @@ def _bars_frame() -> pd.DataFrame:
 
 def _broker_and_portfolio(tmp_path: Path):
     config = _sim_config(tmp_path)
-    return SimBroker(config), SimulationPortfolio(config.initial_capital, config.state_path), config
+    return SimBroker(), SimulationPortfolio(config.initial_capital, config.state_path), config
 
 
 def test_broker_no_orders_and_missing_bar(tmp_path: Path):
@@ -205,3 +188,158 @@ def test_portfolio_fresh_state_has_no_history(tmp_path: Path):
     portfolio.reset()
     assert not portfolio.has_history
     assert portfolio.last_exec_date is None
+
+
+# --- ST status: display names never drive limits; st_codes is as-of only ---
+
+
+def test_broker_limit_down_sell_skipped_keeps_position(tmp_path: Path):
+    # A position whose exit day opens at the one-word limit-down board
+    # cannot be sold: the order is skipped and the position is kept for
+    # the next attempt (existing matching rule).
+    broker, portfolio, _ = _broker_and_portfolio(tmp_path)
+    portfolio.add_buy("000001.SZ", "平安银行", 100, 10.0, "20240101")
+    bars = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": "20240102",
+                "open": 0.9,
+                "high": 0.9,
+                "low": 0.9,
+                "pre_close": 1.0,
+                "volume": 100000.0,
+            }
+        ]
+    )
+    sell = SimOrder(
+        order_id="o2",
+        ts_code="000001.SZ",
+        trade_date="20240102",
+        side="sell",
+        quantity=100,
+        price=0.9,
+    )
+    trades = broker.execute_orders(
+        [sell], bars, "20240102", portfolio, {"000001.SZ": "平安银行"}, BacktestConfig()
+    )
+    assert trades == []
+    assert sell.status == "skipped"
+    assert sell.reason == "limit_down"
+    assert portfolio.positions["000001.SZ"].quantity == 100
+
+
+def test_broker_display_name_does_not_apply_st_band(tmp_path: Path):
+    # A current "*ST" name is display-only: without st_codes the 10% main
+    # board band applies, so a +5.2% one-word open is buyable.
+    broker, portfolio, _ = _broker_and_portfolio(tmp_path)
+    bars = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": "20240102",
+                "open": 1.052,
+                "high": 1.052,
+                "low": 1.052,
+                "pre_close": 1.0,
+                "volume": 100000.0,
+            }
+        ]
+    )
+    order = SimOrder(
+        order_id="o1",
+        ts_code="000001.SZ",
+        trade_date="20240102",
+        side="buy",
+        quantity=100,
+        price=1.052,
+    )
+    trades = broker.execute_orders(
+        [order],
+        bars,
+        "20240102",
+        portfolio,
+        {"000001.SZ": "*ST 星源"},
+        BacktestConfig(),
+    )
+    assert len(trades) == 1
+    assert order.status == "filled"
+    assert portfolio.positions["000001.SZ"].name == "*ST 星源"
+
+
+def test_broker_st_codes_apply_5pct_band_as_of_date(tmp_path: Path):
+    # st_codes carries the current snapshot for same-day execution: the 5%
+    # band then blocks a +5.2% one-word buy as limit_up and a -5.2%
+    # one-word sell as limit_down.
+    limit_up_bars = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": "20240102",
+                "open": 1.052,
+                "high": 1.052,
+                "low": 1.052,
+                "pre_close": 1.0,
+                "volume": 100000.0,
+            }
+        ]
+    )
+    limit_down_bars = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": "20240102",
+                "open": 0.948,
+                "high": 0.948,
+                "low": 0.948,
+                "pre_close": 1.0,
+                "volume": 100000.0,
+            }
+        ]
+    )
+    names = {"000001.SZ": "*ST 星源"}
+
+    buy_broker, buy_portfolio, _ = _broker_and_portfolio(tmp_path / "buy")
+    buy = SimOrder(
+        order_id="o1",
+        ts_code="000001.SZ",
+        trade_date="20240102",
+        side="buy",
+        quantity=100,
+        price=1.052,
+    )
+    buy_broker.execute_orders(
+        [buy],
+        limit_up_bars,
+        "20240102",
+        buy_portfolio,
+        names,
+        BacktestConfig(),
+        st_codes={"000001.SZ"},
+    )
+    assert buy.status == "skipped"
+    assert buy.reason == "limit_up"
+    assert "000001.SZ" not in buy_portfolio.positions
+
+    sell_broker, sell_portfolio, _ = _broker_and_portfolio(tmp_path / "sell")
+    sell_portfolio.add_buy("000001.SZ", "*ST 星源", 100, 1.0, "20240101")
+    sell = SimOrder(
+        order_id="o2",
+        ts_code="000001.SZ",
+        trade_date="20240102",
+        side="sell",
+        quantity=100,
+        price=0.948,
+    )
+    sell_broker.execute_orders(
+        [sell],
+        limit_down_bars,
+        "20240102",
+        sell_portfolio,
+        names,
+        BacktestConfig(),
+        st_codes={"000001.SZ"},
+    )
+    assert sell.status == "skipped"
+    assert sell.reason == "limit_down"
+    assert sell_portfolio.positions["000001.SZ"].quantity == 100

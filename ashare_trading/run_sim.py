@@ -92,17 +92,22 @@ class SimulationRunner:
         backtest_config: BacktestConfig,
         sim_config: SimConfig,
         loader: AshareDataLoader,
+        *,
+        today: str | None = None,
     ):
         self.data_config = data_config
         self.model_config = model_config
         self.backtest_config = backtest_config
         self.sim_config = sim_config
         self.loader = loader
+        # The current ST snapshot (stocks.is_st) is only valid as of today:
+        # same-day executions may use it, historical replay must not.
+        self.today = (today or datetime.now().strftime("%Y%m%d")).replace("-", "")
         validate_execution_config(backtest_config, sim_config)
         self.portfolio = SimulationPortfolio(
             sim_config.initial_capital, sim_config.state_path
         )
-        self.broker = SimBroker(sim_config)
+        self.broker = SimBroker()
         self.vm = StackVM(FORMULA_VOCAB)
         self.formula_tokens: list[int] | None = None
         self.formula_text = ""
@@ -118,38 +123,33 @@ class SimulationRunner:
         self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
         # The trainer records the trade direction it learned on its
         # validation tail; legacy artifacts without it fall back to an
-        # inference on the training window in run().
+        # inference on the training window in compute_signals().
         self.direction = int(payload.get("direction", 1))
         self._has_recorded_direction = "direction" in payload
         logger.success(f"Loaded formula: {self.formula_text}")
 
-    def run(
-        self,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        resume: bool = False,
-    ) -> dict[str, object]:
-        if not resume and self.portfolio.has_history:
-            raise ValueError(
-                "Portfolio state already contains processed history "
-                f"(last_exec_date={self.portfolio.last_exec_date}). "
-                "Pass resume=True to continue or reset the portfolio first."
-            )
-        self._write_progress("loading")
+    def compute_signals(self) -> np.ndarray:
+        """Execute the loaded formula over the factor stack.
+
+        Returns the direction-scaled ``[stock, date]`` signal matrix and
+        wires the PIT universe mask into the VM's cross-sectional operators
+        first.  Single code path for the daily loop and for parity checks
+        against the backtest engine on the same signal date.
+        """
+
         if self.loader.factor_tensor is None:
             self.loader.load_data()
         if self.formula_tokens is None:
             self.load_formula()
+        if self.loader.universe_mask is None:
+            raise ValueError("simulation requires the loader's PIT universe mask")
 
         # Industry-group context for CS_NEUTRALIZE and the PIT eligibility
         # mask for the cross-sectional operators, aligned with the factor
-        # stack (None when the loader carries no such data).
+        # stack.
         self.vm.industry_codes = getattr(self.loader, "industry_codes", None)
-        universe_mask = getattr(self.loader, "universe_mask", None)
-        self.vm.universe_mask = (
-            torch.tensor(universe_mask, dtype=torch.bool)
-            if universe_mask is not None
-            else None
+        self.vm.universe_mask = torch.tensor(
+            self.loader.universe_mask, dtype=torch.bool
         )
         factors = self.vm.execute(self.formula_tokens, self.loader.factor_tensor)
         if factors is None:
@@ -171,19 +171,31 @@ class SimulationRunner:
             self.direction = signal_direction(
                 signals[:, :signal_end],
                 target[:, :signal_end],
-                universe_mask=(
-                    self.loader.universe_mask[:, :signal_end]
-                    if self.loader.universe_mask is not None
-                    else None
-                ),
+                universe_mask=self.loader.universe_mask[:, :signal_end],
             )
             logger.info(f"Inferred trade direction from training window: {self.direction}")
         else:
             logger.info(f"Trade direction from artifact: {self.direction}")
-        signals = float(self.direction) * signals
+        return float(self.direction) * signals
+
+    def run(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        resume: bool = False,
+    ) -> dict[str, object]:
+        if not resume and self.portfolio.has_history:
+            raise ValueError(
+                "Portfolio state already contains processed history "
+                f"(last_exec_date={self.portfolio.last_exec_date}). "
+                "Pass resume=True to continue or reset the portfolio first."
+            )
+        self._write_progress("loading")
+        signals = self.compute_signals()
         raw = {k: v.numpy() for k, v in self.loader.raw_data_cache.items()}
         dates = self.loader.dates
         ts_codes = self.loader.ts_codes
+        universe_mask = self.loader.universe_mask
         stock_names = self._stock_names()
 
         start_idx = 0
@@ -241,16 +253,21 @@ class SimulationRunner:
                 break
             exec_idx = signal_idx + 1
             exec_date = dates[exec_idx]
-            signal = np.where(
-                (
-                    self.loader.universe_mask[:, signal_idx]
-                    & self.loader.universe_mask[:, exec_idx]
-                ),
-                signals[:, signal_idx],
-                np.nan,
+            # Same-day execution is the only reliable as-of use of the
+            # current ST snapshot; historical dates get board rates only.
+            same_day = exec_date == self.today
+            st_codes = self.loader.current_st_codes if same_day else None
+            st_mask = (
+                np.asarray([code in st_codes for code in ts_codes], dtype=bool)
+                if st_codes
+                else None
             )
+            # Selection uses universe_mask[:, signal_idx] (and the entry
+            # date, exactly like the backtest engine): ineligible stocks
+            # can never generate new buy orders.
+            eligible = universe_mask[:, signal_idx] & universe_mask[:, exec_idx]
             selected = engine._select_top_n(
-                signal,
+                signals[:, signal_idx],
                 exec_idx,
                 raw["open"],
                 raw["high"],
@@ -258,8 +275,9 @@ class SimulationRunner:
                 raw["pre_close"],
                 raw["volume"],
                 ts_codes,
-                stock_names,
                 side="buy",
+                eligible=eligible,
+                st_mask=st_mask,
             )
             target_weights = self._equal_weights(selected, len(ts_codes))
             orders = self._make_orders(
@@ -269,7 +287,6 @@ class SimulationRunner:
                 exec_idx,
                 exec_date,
                 raw,
-                stock_names,
             )
 
             bars = self.loader.bars
@@ -280,6 +297,7 @@ class SimulationRunner:
                 self.portfolio,
                 stock_names,
                 self.backtest_config,
+                st_codes=st_codes,
             )
             # Persist orders after execution so their final status/reason
             # (filled, skipped, limit_up, ...) is part of the paper-trail.
@@ -340,7 +358,6 @@ class SimulationRunner:
         exec_idx: int,
         exec_date: str,
         raw: dict[str, np.ndarray],
-        stock_names: dict[str, str],
     ) -> list[SimOrder]:
         open_prices = raw["open"][:, exec_idx]
         equity = self.portfolio.cash
@@ -361,8 +378,23 @@ class SimulationRunner:
                     int(equity * weight / price) // 100
                 ) * 100
 
-        orders: list[SimOrder] = []
-        seen: set[str] = set()
+        counter = 0
+
+        def _order(side: str, code: str, quantity: int, price: float) -> SimOrder:
+            nonlocal counter
+            order = SimOrder(
+                order_id=f"{exec_date}-{code}-{side}-{counter}",
+                ts_code=code,
+                trade_date=exec_date,
+                side=side,
+                quantity=quantity,
+                price=float(price),
+            )
+            counter += 1
+            return order
+
+        sells: list[SimOrder] = []
+        buys: list[SimOrder] = []
         for i in selected:
             code = ts_codes[i]
             pos = self.portfolio.positions.get(code)
@@ -376,42 +408,23 @@ class SimulationRunner:
                 buy_qty = (delta // 100) * 100
                 if buy_qty <= 0:
                     continue
-                side = "buy"
-                quantity = buy_qty
+                buys.append(_order("buy", code, buy_qty, open_prices[i]))
             else:
-                side = "sell"
-                quantity = abs(delta)
-            orders.append(
-                SimOrder(
-                    order_id=f"{exec_date}-{code}-{side}-{len(orders)}",
-                    ts_code=code,
-                    trade_date=exec_date,
-                    side=side,
-                    quantity=quantity,
-                    price=float(open_prices[i]),
-                )
-            )
-            seen.add(code)
+                sells.append(_order("sell", code, abs(delta), open_prices[i]))
 
+        selected_codes = {ts_codes[i] for i in selected}
         for code, pos in self.portfolio.positions.items():
-            if code in seen:
-                continue
-            if code not in ts_codes:
+            if code in selected_codes or code not in ts_codes:
                 continue
             i = ts_codes.index(code)
-            if i in selected:
-                continue
-            orders.append(
-                SimOrder(
-                    order_id=f"{exec_date}-{code}-sell-{len(orders)}",
-                    ts_code=code,
-                    trade_date=exec_date,
-                    side="sell",
-                    quantity=pos.available_quantity,
-                    price=float(open_prices[i]),
-                )
-            )
-        return orders
+            # Full-position sell target: the execution day is already T+1
+            # relative to any previous-day buy, and the broker still caps
+            # the fill by the T+1-available quantity.
+            sells.append(_order("sell", code, pos.quantity, open_prices[i]))
+
+        # Sells execute first so their proceeds fund the day's buys
+        # (A-share sell proceeds are immediately reusable for buying).
+        return sells + buys
 
     @staticmethod
     def _equal_weights(selected: list[int], n_stocks: int) -> np.ndarray:
@@ -424,8 +437,10 @@ class SimulationRunner:
         return weights
 
     def _stock_names(self) -> dict[str, str]:
-        # Prefer real names from the stocks table (needed for ST limit-rate
-        # detection); fall back to the code itself when metadata is absent.
+        # Display names for orders/portfolio only; fall back to the code
+        # itself when metadata is absent.  Limit detection never reads
+        # these: it uses board rates, plus the loader's as-of
+        # current_st_codes on same-day executions alone.
         names = dict(self.loader.stock_names)
         for code in self.loader.ts_codes:
             names.setdefault(code, code)

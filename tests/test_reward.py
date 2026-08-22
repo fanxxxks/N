@@ -236,7 +236,7 @@ def test_simulate_basket_matches_backtest_engine_daily_returns():
     ts_codes, dates, raw, signal, target = _synthetic_market()
     cfg = _cfg()
     result = AshareBacktestEngine(cfg).run(
-        signal, raw, ts_codes, dates, stock_names={}
+        signal, raw, ts_codes, dates
     )
     daily, avg_turnover = simulate_basket_daily_returns(signal, target, cfg)
     assert daily == pytest.approx(np.asarray(result.daily_returns), abs=1e-12)
@@ -486,14 +486,14 @@ def test_blocked_basket_matches_backtest_engine_with_limits():
     raw["low"][1, 5] = raw["open"][1, 5]
     target = open_to_open_returns(raw["open"])
     cfg = _cfg(top_n=3, single_weight_cap=1.0)
-    result = AshareBacktestEngine(cfg).run(signal, raw, ts_codes, dates, stock_names={})
+    result = AshareBacktestEngine(cfg).run(signal, raw, ts_codes, dates)
     blocked_buy = tradability_blocked_matrix(
         raw["open"], raw["high"], raw["low"], raw["pre_close"], raw["volume"],
-        ts_codes, {}, "buy",
+        ts_codes, "buy",
     )
     blocked_sell = tradability_blocked_matrix(
         raw["open"], raw["high"], raw["low"], raw["pre_close"], raw["volume"],
-        ts_codes, {}, "sell",
+        ts_codes, "sell",
     )
     daily, avg_turnover = simulate_basket_daily_returns(
         signal, target, cfg, blocked_buy, blocked_sell
@@ -792,7 +792,7 @@ def test_basket_underfilled_renormalizes_like_backtest_engine():
         "volume": np.full_like(open_, 1_000_000.0),
     }
     engine = AshareBacktestEngine(cfg).run(
-        signal, raw, ts_codes, dates, stock_names={}, universe_mask=mask
+        signal, raw, ts_codes, dates, universe_mask=mask
     )
     assert sim.turnover == pytest.approx(np.asarray(engine.turnover), abs=1e-12)
 
@@ -808,7 +808,7 @@ def test_masked_basket_matches_backtest_engine_with_universe():
     mask[5] = False
     signal[5] = 1e9
     result = AshareBacktestEngine(cfg).run(
-        signal, raw, ts_codes, dates, stock_names={}, universe_mask=mask
+        signal, raw, ts_codes, dates, universe_mask=mask
     )
     daily, avg_turnover = simulate_basket_daily_returns(
         signal, target, cfg, universe_mask=mask
