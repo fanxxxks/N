@@ -241,6 +241,58 @@ def test_current_st_stock_is_retained_with_unknown_status_reason(
     )
 
 
+def test_loader_factor_reference_sets_exclude_pre_join_members(
+    data_config: DataConfig,
+):
+    # The loader must hand its PIT mask to the factor engine: an extreme
+    # pre-join value of a future member cannot shift the eligible stocks'
+    # factor values on pre-join dates.
+    dates, codes, bars = make_bars(8, ["000001.SZ", "600000.SH", "300001.SZ"])
+    bars.loc[
+        (bars["ts_code"] == "300001.SZ") & (bars["trade_date"] < dates[2]),
+        "amount",
+    ] = 1e12
+    memberships = [
+        {
+            "index_code": "000300.SH",
+            "ts_code": "000001.SZ",
+            "in_date": "20200101",
+            "out_date": "99991231",
+        },
+        {
+            "index_code": "000300.SH",
+            "ts_code": "600000.SH",
+            "in_date": "20200101",
+            "out_date": "99991231",
+        },
+        {
+            "index_code": "000300.SH",
+            "ts_code": "300001.SZ",
+            "in_date": dates[2],
+            "out_date": "99991231",
+        },
+    ]
+    _seed_loader_db(
+        data_config,
+        dates,
+        codes,
+        bars,
+        memberships=memberships,
+    )
+    loader = AshareDataLoader(data_config, ModelConfig()).load_data()
+    tensor = loader.factor_tensor.numpy()
+    amt = FEATURE_NAMES.index("AMOUNT_SHARE")
+    a = loader.ts_codes.index("000001.SZ")
+    b = loader.ts_codes.index("600000.SH")
+    # Pre-join, the amount-share denominator counts only the two eligible
+    # stocks: their standardized shares are exact opposites at full scale.
+    # Had the extreme ineligible amount leaked into the denominator, both
+    # shares would collapse to the neutral 0.
+    for day in (0, 1):
+        assert abs(tensor[amt, a, day]) > 0.5
+        assert tensor[amt, a, day] == pytest.approx(-tensor[amt, b, day])
+
+
 def test_load_universe_filters_index_codes(data_config: DataConfig):
     with AshareDB(data_config.duckdb_path) as db:
         db.create_schema(data_config)

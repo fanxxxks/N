@@ -236,6 +236,17 @@ python scripts/archive_run.py --mode sim --commit
   由数据加载器注入 VM；无行业数据时退化为全市场去均值）；时序窗口算子由
   硬编码 20 日扩展为 5/10/60 日枚举（MA/STD/TS_RANK/CORR/DOWNVOL）及
   DELTA10/20，采样语法不变。截面算子只消费当日截面，无未来泄漏。
+- **PIT 成分约束贯穿因子与 VM 截面语义**：`vm.universe_mask`
+  （`[stock × date]` 布尔，随窗口与计算设备移动）使 `CS_RANK`/`CS_ZSCORE`/
+  `CS_DEMEAN`/`CS_NEUTRALIZE` 与 VM 终端 z-score 的参考集合只含**当日
+  eligible 且 finite** 的单元——未来成分既不能被选中，也不能改变过去截面的
+  均值/标准差/排名/行业均值；非 eligible 单元在最终信号中保持 `NaN`
+  （不可参与），绝不作为 0 进入排序。基础因子层同样接入：winsorize
+  分位点与 median/MAD、CAPM 等权市场收益、AMOUNT_SHARE 当日分母、行业相对
+  因子的行业均值都只统计 eligible 单元，而原始行情与个股自身历史不被删除或
+  置零（加入当天的动量仍使用加入前的自身行情）。全日无 eligible 股票时截面
+  稳定映射为中性 0，仅一只 eligible 股票时 z-score/demean 为中性但该股票仍
+  是唯一有效成员。
 - **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式对照首发词表（v1：34 特征/16 算子）重映射，退役重复特征经 `FEATURE_ALIASES`（`RET_20` → `MOMENTUM_20`，两者原为同一计算）解析，语义永不漂移。
 - **回测输出**：包含持仓快照与全市场等权基准（与策略同一 open-to-open 口径），供看板展示。
 

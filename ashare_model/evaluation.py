@@ -315,6 +315,12 @@ def evaluate_formula(
 
     vm = vm or StackVM(FORMULA_VOCAB)
     vm.industry_codes = getattr(loader, "industry_codes", None)
+    universe_mask = getattr(loader, "universe_mask", None)
+    vm.universe_mask = (
+        torch.tensor(universe_mask, dtype=torch.bool)
+        if universe_mask is not None
+        else None
+    )
     signal = vm.execute(list(tokens), loader.factor_tensor)
     if signal is None:
         return None
@@ -626,6 +632,14 @@ def run_random_search(
     vm.industry_codes = (
         industry_codes[:, :train_price_end].to(device)
         if industry_codes is not None
+        else None
+    )
+    universe_mask = getattr(loader, "universe_mask", None)
+    vm.universe_mask = (
+        torch.tensor(
+            universe_mask[:, :train_price_end], dtype=torch.bool, device=device
+        )
+        if universe_mask is not None
         else None
     )
     target = open_to_open_returns(

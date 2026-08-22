@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import torch
 from loguru import logger
 
 from ashare_data.config import (
@@ -140,9 +141,16 @@ class SimulationRunner:
         if self.formula_tokens is None:
             self.load_formula()
 
-        # Industry-group context for CS_NEUTRALIZE, aligned with the factor
-        # stack (None when the loader carries no industry data).
+        # Industry-group context for CS_NEUTRALIZE and the PIT eligibility
+        # mask for the cross-sectional operators, aligned with the factor
+        # stack (None when the loader carries no such data).
         self.vm.industry_codes = getattr(self.loader, "industry_codes", None)
+        universe_mask = getattr(self.loader, "universe_mask", None)
+        self.vm.universe_mask = (
+            torch.tensor(universe_mask, dtype=torch.bool)
+            if universe_mask is not None
+            else None
+        )
         factors = self.vm.execute(self.formula_tokens, self.loader.factor_tensor)
         if factors is None:
             raise ValueError("Formula is invalid")

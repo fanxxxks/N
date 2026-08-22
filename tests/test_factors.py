@@ -620,3 +620,242 @@ def test_medium_term_reversal_and_ret120_values():
     assert rev120.iloc[0, 120] == pytest.approx(-(closes[120] / closes[0] - 1.0))
     # Trailing-only: perturbing the last close leaves earlier cells intact.
     assert np.isnan(rev60.iloc[0, 59])
+
+
+# --- PIT universe mask in the factor layer ------------------------------------
+
+
+def _universe_mask(codes: list[str], dates: list[str], join_day: int) -> np.ndarray:
+    """All eligible except the future member (``300001.SZ``), which joins
+    on ``join_day``."""
+    mask = np.ones((len(codes), len(dates)), dtype=bool)
+    mask[codes.index("300001.SZ"), :join_day] = False
+    return mask
+
+
+def _join_bars(
+    codes: list[str],
+    join_day: int,
+    *,
+    pre_join_amount: float = 1e7,
+    join_day_amount: float | None = None,
+    pre_join_close_jump: bool = False,
+    n_dates: int = 40,
+) -> tuple[list[str], list[str], pd.DataFrame]:
+    """Deterministic bars where ``300001.SZ`` is the future member.
+
+    Eligible stocks trade with distinct amounts ((i+1)*1e7); the future
+    member carries ``pre_join_amount`` before its join day, ``join_day_amount``
+    exactly on the join day (``None`` keeps the pre-join amount), and 1e7
+    afterwards.  ``pre_join_close_jump`` plants a huge close on the day
+    before the join.
+    """
+
+    dates = pd.bdate_range("2024-01-01", periods=n_dates).strftime("%Y%m%d").tolist()
+    rows = []
+    for code in codes:
+        closes = []
+        for i in range(n_dates):
+            if code == "300001.SZ":
+                closes.append(1e5 if (pre_join_close_jump and i == join_day - 1) else 20.0 + 0.1 * i)
+            else:
+                closes.append(10.0 + 0.1 * i + (0.5 if code == "000001.SZ" else 0.0))
+        for i, d in enumerate(dates):
+            close = closes[i]
+            pre = closes[i - 1] if i else close * 0.99
+            if code == "300001.SZ":
+                if i < join_day:
+                    amount = pre_join_amount
+                elif i == join_day and join_day_amount is not None:
+                    amount = join_day_amount
+                else:
+                    amount = 1e7
+            else:
+                amount = (codes.index(code) + 1) * 1e7
+            rows.append(
+                {
+                    "ts_code": code,
+                    "trade_date": d,
+                    "open": close * 0.99,
+                    "high": close * 1.02,
+                    "low": close * 0.98,
+                    "close": close,
+                    "pre_close": pre,
+                    "volume": 1e6,
+                    "amount": amount,
+                    "turnover_rate": 1.0,
+                    "adj_factor": 1.0,
+                }
+            )
+    return codes, dates, pd.DataFrame(rows)
+
+
+def test_future_member_extreme_does_not_move_eligible_factors():
+    # The spec contract: give the future member extreme pre-join values and
+    # the eligible stocks' winsorized factor block (winsorize quantiles,
+    # CAPM market, amount-share denominator, industry-relative demean) must
+    # not change at all before the join day.
+    codes = ["000001.SZ", "600000.SH", "300001.SZ"]
+    join_day = 20
+    _, dates, bars_extreme = _join_bars(
+        codes, join_day, pre_join_amount=1e12, pre_join_close_jump=True
+    )
+    _, _, bars_mild = _join_bars(codes, join_day)
+    mask = _universe_mask(codes, dates, join_day)
+    # One shared industry so the industry-relative factors are live: their
+    # industry means must also exclude the future member before the join.
+    industry = pd.DataFrame(np.nan, index=codes, columns=dates, dtype=object)
+    industry.loc[:, :] = "801780"
+    t_ext = compute_factor_tensor(
+        bars_extreme, codes, dates, industry_frame=industry, universe_mask=mask
+    )
+    t_mild = compute_factor_tensor(
+        bars_mild, codes, dates, industry_frame=industry, universe_mask=mask
+    )
+    # The eligible stocks' whole pre-join factor block is bit-identical.
+    assert np.array_equal(t_ext[:, :2, :join_day], t_mild[:, :2, :join_day])
+    # The future member's own pre-join history is preserved (not zeroed):
+    # its values differ between the two scenarios.
+    assert not np.array_equal(t_ext[:, 2, :join_day], t_mild[:, 2, :join_day])
+
+
+def test_join_day_extreme_legitimately_affects_the_cross_section():
+    # On the join day the future member is eligible: its extreme amount is
+    # part of the reference set and legitimately moves the eligible stocks'
+    # standardized values; before the join day nothing changes.
+    codes = ["000001.SZ", "600000.SH", "300001.SZ", "000002.SZ", "600001.SH"]
+    join_day = 20
+    _, dates, bars_mild = _join_bars(codes, join_day, join_day_amount=5e7)
+    _, _, bars_extreme = _join_bars(codes, join_day, join_day_amount=1e13)
+    mask = _universe_mask(codes, dates, join_day)
+    t_mild = compute_factor_tensor(bars_mild, codes, dates, universe_mask=mask)
+    t_ext = compute_factor_tensor(bars_extreme, codes, dates, universe_mask=mask)
+    assert np.array_equal(t_mild[:, :, :join_day], t_ext[:, :, :join_day])
+    amt = FEATURE_NAMES.index("AMOUNT_SHARE")
+    f_row = codes.index("300001.SZ")
+    eligible_rows = [i for i in range(len(codes)) if i != f_row]
+    # The join-day extreme shifts the eligible reference statistics, so the
+    # eligible stocks' standardized shares differ between the scenarios...
+    assert not np.allclose(
+        t_mild[amt, eligible_rows, join_day],
+        t_ext[amt, eligible_rows, join_day],
+    )
+    # ...and the future member itself is now the dominant share.
+    assert t_ext[amt, f_row, join_day] > max(t_ext[amt, eligible_rows, join_day])
+
+
+def test_join_day_momentum_uses_pre_join_history():
+    # The mask never zeroes a stock's own bar history: the future member's
+    # join-day momentum is the standardized form of its true close ratio,
+    # identical to the unmasked computation (the join-day reference set is
+    # the same either way).
+    codes = ["000001.SZ", "600000.SH", "300001.SZ"]
+    join_day = 25
+    _, dates, bars = _join_bars(codes, join_day)
+    mask = _universe_mask(codes, dates, join_day)
+    engine = AshareFactorEngine()
+    masked = engine.compute_factor_tensor(bars, codes, dates, universe_mask=mask)
+    unmasked = engine.compute_factor_tensor(bars, codes, dates)
+    f_row = codes.index("300001.SZ")
+    for name in ("RET_5", "MOMENTUM_20"):
+        idx = FEATURE_NAMES.index(name)
+        assert np.allclose(
+            masked[idx, f_row, join_day], unmasked[idx, f_row, join_day]
+        )
+    ctx = _context_for(bars, dates, codes, ["RET_5"])
+    raw_ret5 = _factor_fn("RET_5")(ctx)
+    expected = raw_ret5.loc["300001.SZ", dates[join_day]]
+    expected_ratio = bars.loc[
+        (bars["ts_code"] == "300001.SZ") & (bars["trade_date"] == dates[join_day]),
+        "close",
+    ].iloc[0] / bars.loc[
+        (bars["ts_code"] == "300001.SZ") & (bars["trade_date"] == dates[join_day - 5]),
+        "close",
+    ].iloc[0] - 1.0
+    assert expected == pytest.approx(expected_ratio)
+    assert masked[FEATURE_NAMES.index("RET_5"), f_row, join_day] != 0.0
+
+
+def test_engine_rejects_universe_mask_shape_mismatch(bars_data):
+    dates, ts_codes, bars = bars_data
+    bad = np.ones((len(ts_codes), len(dates) + 1), dtype=bool)
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        compute_factor_tensor(bars, ts_codes, dates, universe_mask=bad)
+
+
+def test_amount_share_denominator_excludes_ineligible():
+    amount = pd.DataFrame(
+        {"d1": [30.0, 70.0, 1e9], "d2": [50.0, 50.0, 1e9]},
+        index=["A", "B", "FUTURE"],
+    )
+    eligible = pd.DataFrame(
+        [[True, True], [True, True], [False, False]],
+        index=["A", "B", "FUTURE"],
+        columns=["d1", "d2"],
+    )
+    share = _factor_amount_share(amount, eligible)
+    # The denominator counts only eligible amounts: the extreme ineligible
+    # amount cannot dilute the eligible shares.
+    assert share.loc["A", "d1"] == pytest.approx(0.3)
+    assert share.loc["B", "d1"] == pytest.approx(0.7)
+    assert share.loc["A", "d2"] == pytest.approx(0.5)
+    assert share.loc["B", "d2"] == pytest.approx(0.5)
+
+
+def test_rolling_capm_market_excludes_ineligible_stocks():
+    # Stock A = 2*mkt, stock B = 0.5*mkt, and a future member with extreme
+    # returns.  With the future member masked out the equal-weight market
+    # uses only A/B, so the recovered betas stay 1.6 and 0.4 exactly as in
+    # the unmasked two-stock reference test.
+    n = 30
+    m = np.sin(np.linspace(0.1, 2.0, n)) * 0.01
+    ret_a = 2.0 * m
+    ret_b = 0.5 * m
+    ret_f = np.full(n, 5.0)  # extreme future-member returns
+    close = pd.DataFrame(
+        {
+            f"d{i}": [
+                10.0 * np.prod(1.0 + ret_a[: i + 1]),
+                10.0 * np.prod(1.0 + ret_b[: i + 1]),
+                10.0 * np.prod(1.0 + ret_f[: i + 1]),
+            ]
+            for i in range(n)
+        },
+        index=["A", "B", "FUTURE"],
+    )
+    eligible = np.ones((3, n), dtype=bool)
+    eligible[2] = False
+    beta, ivol, rsq = _rolling_capm(close, window=60, min_periods=2, eligible=eligible)
+    assert beta.loc["A"].iloc[-1] == pytest.approx(1.6, abs=1e-4)
+    assert beta.loc["B"].iloc[-1] == pytest.approx(0.4, abs=1e-4)
+    assert ivol.loc["A"].iloc[-1] == pytest.approx(0.0, abs=1e-6)
+    assert rsq.loc["A"].iloc[-1] == pytest.approx(1.0, abs=1e-4)
+    # Without the mask the extreme future member distorts the market factor
+    # and the recovered betas shift.
+    beta_all, _, _ = _rolling_capm(close, window=60, min_periods=2)
+    assert abs(beta_all.loc["A"].iloc[-1] - 1.6) > 1e-3
+
+
+def test_industry_demean_reference_is_eligible_only():
+    frame = pd.DataFrame(
+        {"d1": [1.0, 3.0, 100.0], "d2": [2.0, 4.0, 200.0]},
+        index=["A", "B", "FUTURE"],
+    )
+    ctx = _empty_ctx(["A", "B", "FUTURE"], ["d1", "d2"])
+    ctx.industry = pd.DataFrame(
+        {"d1": ["X", "X", "X"], "d2": ["X", "X", "X"]},
+        index=["A", "B", "FUTURE"],
+        dtype=object,
+    )
+    ctx.eligible = pd.DataFrame(
+        [[True, True], [True, True], [False, False]],
+        index=["A", "B", "FUTURE"],
+        columns=["d1", "d2"],
+    )
+    out = _industry_demean(ctx, frame)
+    # The industry mean counts only eligible members: mean(A, B) = 2.0 on
+    # d1 and 3.0 on d2, so the extreme ineligible member cannot shift it.
+    assert out.loc["A", "d1"] == pytest.approx(-1.0)
+    assert out.loc["B", "d1"] == pytest.approx(1.0)
+    assert out.loc["A", "d2"] == pytest.approx(-1.0)
+    assert out.loc["B", "d2"] == pytest.approx(1.0)

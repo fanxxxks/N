@@ -291,6 +291,7 @@ class AshareDataLoader:
             pit_fundamentals=pit,
             extra_frames=capital,
             industry_frame=industry_frame,
+            universe_mask=self.universe_mask,
         )
         self.factor_tensor = torch.tensor(factors, dtype=torch.float32)
         # Dense industry group ids for the VM's CS_NEUTRALIZE operator

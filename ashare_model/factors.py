@@ -95,7 +95,13 @@ class FactorContext:
     first-level industry code per ``[stock x date]`` (a current-snapshot
     mapping repeated over dates, NaN for unmapped stocks); it is ``None``
     when no membership data is available, in which case the industry-relative
-    factors stay neutral instead of fabricating groupings.
+    factors stay neutral instead of fabricating groupings.  ``eligible``
+    carries the PIT universe eligibility mask per ``[stock x date]`` (bool);
+    every cross-sectional reference statistic — winsorize quantiles, the
+    CAPM equal-weight market return, the amount-share denominator and the
+    industry means — uses only eligible & finite cells, while a stock's own
+    time-series history is never masked.  It is ``None`` when no mask is
+    supplied (all finite cells are reference cells).
     """
 
     ts_codes: list[str]
@@ -109,6 +115,7 @@ class FactorContext:
     amount: pd.DataFrame
     turnover: pd.DataFrame
     industry: pd.DataFrame | None = None
+    eligible: pd.DataFrame | None = None
     _cache: dict | None = None
 
     def __post_init__(self) -> None:
@@ -155,6 +162,7 @@ def _rolling_capm(
     close: pd.DataFrame,
     window: int = 60,
     min_periods: int = 20,
+    eligible: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Rolling CAPM regression of each stock on the equal-weight market.
 
@@ -162,18 +170,32 @@ def _rolling_capm(
     windows (expanding before ``window``, at least ``min_periods`` valid
     days, and a non-degenerate market/stock variance).  Prefix-sum
     vectorization keeps it cheap on the full cross-section.  The market is
-    the cross-sectional mean return per date, so no external index data is
-    needed.
+    the equal-weight mean return per date over the *eligible and finite*
+    cross-section (``eligible`` is an optional aligned ``[stock x date]``
+    bool mask; without it every finite cell counts), so stocks outside the
+    PIT universe can never move the market factor — each stock's own
+    trailing window still uses only its own history.
     """
 
     r = _returns(close)
     arr = r.to_numpy(dtype=float)  # [S, T], NaN on missing days
     s, t = arr.shape
+    if eligible is not None:
+        eligible = np.asarray(eligible, dtype=bool)
+        if eligible.shape != arr.shape:
+            raise ValueError(
+                f"eligible shape {eligible.shape} does not match "
+                f"close shape {arr.shape}"
+            )
+    ref = ~np.isnan(arr)
+    if eligible is not None:
+        ref = ref & eligible
     with warnings.catch_warnings():
-        # All-NaN columns (e.g. the first date) legitimately produce an
-        # empty-slice warning; they map to a zero market return below.
+        # All-NaN columns (e.g. the first date, or a date whose eligible
+        # cross-section is empty) legitimately produce an empty-slice
+        # warning; they map to a zero market return below.
         warnings.simplefilter("ignore", RuntimeWarning)
-        mkt = np.nanmean(arr, axis=0)  # [T] equal-weight market return
+        mkt = np.nanmean(np.where(ref, arr, np.nan), axis=0)  # [T]
     mkt = np.nan_to_num(mkt, nan=0.0)
     valid = ~np.isnan(arr)
     r0 = np.nan_to_num(arr, nan=0.0)
@@ -223,13 +245,20 @@ def _rolling_capm(
     )
 
 
-def _factor_amount_share(amount: pd.DataFrame) -> pd.DataFrame:
+def _factor_amount_share(
+    amount: pd.DataFrame,
+    eligible: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Cross-sectional share of the day's total turnover amount.
 
-    Days where no stock has a valid amount keep NaN (neutral).
+    The per-date denominator sums only the eligible and finite amounts
+    (``eligible`` is an optional aligned bool frame), so stocks outside the
+    PIT universe cannot dilute the share.  Days with no eligible amount keep
+    NaN (neutral).
     """
 
-    denom = amount.fillna(0.0).sum(axis=0).replace(0.0, np.nan)
+    reference = amount if eligible is None else amount.where(eligible)
+    denom = reference.fillna(0.0).sum(axis=0).replace(0.0, np.nan)
     return (amount / denom).replace([np.inf, -np.inf], np.nan)
 
 
@@ -237,7 +266,14 @@ def _factor_capm(ctx: FactorContext, which: int) -> pd.DataFrame:
     """Shared CAPM triple; ``which`` picks beta (0), ivol (1) or rsq (2)."""
     triple = ctx._cache.get("capm60")
     if triple is None:
-        triple = _rolling_capm(ctx.close, window=60, min_periods=20)
+        eligible = (
+            None
+            if ctx.eligible is None
+            else ctx.eligible.to_numpy(dtype=bool)
+        )
+        triple = _rolling_capm(
+            ctx.close, window=60, min_periods=20, eligible=eligible
+        )
         ctx._cache["capm60"] = triple
     return triple[which]
 
@@ -421,8 +457,11 @@ def _industry_demean(ctx: FactorContext, frame: pd.DataFrame) -> pd.DataFrame:
     Membership comes from the (current-snapshot) Shenwan mapping carried in
     ``ctx.industry``; stocks without an industry stay NaN (neutral after
     standardization), and no industry is fabricated when the frame is
-    absent.  Industry means skip missing values, so a stock's own NaN never
-    contaminates its industry's mean.
+    absent.  Industry means are computed only over the *eligible and
+    finite* members (``ctx.eligible``, the PIT universe mask), so an
+    ineligible stock can never shift its industry's mean — its own raw
+    value is still demeaned with that mean so its history stays observable.
+    A stock's own NaN never contaminates its industry's mean.
     """
 
     if ctx.industry is None or ctx.industry.empty:
@@ -432,7 +471,12 @@ def _industry_demean(ctx: FactorContext, frame: pd.DataFrame) -> pd.DataFrame:
         # No usable membership at all: stay neutral rather than asking
         # groupby to demean an empty set of groups.
         return pd.DataFrame(np.nan, index=frame.index, columns=frame.columns)
-    means = frame.groupby(codes, dropna=True).transform("mean")
+    reference = frame
+    if ctx.eligible is not None:
+        reference = frame.where(
+            ctx.eligible.reindex(index=frame.index, columns=frame.columns)
+        )
+    means = reference.groupby(codes, dropna=True).transform("mean")
     return frame - means
 
 
@@ -633,7 +677,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
         ("amount",),
         1,
         "Share of the day's total cross-sectional turnover amount",
-        lambda ctx: _factor_amount_share(ctx.amount),
+        lambda ctx: _factor_amount_share(ctx.amount, ctx.eligible),
     )
 
     # Lottery / anchoring.
@@ -785,6 +829,7 @@ class AshareFactorEngine:
         dates: list[str],
         close: pd.DataFrame,
         industry_frame: pd.DataFrame | None = None,
+        eligible_frame: pd.DataFrame | None = None,
     ) -> FactorContext:
         """Pivot exactly the columns the requested registered factors need."""
 
@@ -809,6 +854,7 @@ class AshareFactorEngine:
             amount=frames["amount"],
             turnover=frames["turnover_rate"],
             industry=industry_frame,
+            eligible=eligible_frame,
         )
 
     def compute_factor_tensor(
@@ -819,6 +865,7 @@ class AshareFactorEngine:
         pit_fundamentals: dict[str, pd.DataFrame] | None = None,
         extra_frames: dict[str, pd.DataFrame] | None = None,
         industry_frame: pd.DataFrame | None = None,
+        universe_mask: np.ndarray | None = None,
     ) -> np.ndarray:
         """Return a ``[feature, stock, date]`` float32 tensor.
 
@@ -833,12 +880,38 @@ class AshareFactorEngine:
         Frames are injected verbatim; the no-lookahead guarantees live in
         the builders.  Missing names/frames stay neutral (0) after
         standardization.
+
+        ``universe_mask`` is the optional ``[stock x date]`` bool PIT
+        eligibility mask aligned with ``(ts_codes, dates)``.  Every
+        stock-axis reference statistic (winsorize quantiles / median / MAD,
+        the CAPM equal-weight market return, the amount-share denominator,
+        the industry means) is computed only over eligible & finite cells,
+        so stocks outside the universe cannot change eligible stocks'
+        factor values.  A stock's own bar history is never masked: e.g. the
+        join-day momentum still reads its pre-join prices.  A mask whose
+        shape does not match ``(ts_codes, dates)`` raises ``ValueError``.
         """
 
         bars = normalize_daily_bars(bars)
-        dates = sorted(dates)
+        date_order = sorted(range(len(dates)), key=dates.__getitem__)
+        dates = [dates[i] for i in date_order]
+        if universe_mask is not None:
+            universe_mask = np.asarray(universe_mask, dtype=bool)
+            if universe_mask.shape != (len(ts_codes), len(dates)):
+                raise ValueError(
+                    f"universe_mask shape {universe_mask.shape} does not match "
+                    f"(stock={len(ts_codes)}, date={len(dates)})"
+                )
+            universe_mask = universe_mask[:, date_order]
+            eligible_frame = pd.DataFrame(
+                universe_mask, index=ts_codes, columns=dates
+            )
+        else:
+            eligible_frame = None
         close = self._pivot(bars, ts_codes, dates, "close")
-        context = self._build_context(bars, ts_codes, dates, close, industry_frame)
+        context = self._build_context(
+            bars, ts_codes, dates, close, industry_frame, eligible_frame
+        )
 
         empty = pd.DataFrame(index=close.index, columns=close.columns, dtype=float)
         raw_factors: dict[str, pd.DataFrame] = {}
@@ -863,7 +936,7 @@ class AshareFactorEngine:
             if isinstance(frame, pd.Series):
                 frame = frame.to_frame().T
             frame = frame.reindex(index=ts_codes, columns=dates)
-            frame = winsorize_cross_section(frame)
+            frame = winsorize_cross_section(frame, eligible=universe_mask)
             # After cross-sectional standardization 0 is the neutral value.
             standardized.append(frame.fillna(0.0).values.astype(np.float32))
 
@@ -877,9 +950,11 @@ def compute_factor_tensor(
     pit_fundamentals: dict[str, pd.DataFrame] | None = None,
     extra_frames: dict[str, pd.DataFrame] | None = None,
     industry_frame: pd.DataFrame | None = None,
+    universe_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     return AshareFactorEngine().compute_factor_tensor(
-        bars, ts_codes, dates, pit_fundamentals, extra_frames, industry_frame
+        bars, ts_codes, dates, pit_fundamentals, extra_frames, industry_frame,
+        universe_mask,
     )
 
 

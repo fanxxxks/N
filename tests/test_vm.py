@@ -191,3 +191,174 @@ def test_vm_standardizes_stacked_arithmetic_scale():
     assert chained is not None
     assert chained.std(dim=0).max().item() < 2.0  # scale bounded, no explosion
     assert torch.isfinite(chained).all()
+
+
+# --- PIT universe mask on the VM ----------------------------------------------
+
+
+def _vm_op_ids():
+    return {
+        name: FORMULA_VOCAB.operator_offset + i
+        for i, (name, _, _) in enumerate(OPS_CONFIG)
+    }
+
+
+def test_vm_terminal_zscore_excludes_ineligible_stocks():
+    vm = StackVM(FORMULA_VOCAB)
+    torch.manual_seed(9)
+    feature = torch.randn(FORMULA_VOCAB.feature_count, 4, 6)
+    eligible = torch.ones(4, 6, dtype=torch.bool)
+    eligible[3] = False
+    vm.universe_mask = eligible
+    out = vm.execute([1], feature)
+    assert out is not None
+    # Ineligible cells are non-participating (NaN), not zeros in the sort.
+    assert torch.isnan(out[3]).all()
+    # The eligible rows are z-scored over the eligible reference set only.
+    ref = cross_sectional_zscore(feature[0][:3])
+    assert torch.allclose(out[:3], ref, atol=1e-5, rtol=1e-5)
+
+
+def test_vm_extreme_ineligible_values_do_not_move_eligible_signals():
+    vm = StackVM(FORMULA_VOCAB)
+    eligible = torch.tensor(
+        [[True, True], [True, True], [True, True], [False, False]]
+    )
+    vm.universe_mask = eligible
+    base = torch.randn(FORMULA_VOCAB.feature_count, 4, 2)
+    extreme = base.clone()
+    extreme[0, 3] = 1e9  # future member with extreme values
+    out_base = vm.execute([1], base)
+    out_extreme = vm.execute([1], extreme)
+    assert out_base is not None and out_extreme is not None
+    # The eligible rows are identical: the extreme ineligible row cannot
+    # shift their z-scores (it also cannot enter as a zero).
+    assert torch.allclose(out_base[:3], out_extreme[:3], atol=1e-5, rtol=1e-5)
+    assert torch.isnan(out_extreme[3]).all()
+
+
+def test_vm_cs_operators_honor_universe_mask():
+    vm = StackVM(FORMULA_VOCAB)
+    op_id = _vm_op_ids()
+    feature = torch.zeros(FORMULA_VOCAB.feature_count, 4, 3)
+    feature[0] = torch.tensor(
+        [[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [3.0, 6.0, 9.0], [1e6, 1e6, 1e6]]
+    )
+    eligible = torch.tensor(
+        [[True, True, True], [True, True, True], [True, True, True], [False, False, False]]
+    )
+    vm.universe_mask = eligible
+    for name in ("CS_RANK", "CS_ZSCORE", "CS_DEMEAN"):
+        out = vm.execute([1, op_id[name]], feature)
+        assert out is not None, name
+        # The ineligible row is non-participating in the final signal...
+        assert torch.isnan(out[3]).all(), name
+        # ...and the eligible rows match the eligible-only execution.
+        vm.universe_mask = None
+        eligible_only = vm.execute(
+            [1, op_id[name]], feature[:, :3]
+        )
+        vm.universe_mask = eligible
+        assert eligible_only is not None
+        assert torch.allclose(out[:3], eligible_only, atol=1e-5, rtol=1e-5), name
+
+
+def test_vm_cs_neutralize_honors_mask_through_industry_codes():
+    vm = StackVM(FORMULA_VOCAB)
+    op_id = _vm_op_ids()
+    feature = torch.zeros(FORMULA_VOCAB.feature_count, 4, 2)
+    feature[0] = torch.tensor(
+        [[10.0, 2.0], [20.0, 4.0], [1000.0, 2000.0], [7.0, 5.0]]
+    )
+    vm.industry_codes = torch.tensor(
+        [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [float("nan"), float("nan")]]
+    )
+    vm.universe_mask = torch.tensor(
+        [[True, True], [True, True], [False, False], [True, True]]
+    )
+    out = vm.execute([1, op_id["CS_NEUTRALIZE"]], feature)
+    assert out is not None
+    # The terminal signal is z-scored; the industry pair is neutralized
+    # against the eligible members only, so the ineligible extreme could
+    # not move the industry mean.
+    assert not torch.isnan(out[:2]).any()
+    assert torch.isnan(out[2]).all()
+    # Unmapped row stays raw inside the operator and is standardized as the
+    # sole valid member of no group at the terminal step.
+    assert torch.isfinite(out[3]).all()
+
+
+def test_vm_day_without_eligible_stocks_is_stable():
+    vm = StackVM(FORMULA_VOCAB)
+    feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 4)
+    eligible = torch.ones(3, 4, dtype=torch.bool)
+    eligible[:, 2] = False
+    vm.universe_mask = eligible
+    out = vm.execute([1], feature)
+    assert out is not None
+    # The empty day collapses to the stable neutral 0 (no NaN spread, no
+    # extreme values) while the eligible days keep their z-scores.
+    assert (out[:, 2] == 0.0).all()
+    assert torch.isfinite(out[:, :2]).all() and torch.isfinite(out[:, 3]).all()
+
+
+def test_vm_single_eligible_stock_is_neutral_but_valid():
+    vm = StackVM(FORMULA_VOCAB)
+    feature = torch.zeros(FORMULA_VOCAB.feature_count, 3, 2)
+    feature[0] = torch.tensor([[5.0, 7.0], [1e9, 1e9], [1e9, 1e9]])
+    eligible = torch.tensor([[True, True], [False, False], [False, False]])
+    vm.universe_mask = eligible
+    out = vm.execute([1], feature)
+    assert out is not None
+    # A single eligible member has zero dispersion: neutral z-score, but it
+    # stays the only valid cell of its days.
+    assert torch.allclose(out[0], torch.zeros(2), atol=1e-6)
+    assert torch.isnan(out[1]).all() and torch.isnan(out[2]).all()
+
+
+def test_vm_mask_shape_mismatch_returns_none():
+    vm = StackVM(FORMULA_VOCAB)
+    feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 4)
+    vm.universe_mask = torch.ones(2, 4, dtype=torch.bool)
+    # A misaligned mask makes the execution invalid (the VM's None contract
+    # for unusable executions); the underlying operators raise a clear
+    # ValueError for direct callers.
+    assert vm.execute([1], feature) is None
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        cross_sectional_zscore(feature[0], vm.universe_mask)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_vm_masked_execution_matches_cpu_on_cuda():
+    vm = StackVM(FORMULA_VOCAB)
+    torch.manual_seed(7)
+    feature = torch.randn(FORMULA_VOCAB.feature_count, 4, 16)
+    eligible = torch.rand(4, 16) > 0.3
+    industry = torch.randint(0, 2, (4, 16)).float()
+    vm.universe_mask = eligible
+    vm.industry_codes = industry
+    op_id = _vm_op_ids()
+    formulas = [
+        [1],
+        [1, op_id["CS_RANK"]],
+        [1, op_id["CS_ZSCORE"]],
+        [1, op_id["CS_DEMEAN"]],
+        [1, op_id["CS_NEUTRALIZE"]],
+        [1, 2, op_id["CS_RANK"], op_id["ADD"]],
+    ]
+    for tokens in formulas:
+        cpu_out = vm.execute(tokens, feature)
+        assert cpu_out is not None
+        vm.universe_mask = eligible.cuda()
+        vm.industry_codes = industry.cuda()
+        gpu_out = vm.execute(tokens, feature.cuda())
+        vm.universe_mask = eligible
+        vm.industry_codes = industry
+        assert gpu_out is not None
+        # The NaN (non-participating) pattern and the finite values agree
+        # within the established float32 tolerance contract.
+        assert torch.equal(torch.isnan(cpu_out), torch.isnan(gpu_out.cpu()))
+        finite = ~torch.isnan(cpu_out)
+        assert torch.allclose(
+            cpu_out[finite], gpu_out.cpu()[finite], atol=1e-4, rtol=1e-4
+        )

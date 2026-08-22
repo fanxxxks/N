@@ -145,6 +145,48 @@ def test_winsorize_constant_cross_section_maps_to_zero():
     assert out2["d"].abs().max() <= 5.0
 
 
+# --- PIT universe mask in cross-sectional standardization --------------------
+
+
+def test_winsorize_reference_set_is_eligible_only():
+    # An ineligible stock with extreme values must not move the quantile
+    # points / median / MAD used to standardize the eligible stocks.
+    wide = pd.DataFrame(
+        {"d1": [1.0, 2.0, 3.0, 1e6], "d2": [10.0, 10.0, 10.0, 1e6]},
+        index=["A", "B", "C", "FUTURE"],
+    )
+    eligible = np.array(
+        [[True, True], [True, True], [True, True], [False, False]]
+    )
+    out = winsorize_cross_section(wide, eligible=eligible)
+    baseline = winsorize_cross_section(wide.iloc[:3])
+    for day in ("d1", "d2"):
+        assert np.allclose(out.loc[["A", "B", "C"], day], baseline[day])
+    # The ineligible row keeps a bounded, finite transform of its own value
+    # (own history is never zeroed) but contributed to no reference stat.
+    assert np.isfinite(out.to_numpy()).all()
+    assert np.abs(out.to_numpy()).max() <= 5.0
+
+
+def test_winsorize_column_without_eligible_cells_is_neutral():
+    wide = pd.DataFrame(
+        {"d1": [1.0, 2.0, 3.0], "d2": [5.0, 5.0, 5.0]},
+        index=list("ABC"),
+    )
+    eligible = np.array([[True, False], [True, False], [True, False]])
+    out = winsorize_cross_section(wide, eligible=eligible)
+    # Day 1 keeps its eligible reference set; day 2 has none -> stable
+    # neutral 0, no NaN spread and no extreme values.
+    assert (out["d2"] == 0.0).all()
+    assert np.isfinite(out.to_numpy()).all()
+
+
+def test_winsorize_rejects_mask_shape_mismatch():
+    wide = pd.DataFrame([[1.0, 2.0]], index=["A"], columns=["d1", "d2"])
+    with pytest.raises(ValueError, match="eligible shape"):
+        winsorize_cross_section(wide, eligible=np.ones((2, 2), dtype=bool))
+
+
 # --- tradability masks (shared by the backtest engine and the reward path) ---
 
 
