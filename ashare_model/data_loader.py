@@ -78,6 +78,7 @@ class AshareDataLoader:
         self.stock_names: dict[str, str] = {}
         self.stock_list_dates: dict[str, object] = {}
         self.universe: UniverseMask | None = None
+        self.universe_policy: UniversePolicy | None = None
         self.universe_status: UniverseContractStatus | None = None
         self._universe_contract: ResolvedUniverse | None = None
         self._tradability_cache: tuple[np.ndarray, np.ndarray] | None = None
@@ -171,6 +172,12 @@ class AshareDataLoader:
             self.dates,
             "_bar_present",
         ).notna().to_numpy(dtype=bool)
+        policy = UniversePolicy(
+            index_codes=tuple(str(code) for code in self.config.index_codes),
+            min_listed_sessions=self.config.min_listed_sessions,
+            membership_end_inclusive=False,
+        )
+        self.universe_policy = policy
         self.universe = build_universe_mask(
             self.ts_codes,
             self.dates,
@@ -178,11 +185,7 @@ class AshareDataLoader:
             self._membership_records(contract),
             self.stock_list_dates,
             presence,
-            UniversePolicy(
-                index_codes=tuple(str(code) for code in self.config.index_codes),
-                min_listed_sessions=self.config.min_listed_sessions,
-                membership_end_inclusive=False,
-            ),
+            policy,
         )
 
     def load_data(

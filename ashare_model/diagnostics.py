@@ -31,8 +31,22 @@ from ashare_logging import export_log_txt, setup_run_logging
 
 from .data_loader import AshareDataLoader
 from .factors import FACTOR_REGISTRY, NEUTRAL_FEATURE_NAMES
+from .reward import rank_ic_series
 from .time_contract import TrainingTimeContract
 from .vocab import FEATURE_NAMES
+
+
+def _validate_eligible(tensor: np.ndarray, eligible: np.ndarray | None) -> np.ndarray | None:
+    """Return ``eligible`` after enforcing the ``[stock, date]`` alignment."""
+    if eligible is None:
+        return None
+    eligible = np.asarray(eligible, dtype=bool)
+    if eligible.shape != tensor.shape[1:]:
+        raise ValueError(
+            f"eligible shape {eligible.shape} does not match "
+            f"tensor [stock, date] shape {tensor.shape[1:]}"
+        )
+    return eligible
 
 
 def feature_family(name: str) -> str:
@@ -56,18 +70,31 @@ def _names_for(tensor: np.ndarray) -> list[str]:
     return list(FEATURE_NAMES[: tensor.shape[0]])
 
 
-def factor_coverage(tensor: np.ndarray) -> dict[str, float]:
+def factor_coverage(
+    tensor: np.ndarray,
+    eligible: np.ndarray | None = None,
+) -> dict[str, float]:
     """Fraction of non-neutral (non-zero) cells per feature.
 
     After cross-sectional standardization the neutral value is exactly 0,
     so a non-zero cell means the factor carried information that date.
+    ``eligible`` is the optional ``[stock, date]`` bool PIT universe mask:
+    the denominator counts only eligible cells (cells outside the universe
+    neither count as covered nor inflate the denominator), so a future
+    member can never change an eligible factor's coverage.
     """
 
-    nonzero = np.count_nonzero(tensor, axis=(1, 2))
-    cells = tensor.shape[1] * tensor.shape[2]
+    arr = np.asarray(tensor)
+    eligible = _validate_eligible(arr, eligible)
+    if eligible is None:
+        nonzero = np.count_nonzero(arr, axis=(1, 2))
+        cells = arr.shape[1] * arr.shape[2]
+    else:
+        nonzero = np.count_nonzero(arr[:, eligible], axis=1)
+        cells = int(eligible.sum())
     return {
         name: float(nonzero[i]) / max(cells, 1)
-        for i, name in enumerate(_names_for(tensor))
+        for i, name in enumerate(_names_for(arr))
     }
 
 
@@ -76,6 +103,8 @@ def rank_ic_stats(
     target: np.ndarray,
     dates: list[str],
     names: list[str] | None = None,
+    eligible: np.ndarray | None = None,
+    min_stocks: int = 10,
 ) -> dict[str, dict[str, float]]:
     """Per-feature rank IC of the standardized factor vs the forward target.
 
@@ -83,26 +112,22 @@ def rank_ic_stats(
     (mean/std over dates) per feature.  Dates without a usable target
     cross-section are skipped.  ``names`` overrides the vocabulary-derived
     row labels (e.g. for a single formula signal the evaluation protocol
-    passes ``["formula"]``).
+    passes ``["formula"]``).  The daily ICs reuse the unified
+    :func:`ashare_model.reward.rank_ic_series` implementation (one Spearman
+    code path for research, scoring and the protocol); ``eligible`` is the
+    optional ``[stock, date]`` bool PIT universe mask gating each day's
+    correlation to signal-date eligible cells.
     """
 
+    tensor = np.asarray(tensor, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
-    stats: dict[str, dict[str, float]] = {}
+    eligible = _validate_eligible(tensor, eligible)
     names = _names_for(tensor) if names is None else list(names)
+    daily_ics = rank_ic_series(tensor, target, min_stocks, eligible)
+    stats: dict[str, dict[str, float]] = {}
     for i, name in enumerate(names):
-        ics = []
-        for t in range(tensor.shape[2]):
-            signal = tensor[i, :, t]
-            label = target[:, t]
-            valid = np.isfinite(label)
-            if valid.sum() < 10:
-                continue
-            s = pd.Series(signal[valid])
-            l = pd.Series(label[valid])
-            ic = float(s.corr(l, method="spearman"))
-            if np.isfinite(ic):
-                ics.append(ic)
-        if not ics:
+        ics = daily_ics[i][np.isfinite(daily_ics[i])]
+        if ics.size == 0:
             stats[name] = {"ic_mean": 0.0, "ic_abs_mean": 0.0, "icir": 0.0, "n_dates": 0}
             continue
         arr = np.asarray(ics)
@@ -117,21 +142,32 @@ def rank_ic_stats(
 
 def correlation_summary(
     tensor: np.ndarray,
+    eligible: np.ndarray | None = None,
 ) -> dict[str, object]:
     """Cross-sectional correlation structure of the factor stack.
 
     Per date, the ``[feature x feature]`` Pearson correlation over stocks
     is computed; the averages (of the absolute values) are returned as a
     matrix, together with the mean within-family |corr| and the top
-    correlated pairs.
+    correlated pairs.  ``eligible`` is the optional ``[stock, date]`` bool
+    PIT universe mask: each day's correlation uses only the eligible cells
+    of that date, so a future member's extreme pre-join values can never
+    move an eligible factor's correlations.
     """
 
     f, s, t = tensor.shape
+    eligible = _validate_eligible(tensor, eligible)
     names = _names_for(tensor)
     mean_abs = np.zeros((f, f), dtype=np.float64)
     n_dates = 0
     for day in range(t):
-        block = tensor[:, :, day].astype(np.float64)
+        if eligible is not None:
+            sel = eligible[:, day]
+            if int(sel.sum()) < 2:
+                continue
+            block = tensor[:, sel, day].astype(np.float64)
+        else:
+            block = tensor[:, :, day].astype(np.float64)
         if np.count_nonzero(block) == 0:
             continue
         corr = np.corrcoef(block)
@@ -191,18 +227,24 @@ def factor_report(
     price_end = contract.train_label_end
     window = tensor[:, :, :signal_end].numpy().copy()
     eligibility = loader.universe_mask[:, :signal_end]
-    window[:, ~eligibility] = np.nan
     target = open_to_open_returns(
         loader.raw_data_cache["open"][:, :price_end].numpy()
     )[:, :signal_end]
     target = loader.mask_by_universe(target)[:, :signal_end]
 
-    coverage = factor_coverage(window)
-    ic = rank_ic_stats(window, target, dates[:signal_end])
-    corr = correlation_summary(window)
+    coverage = factor_coverage(window, eligible=eligibility)
+    ic = rank_ic_stats(
+        window, target, dates[:signal_end], eligible=eligibility
+    )
+    corr = correlation_summary(window, eligible=eligibility)
     report = {
         "feature_count": len(FEATURE_NAMES),
+        # The full-period code union, kept for provenance.  It is NOT the
+        # daily selectable size: that number is mean_eligible_stocks.
         "stock_count": len(loader.ts_codes),
+        "mean_eligible_stocks": float(
+            round(eligibility.sum(axis=0).mean(), 2)
+        ),
         "date_count": signal_end,
         "dates": [dates[0], dates[signal_end - 1]],
         "per_feature": [

@@ -14,6 +14,7 @@ from ashare_data.config import (
     ProtocolConfig,
     TierConfig,
 )
+from ashare_data.db import AshareDB
 from ashare_model import evaluation
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.data_loader import AshareDataLoader
@@ -42,6 +43,7 @@ from ashare_model.evaluation import (
 )
 from ashare_model.reward import REWARD_VERSION
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
+from tests.conftest import make_bars
 
 
 def _loader(populated_db: DataConfig) -> AshareDataLoader:
@@ -186,6 +188,147 @@ def test_benchmark_row_matches_engine_reference_curve(populated_db: DataConfig):
         result.benchmark_equity[-1] - 1.0, abs=1e-12
     )
     assert row["average_turnover"] is None  # cost-free reference, no turnover
+
+
+# --- PIT universe mask in evaluation -----------------------------------------
+
+
+def _future_member_loader(tmp_path, join_day: int = 10) -> AshareDataLoader:
+    """Loader over three stocks where 300001.SZ joins the universe on
+    ``dates[join_day]`` (inside the default test fold's window)."""
+    data_config = DataConfig(
+        data_dir=tmp_path,
+        duckdb_path=tmp_path / "ashare.duckdb",
+        parquet_dir=tmp_path / "parquet",
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
+        min_listed_sessions=1,
+    )
+    dates, codes, bars = make_bars(40, ["000001.SZ", "600000.SH", "300001.SZ"])
+    with AshareDB(data_config.duckdb_path) as db:
+        db.create_schema(data_config)
+        db.upsert_daily(bars.to_dict("records"), data_config)
+        db.upsert_stocks(
+            [
+                {"ts_code": c, "name": c, "industry": None, "list_date": "20200101", "is_st": False}
+                for c in codes
+            ],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": d, "is_open": True} for d in dates],
+            data_config,
+        )
+        db.upsert_constituents(
+            [
+                {"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20200101", "out_date": "99991231"},
+                {"index_code": "000300.SH", "ts_code": "600000.SH", "in_date": "20200102", "out_date": "99991231"},
+                {"index_code": "000300.SH", "ts_code": "300001.SZ", "in_date": dates[join_day], "out_date": "99991231"},
+            ],
+            data_config,
+        )
+    return AshareDataLoader(data_config, ModelConfig()).load_data()
+
+
+def test_evaluate_signal_uses_one_mask_for_ic_and_backtest(tmp_path):
+    loader = _future_member_loader(tmp_path, join_day=10)
+    fold = _fold(loader.dates)
+    fold_data = epoch_slice(loader, fold)
+    f_row = loader.ts_codes.index("300001.SZ")
+    rng = np.random.default_rng(60)
+    base = rng.normal(size=(len(loader.ts_codes), len(fold_data.dates)))
+    extreme = base.copy()
+    join_col = 10 - fold.contract.test_signal_start
+    extreme[f_row, :join_col] = 1e9  # future member's extreme pre-join values
+    mild = evaluate_signal(base, loader, fold, BacktestConfig())
+    ext = evaluate_signal(extreme, loader, fold, BacktestConfig())
+    # Every measurement — IC/ICIR, benchmark return, positions (through
+    # daily returns, turnover and costs) — is identical: the same mask
+    # gates the IC and the engine.
+    for key in (
+        "ic_mean",
+        "ic_abs_mean",
+        "icir",
+        "n_ic_dates",
+        "benchmark_return",
+        "total_return",
+        "average_turnover",
+        "daily_returns",
+    ):
+        assert ext[key] == mild[key], key
+
+
+def test_benchmark_row_matches_engine_benchmark_path(tmp_path):
+    # The benchmark row is no longer its own per-stock average: it must
+    # reproduce the engine's equal-weight benchmark exactly.
+    loader = _future_member_loader(tmp_path, join_day=10)
+    fold = _fold(loader.dates)
+    row = benchmark_row(loader, fold)
+    fold_data = epoch_slice(loader, fold)
+    engine = AshareBacktestEngine(BacktestConfig()).run(
+        np.zeros((len(loader.ts_codes), len(fold_data.dates))),
+        fold_data.raw,
+        loader.ts_codes,
+        fold_data.dates,
+        signal_range=fold_data.local_signal_range,
+        universe_mask=fold_data.universe_mask,
+    )
+    bench_daily = [
+        float(engine.benchmark_equity[i + 1] / engine.benchmark_equity[i] - 1.0)
+        for i in range(len(engine.benchmark_equity) - 1)
+    ]
+    assert row["benchmark_daily_returns"] == pytest.approx(bench_daily, abs=1e-12)
+    assert row["total_return"] == pytest.approx(
+        engine.benchmark_equity[-1] - 1.0, abs=1e-12
+    )
+
+
+def test_evaluation_requires_universe_mask(populated_db: DataConfig):
+    loader = AshareDataLoader(populated_db, ModelConfig())  # never loaded
+    dates, _, _ = make_bars(20)
+    fold = _fold(dates)
+    with pytest.raises(ValueError, match="universe mask"):
+        epoch_slice(loader, fold)
+    with pytest.raises(ValueError, match="universe mask"):
+        evaluate_formula([1], loader, fold, BacktestConfig())
+
+
+def test_run_protocol_records_universe_policy(
+    populated_db: DataConfig, monkeypatch
+):
+    loader = _loader(populated_db)
+    proto = ProtocolConfig(
+        folds=[FoldConfig("2024-01-10", "2024-01-25")],
+        seeds=[42],
+        random_samples=0,
+    )
+    monkeypatch.setattr(
+        evaluation, "_build_trainer", lambda *a, **k: _FakeTrainer([1])
+    )
+    result = run_protocol(
+        loader,
+        populated_db,
+        ModelConfig(),
+        BacktestConfig(),
+        None,
+        proto,
+        "screening",
+    )
+    policy = result["universe_policy"]
+    assert policy["index_codes"] == ["000300.SH"]
+    assert policy["min_listed_sessions"] == 1
+    assert policy["membership_end_inclusive"] is False
+    assert policy["degraded"] is False
+    # The policy is recorded, not a data hash or a lineage: only the fields
+    # that make two artifacts comparable.
+    assert set(policy) == {
+        "index_codes",
+        "min_listed_sessions",
+        "membership_end_inclusive",
+        "degraded",
+    }
 
 
 def test_baseline_candidates_match_factor_rows(populated_db: DataConfig):

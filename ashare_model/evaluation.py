@@ -47,6 +47,14 @@ version for comparability.
 v7 makes candidate scoring/selection common to RL, random search and bare
 factors, and resolves every fold through the inclusive-anchor t+2 contract.
 
+v8 applies the PIT universe mask to every measurement: the backtest
+engine selects only signal-date AND entry-date eligible stocks, the
+default equal-weight benchmark averages only those cells (requiring a
+valid target), the benchmark row reuses the engine's benchmark path, and
+the protocol row IC is computed over signal-date eligible cells with the
+unified rank-IC implementation.  Artifacts record the applied universe
+policy fields (no data hash, no lineage).
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -84,7 +92,7 @@ from ashare_data.processor import open_to_open_returns
 from ashare_data.universe import require_production_universe
 from ashare_logging import export_log_txt, setup_run_logging
 
-from .backtest import AshareBacktestEngine
+from .backtest import AshareBacktestEngine, equal_weight_benchmark_returns
 from .candidates import CandidateScorer, CandidateSelector, CandidateSpec
 from .data_loader import AshareDataLoader
 from .diagnostics import rank_ic_stats
@@ -98,7 +106,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "7"
+PROTOCOL_VERSION = "8"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -212,6 +220,11 @@ def epoch_slice(
 
     contract = fold.contract
     s0, s1 = contract.test_signal_start, contract.test_price_end
+    if loader.universe_mask is None:
+        raise ValueError(
+            "loader carries no universe mask; production evaluation "
+            "requires the PIT eligibility mask"
+        )
     factors = loader.factor_tensor[:, :, s0:s1].numpy()
     raw = {k: v[:, s0:s1].numpy() for k, v in loader.raw_data_cache.items()}
     universe_mask = loader.universe_mask[:, s0:s1]
@@ -273,6 +286,7 @@ def evaluate_signal(
         target[:, :signal_count],
         dates[:signal_count],
         names=["formula"],
+        eligible=fold_data.universe_mask[:, :signal_count],
     )["formula"]
     bench_daily: list[float] = []
     if result.benchmark_equity and len(result.benchmark_equity) >= 2:
@@ -316,11 +330,12 @@ def evaluate_formula(
     vm = vm or StackVM(FORMULA_VOCAB)
     vm.industry_codes = getattr(loader, "industry_codes", None)
     universe_mask = getattr(loader, "universe_mask", None)
-    vm.universe_mask = (
-        torch.tensor(universe_mask, dtype=torch.bool)
-        if universe_mask is not None
-        else None
-    )
+    if universe_mask is None:
+        raise ValueError(
+            "loader carries no universe mask; production evaluation "
+            "requires the PIT eligibility mask"
+        )
+    vm.universe_mask = torch.tensor(universe_mask, dtype=torch.bool)
     signal = vm.execute(list(tokens), loader.factor_tensor)
     if signal is None:
         return None
@@ -335,16 +350,18 @@ def benchmark_row(
     loader: AshareDataLoader,
     fold: Fold,
 ) -> dict:
-    """Equal-weight benchmark scored on the same code path as the engine's
-    reference curve (cost-free buy-and-hold reference, no turnover)."""
+    """Equal-weight benchmark scored on the engine's exact reference path:
+    the mean forward target over signal-date AND entry-date eligible cells
+    (cost-free buy-and-hold reference, no turnover).  No longer a separate
+    per-stock average: the single
+    :func:`ashare_model.backtest.equal_weight_benchmark_returns` helper
+    computes it, so the row always equals the engine's benchmark curve."""
 
     fold_data = epoch_slice(loader, fold)
     _, _, target, dates = fold_data
-    daily = []
-    for t in fold_data.local_signal_range:
-        values = target[:, t]
-        values = values[np.isfinite(values)]
-        daily.append(float(np.mean(values)) if values.size else 0.0)
+    daily = equal_weight_benchmark_returns(
+        target, list(fold_data.local_signal_range), fold_data.universe_mask
+    )
     equity = [1.0]
     for ret in daily:
         equity.append(equity[-1] * (1.0 + ret))
@@ -1080,6 +1097,27 @@ def _sanitize(value):
     return value
 
 
+def universe_policy_payload(loader: AshareDataLoader) -> dict | None:
+    """The universe policy actually applied to a run, for artifact
+    provenance: the configured index codes, the listing-age rule and the
+    membership-boundary convention, plus the degraded flag.  No data hash
+    and no lineage are recorded."""
+
+    policy = getattr(loader, "universe_policy", None)
+    if policy is None:
+        return None
+    return {
+        "index_codes": [str(code) for code in policy.index_codes],
+        "min_listed_sessions": int(policy.min_listed_sessions),
+        "membership_end_inclusive": bool(policy.membership_end_inclusive),
+        "degraded": (
+            bool(loader.universe_status.degraded)
+            if loader.universe_status is not None
+            else None
+        ),
+    }
+
+
 def build_result(
     proto_cfg: ProtocolConfig,
     tier_name: str,
@@ -1088,13 +1126,15 @@ def build_result(
     data_end_date: str | None = None,
     extra_trial_rows: list[dict] | None = None,
     max_t_perms: int = 5000,
+    universe_policy: dict | None = None,
 ) -> dict:
     """Assemble the protocol artifact (schema contract, see module docstring).
 
     ``extra_trial_rows`` are trial rows from earlier protocol artifacts
     (e.g. screening runs whose OOS trials must count towards the DS/max-t
     multiplicity correction); they join the correction pool but are never
-    merged into this run's own rows.
+    merged into this run's own rows.  ``universe_policy`` records the PIT
+    universe policy fields that produced the rows.
     """
 
     trial_pool = list(rows) + list(extra_trial_rows or [])
@@ -1116,6 +1156,7 @@ def build_result(
             ],
             "baseline_signals": list(proto_cfg.baseline_signals),
             "data_end_date": data_end_date,
+            "universe_policy": universe_policy,
             "n_candidates": len(rows),
             "rows": rows,
             "aggregates": aggregate_results(rows),
@@ -1215,6 +1256,7 @@ def run_protocol(
         data_end_date=loader.dates[-1],
         extra_trial_rows=extra_trial_rows,
         max_t_perms=max_t_perms,
+        universe_policy=universe_policy_payload(loader),
     )
 
 
