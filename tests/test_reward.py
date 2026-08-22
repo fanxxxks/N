@@ -630,3 +630,302 @@ def test_signal_direction_defaults_to_positive_without_observations():
     assert signal_direction(np.ones((20, 40)), rng.normal(size=(20, 40))) == 1
     # Below the minimum cross-section: every date is skipped -> neutral +1.
     assert signal_direction(np.ones((3, 10)), rng.normal(size=(3, 10)), min_stocks=5) == 1
+
+
+# --- v7 signal-date universe eligibility -------------------------------------
+
+
+def _universe_mask(n_stocks, n_dates, future_row=-1, join_day=None):
+    mask = np.ones((n_stocks, n_dates), dtype=bool)
+    if join_day is not None:
+        mask[future_row, :join_day] = False
+    return mask
+
+
+def test_rank_ic_series_ignores_ineligible_extreme_values():
+    rng = np.random.default_rng(41)
+    n_stocks, n_dates = 6, 20
+    join_day = 8
+    target = rng.normal(size=(n_stocks, n_dates))
+    signal = target.copy()  # perfect alignment over every row
+    extreme = signal.copy()
+    extreme[-1, :join_day] = 1e9  # future member's extreme pre-join values
+    mask = _universe_mask(n_stocks, n_dates, join_day=join_day)
+    ic_masked = rank_ic_series(extreme[None], target, min_stocks=3, universe_mask=mask)
+    ic_open = rank_ic_series(extreme[None], target, min_stocks=3)
+    # Pre-join the masked IC keeps the perfect eligible-only correlation...
+    assert np.allclose(ic_masked[0, :join_day], 1.0)
+    # ...while the unmasked path is polluted by the extreme finite values.
+    assert not np.allclose(ic_open[0, :join_day], 1.0)
+    # From the join day on the mask includes the future member: identical.
+    assert np.allclose(ic_masked[0, join_day:], ic_open[0, join_day:])
+
+
+def test_rank_ic_series_rejects_mask_shape_mismatch():
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        rank_ic_series(
+            np.zeros((2, 3, 4)),
+            np.zeros((3, 4)),
+            universe_mask=np.ones((3, 3), dtype=bool),
+        )
+
+
+def test_signal_direction_ignores_ineligible_extreme_values():
+    # Deterministic three-stock cross-section: rows 0-1 are perfectly
+    # anti-aligned, the (ineligible) future member perfectly aligned.  The
+    # masked direction is decided on the eligible rows only (-1); the
+    # unmasked direction is flipped by the future member's alignment (+1).
+    target = np.tile(np.array([0.01, 0.02, 0.03])[:, None], (1, 10))
+    signal = -target.copy()
+    signal[2] = target[2]
+    mask = _universe_mask(3, 10, join_day=10)  # row 2 never eligible
+    assert signal_direction(signal, target, min_stocks=2, universe_mask=mask) == -1
+    assert signal_direction(signal, target, min_stocks=2) == 1
+
+
+def test_basket_excludes_ineligible_and_switches_on_join_day():
+    cfg = _cfg(top_n=1, single_weight_cap=1.0, commission_rate=0.0,
+               min_commission=0.0, stamp_tax_rate=0.0, transfer_fee_rate=0.0,
+               slippage_rate=0.0)
+    n_stocks, n_dates = 3, 8
+    join_day = 3
+    # The future member always has the top signal but is ineligible before
+    # the join day; the eligible runner-up is selected until then.
+    signal = np.tile(np.array([2.0, 1.0, 9.0])[:, None], (1, n_dates))
+    target = np.zeros((n_stocks, n_dates))
+    mask = _universe_mask(n_stocks, n_dates, join_day=join_day)
+    masked = simulate_basket_daily_returns(signal, target, cfg, universe_mask=mask)
+    free = simulate_basket_daily_returns(signal, target, cfg)
+    # Unmasked: the future member is bought on day 0 and held throughout.
+    assert free.turnover[0] == pytest.approx(1.0)
+    assert np.allclose(free.turnover[1:], 0.0)
+    # Masked: the runner-up is bought on day 0; the join day swaps the
+    # basket into the future member (sell + buy) and nothing churns before.
+    assert masked.turnover[0] == pytest.approx(1.0)
+    assert np.allclose(masked.turnover[1:join_day], 0.0)
+    assert masked.turnover[join_day] == pytest.approx(2.0)
+    assert np.allclose(masked.turnover[join_day + 1 :], 0.0)
+
+
+def test_basket_pre_join_extreme_values_do_not_move_returns_or_costs():
+    rng = np.random.default_rng(45)
+    cfg = _cfg(top_n=1, single_weight_cap=1.0)
+    n_stocks, n_dates = 3, 10
+    join_day = 4
+    target = rng.normal(0.0, 0.01, size=(n_stocks, n_dates))
+    base = np.tile(np.array([2.0, 1.0, 9.0])[:, None], (1, n_dates))
+    extreme = base.copy()
+    extreme[2, :join_day] = 1e9
+    mask = _universe_mask(n_stocks, n_dates, join_day=join_day)
+    mild_sim = simulate_basket_daily_returns(base, target, cfg, universe_mask=mask)
+    extreme_sim = simulate_basket_daily_returns(extreme, target, cfg, universe_mask=mask)
+    # Selection, daily returns and daily costs are bit-identical: the
+    # future member's extreme finite pre-join values never reach the basket.
+    assert np.array_equal(extreme_sim.daily_gross_returns, mild_sim.daily_gross_returns)
+    assert np.array_equal(extreme_sim.daily_net_returns, mild_sim.daily_net_returns)
+    assert np.array_equal(
+        extreme_sim.daily_cost_fractions, mild_sim.daily_cost_fractions
+    )
+    assert np.array_equal(extreme_sim.turnover, mild_sim.turnover)
+    # Without the mask the extreme values change the outcome (sanity: the
+    # perturbation is real and the mask is what neutralizes it).
+    open_sim = simulate_basket_daily_returns(extreme, target, cfg)
+    assert not np.array_equal(open_sim.daily_net_returns, extreme_sim.daily_net_returns)
+
+
+def test_basket_exit_is_sold_through_cost_path_or_force_held():
+    cfg = _cfg(top_n=1, single_weight_cap=1.0)
+    n_stocks, n_dates = 3, 8
+    exit_day = 3
+    # Stock 0 is the top signal every day but exits the member pool on
+    # ``exit_day``: its target weight must go to zero through the ordinary
+    # sell path (paying the sell leg), never silently.
+    signal = np.tile(np.array([9.0, 2.0, 1.0])[:, None], (1, n_dates))
+    target = np.zeros((n_stocks, n_dates))
+    mask = np.ones((n_stocks, n_dates), dtype=bool)
+    mask[0, exit_day:] = False
+    sim = simulate_basket_daily_returns(signal, target, cfg, universe_mask=mask)
+    # Entry on day 0 pays costs; the exit-day execution pays the sell leg
+    # on top of the buy leg (a silently vanished position would pay none).
+    assert sim.daily_cost_fractions[0] > 0
+    assert sim.daily_cost_fractions[1] == pytest.approx(0.0, abs=1e-15)
+    assert sim.daily_cost_fractions[exit_day] > sim.daily_cost_fractions[1]
+    assert sim.turnover[exit_day] == pytest.approx(2.0)
+    # When the execution day is sell-blocked the position is force-held:
+    # the sell is deferred (smaller turnover and cost at the exit day), not
+    # dropped from the book.
+    blocked_sell = np.zeros((n_stocks, n_dates), dtype=bool)
+    blocked_sell[0, exit_day + 1] = True
+    held = simulate_basket_daily_returns(
+        signal, target, cfg, universe_mask=mask, blocked_sell=blocked_sell
+    )
+    assert held.turnover[exit_day] == pytest.approx(1.0)
+    assert held.daily_cost_fractions[exit_day] < sim.daily_cost_fractions[exit_day]
+
+
+def test_basket_underfilled_renormalizes_like_backtest_engine():
+    cfg = _cfg(top_n=3, single_weight_cap=1.0, commission_rate=0.0,
+               min_commission=0.0, stamp_tax_rate=0.0, transfer_fee_rate=0.0,
+               slippage_rate=0.0)
+    n_stocks, n_dates = 4, 6
+    # Only two eligible stocks: fewer than top_n=3.  Both are selected and
+    # the weights renormalize to 0.5/0.5, exactly like the engine.
+    signal = np.tile(np.array([4.0, 3.0, 2.0, 1.0])[:, None], (1, n_dates))
+    target = np.zeros((n_stocks, n_dates))
+    target[0, 0] = 0.01
+    target[1, 0] = 0.02
+    mask = _universe_mask(n_stocks, n_dates, join_day=n_dates)
+    mask[2:] = False
+    sim = simulate_basket_daily_returns(signal, target, cfg, universe_mask=mask)
+    assert sim.daily_net_returns[0] == pytest.approx(
+        0.5 * 0.01 + 0.5 * 0.02, abs=1e-12
+    )
+    # Engine parity: same universe mask, same per-day turnover path.
+    ts_codes = [f"{i:06d}.SZ" for i in range(n_stocks)]
+    dates = [f"202401{i:02d}" for i in range(n_dates)]
+    open_ = np.full((n_stocks, n_dates), 10.0)
+    raw = {
+        "open": open_,
+        "high": open_ * 1.02,
+        "low": open_ * 0.98,
+        "pre_close": open_.copy(),
+        "volume": np.full_like(open_, 1_000_000.0),
+    }
+    engine = AshareBacktestEngine(cfg).run(
+        signal, raw, ts_codes, dates, stock_names={}, universe_mask=mask
+    )
+    assert sim.turnover == pytest.approx(np.asarray(engine.turnover), abs=1e-12)
+
+
+def test_masked_basket_matches_backtest_engine_with_universe():
+    # Day-by-day parity with the engine when both consume the same PIT
+    # universe mask: a permanently ineligible stock with extreme finite
+    # signals is excluded by both paths.
+    ts_codes, dates, raw, signal, _ = _synthetic_market(n_stocks=6, n_dates=8)
+    target = open_to_open_returns(raw["open"])
+    cfg = _cfg(top_n=3, single_weight_cap=1.0)
+    mask = np.ones((6, 8), dtype=bool)
+    mask[5] = False
+    signal[5] = 1e9
+    result = AshareBacktestEngine(cfg).run(
+        signal, raw, ts_codes, dates, stock_names={}, universe_mask=mask
+    )
+    daily, avg_turnover = simulate_basket_daily_returns(
+        signal, target, cfg, universe_mask=mask
+    )
+    assert daily == pytest.approx(np.asarray(result.daily_returns), abs=1e-12)
+    assert avg_turnover == pytest.approx(float(np.mean(result.turnover)), abs=1e-12)
+
+
+def test_masked_scalar_and_batched_rewards_agree():
+    rng = np.random.default_rng(43)
+    cfg = _cfg(top_n=2, single_weight_cap=1.0)
+    reward_cfg = _reward_cfg()
+    n_stocks, n_dates = 7, 25
+    join_day = 10
+    signals, target = _random_batch(rng, 3, n_stocks, n_dates, nan_frac=0.05)
+    mask = _universe_mask(n_stocks, n_dates, join_day=join_day)
+    windows = [(8, 16)]
+    rewards, val_rewards, icir, val_icir = batched_basket_rewards(
+        signals, target, cfg, reward_cfg, windows, universe_mask=mask
+    )
+    df, tf = simulate_basket_daily_returns_batch(
+        signals, target, cfg, universe_mask=mask
+    )
+    for i in range(3):
+        ref_r = formula_reward(signals[i], target, cfg, reward_cfg, universe_mask=mask)
+        ref_v = formula_reward(
+            signals[i],
+            target,
+            cfg,
+            reward_cfg,
+            signal_range=windows[0],
+            universe_mask=mask,
+        )
+        assert rewards[i] == pytest.approx(ref_r, rel=1e-9, abs=1e-10)
+        assert val_rewards[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-10)
+        ref_icir = icir_from_series(
+            rank_ic_series(
+                signals[i][None, :, : n_dates - 2],
+                target[:, : n_dates - 2],
+                reward_cfg.ic_min_stocks,
+                mask[:, : n_dates - 2],
+            )
+        )[0]
+        assert icir[i] == pytest.approx(ref_icir, rel=1e-9, abs=1e-10)
+        ref_df, ref_tf = simulate_basket_daily_returns(
+            signals[i], target, cfg, universe_mask=mask
+        )
+        assert df[i] == pytest.approx(ref_df, rel=1e-9, abs=1e-11)
+        assert tf[i] == pytest.approx(ref_tf, rel=1e-9, abs=1e-11)
+
+
+def test_mask_slices_align_exactly_without_off_by_one():
+    # The eligibility flip must land exactly on the join column, both on
+    # the full range and through validation windows: rows 0-2 are perfectly
+    # anti-aligned, the future member perfectly aligned.
+    n_stocks, n_dates = 4, 20
+    join_day = 9
+    target = np.tile(
+        np.array([0.01, 0.02, 0.03, 0.04])[:, None], (1, n_dates)
+    )
+    signal = -target.copy()
+    signal[3] = target[3] * 10.0
+    mask = _universe_mask(n_stocks, n_dates, join_day=join_day)
+    ic = rank_ic_series(signal[None], target, min_stocks=3, universe_mask=mask)[0]
+    # Pre-join: rank correlation over the three eligible rows is exactly
+    # -1; from the join day the aligned row enters and it becomes +0.2.
+    # The flip at column ``join_day`` itself proves no off-by-one.
+    assert np.allclose(ic[:join_day], -1.0)
+    assert np.allclose(ic[join_day:], 0.2)
+    assert np.isnan(ic).sum() == 0
+
+    # The same slice alignment holds through the validation-window path.
+    cfg = _cfg(top_n=2, single_weight_cap=1.0)
+    reward_cfg = _reward_cfg()
+    window = (join_day - 3, join_day + 3)
+    rewards, val_rewards, _, val_icir = batched_basket_rewards(
+        signal[None], target, cfg, reward_cfg, [window], universe_mask=mask
+    )
+    ref_window = formula_reward(
+        signal, target, cfg, reward_cfg, signal_range=window, universe_mask=mask
+    )
+    assert val_rewards[0] == pytest.approx(ref_window, rel=1e-9, abs=1e-10)
+    ref_val_icir = icir_from_series(
+        rank_ic_series(
+            signal[None, :, window[0] : window[1]],
+            target[:, window[0] : window[1]],
+            reward_cfg.ic_min_stocks,
+            mask[:, window[0] : window[1]],
+        )
+    )[0]
+    assert val_icir[0] == pytest.approx(ref_val_icir, rel=1e-9, abs=1e-10)
+    # The window itself straddles the flip: -1 before, +0.2 at/after.
+    window_ic = rank_ic_series(signal[None], target, min_stocks=3, universe_mask=mask)[0]
+    assert window_ic[window[0]] == pytest.approx(-1.0)
+    assert window_ic[join_day] == pytest.approx(0.2)
+    assert rewards[0] == pytest.approx(
+        formula_reward(signal, target, cfg, reward_cfg, universe_mask=mask),
+        rel=1e-9,
+        abs=1e-10,
+    )
+
+
+def test_reward_paths_reject_mask_shape_mismatch():
+    cfg = _cfg()
+    reward_cfg = _reward_cfg()
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        formula_reward(
+            np.zeros((3, 6)), np.zeros((3, 6)), cfg, reward_cfg,
+            universe_mask=np.ones((3, 5), dtype=bool),
+        )
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        batched_basket_rewards(
+            np.zeros((2, 3, 6)), np.zeros((3, 6)), cfg, reward_cfg,
+            universe_mask=np.ones((2, 6), dtype=bool),
+        )
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        simulate_basket_daily_returns(
+            np.zeros((3, 6)), np.zeros((3, 6)), cfg,
+            universe_mask=np.ones((4, 6), dtype=bool),
+        )

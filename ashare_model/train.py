@@ -271,6 +271,7 @@ class AshareTrainer:
         blocked_buy: np.ndarray | None = None,
         blocked_sell: np.ndarray | None = None,
         full_signal_range: tuple[int, int] | None = None,
+        universe_mask: np.ndarray | None = None,
     ) -> None:
         """Score one chunk of pending formulas and merge the outcomes."""
 
@@ -284,6 +285,7 @@ class AshareTrainer:
             blocked_buy=blocked_buy,
             blocked_sell=blocked_sell,
             full_signal_range=full_signal_range,
+            universe_mask=universe_mask,
         )
         for score in scores:
             assert score.tokens is not None
@@ -344,6 +346,14 @@ class AshareTrainer:
                 dtype=torch.bool,
                 device=vm_device,
             )
+            if universe_mask is not None
+            else None
+        )
+        # The candidate scorer needs the same PIT mask on the numpy side:
+        # every quality statistic (rank IC, basket selection, near-constant
+        # rejection, direction) is gated to signal-date eligible cells.
+        train_universe_mask = (
+            universe_mask[:, :train_end_idx]
             if universe_mask is not None
             else None
         )
@@ -442,6 +452,7 @@ class AshareTrainer:
                         blocked_sell=blocked_sell,
                         formula_valid=False,
                         full_signal_range=train_signal_range,
+                        universe_mask=train_universe_mask,
                     )
                     continue
                 signal_np = signal.detach().cpu().numpy()
@@ -459,6 +470,7 @@ class AshareTrainer:
                         blocked_buy,
                         blocked_sell,
                         train_signal_range,
+                        train_universe_mask,
                     )
                     pending = []
             self._score_pending_chunk(
@@ -469,6 +481,7 @@ class AshareTrainer:
                 blocked_buy,
                 blocked_sell,
                 train_signal_range,
+                train_universe_mask,
             )
 
             for i in range(batch_size):

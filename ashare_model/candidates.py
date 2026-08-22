@@ -190,6 +190,7 @@ class CandidateScorer:
         blocked_sell: np.ndarray | None = None,
         formula_valid: bool = True,
         full_signal_range: tuple[int, int] | None = None,
+        universe_mask: np.ndarray | None = None,
     ) -> CandidateScore:
         return self.score_many(
             [spec],
@@ -200,6 +201,7 @@ class CandidateScorer:
             blocked_sell=blocked_sell,
             formula_valid=[formula_valid],
             full_signal_range=full_signal_range,
+            universe_mask=universe_mask,
         )[0]
 
     def score_many(
@@ -213,7 +215,20 @@ class CandidateScorer:
         blocked_sell: np.ndarray | None = None,
         formula_valid: Sequence[bool] | None = None,
         full_signal_range: tuple[int, int] | None = None,
+        universe_mask: np.ndarray | None = None,
     ) -> list[CandidateScore]:
+        """Score a batch of candidates under one PIT eligibility mask.
+
+        ``universe_mask`` (``[stock, date]`` bool, aligned with
+        ``target_ret``) must be supplied by every production caller: it
+        cannot be inferred from NaN VM outputs because bare-factor signals
+        never pass through the VM.  The mask gates every quality decision —
+        the near-constant rejection, the reward function (both directions
+        share the identical mask) and the direction tie-break — so a future
+        member's extreme finite values can neither move a score nor flip a
+        direction or rejection reason before its join day.
+        """
+
         if len(specs) != len(signals):
             raise ValueError("specs and signals must have the same length")
         if not val_windows:
@@ -224,9 +239,20 @@ class CandidateScorer:
         target = np.asarray(target_ret, dtype=np.float64)
         if target.ndim != 2:
             raise ValueError("target_ret must be [stock, date]")
+        if universe_mask is not None:
+            universe_mask = np.asarray(universe_mask, dtype=bool)
+            if universe_mask.shape != target.shape:
+                raise ValueError(
+                    f"universe_mask shape {universe_mask.shape} does not match "
+                    f"target shape {target.shape}"
+                )
         if full_signal_range is None:
             full_signal_range = (0, max(target.shape[1] - 2, 0))
         full_start, full_end = full_signal_range
+        if universe_mask is not None:
+            scoring_ref = universe_mask[:, full_start:full_end]
+        else:
+            scoring_ref = None
 
         results: list[CandidateScore | None] = [None] * len(specs)
         batch_indices: list[int] = []
@@ -245,7 +271,10 @@ class CandidateScorer:
                     f"signal shape {array.shape} does not match target {target.shape}"
                 )
             scoring_values = array[:, full_start:full_end]
-            finite = scoring_values[np.isfinite(scoring_values)]
+            ref = np.isfinite(scoring_values)
+            if scoring_ref is not None:
+                ref &= scoring_ref
+            finite = scoring_values[ref]
             if finite.size == 0 or float(np.std(finite)) < self.near_constant_threshold:
                 results[index] = self._rejected_score(
                     spec,
@@ -272,6 +301,7 @@ class CandidateScorer:
                 blocked_buy=blocked_buy,
                 blocked_sell=blocked_sell,
                 full_signal_range=full_signal_range,
+                universe_mask=universe_mask,
             )
             assert val_rewards is not None and val_icir is not None
             for batch_index, result_index in enumerate(batch_indices):
@@ -285,6 +315,7 @@ class CandidateScorer:
                     float(val_icir[plus]),
                     float(val_rewards[minus]),
                     float(val_icir[minus]),
+                    universe_mask,
                 )
                 chosen = plus if direction == 1 else minus
                 penalty = self.complexity_penalty(spec)
@@ -355,6 +386,7 @@ class CandidateScorer:
         plus_icir: float,
         minus_reward: float,
         minus_icir: float,
+        universe_mask: np.ndarray | None = None,
     ) -> int:
         plus_key = (
             plus_reward if math.isfinite(plus_reward) else -math.inf,
@@ -369,10 +401,15 @@ class CandidateScorer:
         if minus_key > plus_key:
             return -1
         # Mirror-stable canonical orientation: make the first finite non-zero
-        # validation observation positive. Mirroring the input therefore
-        # flips direction while leaving the applied signal identical.
+        # validation observation positive.  Mirroring the input therefore
+        # flips direction while leaving the applied signal identical.  Only
+        # signal-date eligible validation observations are scanned, so a
+        # future member's values can never decide the canonical orientation.
         for start, end in val_windows:
-            for value in np.asarray(signal[:, start:end]).T.ravel():
+            values = np.asarray(signal[:, start:end])
+            if universe_mask is not None:
+                values = np.where(universe_mask[:, start:end], values, np.nan)
+            for value in values.T.ravel():
                 if math.isfinite(float(value)) and float(value) != 0.0:
                     return 1 if float(value) > 0.0 else -1
         return 1

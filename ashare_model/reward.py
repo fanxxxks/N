@@ -14,6 +14,17 @@ never be compared silently.
 
 Version history
 ---------------
+* v7: signal-date universe eligibility in every candidate-quality path.
+  ``rank_ic_series``/``signal_direction``/``formula_reward``/
+  ``batched_basket_rewards``/``simulate_basket_daily_returns(_batch)`` and
+  the candidate scorer all take the PIT ``universe_mask``
+  (``[stock, date]``): a signal column ``t`` contributes only its
+  signal-date eligible cells, the basket's top-n selection uses
+  ``universe_mask[:, t]`` (execution tradability still uses ``t+1``), and
+  the scorer's near-constant check and direction tie-break scan eligible
+  observations only.  A stock that leaves the member pool has its target
+  weight go to zero through the ordinary sell path (force-held when the
+  execution day is sell-blocked) — positions never vanish silently.
 * v6: direction-symmetric candidate scoring and exact daily execution-cost
   fractions. Continuous weights are converted to yuan using each path's
   current capital; every non-zero order receives the same minimum-commission,
@@ -66,7 +77,7 @@ import numpy as np
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
 
-REWARD_VERSION = "6"
+REWARD_VERSION = "7"
 
 _ANNUALIZATION = 252
 
@@ -128,6 +139,7 @@ def rank_ic_series(
     signals: np.ndarray,
     target_ret: np.ndarray,
     min_stocks: int = 10,
+    universe_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Per-date cross-sectional rank IC of each signal vs the forward target.
 
@@ -135,11 +147,22 @@ def rank_ic_series(
     ``[stocks, dates]``; the result is ``[B, dates]`` of Spearman rank IC
     (NaN on days without at least ``min_stocks`` finite pairs).  Non-finite
     signal cells are excluded per row, so a formula that is invalid on a
-    subset of stocks never fabricates correlation.
+    subset of stocks never fabricates correlation.  ``universe_mask`` is the
+    optional ``[stocks, dates]`` bool PIT eligibility mask: only signal-date
+    eligible cells (``universe_mask[:, day]``) may enter a day's
+    correlation, so a future member's finite values can never move the IC
+    before it joins.
     """
 
     signals = np.asarray(signals, dtype=np.float64)
     target = np.asarray(target_ret, dtype=np.float64)
+    if universe_mask is not None:
+        universe_mask = np.asarray(universe_mask, dtype=bool)
+        if universe_mask.shape != target.shape:
+            raise ValueError(
+                f"universe_mask shape {universe_mask.shape} does not match "
+                f"target shape {target.shape}"
+            )
     if signals.ndim == 2:
         signals = signals[None]
     b, _, t = signals.shape
@@ -147,6 +170,8 @@ def rank_ic_series(
     for day in range(t):
         tgt = target[:, day]
         base_valid = np.isfinite(tgt)
+        if universe_mask is not None:
+            base_valid &= universe_mask[:, day]
         if int(base_valid.sum()) < min_stocks:
             continue
         for i in range(b):
@@ -233,6 +258,7 @@ def simulate_basket_daily_returns(
     blocked_buy: np.ndarray | None = None,
     blocked_sell: np.ndarray | None = None,
     signal_range: tuple[int, int] | None = None,
+    universe_mask: np.ndarray | None = None,
 ) -> BasketSimulation:
     """Exact daily top-n basket path, restarted from cash at range start.
 
@@ -241,7 +267,9 @@ def simulate_basket_daily_returns(
     the same trading-cost model.  Non-finite target cells contribute a zero
     return; days with fewer than ``top_n`` finite signals contribute a zero
     return and keep the previous basket.  ``blocked_buy`` / ``blocked_sell``
-    carry the engine's tradability masks (``[stock, date]`` bool); see
+    carry the engine's tradability masks (``[stock, date]`` bool);
+    ``universe_mask`` is the ``[stock, date]`` bool PIT eligibility mask
+    consumed at the signal date; see
     :func:`simulate_basket_daily_returns_batch` for their semantics.
     """
 
@@ -252,6 +280,7 @@ def simulate_basket_daily_returns(
         blocked_buy=blocked_buy,
         blocked_sell=blocked_sell,
         signal_range=signal_range,
+        universe_mask=universe_mask,
     )
     return BasketSimulation(
         daily_gross_returns=batch.daily_gross_returns[0],
@@ -268,6 +297,7 @@ def simulate_basket_daily_returns_batch(
     blocked_buy: np.ndarray | None = None,
     blocked_sell: np.ndarray | None = None,
     signal_range: tuple[int, int] | None = None,
+    universe_mask: np.ndarray | None = None,
 ) -> BatchBasketSimulation:
     """Batched exact basket simulation over an explicit signal range.
 
@@ -289,10 +319,21 @@ def simulate_basket_daily_returns_batch(
     (suspended or opening at a one-word limit-down) are force-held with the
     remaining weights renormalized, so the reward can never credit a trade
     the engine could not have made.  Selection at signal day ``t`` executes
-    at the ``t+1`` open, so the masks are consumed at column ``t+1`` —
-    the same execution-day alignment as the engine.  Without the masks the
-    simulation keeps the unconstrained semantics (rewards stay comparable
-    across ``REWARD_VERSION`` for callers that never had masks).
+    at the ``t+1`` open, so the tradability masks are consumed at column
+    ``t+1`` — the same execution-day alignment as the engine.
+
+    ``universe_mask`` (``[stocks, dates]`` bool, optional) is the PIT
+    eligibility mask consumed at the **signal date**: only
+    ``universe_mask[:, t]`` cells may enter the top-n selection at ``t``, so
+    a future member can never join the basket before its join day, and a
+    stock that exits the member pool has its target weight go to zero
+    through the ordinary sell path (counted at full cost, or force-held
+    when the execution day is sell-blocked) — the mask never makes an
+    existing position vanish silently.  When fewer than ``top_n`` cells are
+    selectable the selected set is renormalized, the same under-filled
+    semantics as the backtest engine.  Without the masks the simulation
+    keeps the unconstrained semantics (rewards stay comparable across
+    ``REWARD_VERSION`` for callers that never had masks).
     """
 
     signals = np.asarray(signals, dtype=np.float64)
@@ -339,6 +380,13 @@ def simulate_basket_daily_returns_batch(
                 f"blocked_sell shape {blocked_sell.shape} does not match "
                 f"({n_stocks}, {n_dates})"
             )
+    if universe_mask is not None:
+        universe_mask = np.asarray(universe_mask, dtype=bool)
+        if universe_mask.shape != (n_stocks, n_dates):
+            raise ValueError(
+                f"universe_mask shape {universe_mask.shape} does not match "
+                f"({n_stocks}, {n_dates})"
+            )
 
     top_n = min(int(cfg.top_n), n_stocks)
     if top_n <= 0:
@@ -355,12 +403,15 @@ def simulate_basket_daily_returns_batch(
     for output_col, t in enumerate(range(signal_start, signal_end)):
         # Selection uses the signal column t but executes at the t+1 open
         # (the target return is open[t+1] -> open[t+2]); the tradability
-        # masks therefore use the t+1 columns, exactly like the engine.
+        # masks therefore use the t+1 columns, exactly like the engine,
+        # while the PIT eligibility mask uses the signal-date column t.
         exec_col = t + 1
         column = signals[:, :, t]  # [B, stocks]
         finite = np.isfinite(column)
         if blocked_buy is not None:
             finite &= ~blocked_buy[None, :, exec_col]
+        if universe_mask is not None:
+            finite &= universe_mask[None, :, t]
         fill = np.where(finite, column, -np.inf)
         top_idx = np.argpartition(fill, kth=-top_n, axis=1)[:, -top_n:]  # [B, top_n]
         fresh = np.zeros((b, n_stocks))
@@ -418,17 +469,27 @@ def formula_reward(
     blocked_buy: np.ndarray | None = None,
     blocked_sell: np.ndarray | None = None,
     signal_range: tuple[int, int] | None = None,
+    universe_mask: np.ndarray | None = None,
 ) -> float:
-    """Scalar v6 reward: clipped ICIR minus exact annualized daily cost.
+    """Scalar v7 reward: clipped ICIR minus exact annualized daily cost.
 
     Reference path for the batched implementation: the IC is computed over
     the full window and the cost drag over the simulated basket's average
     daily turnover.  ``blocked_buy`` / ``blocked_sell`` are the engine's
-    tradability masks (see :func:`simulate_basket_daily_returns_batch`).
+    tradability masks (see :func:`simulate_basket_daily_returns_batch`);
+    ``universe_mask`` is the ``[stock, date]`` PIT eligibility mask used at
+    the signal date by both the IC and the basket.
     """
 
     signal = np.asarray(signal, dtype=np.float64)
     target_ret = np.asarray(target_ret, dtype=np.float64)
+    if universe_mask is not None:
+        universe_mask = np.asarray(universe_mask, dtype=bool)
+        if universe_mask.shape != signal.shape:
+            raise ValueError(
+                f"universe_mask shape {universe_mask.shape} does not match "
+                f"signal shape {signal.shape}"
+            )
     if signal_range is None:
         signal_range = (0, max(signal.shape[1] - 2, 0))
     start, end = signal_range
@@ -437,6 +498,7 @@ def formula_reward(
             signal[None, :, start:end],
             target_ret[:, start:end],
             reward_cfg.ic_min_stocks,
+            universe_mask[:, start:end] if universe_mask is not None else None,
         )
     )[0]
     simulation = simulate_basket_daily_returns(
@@ -446,6 +508,7 @@ def formula_reward(
         blocked_buy,
         blocked_sell,
         signal_range,
+        universe_mask,
     )
     annualized_cost = (
         float(simulation.daily_cost_fractions.mean()) * _ANNUALIZATION
@@ -465,8 +528,9 @@ def batched_basket_rewards(
     blocked_buy: np.ndarray | None = None,
     blocked_sell: np.ndarray | None = None,
     full_signal_range: tuple[int, int] | None = None,
+    universe_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray | None]:
-    """v6 rewards for a batch: ICIR minus exact annualized daily costs, with
+    """v7 rewards for a batch: ICIR minus exact annualized daily costs, with
     raw ICIR values exposed for the trainer's signal-quality gate.
 
     ``signals`` is ``[B, stocks, dates]``.  Returns
@@ -480,10 +544,20 @@ def batched_basket_rewards(
     the second and fourth results are ``None``.  ``blocked_buy`` /
     ``blocked_sell`` are ``[stocks, dates]`` tradability masks shared by all
     rows (per window they are sliced exactly like the signals).
+    ``universe_mask`` is the ``[stocks, dates]`` PIT eligibility mask,
+    sliced per window exactly like the signals, so each window's IC and
+    basket see only its signal-date eligible cells.
     """
 
     signals = np.asarray(signals, dtype=np.float64)
     target_ret = np.asarray(target_ret, dtype=np.float64)
+    if universe_mask is not None:
+        universe_mask = np.asarray(universe_mask, dtype=bool)
+        if universe_mask.shape != target_ret.shape:
+            raise ValueError(
+                f"universe_mask shape {universe_mask.shape} does not match "
+                f"target_ret shape {target_ret.shape}"
+            )
     if full_signal_range is None:
         full_signal_range = (0, max(signals.shape[2] - 2, 0))
     full_start, full_end = full_signal_range
@@ -492,6 +566,9 @@ def batched_basket_rewards(
             signals[:, :, full_start:full_end],
             target_ret[:, full_start:full_end],
             reward_cfg.ic_min_stocks,
+            universe_mask[:, full_start:full_end]
+            if universe_mask is not None
+            else None,
         )
     )
     simulation = simulate_basket_daily_returns_batch(
@@ -501,6 +578,7 @@ def batched_basket_rewards(
         blocked_buy,
         blocked_sell,
         full_signal_range,
+        universe_mask,
     )
     mean_cost = (
         simulation.daily_cost_fractions.mean(axis=1)
@@ -521,6 +599,9 @@ def batched_basket_rewards(
                     signals[:, :, start:end],
                     target_ret[:, start:end],
                     reward_cfg.ic_min_stocks,
+                    universe_mask[:, start:end]
+                    if universe_mask is not None
+                    else None,
                 )
             )
             win_simulation = simulate_basket_daily_returns_batch(
@@ -530,6 +611,7 @@ def batched_basket_rewards(
                 blocked_buy,
                 blocked_sell,
                 (start, end),
+                universe_mask,
             )
             win_mean_cost = (
                 win_simulation.daily_cost_fractions.mean(axis=1)
@@ -553,6 +635,7 @@ def signal_direction(
     signal: np.ndarray,
     target_ret: np.ndarray,
     min_stocks: int = 10,
+    universe_mask: np.ndarray | None = None,
 ) -> int:
     """Learned trade direction of one signal: +1 or -1.
 
@@ -560,12 +643,16 @@ def signal_direction(
     signal is traded by flipping it, so the top-n long-only engine never
     mechanically buys the wrong side).  Without enough finite IC
     observations the direction defaults to +1 (neutral).
+    ``universe_mask`` is the optional ``[stock, date]`` PIT eligibility
+    mask: the direction is decided on signal-date eligible observations
+    only, so a future member cannot flip it before its join day.
     """
 
     ic = rank_ic_series(
         np.asarray(signal, dtype=np.float64)[None],
         np.asarray(target_ret, dtype=np.float64),
         min_stocks,
+        universe_mask,
     )[0]
     finite = ic[np.isfinite(ic)]
     if finite.size == 0:

@@ -171,6 +171,11 @@ class SimulationRunner:
             self.direction = signal_direction(
                 signals[:, :signal_end],
                 target[:, :signal_end],
+                universe_mask=(
+                    self.loader.universe_mask[:, :signal_end]
+                    if self.loader.universe_mask is not None
+                    else None
+                ),
             )
             logger.info(f"Inferred trade direction from training window: {self.direction}")
         else:
