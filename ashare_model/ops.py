@@ -187,40 +187,113 @@ def _ts_downvol(x: torch.Tensor, d: int) -> torch.Tensor:
 # --- cross-sectional operators -----------------------------------------------
 
 
-def cross_sectional_zscore(signal: torch.Tensor) -> torch.Tensor:
+def _validate_eligible(
+    x: torch.Tensor, eligible: torch.Tensor | None
+) -> torch.Tensor | None:
+    """Return ``eligible`` after enforcing the ``[stock, date]`` alignment."""
+    if eligible is None:
+        return None
+    if eligible.shape != x.shape:
+        raise ValueError(
+            f"universe_mask shape {tuple(eligible.shape)} does not match "
+            f"signal shape {tuple(x.shape)}"
+        )
+    return eligible
+
+
+def _cs_reference(
+    x: torch.Tensor, eligible: torch.Tensor | None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """``(ref, count)``: the per-cell reference mask and its per-date count.
+
+    A cell is a reference cell when it is finite and — when a PIT universe
+    mask is supplied — eligible.  ``count`` has shape ``[T]``.
+    """
+
+    eligible = _validate_eligible(x, eligible)
+    finite = torch.isfinite(x)
+    ref = finite if eligible is None else finite & eligible
+    return ref, ref.sum(dim=0)
+
+
+def _masked_output(
+    out: torch.Tensor,
+    ref: torch.Tensor,
+    count: torch.Tensor,
+) -> torch.Tensor:
+    """Finalize a cross-sectional operator's output.
+
+    Non-reference cells become NaN (non-participating) so they can never
+    enter a downstream sort; a date with no reference cell at all collapses
+    to the stable neutral 0 instead of spreading NaN statistics.
+    """
+
+    out = torch.where(ref, out, torch.full_like(out, float("nan")))
+    out[:, count == 0] = 0.0
+    return out
+
+
+def cross_sectional_zscore(
+    signal: torch.Tensor,
+    eligible: torch.Tensor | None = None,
+) -> torch.Tensor:
     """Per-date cross-sectional z-score of a ``[stock, date]`` signal.
 
-    The mean and standard deviation are taken over the stock axis for each
-    date column (only the current cross-section, so no future information
-    enters).  A degenerate column (zero standard deviation, e.g. an
-    all-neutral date) maps to 0: the numerator is 0 there as well, so the
-    ``eps`` guard alone is sufficient.  Shared by the ``CS_ZSCORE``
-    operator and the VM's terminal standardization.
+    The mean and standard deviation are taken over the *reference* cells of
+    each date column — finite, and additionally eligible when the optional
+    ``[stock, date]`` PIT mask is supplied — so only the current
+    cross-section counts and no future information enters.  Reference cells
+    get the z-score; non-reference cells map to NaN (non-participating).  A
+    degenerate column (zero standard deviation, e.g. an all-neutral date)
+    maps to 0: the numerator is 0 there as well, so the ``eps`` guard alone
+    is sufficient; a column with no reference cell at all also maps to the
+    stable neutral 0.  Shared by the ``CS_ZSCORE`` operator and the VM's
+    terminal standardization.
     """
 
-    mean = signal.mean(dim=0, keepdim=True)
-    std = signal.std(dim=0, keepdim=True, unbiased=False)
-    return (signal - mean) / (std + 1e-6)
+    ref, count = _cs_reference(signal, eligible)
+    safe = torch.where(ref, signal, torch.zeros_like(signal))
+    mean = safe.sum(dim=0) / count.clamp(min=1)  # [T]
+    dev = torch.where(ref, signal - mean, torch.zeros_like(signal))
+    var = (dev * dev).sum(dim=0) / count.clamp(min=1)
+    std = torch.sqrt(var)
+    out = (signal - mean) / (std + 1e-6)
+    return _masked_output(out, ref, count)
 
 
-def _cs_demean(x: torch.Tensor) -> torch.Tensor:
-    """Subtract the per-date cross-sectional mean (full-market demean)."""
-    return x - x.mean(dim=0, keepdim=True)
+def _cs_demean(
+    x: torch.Tensor, eligible: torch.Tensor | None = None
+) -> torch.Tensor:
+    """Subtract the per-date reference mean (full-market demean without a
+    mask; eligible-only demean with one).  Non-reference cells stay NaN."""
+
+    ref, count = _cs_reference(x, eligible)
+    safe = torch.where(ref, x, torch.zeros_like(x))
+    mean = safe.sum(dim=0) / count.clamp(min=1)  # [T]
+    return _masked_output(x - mean, ref, count)
 
 
-def _cs_rank(x: torch.Tensor) -> torch.Tensor:
+def _cs_rank(
+    x: torch.Tensor, eligible: torch.Tensor | None = None
+) -> torch.Tensor:
     """Per-date cross-sectional percentile rank in ``[0, 1]``.
 
-    Ties share the *average* rank of their group, so the result depends
-    only on the values — never on the sort order of equal elements — and is
-    therefore identical on CPU and CUDA.  Implemented with a stable argsort
-    and per-group start/end reductions (no quadratic pairwise comparisons,
-    no reliance on running-min scans).
+    Ranks are computed among the reference cells (finite, and eligible when
+    the PIT mask is supplied); non-reference cells map to NaN.  Ties share
+    the *average* rank of their group, so the result depends only on the
+    values — never on the sort order of equal elements — and is therefore
+    identical on CPU and CUDA.  Implemented with a stable argsort and
+    per-group start/end reductions (no quadratic pairwise comparisons, no
+    reliance on running-min scans).  Non-reference cells are pushed to the
+    bottom with a ``-inf`` sentinel so their positions can be subtracted in
+    one vectorized pass.
     """
 
+    ref, count = _cs_reference(x, eligible)
     n, t = x.shape
-    order = torch.argsort(x, dim=0, stable=True)  # [n, t]
-    sorted_x = x.gather(0, order)
+    ranked = torch.where(ref, x, torch.full_like(x, float("-inf")))
+    order = torch.argsort(ranked, dim=0, stable=True)  # [n, t]
+    sorted_x = ranked.gather(0, order)
     # boundary[p] marks the first sorted position of each equal-value group.
     diff = sorted_x[1:] != sorted_x[:-1]  # [n-1, t]
     boundary = torch.cat([diff.new_ones((1, t)), diff], dim=0)
@@ -241,35 +314,49 @@ def _cs_rank(x: torch.Tensor) -> torch.Tensor:
     ends.scatter_reduce_(0, gid, pos, reduce="amax", include_self=False)
     # Average rank of the group = mean of its first and last sorted position.
     avg_sorted = ((starts + ends) / 2.0).gather(0, gid)
-    out = torch.zeros_like(x)
-    out.scatter_(0, order, avg_sorted)
-    return out / n
+    full = torch.zeros_like(x)
+    full.scatter_(0, order, avg_sorted)
+    # The non-reference cells occupy the bottom ``n - count`` positions of
+    # each column, so the reference ranks are full-rank minus that offset,
+    # normalized by the number of reference cells.
+    excluded = n - count  # [T]
+    return _masked_output((full - excluded) / count.clamp(min=1), ref, count)
 
 
 def _cs_neutralize(
-    x: torch.Tensor, group: torch.Tensor | None = None
+    x: torch.Tensor,
+    group: torch.Tensor | None = None,
+    eligible: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Subtract the per-date mean within each group (industry neutralization).
 
     ``group`` is a ``[stock, date]`` tensor of discrete group ids aligned
     with ``x``; non-finite cells (stocks without a mapping) belong to no
-    group, so their values are untouched.  Without ``group`` — or when no
-    finite group id exists — the operator degrades to the full-market
-    demean, so a missing industry source never fabricates a grouping.
+    group, so their values are untouched — and never enter another group's
+    mean.  ``eligible`` is the optional ``[stock, date]`` PIT universe mask:
+    a group's mean uses only the same-day members that are eligible *and*
+    finite, and ineligible cells map to NaN (non-participating).  Without
+    ``group`` — or when no finite group id exists — the operator degrades
+    to the full-market demean, so a missing industry source never
+    fabricates a grouping.
     """
 
     if group is None:
-        return _cs_demean(x)
+        return _cs_demean(x, eligible)
     ids = torch.unique(group[torch.isfinite(group)])
     if ids.numel() == 0:
-        return _cs_demean(x)
+        return _cs_demean(x, eligible)
+    ref, count = _cs_reference(x, eligible)
     out = x.clone()
     for gid in ids:
-        mask = group == gid
-        count = mask.sum(dim=0, keepdim=True)
-        mean = (x * mask).sum(dim=0, keepdim=True) / count.clamp(min=1)
-        out = out - mask * mean
-    return out
+        member = (group == gid) & ref
+        group_count = member.sum(dim=0, keepdim=True)
+        total = torch.where(member, x, torch.zeros_like(x)).sum(
+            dim=0, keepdim=True
+        )
+        mean = total / group_count.clamp(min=1)
+        out = torch.where(group == gid, x - mean, out)
+    return _masked_output(out, ref, count)
 
 
 OPS_CONFIG = [

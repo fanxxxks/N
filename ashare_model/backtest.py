@@ -366,8 +366,17 @@ def main() -> None:
         payload = json.loads(formula_file.read_text(encoding="utf-8"))
         tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
 
+        import torch
+
+        universe_mask = getattr(loader, "universe_mask", None)
         vm = StackVM(
-            FORMULA_VOCAB, industry_codes=getattr(loader, "industry_codes", None)
+            FORMULA_VOCAB,
+            industry_codes=getattr(loader, "industry_codes", None),
+            universe_mask=(
+                torch.tensor(universe_mask, dtype=torch.bool)
+                if universe_mask is not None
+                else None
+            ),
         )
         factors = vm.execute(tokens, loader.factor_tensor)
         if factors is None:

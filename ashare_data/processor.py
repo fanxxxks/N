@@ -333,29 +333,56 @@ def winsorize_cross_section(
     lower_q: float = 0.01,
     upper_q: float = 0.99,
     clip: float = 5.0,
+    eligible: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Winsorize then robust z-score each date cross-section.
 
-    The input is ``[stock x date]``. Standardization uses only the values in
-    the current date column, so it does not leak future information.  Missing
-    values stay NaN (the caller converts them to the neutral 0); a degenerate
-    cross-section with zero MAD is normalized by 1.0 so constant columns map
-    to 0 instead of exploding into ±clip spikes.
+    The input is ``[stock x date]``.  The quantile points, median and MAD of
+    each date column are computed only over the *eligible and finite*
+    reference cells: ``eligible`` is an optional ``[stock x date]`` bool mask
+    aligned with ``wide`` (the PIT universe mask), so stocks outside the
+    universe can never shift the reference statistics.  The same
+    clip/standardize transform is then applied to every cell, keeping each
+    stock's own history on one per-date scale (a future member's pre-join
+    values stay observable for time-series use instead of being zeroed);
+    only the reference set decides the statistics.  Standardization uses
+    only the current date column, so it does not leak future information.
+    Missing values stay NaN (the caller converts them to the neutral 0); a
+    degenerate column with zero MAD — or with no reference cell at all —
+    maps to 0 instead of exploding into ±clip spikes.
     """
 
     arr = wide.to_numpy(dtype=float).copy()
-    all_nan = np.isnan(arr).all(axis=0)
-    arr[:, all_nan] = 0.0
+    if eligible is None:
+        eligible = np.ones(arr.shape, dtype=bool)
+    else:
+        eligible = np.asarray(eligible, dtype=bool)
+        if eligible.shape != arr.shape:
+            raise ValueError(
+                f"eligible shape {eligible.shape} does not match "
+                f"wide shape {arr.shape}"
+            )
+    ref = eligible & np.isfinite(arr)
+    has_ref = ref.any(axis=0)
+    # Reference matrix for the quantile points: non-reference cells are NaN
+    # so they cannot contribute; empty columns are zeroed up front so every
+    # reduce below stays finite.
+    reference = np.where(ref, arr, np.nan)
+    reference[:, ~has_ref] = 0.0
     with np.errstate(all="ignore"):
-        lower = np.nanquantile(arr, lower_q, axis=0)
-        upper = np.nanquantile(arr, upper_q, axis=0)
+        lower = np.nanquantile(reference, lower_q, axis=0)
+        upper = np.nanquantile(reference, upper_q, axis=0)
         clipped = np.clip(arr, lower, upper)
-        median = np.nanmedian(clipped, axis=0)
-        mad = np.nanmedian(np.abs(clipped - median), axis=0)
+        # Median/MAD input over the reference cells only; empty columns are
+        # zeroed like the quantile matrix so every reduce stays warning-free.
+        center = np.where(ref, clipped, np.nan)
+        center[:, ~has_ref] = 0.0
+        median = np.nanmedian(center, axis=0)
+        mad = np.nanmedian(np.abs(center - median), axis=0)
         mad = np.where(mad == 0, 1.0, mad)
     result = (clipped - median) / mad
     result = np.clip(result, -clip, clip)
-    result[:, all_nan] = 0.0
+    result[:, ~has_ref] = 0.0
     return pd.DataFrame(result, index=wide.index, columns=wide.columns)
 
 

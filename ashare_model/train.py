@@ -328,12 +328,23 @@ class AshareTrainer:
             vm_device
         )
         # The VM executes on the compute device; the industry-group tensor
-        # for CS_NEUTRALIZE moves with the factor stack (None when the
-        # loader carries no industry data).
+        # for CS_NEUTRALIZE and the PIT eligibility mask for the
+        # cross-sectional operators move with the factor stack (None when
+        # the loader carries no such data).
         industry_codes = getattr(self.loader, "industry_codes", None)
         self.vm.industry_codes = (
             industry_codes[:, :train_end_idx].to(vm_device)
             if industry_codes is not None
+            else None
+        )
+        universe_mask = getattr(self.loader, "universe_mask", None)
+        self.vm.universe_mask = (
+            torch.tensor(
+                universe_mask[:, :train_end_idx],
+                dtype=torch.bool,
+                device=vm_device,
+            )
+            if universe_mask is not None
             else None
         )
         # Recompute labels only from prices inside the inclusive training

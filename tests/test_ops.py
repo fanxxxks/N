@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 from ashare_model.ops import (
@@ -294,3 +295,164 @@ def test_enumerated_windows_match_their_parameterized_cores():
     assert torch.allclose(_op("DOWNVOL60")(x), _ts_downvol(x, 60), atol=1e-6)
     assert torch.allclose(_op("DELTA10")(x), _ts_delta(x, 10), atol=1e-6)
     assert torch.allclose(_op("DELTA20")(x), _ts_delta(x, 20), atol=1e-6)
+
+
+# --- PIT universe mask in the cross-sectional operators -----------------------
+
+
+def _masked_x():
+    x = torch.tensor(
+        [
+            [1.0, 2.0],
+            [2.0, 4.0],
+            [3.0, 6.0],
+            [1e6, 1e6],  # future member with extreme values
+        ]
+    )
+    eligible = torch.tensor(
+        [
+            [True, True],
+            [True, True],
+            [True, True],
+            [False, False],
+        ]
+    )
+    return x, eligible
+
+
+def test_cs_zscore_reference_is_eligible_only():
+    x, eligible = _masked_x()
+    out = cross_sectional_zscore(x, eligible)
+    # The eligible rows match the z-score of the eligible-only matrix: the
+    # extreme ineligible row contributes nothing.
+    baseline = cross_sectional_zscore(x[:3])
+    assert torch.allclose(out[:3], baseline, atol=1e-6)
+    # Ineligible cells are non-participating (NaN), not zeros in the sort.
+    assert torch.isnan(out[3]).all()
+
+
+def test_cs_demean_reference_is_eligible_only():
+    x, eligible = _masked_x()
+    out = _cs_demean(x, eligible)
+    baseline = _cs_demean(x[:3])
+    assert torch.allclose(out[:3], baseline, atol=1e-6)
+    assert torch.isnan(out[3]).all()
+
+
+def test_cs_rank_reference_is_eligible_only():
+    x, eligible = _masked_x()
+    out = _cs_rank(x, eligible)
+    baseline = _cs_rank(x[:3])
+    assert torch.allclose(out[:3], baseline, atol=1e-6)
+    assert torch.isnan(out[3]).all()
+    # Eligible ranks stay in [0, 1], monotone in value, with the top
+    # eligible cell at (n_eligible - 1) / n_eligible.
+    assert torch.all(out[:3] >= 0.0) and torch.all(out[:3] <= 1.0)
+    assert out[2, 0].item() == pytest.approx(2.0 / 3.0)
+
+
+def test_cs_ops_single_eligible_stock_is_neutral_but_valid():
+    x = torch.tensor([[5.0, 7.0], [100.0, 200.0]])
+    eligible = torch.tensor([[True, True], [False, False]])
+    z = cross_sectional_zscore(x, eligible)
+    dm = _cs_demean(x, eligible)
+    # A single eligible member has zero dispersion: z-score and demean are
+    # exactly neutral, but the member stays the only valid (finite) cell.
+    assert torch.allclose(z[0], torch.zeros(2), atol=1e-6)
+    assert torch.allclose(dm[0], torch.zeros(2), atol=1e-6)
+    assert torch.isnan(z[1]).all() and torch.isnan(dm[1]).all()
+
+
+def test_cs_ops_day_without_eligible_stocks_is_stable():
+    x = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    eligible = torch.tensor([[True, False], [True, False]])
+    for out in (
+        cross_sectional_zscore(x, eligible),
+        _cs_demean(x, eligible),
+        _cs_rank(x, eligible),
+    ):
+        # The empty day collapses to the stable neutral 0: no NaN spread,
+        # no extreme values.
+        assert (out[:, 1] == 0.0).all()
+        assert torch.isfinite(out).all()
+
+
+def test_cs_neutralize_industry_means_use_eligible_finite_members():
+    x = torch.tensor(
+        [
+            [10.0, 2.0],
+            [20.0, 4.0],
+            [1000.0, 2000.0],  # ineligible same-industry extreme
+            [7.0, 5.0],  # unmapped
+        ]
+    )
+    group = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [float("nan"), float("nan")],
+        ]
+    )
+    eligible = torch.tensor(
+        [
+            [True, True],
+            [True, True],
+            [False, False],
+            [True, True],
+        ]
+    )
+    out = _cs_neutralize(x, group, eligible)
+    # Group 0's mean counts only eligible members: (10+20)/2=15 -> [-5, +5]
+    # on day 0 and (2+4)/2=3 -> [-1, +1] on day 1.
+    assert out[0, 0].item() == -5.0 and out[1, 0].item() == 5.0
+    assert out[0, 1].item() == -1.0 and out[1, 1].item() == 1.0
+    # The ineligible member is non-participating; the unmapped eligible
+    # member keeps its raw value and never entered group 0's mean.
+    assert torch.isnan(out[2]).all()
+    assert torch.allclose(out[3], x[3])
+
+
+def test_cs_neutralize_unmapped_never_enters_other_industry_means():
+    x = torch.tensor([[10.0], [20.0], [1000.0]])
+    group = torch.tensor([[0.0], [0.0], [float("nan")]])
+    eligible = torch.ones_like(x, dtype=torch.bool)
+    out = _cs_neutralize(x, group, eligible)
+    # The unmapped extreme must not move industry 0's mean (still 15).
+    assert out[0, 0].item() == -5.0 and out[1, 0].item() == 5.0
+    assert out[2, 0].item() == 1000.0
+
+
+def test_cs_ops_reject_mask_shape_mismatch():
+    x = torch.randn(3, 4)
+    bad = torch.ones(4, 4, dtype=torch.bool)
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        cross_sectional_zscore(x, bad)
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        _cs_demean(x, bad)
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        _cs_rank(x, bad)
+    with pytest.raises(ValueError, match="universe_mask shape"):
+        _cs_neutralize(x, torch.zeros(3, 4), bad)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_masked_cs_ops_match_cpu_on_cuda():
+    torch.manual_seed(51)
+    x = torch.randn(8, 12)
+    eligible = torch.rand(8, 12) > 0.3
+    group = torch.randint(0, 3, (8, 12)).float()
+    group[torch.rand(8, 12) < 0.2] = float("nan")
+    for fn, args in (
+        (cross_sectional_zscore, (x, eligible)),
+        (_cs_demean, (x, eligible)),
+        (_cs_rank, (x, eligible)),
+        (_cs_neutralize, (x, group, eligible)),
+    ):
+        cpu = fn(*args)
+        gpu = fn(*[a.cuda() for a in args])
+        # The NaN (non-participating) pattern and the finite values must
+        # agree within the established float32 tolerance contract.
+        assert torch.equal(torch.isnan(cpu), torch.isnan(gpu.cpu()))
+        finite = ~torch.isnan(cpu)
+        assert torch.allclose(cpu[finite], gpu.cpu()[finite], atol=1e-4, rtol=1e-4)
