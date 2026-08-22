@@ -253,6 +253,17 @@ python scripts/archive_run.py --mode sim --commit
   置零（加入当天的动量仍使用加入前的自身行情）。全日无 eligible 股票时截面
   稳定映射为中性 0，仅一只 eligible 股票时 z-score/demean 为中性但该股票仍
   是唯一有效成员。
+- **回测与研究报告共用同一 PIT universe**：回测引擎 `run()` 显式接收
+  `[stock × date]` mask，选股要求 signal-date 与 entry-date
+  （`mask[:, t] & mask[:, t+1]`）同时 eligible；默认等权基准只平均当日
+  eligible 且目标收益有效的股票，无 eligible 股票的日期基准与空仓策略收益
+  均为 0；退出成员池的持仓经正常卖出路径减仓（计费），持仓快照不会新增
+  ineligible 股票。研究报告的 coverage 分母、rank IC（复用统一的
+  `rank_ic_series` 实现，无第二套 Spearman）与每日相关矩阵只使用 eligible
+  单元；协议 benchmark 行复用引擎的基准路径，IC 与回测消费同一个 mask。
+  协议（`PROTOCOL_VERSION` v8）与回测产物记录实际生效的 universe policy
+  字段（index_codes / min_listed_sessions / membership_end_inclusive /
+  degraded），不记录数据 hash、不建立 lineage。
 - **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式对照首发词表（v1：34 特征/16 算子）重映射，退役重复特征经 `FEATURE_ALIASES`（`RET_20` → `MOMENTUM_20`，两者原为同一计算）解析，语义永不漂移。
 - **回测输出**：包含持仓快照与全市场等权基准（与策略同一 open-to-open 口径），供看板展示。
 

@@ -20,6 +20,43 @@ from .reward import sortino_ratio
 from .time_contract import TrainingTimeContract
 
 
+def equal_weight_benchmark_returns(
+    target_ret: np.ndarray,
+    signal_indices: list[int],
+    universe_mask: np.ndarray | None = None,
+) -> list[float]:
+    """Equal-weight universe return per executed signal period.
+
+    The default benchmark averages the forward target over the cells that
+    are eligible on the signal date **and** on the entry date
+    (``universe_mask[:, t] & universe_mask[:, t + 1]``) and whose target is
+    finite; a period without any such cell earns 0.0 (stable, no NaN
+    spread).  Without a mask every finite cell counts.  Single code path
+    shared by the backtest engine and the evaluation protocol's benchmark
+    row, so both report the identical universe return.
+    """
+
+    target_ret = np.asarray(target_ret, dtype=np.float64)
+    if universe_mask is not None:
+        universe_mask = np.asarray(universe_mask, dtype=bool)
+        if universe_mask.shape != target_ret.shape:
+            raise ValueError(
+                f"universe_mask shape {universe_mask.shape} does not match "
+                f"target shape {target_ret.shape}"
+            )
+    returns: list[float] = []
+    for t in signal_indices:
+        eligible = (
+            (universe_mask[:, t] & universe_mask[:, t + 1])
+            if universe_mask is not None
+            else np.ones(target_ret.shape[0], dtype=bool)
+        )
+        values = target_ret[eligible, t]
+        values = values[np.isfinite(values)]
+        returns.append(float(np.mean(values)) if values.size else 0.0)
+    return returns
+
+
 class AshareBacktestEngine:
     def __init__(self, config: BacktestConfig | None = None):
         self.config = config or BacktestConfig()
@@ -37,6 +74,22 @@ class AshareBacktestEngine:
         signal_range: range | tuple[int, int] | None = None,
         universe_mask: np.ndarray | None = None,
     ) -> BacktestResult:
+        """Execute the daily top-n strategy over the signal columns.
+
+        ``universe_mask`` is the explicit ``[stock, date]`` bool PIT
+        eligibility mask: a position can only be newly opened in a stock
+        eligible on the signal date **and** on the entry date
+        (``universe_mask[:, t] & universe_mask[:, t + 1]``), the default
+        equal-weight benchmark averages only those cells (and requires a
+        valid target), and a day without any eligible stock earns zero for
+        both the strategy (flat book) and the benchmark.  Existing
+        positions of a stock that exits the universe are sold through the
+        ordinary sell path — the mask never erases them silently.  A mask
+        whose shape does not match the signal raises ``ValueError``; with
+        ``universe_mask=None`` the engine keeps the legacy unconstrained
+        semantics.
+        """
+
         factors = np.asarray(factors, dtype=np.float64)
         if factors.ndim != 2:
             raise ValueError("factors must be [stock, date]")
@@ -102,18 +155,9 @@ class AshareBacktestEngine:
         if benchmark_returns is None:
             # Default benchmark: equal-weight universe return on the same
             # complete t+2 periods as the strategy itself.
-            benchmark_returns = []
-            for t in signal_indices:
-                eligible = (
-                    (universe_mask[:, t] & universe_mask[:, t + 1])
-                    if universe_mask is not None
-                    else np.ones(n_stocks, dtype=bool)
-                )
-                values = target_ret[eligible, t]
-                values = values[np.isfinite(values)]
-                benchmark_returns.append(
-                    float(np.mean(values)) if values.size else 0.0
-                )
+            benchmark_returns = equal_weight_benchmark_returns(
+                target_ret, signal_indices, universe_mask
+            )
         elif len(benchmark_returns) != len(signal_indices):
             raise ValueError("benchmark_returns must align with signal_range")
         prev_weights = np.zeros(n_stocks, dtype=np.float64)
@@ -125,9 +169,16 @@ class AshareBacktestEngine:
         for t in signal_indices:
             entry_day = t + 1
             signal = factors[:, t]
-            if universe_mask is not None:
-                eligible = universe_mask[:, t] & universe_mask[:, entry_day]
-                signal = np.where(eligible, signal, np.nan)
+            # Signal-date and entry-date eligibility together define the
+            # selectable set: a stock must be a member when the signal is
+            # observed and still be a member when the buy executes at the
+            # t+1 open.  Non-finite signal cells are excluded inside the
+            # selection itself.
+            eligible = (
+                (universe_mask[:, t] & universe_mask[:, entry_day])
+                if universe_mask is not None
+                else None
+            )
             exit_day = t + 2
             selected = self._select_top_n(
                 signal,
@@ -140,6 +191,7 @@ class AshareBacktestEngine:
                 ts_codes,
                 stock_names or {},
                 side="buy",
+                eligible=eligible,
             )
             target_weights = np.zeros(n_stocks, dtype=np.float64)
             weight = 1.0 / max(self.config.top_n, 1)
@@ -241,7 +293,18 @@ class AshareBacktestEngine:
         ts_codes: list[str],
         stock_names: dict[str, str],
         side: str,
+        eligible: np.ndarray | None = None,
     ) -> list[int]:
+        """Top-n indices of the current signal column.
+
+        ``eligible`` is the optional per-stock bool eligibility vector for
+        this signal date (signal-date & entry-date universe membership):
+        ineligible stocks are excluded from the selection regardless of
+        their signal value, so a position can never be newly opened in a
+        stock outside the universe.  Executed only when the column is
+        finite and not blocked by the execution-day tradability mask.
+        """
+
         blocked = self._blocked_mask(
             exec_day,
             open_,
@@ -253,7 +316,13 @@ class AshareBacktestEngine:
             stock_names,
             side=side,
         )
-        valid = [(i, float(signal[i])) for i in range(len(signal)) if not blocked[i] and np.isfinite(signal[i])]
+        valid = [
+            (i, float(signal[i]))
+            for i in range(len(signal))
+            if (eligible is None or eligible[i])
+            and not blocked[i]
+            and np.isfinite(signal[i])
+        ]
         valid.sort(key=lambda x: x[1], reverse=True)
         return [i for i, _ in valid[: self.config.top_n]]
 
@@ -417,6 +486,10 @@ def main() -> None:
             stock_names=loader.stock_names,
             universe_mask=loader.universe_mask,
         )
+        # The universe policy actually applied to the result, for provenance.
+        # No data hash or lineage is recorded: the policy fields are what
+        # makes two results comparable.
+        policy = getattr(loader, "universe_policy", None)
         output = {
             "formula": tokens,
             "formula_text": formula_decode(tokens, FORMULA_VOCAB),
@@ -427,6 +500,20 @@ def main() -> None:
             "benchmark": backtest_config.benchmark,
             "benchmark_equity": result.benchmark_equity,
             "positions": result.positions,
+            "universe_policy": (
+                {
+                    "index_codes": list(policy.index_codes),
+                    "min_listed_sessions": int(policy.min_listed_sessions),
+                    "membership_end_inclusive": bool(
+                        policy.membership_end_inclusive
+                    ),
+                    "degraded": bool(loader.universe_status.degraded)
+                    if loader.universe_status is not None
+                    else None,
+                }
+                if policy is not None
+                else None
+            ),
         }
         out_path = root / args.output
         out_path.parent.mkdir(parents=True, exist_ok=True)

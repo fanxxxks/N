@@ -16,6 +16,7 @@ from ashare_model.diagnostics import (
     rank_ic_stats,
 )
 from ashare_model.factors import FAMILIES, ablate_factors
+from ashare_model.reward import rank_ic_series
 from ashare_model.vocab import FEATURE_NAMES
 
 
@@ -106,6 +107,9 @@ def test_factor_report_smoke(populated_db: DataConfig):
     report = factor_report(loader, "2024-02-01")
     assert report["feature_count"] == len(FEATURE_NAMES)
     assert report["stock_count"] == len(loader.ts_codes)
+    # The union size stays, but the daily selectable size is explicit and
+    # must not be confused with it.
+    assert report["mean_eligible_stocks"] == pytest.approx(3.0)
     assert len(report["per_feature"]) == len(FEATURE_NAMES)
     row = report["per_feature"][FEATURE_NAMES.index("RET_1")]
     assert row["name"] == "RET_1"
@@ -122,3 +126,107 @@ def test_factor_report_writes_file(populated_db: DataConfig, tmp_path):
     factor_report(loader, "2024-02-01", out)
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["feature_count"] == len(FEATURE_NAMES)
+
+
+# --- PIT universe mask in diagnostics ----------------------------------------
+
+
+def _masked_tensors():
+    n_stocks, n_dates = 6, 20
+    join_day = 8
+    rng = np.random.default_rng(55)
+    target = rng.normal(size=(n_stocks, n_dates))
+    base = rng.normal(size=(3, n_stocks, n_dates)).astype(np.float32)
+    extreme = base.copy()
+    extreme[0, -1, :join_day] = 1e9  # future member's extreme pre-join values
+    mask = np.ones((n_stocks, n_dates), dtype=bool)
+    mask[-1, :join_day] = False
+    return base, extreme, target, mask
+
+
+def test_coverage_ic_and_correlations_ignore_ineligible_extremes():
+    base, extreme, target, mask = _masked_tensors()
+    dates = [f"d{i}" for i in range(20)]
+    assert factor_coverage(base, eligible=mask) == factor_coverage(
+        extreme, eligible=mask
+    )
+    assert rank_ic_stats(base, target, dates, eligible=mask, min_stocks=3) == (
+        rank_ic_stats(extreme, target, dates, eligible=mask, min_stocks=3)
+    )
+    assert correlation_summary(base, eligible=mask) == correlation_summary(
+        extreme, eligible=mask
+    )
+    # Sanity: without the mask the extreme finite values do move the ICs.
+    assert rank_ic_stats(base, target, dates, min_stocks=3) != rank_ic_stats(
+        extreme, target, dates, min_stocks=3
+    )
+
+
+def test_coverage_denominator_counts_eligible_cells_only():
+    mask = np.ones((4, 6), dtype=bool)
+    mask[1:] = False  # only stock 0 eligible
+    tensor = np.zeros((2, 4, 6), dtype=np.float32)
+    tensor[0, 0, :] = 1.0  # feature 0 informative only in the eligible row
+    cov = factor_coverage(tensor, eligible=mask)
+    assert cov[FEATURE_NAMES[0]] == pytest.approx(1.0)
+    # Non-zero cells outside the universe neither count as covered nor
+    # inflate the denominator.
+    tensor2 = np.ones((2, 4, 6), dtype=np.float32)
+    assert factor_coverage(tensor2, eligible=mask)[FEATURE_NAMES[0]] == pytest.approx(1.0)
+    tensor3 = np.zeros((2, 4, 6), dtype=np.float32)
+    tensor3[0, 1:, :] = 1.0  # informative only in ineligible rows
+    assert factor_coverage(tensor3, eligible=mask)[FEATURE_NAMES[0]] == pytest.approx(0.0)
+
+
+def test_correlation_summary_uses_eligible_cells_per_day():
+    # Two features are identical on the eligible rows and wildly different
+    # on the ineligible row: the masked summary must still report |corr| 1.
+    rng = np.random.default_rng(56)
+    n_stocks, n_dates = 5, 6
+    base = rng.normal(size=(n_stocks, n_dates)).astype(np.float32)
+    tensor = np.stack([base, base])
+    tensor[1, 3:, :] = base[3:, :] + 1000.0
+    mask = np.ones((n_stocks, n_dates), dtype=bool)
+    mask[3:, :] = False
+    summary = correlation_summary(tensor, eligible=mask)
+    top = {(p["a"], p["b"]): p["abs_corr"] for p in summary["top_pairs"]}
+    assert top[(FEATURE_NAMES[0], FEATURE_NAMES[1])] == pytest.approx(1.0, abs=1e-4)
+    # Without the mask the ineligible divergence breaks the correlation.
+    open_summary = correlation_summary(tensor)
+    open_top = {(p["a"], p["b"]): p["abs_corr"] for p in open_summary["top_pairs"]}
+    assert open_top[(FEATURE_NAMES[0], FEATURE_NAMES[1])] < 1.0
+
+
+def test_rank_ic_stats_reuses_unified_rank_ic_series():
+    # The diagnostics IC must be the exact unified implementation: same
+    # daily series, same summary values (single Spearman code path).
+    rng = np.random.default_rng(57)
+    n_stocks, n_dates = 25, 12
+    target = rng.normal(size=(n_stocks, n_dates))
+    tensor = np.stack(
+        [target, -target, np.zeros_like(target)]
+    ).astype(np.float32)
+    mask = np.ones((n_stocks, n_dates), dtype=bool)
+    mask[-3:, :6] = False
+    stats = rank_ic_stats(
+        tensor, target, [f"d{i}" for i in range(n_dates)],
+        eligible=mask, min_stocks=5,
+    )
+    daily = rank_ic_series(tensor, target, 5, mask)
+    for i, name in enumerate(FEATURE_NAMES[:3]):
+        finite = daily[i][np.isfinite(daily[i])]
+        expected_mean = float(finite.mean()) if finite.size else 0.0
+        assert stats[name]["ic_mean"] == pytest.approx(expected_mean, abs=1e-12)
+        assert stats[name]["n_dates"] == int(finite.size)
+
+
+def test_diagnostics_reject_mask_shape_mismatch():
+    tensor = np.zeros((2, 4, 6), dtype=np.float32)
+    target = np.zeros((4, 6))
+    bad = np.ones((3, 6), dtype=bool)
+    with pytest.raises(ValueError, match="eligible shape"):
+        factor_coverage(tensor, bad)
+    with pytest.raises(ValueError, match="eligible shape"):
+        rank_ic_stats(tensor, target, [], eligible=bad)
+    with pytest.raises(ValueError, match="eligible shape"):
+        correlation_summary(tensor, bad)
