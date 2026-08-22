@@ -103,3 +103,27 @@ def test_run_includes_benchmark_positions_and_aligned_dates(populated_db: DataCo
 def test_initial_capital_from_config():
     engine = AshareBacktestEngine(BacktestConfig(initial_capital=50000.0))
     assert engine.initial_capital == 50000.0
+
+
+def test_run_excludes_high_signal_outside_pit_universe():
+    dates = ["20240102", "20240103", "20240104"]
+    codes = ["000001.SZ", "600000.SH"]
+    factors = np.array([[100.0, 100.0, 100.0], [1.0, 1.0, 1.0]])
+    raw = {
+        "open": np.ones((2, 3)),
+        "high": np.full((2, 3), 1.1),
+        "low": np.full((2, 3), 0.9),
+        "pre_close": np.ones((2, 3)),
+        "volume": np.ones((2, 3)),
+    }
+    universe_mask = np.array(
+        [[False, False, True], [True, True, True]], dtype=bool
+    )
+    result = AshareBacktestEngine(BacktestConfig(top_n=1)).run(
+        factors,
+        raw,
+        codes,
+        dates,
+        universe_mask=universe_mask,
+    )
+    assert result.positions[0]["ts_codes"] == ["600000.SH"]

@@ -36,6 +36,7 @@ from ashare_data.config import (
 )
 from ashare_data.schemas import SimOrder
 from ashare_data.processor import open_to_open_returns
+from ashare_data.universe import require_production_universe
 from ashare_execution import validate_execution_config
 
 from ashare_model.backtest import AshareBacktestEngine
@@ -158,6 +159,7 @@ class SimulationRunner:
             target = open_to_open_returns(
                 self.loader.raw_data_cache["open"][:, :price_end].numpy()
             )
+            target = self.loader.mask_by_universe(target)
             self.direction = signal_direction(
                 signals[:, :signal_end],
                 target[:, :signal_end],
@@ -226,7 +228,14 @@ class SimulationRunner:
                 break
             exec_idx = signal_idx + 1
             exec_date = dates[exec_idx]
-            signal = signals[:, signal_idx]
+            signal = np.where(
+                (
+                    self.loader.universe_mask[:, signal_idx]
+                    & self.loader.universe_mask[:, exec_idx]
+                ).numpy(),
+                signals[:, signal_idx],
+                np.nan,
+            )
             selected = engine._select_top_n(
                 signal,
                 exec_idx,
@@ -465,6 +474,7 @@ def main() -> None:
         root = _project_root()
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
+        require_production_universe(data_config)
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         sim_config = make_sim_config(raw, root)

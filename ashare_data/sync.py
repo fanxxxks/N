@@ -186,26 +186,16 @@ def sync_all(
         db.upsert_stocks(_stock_rows(stocks_df), config)
         logger.info(f"Stock list synced: {len(stocks_df)} stocks")
 
-        constituent_rows: list[dict[str, Any]] = []
         all_constituents: set[str] = set()
         for index_code in config.index_codes:
             codes = client.get_constituents(index_code)
-            constituent_rows.extend(
-                {
-                    "index_code": index_code,
-                    "ts_code": code,
-                    "in_date": config.start_date.replace("-", ""),
-                    "out_date": "99991231",
-                }
-                for code in codes
-            )
             all_constituents.update(codes)
-            logger.info(f"Constituents for {index_code}: {len(codes)}")
-        if constituent_rows:
-            # Constituent data is a current snapshot: replace the table so
-            # stale memberships from previous runs disappear.
-            db.execute(f"DELETE FROM {config.constituents_table}")
-            db.upsert_constituents(constituent_rows, config)
+            logger.info(f"Current constituent snapshot for {index_code}: {len(codes)}")
+        if all_constituents:
+            logger.warning(
+                "Current constituent snapshots are used only to choose symbols "
+                "for daily-bar sync; no PIT membership intervals were written"
+            )
 
         # Defensive validation: only real A-share stock codes may enter the
         # trading universe (index symbols, B-shares etc. are dropped).  The
@@ -306,6 +296,8 @@ def sync_all(
             "calendar_days": len(dates),
             "stocks": len(stocks_df),
             "universe": len(universe),
+            "constituent_snapshot_symbols": len(all_constituents),
+            "pit_constituent_rows_written": 0,
             "daily_rows": total_rows,
             "failures": failures,
             "purged_rows": purged,

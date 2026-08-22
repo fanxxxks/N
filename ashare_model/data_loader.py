@@ -20,6 +20,12 @@ from ashare_data.processor import (
     pivot_wide,
     tradability_blocked_matrix,
 )
+from ashare_data.universe import (
+    ResolvedUniverse,
+    UniverseContractError,
+    UniverseContractStatus,
+    resolve_universe_contract,
+)
 
 from .factors import compute_factor_tensor
 
@@ -42,9 +48,18 @@ def date_index(dates: list[str], date_str: str) -> int:
 
 
 class AshareDataLoader:
-    def __init__(self, data_config: DataConfig, model_config: ModelConfig | None = None):
+    def __init__(
+        self,
+        data_config: DataConfig,
+        model_config: ModelConfig | None = None,
+        *,
+        allow_development_universe_fallback: bool = False,
+    ):
         self.config = data_config
         self.model_config = model_config or ModelConfig()
+        self.allow_development_universe_fallback = bool(
+            allow_development_universe_fallback
+        )
         self.bars: pd.DataFrame | None = None
         self.ts_codes: list[str] = []
         self.dates: list[str] = []
@@ -53,6 +68,20 @@ class AshareDataLoader:
         self.target_ret: torch.Tensor | None = None
         self.stock_names: dict[str, str] = {}
         self.st_stocks: set[str] = set()
+        self.universe_mask: torch.Tensor | None = None
+        self.universe_status: UniverseContractStatus | None = None
+        self._universe_contract: ResolvedUniverse | None = None
+
+    def _contract(self) -> ResolvedUniverse:
+        if self._universe_contract is None:
+            self._universe_contract = resolve_universe_contract(
+                self.config,
+                allow_development_fallback=(
+                    self.allow_development_universe_fallback
+                ),
+            )
+            self.universe_status = self._universe_contract.status
+        return self._universe_contract
 
     def load_stock_meta(self) -> None:
         """Load ts_code -> name and the ST flag set from the stocks table.
@@ -80,33 +109,17 @@ class AshareDataLoader:
                 self.st_stocks.add(code)
 
     def load_universe(self) -> list[str]:
-        """Default universe: validated constituents (fallback: stock list).
+        """Validated union of configured PIT constituent intervals.
 
         Index codes and other non-stock instruments are dropped, codes are
-        intersected with the stock list when available (authoritative
-        membership check), and ST stocks are excluded, matching the
-        sync-time universe policy.
+        backed by stock metadata with valid listing dates, and ST stocks are
+        excluded.  A stock-list/all-period fallback exists only when the
+        loader was explicitly constructed in development mode.
         """
 
+        contract = self._contract()
         self.load_stock_meta()
-        with AshareDB(self.config.duckdb_path, read_only=True) as db:
-            try:
-                constituents = db.query(
-                    f"SELECT DISTINCT ts_code FROM {self.config.constituents_table}"
-                )
-                codes = sorted(constituents["ts_code"].astype(str).tolist())
-            except Exception:  # noqa: BLE001
-                codes = []
-            try:
-                stocks = db.query(f"SELECT ts_code FROM {self.config.stocks_table}")
-                stock_codes = set(stocks["ts_code"].astype(str).tolist())
-            except Exception:  # noqa: BLE001
-                stock_codes = set()
-            if not codes:
-                codes = sorted(stock_codes)
-        codes = [c for c in codes if is_valid_a_share_code(c)]
-        if stock_codes:
-            codes = [c for c in codes if c in stock_codes]
+        codes = [c for c in contract.codes if is_valid_a_share_code(c)]
         codes = [c for c in codes if c not in self.st_stocks]
         return codes
 
@@ -115,16 +128,38 @@ class AshareDataLoader:
         ts_codes: list[str] | None = None,
         dates: list[str] | None = None,
     ) -> "AshareDataLoader":
+        contract = self._contract()
         self.load_stock_meta()
         if ts_codes is None:
             ts_codes = self.load_universe()
         requested_codes = list(ts_codes)
         if not requested_codes:
             raise ValueError("No universe symbols loaded")
+        uncovered = sorted(set(requested_codes) - set(contract.codes))
+        if uncovered:
+            raise UniverseContractError(
+                "requested ts_codes are not covered by the resolved universe: "
+                + ", ".join(uncovered[:5])
+            )
+
+        requested_dates = (
+            sorted({str(date).replace("-", "") for date in dates})
+            if dates
+            else None
+        )
+        if requested_dates is not None:
+            non_sessions = sorted(set(requested_dates) - set(contract.sessions))
+            if non_sessions:
+                raise UniverseContractError(
+                    "requested dates are not trade_calendar.is_open=True sessions: "
+                    + ", ".join(non_sessions[:5])
+                )
 
         with AshareDB(self.config.duckdb_path, read_only=True) as db:
-            if dates:
-                where_dates = "AND trade_date IN (" + ",".join(f"'{d}'" for d in dates) + ")"
+            if requested_dates:
+                where_dates = "AND trade_date IN (" + ",".join(
+                    f"'{date}'" for date in requested_dates
+                ) + ")"
             else:
                 where_dates = ""
             code_list = ",".join(f"'{c}'" for c in requested_codes)
@@ -143,7 +178,22 @@ class AshareDataLoader:
             raise ValueError("No daily bars found")
         self.bars = df
         self.ts_codes = sorted(df["ts_code"].unique().tolist())
-        self.dates = sorted(df["trade_date"].unique().tolist())
+        if requested_dates is not None:
+            self.dates = requested_dates
+        else:
+            first_bar = str(df["trade_date"].min())
+            last_bar = str(df["trade_date"].max())
+            self.dates = [
+                date for date in contract.sessions if first_bar <= date <= last_bar
+            ]
+        if not self.dates:
+            raise UniverseContractError(
+                "no trade_calendar.is_open=True sessions overlap the loaded bars"
+            )
+        self.universe_mask = torch.tensor(
+            contract.membership_mask(self.ts_codes, self.dates),
+            dtype=torch.bool,
+        )
 
         tensor_map: dict[str, torch.Tensor] = {}
         for column in (
@@ -192,10 +242,28 @@ class AshareDataLoader:
         # Next-open to next-open forward return with a missing-data mask, so
         # suspended / unlisted days can never fabricate huge fake targets.
         open_tensor = self.raw_data_cache["open"]
-        self.target_ret = torch.tensor(
-            open_to_open_returns(open_tensor.numpy()), dtype=torch.float32
-        )
+        target = self.mask_by_universe(open_to_open_returns(open_tensor.numpy()))
+        self.target_ret = torch.tensor(target, dtype=torch.float32)
         return self
+
+    def mask_by_universe(
+        self,
+        values: np.ndarray,
+        *,
+        start: int = 0,
+    ) -> np.ndarray:
+        """Replace values outside the PIT eligibility mask with ``NaN``."""
+
+        if self.universe_mask is None:
+            raise ValueError("universe mask requires loaded data")
+        array = np.asarray(values, dtype=np.float64).copy()
+        mask = self.universe_mask[:, start : start + array.shape[1]].numpy()
+        if array.shape != mask.shape:
+            raise ValueError(
+                f"values shape {array.shape} does not match universe mask {mask.shape}"
+            )
+        array[~mask] = np.nan
+        return array
 
     def tradability_masks(self) -> tuple[np.ndarray, np.ndarray]:
         """``(blocked_buy, blocked_sell)`` ``[stock x date]`` bool matrices.
@@ -234,6 +302,11 @@ class AshareDataLoader:
             self.stock_names,
             "sell",
         )
+        if self.universe_mask is None:
+            raise ValueError("tradability masks require loaded universe mask")
+        # Ineligible stocks cannot be newly bought.  Sell eligibility remains
+        # market-driven so an index exit never traps an existing position.
+        blocked_buy |= ~self.universe_mask.numpy()
         self._tradability_cache = (blocked_buy, blocked_sell)
         return self._tradability_cache
 

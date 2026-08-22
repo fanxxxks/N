@@ -519,9 +519,10 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
     cfg_path.write_text(
         yaml.safe_dump(
             {
-                "data_dir": str(populated_db.data_dir),
-                "duckdb_path": str(populated_db.duckdb_path),
-                "parquet_dir": str(populated_db.parquet_dir),
+                    "data_dir": str(populated_db.data_dir),
+                    "duckdb_path": str(populated_db.duckdb_path),
+                    "parquet_dir": str(populated_db.parquet_dir),
+                    "index_codes": ["000300.SH"],
                 "model": {"max_formula_len": 6},
                 "protocol": {
                     "folds": [
@@ -748,9 +749,10 @@ def test_cli_confirmation_smoke(tmp_path, populated_db: DataConfig):
     cfg_path.write_text(
         yaml.safe_dump(
             {
-                "data_dir": str(populated_db.data_dir),
-                "duckdb_path": str(populated_db.duckdb_path),
-                "parquet_dir": str(populated_db.parquet_dir),
+                    "data_dir": str(populated_db.data_dir),
+                    "duckdb_path": str(populated_db.duckdb_path),
+                    "parquet_dir": str(populated_db.parquet_dir),
+                    "index_codes": ["000300.SH"],
                 "model": {"max_formula_len": 6},
                 "protocol": {
                     "folds": [
@@ -787,9 +789,10 @@ def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
     cfg_path.write_text(
         yaml.safe_dump(
             {
-                "data_dir": str(populated_db.data_dir),
-                "duckdb_path": str(populated_db.duckdb_path),
-                "parquet_dir": str(populated_db.parquet_dir),
+                    "data_dir": str(populated_db.data_dir),
+                    "duckdb_path": str(populated_db.duckdb_path),
+                    "parquet_dir": str(populated_db.parquet_dir),
+                    "index_codes": ["000300.SH"],
                 "protocol": {
                     "folds": [
                         {"train_end": "2024-01-10", "test_end": "2024-01-25"},

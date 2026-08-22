@@ -87,8 +87,11 @@ def test_industry_codes_all_nan_without_membership(populated_db: DataConfig):
 def test_load_data_raises_when_universe_empty(data_config: DataConfig):
     with AshareDB(data_config.duckdb_path) as db:
         db.create_schema(data_config)
+        db.upsert_calendar(
+            [{"trade_date": "20240102", "is_open": True}], data_config
+        )
     loader = AshareDataLoader(data_config, ModelConfig())
-    with pytest.raises(ValueError, match="No universe symbols loaded"):
+    with pytest.raises(ValueError, match="no historical membership intervals"):
         loader.load_data()
 
 
@@ -98,6 +101,13 @@ def test_load_data_raises_when_no_bars(data_config: DataConfig):
         db.create_schema(data_config)
         db.upsert_stocks(
             [{"ts_code": "000001.SZ", "name": "A", "industry": None, "list_date": "20200101", "is_st": False}],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": "20240102", "is_open": True}], data_config
+        )
+        db.upsert_constituents(
+            [{"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20200101", "out_date": "99991231"}],
             data_config,
         )
     loader = AshareDataLoader(data_config, ModelConfig())
@@ -119,6 +129,24 @@ def test_target_ret_masks_suspended_days(data_config: DataConfig):
     with AshareDB(data_config.duckdb_path) as db:
         db.create_schema(data_config)
         db.upsert_daily(bars.to_dict("records"), data_config)
+        db.upsert_stocks(
+            [
+                {"ts_code": code, "name": code, "industry": None, "list_date": "20200101", "is_st": False}
+                for code in ts_codes
+            ],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": date, "is_open": True} for date in dates],
+            data_config,
+        )
+        db.upsert_constituents(
+            [
+                {"index_code": "000300.SH", "ts_code": code, "in_date": f"2020010{i + 1}", "out_date": "99991231"}
+                for i, code in enumerate(ts_codes)
+            ],
+            data_config,
+        )
     loader = AshareDataLoader(data_config, ModelConfig())
     loader.load_data(ts_codes=ts_codes, dates=dates)
     assert loader.target_ret is not None
@@ -142,9 +170,13 @@ def test_load_stock_meta_and_st_exclusion(data_config: DataConfig):
         )
         db.upsert_constituents(
             [
-                {"index_code": "000300.SH", "ts_code": c, "in_date": "20240101", "out_date": "99991231"}
-                for c in ts_codes
+                {"index_code": "000300.SH", "ts_code": c, "in_date": f"2020010{i + 1}", "out_date": "99991231"}
+                for i, c in enumerate(ts_codes)
             ],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": date, "is_open": True} for date in dates],
             data_config,
         )
     loader = AshareDataLoader(data_config, ModelConfig())
@@ -159,11 +191,18 @@ def test_load_stock_meta_and_st_exclusion(data_config: DataConfig):
 def test_load_universe_filters_index_codes(data_config: DataConfig):
     with AshareDB(data_config.duckdb_path) as db:
         db.create_schema(data_config)
+        db.upsert_stocks(
+            [{"ts_code": "000001.SZ", "name": "A", "industry": None, "list_date": "20200101", "is_st": False}],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": "20240102", "is_open": True}], data_config
+        )
         db.upsert_constituents(
             [
-                {"index_code": "000300.SH", "ts_code": "000300.SZ", "in_date": "20240101", "out_date": "99991231"},
-                {"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20240101", "out_date": "99991231"},
-                {"index_code": "000300.SH", "ts_code": "900901.SH", "in_date": "20240101", "out_date": "99991231"},
+                {"index_code": "000300.SH", "ts_code": "000300.SZ", "in_date": "20200101", "out_date": "99991231"},
+                {"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20200102", "out_date": "99991231"},
+                {"index_code": "000300.SH", "ts_code": "900901.SH", "in_date": "20200103", "out_date": "99991231"},
             ],
             data_config,
         )

@@ -26,6 +26,7 @@ from ashare_data.config import (
 from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 from ashare_data.capital_flow import EXTERNAL_FACTOR_NAMES
 from ashare_data.processor import open_to_open_returns
+from ashare_data.universe import require_production_universe
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .data_loader import AshareDataLoader
@@ -188,10 +189,13 @@ def factor_report(
     contract = TrainingTimeContract.resolve(dates, train_end_date)
     signal_end = contract.train_signal_end
     price_end = contract.train_label_end
-    window = tensor[:, :, :signal_end].numpy()
+    window = tensor[:, :, :signal_end].numpy().copy()
+    eligibility = loader.universe_mask[:, :signal_end].numpy()
+    window[:, ~eligibility] = np.nan
     target = open_to_open_returns(
         loader.raw_data_cache["open"][:, :price_end].numpy()
     )[:, :signal_end]
+    target = loader.mask_by_universe(target)[:, :signal_end]
 
     coverage = factor_coverage(window)
     ic = rank_ic_stats(window, target, dates[:signal_end])
@@ -253,6 +257,7 @@ def main() -> None:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
+        require_production_universe(data_config)
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         loader = AshareDataLoader(data_config, model_config)

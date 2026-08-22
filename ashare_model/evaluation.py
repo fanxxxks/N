@@ -81,6 +81,7 @@ from ashare_data.config import (
     validate_baseline_signals,
 )
 from ashare_data.processor import open_to_open_returns
+from ashare_data.universe import require_production_universe
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .backtest import AshareBacktestEngine
@@ -149,6 +150,7 @@ class FoldData:
     raw: dict[str, np.ndarray]
     target: np.ndarray
     dates: list[str]
+    universe_mask: np.ndarray
     contract: FoldTimeContract
 
     @property
@@ -212,12 +214,14 @@ def epoch_slice(
     s0, s1 = contract.test_signal_start, contract.test_price_end
     factors = loader.factor_tensor[:, :, s0:s1].numpy()
     raw = {k: v[:, s0:s1].numpy() for k, v in loader.raw_data_cache.items()}
-    target = open_to_open_returns(raw["open"])
+    universe_mask = loader.universe_mask[:, s0:s1].numpy()
+    target = loader.mask_by_universe(open_to_open_returns(raw["open"]), start=s0)
     return FoldData(
         factors=factors,
         raw=raw,
         target=target,
         dates=loader.dates[s0:s1],
+        universe_mask=universe_mask,
         contract=contract,
     )
 
@@ -250,6 +254,7 @@ def evaluate_signal(
         dates,
         stock_names=loader.stock_names,
         signal_range=fold_data.local_signal_range,
+        universe_mask=fold_data.universe_mask,
     )
     m = result.metrics
     bench_total = (
@@ -329,7 +334,11 @@ def benchmark_row(
 
     fold_data = epoch_slice(loader, fold)
     _, _, target, dates = fold_data
-    daily = [float(np.mean(target[:, t])) for t in fold_data.local_signal_range]
+    daily = []
+    for t in fold_data.local_signal_range:
+        values = target[:, t]
+        values = values[np.isfinite(values)]
+        daily.append(float(np.mean(values)) if values.size else 0.0)
     equity = [1.0]
     for ret in daily:
         equity.append(equity[-1] * (1.0 + ret))
@@ -386,6 +395,7 @@ def baseline_candidates(
     train_factors = loader.factor_tensor[:, :, :train_price_end].numpy()
     train_open = loader.raw_data_cache["open"][:, :train_price_end].numpy()
     train_target = open_to_open_returns(train_open)
+    train_target = loader.mask_by_universe(train_target)
     blocked_buy, blocked_sell = loader.tradability_masks()
     val_windows = validation_windows(train_signal_end, model_cfg)
     scorer = CandidateScorer(
@@ -621,6 +631,7 @@ def run_random_search(
     target = open_to_open_returns(
         loader.raw_data_cache["open"][:, :train_price_end].numpy()
     )
+    target = loader.mask_by_universe(target)
     val_windows = validation_windows(train_signal_end, model_config)
     # Tradability masks shared by every sampled formula, sliced to the
     # training window like the signals (the same path the trainer uses).
@@ -1239,6 +1250,7 @@ def main(argv=None) -> int:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
+        require_production_universe(data_config)
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         reward_config = make_reward_config(raw)

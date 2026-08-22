@@ -91,6 +91,8 @@ def test_sync_all_offline(tmp_path: Path):
     # list fixture: the authoritative stock-list intersection removes it, so
     # it is neither synced nor attempted.
     assert result["universe"] == 2
+    assert result["constituent_snapshot_symbols"] >= 2
+    assert result["pit_constituent_rows_written"] == 0
     assert result["daily_rows"] > 0
     assert result["failures"] == []
 
@@ -98,6 +100,7 @@ def test_sync_all_offline(tmp_path: Path):
         assert db.query("SELECT COUNT(*) AS n FROM daily_bar").iloc[0]["n"] > 0
         codes = set(db.query("SELECT DISTINCT ts_code FROM daily_bar")["ts_code"])
         assert codes == {"000001.SZ", "600000.SH"}
+        assert db.query("SELECT COUNT(*) AS n FROM constituents").iloc[0]["n"] == 0
 
 
 def test_purge_stale_daily_rows(tmp_path: Path):
