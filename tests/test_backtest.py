@@ -43,13 +43,6 @@ def test_open_to_open_returns():
     assert ret[0, -1] == 0.0 and ret[0, -2] == 0.0
 
 
-def test_limit_rate():
-    assert AshareBacktestEngine._limit_rate("000001.SZ", "平安银行") == 0.10
-    assert AshareBacktestEngine._limit_rate("300001.SZ", "") == 0.20
-    assert AshareBacktestEngine._limit_rate("688001.SH", "") == 0.20
-    assert AshareBacktestEngine._limit_rate("000001.SZ", "ST 风险") == 0.05
-
-
 def test_blocked_mask_suspension_and_limits(populated_db: DataConfig):
     factors, raw, ts_codes, dates = _engine_inputs(populated_db)
     engine = AshareBacktestEngine(BacktestConfig())
@@ -58,24 +51,43 @@ def test_blocked_mask_suspension_and_limits(populated_db: DataConfig):
     low = np.ones((1, 3))
     pre_close = np.ones((1, 3))
     volume = np.ones((1, 3))
-    names = {"000001.SZ": "平安银行"}
 
     open_[0, 1] = 0.0
-    blocked = engine._blocked_mask(1, open_, high, low, pre_close, volume, ["000001.SZ"], names, "buy")
+    blocked = engine._blocked_mask(1, open_, high, low, pre_close, volume, ["000001.SZ"], "buy")
     assert blocked[0]
 
     open_[:] = 1.1
     high[:] = 1.1
     low[:] = 1.1
     pre_close[:] = 1.0
-    blocked_buy = engine._blocked_mask(1, open_, high, low, pre_close, volume, ["000001.SZ"], names, "buy")
+    blocked_buy = engine._blocked_mask(1, open_, high, low, pre_close, volume, ["000001.SZ"], "buy")
     assert blocked_buy[0]
 
     open_[:] = 0.9
     high[:] = 0.9
     low[:] = 0.9
-    blocked_sell = engine._blocked_mask(1, open_, high, low, pre_close, volume, ["000001.SZ"], names, "sell")
+    blocked_sell = engine._blocked_mask(1, open_, high, low, pre_close, volume, ["000001.SZ"], "sell")
     assert blocked_sell[0]
+
+
+def test_engine_uses_board_rates_not_current_st_names():
+    # A one-word +5.2% open is inside the 10% main-board band: the
+    # historical engine must buy it, whatever the stock's current name is
+    # (there is no dated ST history, so names can never rewrite the past).
+    codes = ["000001.SZ", "600000.SH"]
+    dates = ["20240102", "20240103", "20240104", "20240105"]
+    open_ = np.full((2, 4), 10.0)
+    high = np.full((2, 4), 10.0)
+    low = np.full((2, 4), 10.0)
+    pre_close = np.full((2, 4), 10.0)
+    volume = np.full((2, 4), 1_000_000.0)
+    open_[0, 1] = high[0, 1] = low[0, 1] = 10.52  # one-word entry-day open
+    signal = np.array([[5.0] * 4, [1.0] * 4])
+    result = AshareBacktestEngine(
+        BacktestConfig(top_n=1, single_weight_cap=1.0)
+    ).run(signal, {"open": open_, "high": high, "low": low,
+                   "pre_close": pre_close, "volume": volume}, codes, dates)
+    assert result.positions[0]["ts_codes"] == ["000001.SZ"]
 
 
 def test_run_includes_benchmark_positions_and_aligned_dates(populated_db: DataConfig):

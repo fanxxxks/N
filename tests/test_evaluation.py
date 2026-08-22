@@ -128,7 +128,7 @@ def test_evaluate_signal_matches_engine_run(populated_db: DataConfig):
     signal = factors[0]
     metrics = evaluate_signal(signal, loader, fold, BacktestConfig())
     result = AshareBacktestEngine(BacktestConfig()).run(
-        signal, raw, loader.ts_codes, dates, stock_names=loader.stock_names
+        signal, raw, loader.ts_codes, dates
     )
     assert metrics["total_return"] == pytest.approx(
         result.metrics["total_return"], abs=1e-12
@@ -180,7 +180,7 @@ def test_benchmark_row_matches_engine_reference_curve(populated_db: DataConfig):
     fold = _fold(loader.dates)
     factors, raw, _, dates = epoch_slice(loader, fold)
     result = AshareBacktestEngine(BacktestConfig()).run(
-        factors[0], raw, loader.ts_codes, dates, stock_names=loader.stock_names
+        factors[0], raw, loader.ts_codes, dates
     )
     row = benchmark_row(loader, fold)
     assert row["candidate"] == "benchmark:equal_weight"

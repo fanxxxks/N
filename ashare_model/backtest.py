@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from ashare_data.config import BacktestConfig
-from ashare_data.processor import limit_rate, open_to_open_returns, tradability_blocked
+from ashare_data.processor import open_to_open_returns, tradability_blocked
 from ashare_data.schemas import BacktestResult
 from ashare_execution import (
     ExecutionCostModel,
@@ -70,7 +70,6 @@ class AshareBacktestEngine:
         ts_codes: list[str],
         dates: list[str],
         benchmark_returns: list[float] | None = None,
-        stock_names: dict[str, str] | None = None,
         signal_range: range | tuple[int, int] | None = None,
         universe_mask: np.ndarray | None = None,
     ) -> BacktestResult:
@@ -88,6 +87,10 @@ class AshareBacktestEngine:
         whose shape does not match the signal raises ``ValueError``; with
         ``universe_mask=None`` the engine keeps the legacy unconstrained
         semantics.
+
+        Limit detection always uses board rates (main board 10%,
+        ChiNext / STAR 20%): the engine replays history, there is no dated
+        ST status, and current stock names must never rewrite the past.
         """
 
         factors = np.asarray(factors, dtype=np.float64)
@@ -189,7 +192,6 @@ class AshareBacktestEngine:
                 pre_close,
                 volume,
                 ts_codes,
-                stock_names or {},
                 side="buy",
                 eligible=eligible,
             )
@@ -211,7 +213,6 @@ class AshareBacktestEngine:
                 pre_close,
                 volume,
                 ts_codes,
-                stock_names or {},
                 side="sell",
             )
             for idx in sell_required:
@@ -291,9 +292,9 @@ class AshareBacktestEngine:
         pre_close: np.ndarray,
         volume: np.ndarray,
         ts_codes: list[str],
-        stock_names: dict[str, str],
         side: str,
         eligible: np.ndarray | None = None,
+        st_mask: np.ndarray | None = None,
     ) -> list[int]:
         """Top-n indices of the current signal column.
 
@@ -301,8 +302,11 @@ class AshareBacktestEngine:
         this signal date (signal-date & entry-date universe membership):
         ineligible stocks are excluded from the selection regardless of
         their signal value, so a position can never be newly opened in a
-        stock outside the universe.  Executed only when the column is
-        finite and not blocked by the execution-day tradability mask.
+        stock outside the universe.  ``st_mask`` optionally marks the
+        stocks that are ST as of the exact execution date (same-day paper
+        trading only); the historical engine leaves it None.  Executed
+        only when the column is finite and not blocked by the execution-day
+        tradability mask.
         """
 
         blocked = self._blocked_mask(
@@ -313,8 +317,8 @@ class AshareBacktestEngine:
             pre_close,
             volume,
             ts_codes,
-            stock_names,
             side=side,
+            st_mask=st_mask,
         )
         valid = [
             (i, float(signal[i]))
@@ -335,8 +339,8 @@ class AshareBacktestEngine:
         pre_close: np.ndarray,
         volume: np.ndarray,
         ts_codes: list[str],
-        stock_names: dict[str, str],
         side: str,
+        st_mask: np.ndarray | None = None,
     ) -> np.ndarray:
         n_stocks = open_.shape[0]
         if exec_day >= open_.shape[1]:
@@ -348,13 +352,9 @@ class AshareBacktestEngine:
             pre_close[:, exec_day],
             volume[:, exec_day],
             ts_codes,
-            stock_names,
             side,
+            st_mask=st_mask,
         )
-
-    @staticmethod
-    def _limit_rate(ts_code: str, name: str) -> float:
-        return limit_rate(ts_code, name)
 
     @staticmethod
     def _equity_curve(daily_returns: list[float]) -> list[float]:
@@ -483,7 +483,6 @@ def main() -> None:
             {k: v.numpy() for k, v in loader.raw_data_cache.items()},
             loader.ts_codes,
             loader.dates,
-            stock_names=loader.stock_names,
             universe_mask=loader.universe_mask,
         )
         # The universe policy actually applied to the result, for provenance.

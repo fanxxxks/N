@@ -2,22 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-
+import numpy as np
 import pandas as pd
 
-from ashare_data.config import SimConfig
+from ashare_data.processor import blocked_components
 from ashare_data.schemas import SimOrder, SimTrade
 from ashare_execution import ExecutionCostModel
 
 from .portfolio import SimulationPortfolio
-from .risk import is_one_word_limit_down, is_one_word_limit_up, is_suspended
 
 
 class SimBroker:
-    def __init__(self, config: SimConfig):
-        self.config = config
-
     def execute_orders(
         self,
         orders: list[SimOrder],
@@ -26,8 +21,17 @@ class SimBroker:
         portfolio: SimulationPortfolio,
         stock_names: dict[str, str],
         backtest_config,
+        *,
+        st_codes: set[str] | None = None,
     ) -> list[SimTrade]:
-        """Execute orders for one trading day at the day's open price."""
+        """Execute orders for one trading day at the day's open price.
+
+        ``stock_names`` is display-only (persisted as the position name).
+        Limit detection is the shared processor rule with board rates plus
+        ``st_codes`` — the stocks whose current ``stocks.is_st`` snapshot
+        is valid as of ``date``, i.e. same-day execution only; historical
+        replay passes None so current names never rewrite the past.
+        """
 
         if not orders:
             return []
@@ -38,6 +42,48 @@ class SimBroker:
         bar_lookup = {
             row.ts_code: row for row in day_bars.itertuples(index=False)
         }
+        rows = list(day_bars.itertuples(index=False))
+        codes = [row.ts_code for row in rows]
+        columns = {
+            name: np.asarray(
+                [float(getattr(row, name)) for row in rows], dtype=np.float64
+            )
+            for name in ("open", "high", "low", "pre_close", "volume")
+        }
+        st_mask = (
+            np.asarray([code in st_codes for code in codes], dtype=bool)
+            if st_codes is not None
+            else None
+        )
+        suspended, limit_buy = blocked_components(
+            columns["open"],
+            columns["high"],
+            columns["low"],
+            columns["pre_close"],
+            columns["volume"],
+            codes,
+            "buy",
+            st_mask=st_mask,
+        )
+        _, limit_sell = blocked_components(
+            columns["open"],
+            columns["high"],
+            columns["low"],
+            columns["pre_close"],
+            columns["volume"],
+            codes,
+            "sell",
+            st_mask=st_mask,
+        )
+        blocked = {
+            code: (
+                bool(suspended[i]),
+                bool(limit_buy[i]),
+                bool(limit_sell[i]),
+            )
+            for i, code in enumerate(codes)
+        }
+
         trades: list[SimTrade] = []
         portfolio.mark_new_day()
         cost_model = ExecutionCostModel.from_config(backtest_config)
@@ -50,7 +96,10 @@ class SimBroker:
                 order.status = "skipped"
                 order.reason = "missing_bar"
                 continue
-            if is_suspended(bar.open, bar.volume):
+            is_suspended_flag, limit_up_flag, limit_down_flag = blocked[
+                order.ts_code
+            ]
+            if is_suspended_flag:
                 order.status = "skipped"
                 order.reason = "suspended"
                 continue
@@ -58,14 +107,7 @@ class SimBroker:
             name = stock_names.get(order.ts_code, order.ts_code)
             price = float(bar.open)
             if order.side == "buy":
-                if is_one_word_limit_up(
-                    bar.open,
-                    bar.high,
-                    bar.low,
-                    bar.pre_close,
-                    order.ts_code,
-                    name,
-                ):
+                if limit_up_flag:
                     order.status = "skipped"
                     order.reason = "limit_up"
                     continue
@@ -98,14 +140,7 @@ class SimBroker:
                     order.status = "skipped"
                     order.reason = "no_position"
                     continue
-                if is_one_word_limit_down(
-                    bar.open,
-                    bar.high,
-                    bar.low,
-                    bar.pre_close,
-                    order.ts_code,
-                    name,
-                ):
+                if limit_down_flag:
                     order.status = "skipped"
                     order.reason = "limit_down"
                     continue

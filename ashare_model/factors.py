@@ -481,9 +481,10 @@ def _industry_demean(ctx: FactorContext, frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _limit_rate_per_stock(ts_codes: list[str]) -> np.ndarray:
-    """Board daily limit rate per stock (ST stocks are excluded from the
-    universe upstream, so the shared rule is evaluated without names)."""
-    return np.asarray([limit_rate(code, "") for code in ts_codes], dtype=float)
+    """Board daily limit rate per stock: factors are historical by
+    construction and there is no dated ST status, so the shared rule is
+    evaluated without any ST flag."""
+    return np.asarray([limit_rate(code) for code in ts_codes], dtype=float)
 
 
 def _factor_macd_cached(ctx: FactorContext) -> tuple[pd.DataFrame, pd.DataFrame]:

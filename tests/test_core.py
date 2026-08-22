@@ -139,7 +139,6 @@ def test_factor_tensor_and_backtest(tmp_path):
         {k: v.numpy() for k, v in loader.raw_data_cache.items()},
         loader.ts_codes,
         loader.dates,
-        stock_names={c: c for c in ts_codes},
     )
     assert len(result.daily_returns) == len(loader.dates) - 2
     assert result.equity_curve[-1] > 0
@@ -178,7 +177,7 @@ def test_sim_broker_t_plus_one_and_costs(tmp_path):
         trades_dir=tmp_path / "trades",
     )
     portfolio = SimulationPortfolio(sim_cfg.initial_capital, sim_cfg.state_path)
-    broker = SimBroker(sim_cfg)
+    broker = SimBroker()
     from ashare_data.schemas import SimOrder
 
     order = SimOrder(
