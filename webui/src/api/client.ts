@@ -10,6 +10,7 @@ import type {
   SimDayData,
   SimDays,
   SimRunStatus,
+  SimStartResult,
   SimState,
   StrategyData,
 } from '../types'
@@ -45,7 +46,7 @@ export const api = {
     }),
   simStatus: () => request<SimRunStatus>('/api/sim/status'),
   simStart: (body: { reset?: boolean; start?: string | null; end?: string | null } = {}) =>
-    request<SimRunStatus>('/api/sim/start', {
+    request<SimStartResult>('/api/sim/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

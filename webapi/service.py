@@ -23,6 +23,7 @@ from ashare_data.config import (
     make_sim_config,
     load_config,
 )
+from ashare_execution import execution_config_mismatches, validate_execution_config
 from ashare_data.db import AshareDB
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,7 +126,8 @@ def get_backtest_positions(offset: int = 0, limit: int = 20) -> dict:
         items.append(
             {
                 "signal_date": snap.get("signal_date"),
-                "exec_date": snap.get("exec_date"),
+                "entry_date": snap.get("entry_date"),
+                "exit_date": snap.get("exit_date"),
                 "count": len(rows),
                 "rows": rows,
             }
@@ -371,6 +373,7 @@ class SimConfigPatch(BaseModel):
 
     initial_capital: float | None = Field(default=None, gt=0)
     max_positions: int | None = Field(default=None, ge=1, le=500)
+    single_weight_cap: float | None = Field(default=None, gt=0, le=1)
     commission_rate: float | None = Field(default=None, ge=0, lt=1)
     min_commission: float | None = Field(default=None, ge=0)
     stamp_tax_rate: float | None = Field(default=None, ge=0, lt=1)
@@ -417,8 +420,14 @@ def write_sim_config(patch: SimConfigPatch, root: Path = ROOT) -> dict:
         "sim": {
             "initial_capital": patch.initial_capital,
             "max_positions": patch.max_positions,
+            "single_weight_cap": patch.single_weight_cap,
         },
-        "backtest": {key: getattr(patch, key) for key in FEE_KEYS},
+        "backtest": {
+            "initial_capital": patch.initial_capital,
+            "top_n": patch.max_positions,
+            "single_weight_cap": patch.single_weight_cap,
+            **{key: getattr(patch, key) for key in FEE_KEYS},
+        },
     }
     for section, mapping in patch_map.items():
         target = overrides.setdefault(section, {})
@@ -456,6 +465,7 @@ def get_sim_config(root: Path = ROOT) -> dict:
     effective = {
         "initial_capital": sim.initial_capital,
         "max_positions": sim.max_positions,
+        "single_weight_cap": sim.single_weight_cap,
         "commission_rate": backtest.commission_rate,
         "min_commission": backtest.min_commission,
         "stamp_tax_rate": backtest.stamp_tax_rate,
@@ -467,12 +477,18 @@ def get_sim_config(root: Path = ROOT) -> dict:
     pending_reset = state_initial is None or float(state_initial) != float(
         effective["initial_capital"]
     )
+    mismatches = execution_config_mismatches(backtest, sim)
     return {
         "effective": effective,
         "overrides_path": str(overrides_path),
         "overrides": _read_overrides(overrides_path),
         "state_initial_capital": state_initial,
         "pending_reset": pending_reset,
+        "execution_config_consistent": not mismatches,
+        "execution_config_mismatches": {
+            key: {"backtest": left, "sim": right}
+            for key, (left, right) in mismatches.items()
+        },
     }
 
 
@@ -496,9 +512,13 @@ def _job_manager():
 def sim_start(req: SimStartRequest) -> dict:
     from ashare_trading.manager import RunConflictError
 
-    data_config, *_ = _get_configs()
+    data_config, _, backtest_config, sim_config = _get_configs()
     if data_config is None:
         return {"ok": False, "reason": "config load failed"}
+    try:
+        validate_execution_config(backtest_config, sim_config)
+    except ValueError as exc:
+        return {"ok": False, "reason": str(exc)}
     strategy = data_config.data_dir / "best_ashare_strategy.json"
     if not strategy.exists():
         return {

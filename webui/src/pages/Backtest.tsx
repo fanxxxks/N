@@ -142,7 +142,12 @@ function PositionsTable({ page }: { page: PositionPage | null }) {
     return <div style={{ color: '#8b949e' }}>暂无持仓快照</div>
   }
   const rows = page.items.flatMap((snap) =>
-    snap.rows.map((r) => ({ ...r, signal_date: snap.signal_date, exec_date: snap.exec_date })),
+    snap.rows.map((r) => ({
+      ...r,
+      signal_date: snap.signal_date,
+      entry_date: snap.entry_date,
+      exit_date: snap.exit_date,
+    })),
   )
   return (
     <Table
@@ -153,7 +158,8 @@ function PositionsTable({ page }: { page: PositionPage | null }) {
       scroll={{ y: 480 }}
       columns={[
         { title: '信号日', dataIndex: 'signal_date', width: 110 },
-        { title: '执行日', dataIndex: 'exec_date', width: 110 },
+        { title: '入场日', dataIndex: 'entry_date', width: 110 },
+        { title: '退出日', dataIndex: 'exit_date', width: 110 },
         { title: '代码', dataIndex: 'ts_code', width: 110 },
         { title: '名称', dataIndex: 'name', width: 110 },
         {
