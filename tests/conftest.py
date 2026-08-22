@@ -62,8 +62,7 @@ def data_config(tmp_path: Path) -> DataConfig:
         end_date="2024-12-31",
         index_codes=["000300.SH"],
         index_names=["沪深300"],
-        min_listed_days=1,
-        min_amount=1.0,
+        min_listed_sessions=1,
     )
 
 

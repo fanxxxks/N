@@ -18,7 +18,7 @@ from ashare_data.config import (
     make_data_config,
 )
 from ashare_data.db import AshareDB
-from ashare_data.processor import filter_universe, normalize_daily_bars
+from ashare_data.processor import normalize_daily_bars
 from ashare_model.alphagpt import build_action_mask
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.data_loader import AshareDataLoader
@@ -65,8 +65,7 @@ def _make_config(tmp_path: Path) -> DataConfig:
         end_date="2024-12-31",
         index_codes=["000300.SH"],
         index_names=["沪深300"],
-        min_listed_days=1,
-        min_amount=1.0,
+        min_listed_sessions=1,
     )
 
 

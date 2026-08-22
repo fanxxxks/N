@@ -35,12 +35,13 @@ def test_upsert_stocks_replaces_existing_rows(data_config: DataConfig):
             data_config,
         )
         db.upsert_stocks(
-            [{"ts_code": "000001.SZ", "name": "A2", "industry": None, "list_date": "20200101", "is_st": True}],
+            [{"ts_code": "000001.SZ", "name": "A2", "industry": None, "list_date": None, "is_st": True}],
             data_config,
         )
         df = db.query(f"SELECT * FROM {data_config.stocks_table}")
         assert len(df) == 1
         assert df.iloc[0]["name"] == "A2"
+        assert df.iloc[0]["list_date"] == "20200101"
         assert bool(df.iloc[0]["is_st"]) is True
 
 

@@ -89,6 +89,49 @@ def _ts_code_from_symbol(symbol: str) -> str:
     return f"{symbol}.SZ"
 
 
+def normalize_listing_date(value: object) -> str | None:
+    """Normalize one provider listing date without inventing missing data."""
+
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    compact = text.replace("-", "").replace("/", "")
+    if len(compact) == 8 and compact.isdigit():
+        parsed = pd.to_datetime(compact, format="%Y%m%d", errors="coerce")
+    else:
+        parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.strftime("%Y%m%d")
+
+
+def normalize_stock_metadata(frame: pd.DataFrame | None) -> pd.DataFrame:
+    """Return the canonical stock snapshot persisted by the sync layer."""
+
+    columns = ["ts_code", "name", "industry", "list_date", "is_st"]
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=columns)
+    normalized = frame.copy()
+    for column in columns:
+        if column not in normalized.columns:
+            normalized[column] = None
+    normalized["ts_code"] = normalized["ts_code"].astype(str)
+    normalized = normalized[
+        normalized["ts_code"].apply(is_valid_a_share_code)
+    ].copy()
+    normalized["name"] = normalized["name"].fillna("").astype(str)
+    normalized["list_date"] = normalized["list_date"].map(
+        normalize_listing_date
+    )
+    inferred_st = normalized["name"].str.upper().str.contains("ST", na=False)
+    supplied_st = normalized["is_st"]
+    normalized["is_st"] = supplied_st.where(supplied_st.notna(), inferred_st)
+    normalized["is_st"] = normalized["is_st"].astype(bool)
+    return normalized.loc[:, columns].drop_duplicates("ts_code", keep="last")
+
+
 def _sina_symbol(ts_code: str) -> str:
     """Convert ``000001.SZ`` to Sina's ``sz000001`` format."""
     symbol, suffix = ts_code.split(".", 1)
@@ -170,9 +213,11 @@ class AkShareClient:
 
             df = self._fetch(ak.tool_trade_date_hist_sina)
             dates = sorted(pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d").tolist())
-            start = self.config.start_date.replace("-", "")
             end = self.config.end_date.replace("-", "")
-            dates = [d for d in dates if start <= d <= end]
+            # Listing age is measured in open sessions.  Retain the provider's
+            # full history through the configured end date even when daily-bar
+            # synchronization starts later.
+            dates = [d for d in dates if d <= end]
             if dates:
                 return dates
         except Exception as exc:  # noqa: BLE001
@@ -185,28 +230,28 @@ class AkShareClient:
         if self.offline:
             fixture = self._load_fixture("stocks")
             if fixture is not None and not fixture.empty:
-                fixture = fixture[
-                    fixture["ts_code"].astype(str).apply(is_valid_a_share_code)
-                ]
+                fixture = normalize_stock_metadata(fixture)
                 if not fixture.empty:
                     return fixture
-            return pd.DataFrame(
-                [
-                    {
-                        "ts_code": "000001.SZ",
-                        "name": "平安银行",
-                        "industry": "银行",
-                        "list_date": "19910403",
-                        "is_st": False,
-                    },
-                    {
-                        "ts_code": "600000.SH",
-                        "name": "浦发银行",
-                        "industry": "银行",
-                        "list_date": "19991110",
-                        "is_st": False,
-                    },
-                ]
+            return normalize_stock_metadata(
+                pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000001.SZ",
+                            "name": "平安银行",
+                            "industry": "银行",
+                            "list_date": "19910403",
+                            "is_st": False,
+                        },
+                        {
+                            "ts_code": "600000.SH",
+                            "name": "浦发银行",
+                            "industry": "银行",
+                            "list_date": "19991110",
+                            "is_st": False,
+                        },
+                    ]
+                )
             )
 
         import akshare as ak
@@ -215,14 +260,79 @@ class AkShareClient:
             df = self._fetch(ak.stock_info_a_code_name)
         except Exception:
             df = self._fetch(ak.stock_zh_a_spot_em)
-        df = df.rename(columns={"code": "symbol", "名称": "name", "name": "name"})
+        df = df.rename(
+            columns={"code": "symbol", "代码": "symbol", "名称": "name"}
+        )
         df["ts_code"] = df["symbol"].apply(_ts_code_from_symbol)
-        df = df[df["ts_code"].apply(is_valid_a_share_code)]
-        names = df["name"].astype(str)
-        df["is_st"] = names.str.upper().str.contains("ST", na=False)
-        df["industry"] = None
-        df["list_date"] = None
-        return df[["ts_code", "name", "industry", "list_date", "is_st"]]
+        base = df.loc[:, ["ts_code", "name"]].copy()
+
+        detail_frames: list[pd.DataFrame] = []
+        sources = (
+            (
+                getattr(ak, "stock_info_sh_name_code", None),
+                {"symbol": "主板A股"},
+                "证券代码",
+                "证券简称",
+                "上市日期",
+                None,
+            ),
+            (
+                getattr(ak, "stock_info_sh_name_code", None),
+                {"symbol": "科创板"},
+                "证券代码",
+                "证券简称",
+                "上市日期",
+                None,
+            ),
+            (
+                getattr(ak, "stock_info_sz_name_code", None),
+                {"symbol": "A股列表"},
+                "A股代码",
+                "A股简称",
+                "A股上市日期",
+                "所属行业",
+            ),
+            (
+                getattr(ak, "stock_info_bj_name_code", None),
+                {},
+                "证券代码",
+                "证券简称",
+                "上市日期",
+                "所属行业",
+            ),
+        )
+        for fn, kwargs, code_col, name_col, date_col, industry_col in sources:
+            if fn is None:
+                continue
+            try:
+                detail = self._fetch(lambda fn=fn, kwargs=kwargs: fn(**kwargs))
+            except Exception as exc:  # noqa: BLE001 - partial metadata is retained.
+                logger.warning(f"Exchange stock metadata unavailable: {exc}")
+                continue
+            required = {code_col, name_col, date_col}
+            if detail is None or detail.empty or not required.issubset(detail.columns):
+                continue
+            normalized_detail = pd.DataFrame(
+                {
+                    "ts_code": detail[code_col].map(_ts_code_from_symbol),
+                    "detail_name": detail[name_col],
+                    "list_date": detail[date_col].map(normalize_listing_date),
+                    "industry": detail[industry_col] if industry_col else None,
+                }
+            )
+            detail_frames.append(normalized_detail)
+
+        if detail_frames:
+            details = pd.concat(detail_frames, ignore_index=True).drop_duplicates(
+                "ts_code", keep="last"
+            )
+            base = base.merge(details, on="ts_code", how="outer")
+            base["name"] = base["detail_name"].fillna(base["name"])
+            base = base.drop(columns="detail_name")
+        else:
+            base["industry"] = None
+            base["list_date"] = None
+        return normalize_stock_metadata(base)
 
     def get_constituents(self, index_code: str) -> list[str]:
         if self.offline:

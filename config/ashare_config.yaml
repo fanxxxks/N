@@ -25,10 +25,7 @@ index_names:
   - "中证500"
   - "中证1000"
 
-min_listed_days: 60
-min_price: 1.0
-max_price: 10000.0
-min_amount: 100000.0
+min_listed_sessions: 60
 
 # Daily bar provider: auto (Eastmoney first, Sina fallback), eastmoney, sina.
 daily_provider: auto

@@ -53,6 +53,7 @@ def _make_runner(
         parquet_dir=tmp_path / "parquet",
         start_date="2024-01-01",
         end_date="2024-12-31",
+        min_listed_sessions=1,
         index_codes=["000300.SH"],
         index_names=["沪深300"],
     )

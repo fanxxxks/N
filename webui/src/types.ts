@@ -160,7 +160,7 @@ export interface DataStatus {
   artifacts: Artifact[]
   config: {
     date_range?: { start?: string; end?: string }
-    universe?: { indexes?: string[]; min_listed_days?: number }
+    universe?: { indexes?: string[]; min_listed_sessions?: number }
     model?: Record<string, number | null>
     backtest?: Record<string, number | string | null>
   }

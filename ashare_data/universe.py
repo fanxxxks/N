@@ -115,46 +115,6 @@ class ResolvedUniverse:
     codes: list[str]
     status: UniverseContractStatus
 
-    def membership_mask(
-        self,
-        ts_codes: Iterable[str],
-        dates: Iterable[str],
-    ) -> np.ndarray:
-        """Return ``[stock, session]`` eligibility under half-open intervals."""
-
-        codes = [str(code) for code in ts_codes]
-        session_dates = [_normalize_date(date) for date in dates]
-        mask = np.zeros((len(codes), len(session_dates)), dtype=bool)
-        allowed = set(self.codes)
-
-        if self.status.degraded:
-            for row, code in enumerate(codes):
-                if code in allowed:
-                    mask[row, :] = True
-            return mask
-
-        listed = {
-            str(row.ts_code): str(row.list_date)
-            for row in self.stocks.itertuples(index=False)
-        }
-        intervals: dict[str, list[tuple[str, str]]] = {}
-        for row in self.constituents.itertuples(index=False):
-            intervals.setdefault(str(row.ts_code), []).append(
-                (str(row.in_date), str(row.out_date))
-            )
-        for row, code in enumerate(codes):
-            list_date = listed.get(code)
-            if not list_date:
-                continue
-            for col, date in enumerate(session_dates):
-                if date < list_date:
-                    continue
-                mask[row, col] = any(
-                    in_date <= date < out_date
-                    for in_date, out_date in intervals.get(code, ())
-                )
-        return mask
-
 
 def _normalize_date(value: object) -> str:
     if value is None or pd.isna(value):
@@ -353,8 +313,8 @@ def build_universe_mask(
 
     Membership is evaluated as the union of ``policy.index_codes``.  Provider
     inclusive end dates are converted once to the module's canonical half-open
-    form.  Missing listing metadata is retained as the non-blocking
-    ``STATUS_UNKNOWN`` audit bit; malformed supplied dates are rejected.
+    form.  ``STATUS_UNKNOWN`` records the absence of dated ST history and is
+    non-blocking; malformed supplied listing dates are rejected.
     """
 
     index_codes = set(_validate_policy(policy))
@@ -387,13 +347,20 @@ def build_universe_mask(
         if index_code in index_codes:
             selected_intervals.setdefault(ts_code, []).extend(values)
 
-    reasons = np.zeros((len(codes), len(dates)), dtype=np.uint16)
+    # No dated ST-status source exists yet.  The current ``stocks.is_st``
+    # snapshot cannot prove any historical cell's status, regardless of
+    # whether its current value is true or false.  Keep that uncertainty as a
+    # non-blocking audit bit until a proper status-history source is added.
+    reasons = np.full(
+        (len(codes), len(dates)),
+        np.uint16(UniverseReason.STATUS_UNKNOWN),
+        dtype=np.uint16,
+    )
     not_member_value = np.uint16(UniverseReason.NOT_MEMBER)
     not_yet_listed_value = np.uint16(UniverseReason.NOT_YET_LISTED)
     insufficient_age_value = np.uint16(
         UniverseReason.LISTING_AGE_INSUFFICIENT
     )
-    unknown_status_value = np.uint16(UniverseReason.STATUS_UNKNOWN)
     missing_bar_value = np.uint16(UniverseReason.MISSING_BAR)
 
     for row, code in enumerate(codes):
@@ -404,9 +371,7 @@ def build_universe_mask(
 
         raw_list_date = list_dates.get(code)
         normalized_list_date = _normalize_date(raw_list_date)
-        if not normalized_list_date:
-            reasons[row, :] |= unknown_status_value
-        else:
+        if normalized_list_date:
             list_date = _require_date(
                 normalized_list_date, f"list_dates[{code!r}]"
             )

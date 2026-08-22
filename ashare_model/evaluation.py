@@ -214,7 +214,7 @@ def epoch_slice(
     s0, s1 = contract.test_signal_start, contract.test_price_end
     factors = loader.factor_tensor[:, :, s0:s1].numpy()
     raw = {k: v[:, s0:s1].numpy() for k, v in loader.raw_data_cache.items()}
-    universe_mask = loader.universe_mask[:, s0:s1].numpy()
+    universe_mask = loader.universe_mask[:, s0:s1]
     target = loader.mask_by_universe(open_to_open_returns(raw["open"]), start=s0)
     return FoldData(
         factors=factors,

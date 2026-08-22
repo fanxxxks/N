@@ -45,10 +45,7 @@ class DataConfig:
     index_names: list[str] = field(
         default_factory=lambda: ["沪深300", "中证500", "中证1000"]
     )
-    min_listed_days: int = 60
-    min_price: float = 1.0
-    max_price: float = 10000.0
-    min_amount: float = 100000.0
+    min_listed_sessions: int = 60
     request_retries: int = 3
     request_timeout: int = 20
     daily_provider: str = "auto"

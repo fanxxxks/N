@@ -253,28 +253,13 @@ def test_missing_bar_reason_combines_with_membership_reason():
     assert result.eligible.tolist() == [[False, False]]
 
 
-def test_unknown_listing_status_is_a_non_blocking_audit_reason():
+def test_missing_dated_st_status_is_a_non_blocking_audit_reason():
     result = build_universe_mask(
         [STOCK],
         ["20240102"],
         ["20240102"],
         [_membership("20200101", "99991231")],
-        {},
-        [[True]],
-        _policy(),
-    )
-
-    assert result.eligible.tolist() == [[True]]
-    assert _has_reason(result.reasons[0, 0], UniverseReason.STATUS_UNKNOWN)
-
-
-def test_nan_listing_status_is_a_non_blocking_audit_reason():
-    result = build_universe_mask(
-        [STOCK],
-        ["20240102"],
-        ["20240102"],
-        [_membership("20200101", "99991231")],
-        {STOCK: np.nan},
+        {STOCK: "20200101"},
         [[True]],
         _policy(),
     )
@@ -457,9 +442,7 @@ def test_explicit_development_fallback_warns_and_records_status(
     assert resolved.status.membership_source == "development_all_period"
     assert resolved.status.session_source.endswith(".is_open=True")
     assert resolved.status.warnings
-    assert resolved.membership_mask(
-        ["000001.SZ", "600000.SH"], ["20240102", "20240103"]
-    ).all()
+    assert resolved.codes == ["000001.SZ", "600000.SH"]
 
 
 def test_environment_variable_cannot_enable_development_fallback(
@@ -501,38 +484,6 @@ def test_current_snapshot_shape_is_not_historical_validity(data_config: DataConf
     _seed_contract(data_config, rows)
     with pytest.raises(UniverseContractError, match="current snapshot stretched"):
         require_production_universe(data_config)
-
-
-def test_membership_mask_supports_reentry_and_half_open_intervals(
-    data_config: DataConfig,
-):
-    rows = [
-        {
-            "index_code": "000300.SH",
-            "ts_code": "000001.SZ",
-            "in_date": "20240101",
-            "out_date": "20240103",
-        },
-        {
-            "index_code": "000300.SH",
-            "ts_code": "000001.SZ",
-            "in_date": "20240104",
-            "out_date": "99991231",
-        },
-    ]
-    _seed_contract(
-        data_config,
-        rows,
-        calendar=[
-            {"trade_date": date, "is_open": True}
-            for date in ("20240102", "20240103", "20240104")
-        ],
-    )
-    resolved = resolve_universe_contract(data_config)
-    mask = resolved.membership_mask(
-        ["000001.SZ"], ["20240102", "20240103", "20240104"]
-    )
-    assert mask.tolist() == [[True, False, True]]
 
 
 def test_calendar_open_rows_define_loader_session_axis(data_config: DataConfig):

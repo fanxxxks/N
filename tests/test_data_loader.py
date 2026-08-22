@@ -6,8 +6,56 @@ import torch
 
 from ashare_data.config import DataConfig, ModelConfig
 from ashare_data.db import AshareDB
+from ashare_data.universe import UniverseContractError, UniverseReason
 from ashare_model.data_loader import AshareDataLoader, build_loader_from_config, date_index
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
+from tests.conftest import make_bars
+
+
+def _seed_loader_db(
+    config: DataConfig,
+    dates: list[str],
+    codes: list[str],
+    bars,
+    *,
+    list_dates: dict[str, str | None] | None = None,
+    current_st: set[str] | None = None,
+    memberships: list[dict] | None = None,
+    calendar: list[dict] | None = None,
+) -> None:
+    list_dates = list_dates or {code: "20200101" for code in codes}
+    current_st = current_st or set()
+    if memberships is None:
+        memberships = [
+            {
+                "index_code": "000300.SH",
+                "ts_code": code,
+                "in_date": "20200101",
+                "out_date": "99991231",
+            }
+            for code in codes
+        ]
+    if calendar is None:
+        calendar = [{"trade_date": date, "is_open": True} for date in dates]
+    with AshareDB(config.duckdb_path) as db:
+        db.create_schema(config)
+        if bars is not None and not bars.empty:
+            db.upsert_daily(bars.to_dict("records"), config)
+        db.upsert_stocks(
+            [
+                {
+                    "ts_code": code,
+                    "name": f"*ST {code}" if code in current_st else code,
+                    "industry": None,
+                    "list_date": list_dates.get(code),
+                    "is_st": code in current_st,
+                }
+                for code in codes
+            ],
+            config,
+        )
+        db.upsert_calendar(calendar, config)
+        db.upsert_constituents(memberships, config)
 
 
 def test_load_universe_and_data(populated_db: DataConfig):
@@ -122,8 +170,6 @@ def test_build_loader_from_config(tmp_path):
 
 def test_target_ret_masks_suspended_days(data_config: DataConfig):
     """A suspended (missing) day must not fabricate 1e10-scale targets."""
-    from tests.conftest import make_bars
-
     dates, ts_codes, bars = make_bars(5)
     bars = bars[~((bars["ts_code"] == "600000.SH") & (bars["trade_date"] == dates[1]))]
     with AshareDB(data_config.duckdb_path) as db:
@@ -150,42 +196,49 @@ def test_target_ret_masks_suspended_days(data_config: DataConfig):
     loader = AshareDataLoader(data_config, ModelConfig())
     loader.load_data(ts_codes=ts_codes, dates=dates)
     assert loader.target_ret is not None
-    assert loader.target_ret.abs().max().item() < 1.0
+    target = loader.target_ret.numpy()
+    assert np.nanmax(np.abs(target)) < 1.0
+    missing_row = loader.ts_codes.index("600000.SH")
+    missing_col = loader.dates.index(dates[1])
+    assert np.isnan(target[missing_row, missing_col])
 
 
-def test_load_stock_meta_and_st_exclusion(data_config: DataConfig):
-    from tests.conftest import make_bars
-
+def test_current_st_stock_is_retained_with_unknown_status_reason(
+    data_config: DataConfig,
+):
     dates, ts_codes, bars = make_bars(6)
-    with AshareDB(data_config.duckdb_path) as db:
-        db.create_schema(data_config)
-        db.upsert_daily(bars.to_dict("records"), data_config)
-        db.upsert_stocks(
-            [
-                {"ts_code": "000001.SZ", "name": "平安银行", "industry": None, "list_date": "20200101", "is_st": False},
-                {"ts_code": "600000.SH", "name": "浦发银行", "industry": None, "list_date": "20200101", "is_st": False},
-                {"ts_code": "300001.SZ", "name": "*ST 风险", "industry": None, "list_date": "20200101", "is_st": True},
-            ],
-            data_config,
-        )
-        db.upsert_constituents(
-            [
-                {"index_code": "000300.SH", "ts_code": c, "in_date": f"2020010{i + 1}", "out_date": "99991231"}
-                for i, c in enumerate(ts_codes)
-            ],
-            data_config,
-        )
-        db.upsert_calendar(
-            [{"trade_date": date, "is_open": True} for date in dates],
-            data_config,
-        )
+    memberships = [
+        {
+            "index_code": "000300.SH",
+            "ts_code": code,
+            "in_date": f"2020010{i + 1}",
+            "out_date": "99991231",
+        }
+        for i, code in enumerate(ts_codes)
+    ]
+    _seed_loader_db(
+        data_config,
+        dates,
+        ts_codes,
+        bars,
+        current_st={"300001.SZ"},
+        memberships=memberships,
+    )
     loader = AshareDataLoader(data_config, ModelConfig())
-    loader.load_stock_meta()
-    assert loader.stock_names["000001.SZ"] == "平安银行"
-    assert "300001.SZ" in loader.st_stocks
-    universe = loader.load_universe()
-    assert "300001.SZ" not in universe
-    assert "000001.SZ" in universe and "600000.SH" in universe
+    loader.load_data()
+
+    assert "300001.SZ" in loader.ts_codes
+    assert not hasattr(loader, "st_stocks")
+    assert loader.stock_list_dates["300001.SZ"] == "20200101"
+    assert loader.universe_reason_codes is not None
+    unknown = int(UniverseReason.STATUS_UNKNOWN)
+    assert np.all(loader.universe_reason_codes & unknown)
+    assert loader.universe_mask is not None
+    assert loader.universe_mask.flags.writeable is False
+    assert loader.universe_mask.shape == (
+        len(loader.ts_codes),
+        len(loader.dates),
+    )
 
 
 def test_load_universe_filters_index_codes(data_config: DataConfig):
@@ -203,11 +256,120 @@ def test_load_universe_filters_index_codes(data_config: DataConfig):
                 {"index_code": "000300.SH", "ts_code": "000300.SZ", "in_date": "20200101", "out_date": "99991231"},
                 {"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20200102", "out_date": "99991231"},
                 {"index_code": "000300.SH", "ts_code": "900901.SH", "in_date": "20200103", "out_date": "99991231"},
+                {"index_code": "000905.SH", "ts_code": "600000.SH", "in_date": "20200101", "out_date": "99991231"},
             ],
             data_config,
         )
     loader = AshareDataLoader(data_config, ModelConfig())
     assert loader.load_universe() == ["000001.SZ"]
+
+
+def test_requested_axes_slice_universe_and_reload_clears_shape_caches(
+    data_config: DataConfig,
+):
+    dates, codes, bars = make_bars(6, ["000001.SZ", "600000.SH"])
+    bars = bars[
+        ~(
+            (bars["ts_code"] == "600000.SH")
+            & (bars["trade_date"] == dates[2])
+        )
+    ]
+    memberships = [
+        {
+            "index_code": "000300.SH",
+            "ts_code": "000001.SZ",
+            "in_date": "20200101",
+            "out_date": "99991231",
+        },
+        {
+            "index_code": "000300.SH",
+            "ts_code": "600000.SH",
+            "in_date": dates[1],
+            "out_date": "99991231",
+        },
+    ]
+    _seed_loader_db(
+        data_config,
+        dates,
+        codes,
+        bars,
+        memberships=memberships,
+    )
+    loader = AshareDataLoader(data_config, ModelConfig()).load_data()
+    assert loader.universe_mask is not None
+    full_codes = list(loader.ts_codes)
+    full_dates = list(loader.dates)
+    full_mask = loader.universe_mask.copy()
+    full_reasons = loader.universe_reason_codes.copy()
+    loader.tradability_masks()
+    assert loader._tradability_cache is not None
+
+    selected_codes = ["600000.SH"]
+    selected_dates = [dates[1], dates[2], dates[4]]
+    expected_rows = [full_codes.index(code) for code in selected_codes]
+    expected_cols = [full_dates.index(date) for date in selected_dates]
+    loader.load_data(ts_codes=selected_codes, dates=selected_dates)
+
+    assert loader.ts_codes == selected_codes
+    assert loader.dates == selected_dates
+    assert loader._tradability_cache is None
+    assert np.array_equal(
+        loader.universe_mask,
+        full_mask[np.ix_(expected_rows, expected_cols)],
+    )
+    assert np.array_equal(
+        loader.universe_reason_codes,
+        full_reasons[np.ix_(expected_rows, expected_cols)],
+    )
+    assert loader.factor_tensor.shape[1:] == (1, 3)
+
+
+@pytest.mark.parametrize(
+    ("missing", "match"),
+    [
+        ("membership", "no historical membership intervals"),
+        ("list_date", r"stocks\.list_date"),
+        ("calendar", "no rows with is_open=True"),
+    ],
+)
+def test_loader_reports_missing_universe_sources(
+    data_config: DataConfig,
+    missing: str,
+    match: str,
+):
+    dates, codes, bars = make_bars(2, ["000001.SZ"])
+    kwargs = {
+        "list_dates": {"000001.SZ": None if missing == "list_date" else "20200101"},
+        "memberships": [] if missing == "membership" else None,
+        "calendar": [] if missing == "calendar" else None,
+    }
+    _seed_loader_db(data_config, dates, codes, bars, **kwargs)
+
+    with pytest.raises(UniverseContractError, match=match):
+        AshareDataLoader(data_config, ModelConfig()).load_data()
+
+
+def test_loader_rejects_current_only_constituent_snapshot(data_config: DataConfig):
+    dates, codes, bars = make_bars(2, ["000001.SZ", "600000.SH"])
+    memberships = [
+        {
+            "index_code": "000300.SH",
+            "ts_code": code,
+            "in_date": "20200101",
+            "out_date": "99991231",
+        }
+        for code in codes
+    ]
+    _seed_loader_db(
+        data_config,
+        dates,
+        codes,
+        bars,
+        memberships=memberships,
+    )
+
+    with pytest.raises(UniverseContractError, match="current snapshot stretched"):
+        AshareDataLoader(data_config, ModelConfig()).load_data()
 
 
 # --- date_index -------------------------------------------------------------

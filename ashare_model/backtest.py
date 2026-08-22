@@ -401,7 +401,7 @@ def main() -> None:
             loader.ts_codes,
             loader.dates,
             stock_names=loader.stock_names,
-            universe_mask=loader.universe_mask.numpy(),
+            universe_mask=loader.universe_mask,
         )
         output = {
             "formula": tokens,

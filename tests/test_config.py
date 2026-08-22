@@ -97,6 +97,7 @@ def test_make_data_config_applies_defaults_and_paths(tmp_path: Path):
     assert cfg.data_dir == tmp_path / "data"
     assert cfg.duckdb_path == tmp_path / "data" / "ashare.duckdb"
     assert cfg.start_date == DataConfig().start_date
+    assert cfg.min_listed_sessions == 60
 
 
 def test_make_model_and_backtest_config_nested(tmp_path: Path):

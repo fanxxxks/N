@@ -190,7 +190,7 @@ def factor_report(
     signal_end = contract.train_signal_end
     price_end = contract.train_label_end
     window = tensor[:, :, :signal_end].numpy().copy()
-    eligibility = loader.universe_mask[:, :signal_end].numpy()
+    eligibility = loader.universe_mask[:, :signal_end]
     window[:, ~eligibility] = np.nan
     target = open_to_open_returns(
         loader.raw_data_cache["open"][:, :price_end].numpy()
