@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from ashare_data import config as data_config_module
@@ -11,12 +12,98 @@ from ashare_data.akshare_client import (
     _call_with_timeout,
     _retry,
     _symbol_from_ts_code,
+    normalize_listing_date,
+    normalize_stock_metadata,
 )
 
 
 def test_symbol_from_ts_code():
     assert _symbol_from_ts_code("000001.SZ") == "000001"
     assert _symbol_from_ts_code("600000.SH") == "600000"
+
+
+def test_stock_metadata_normalizes_listing_dates_without_fabrication():
+    frame = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "name": "A",
+                "list_date": "1991-04-03",
+                "is_st": False,
+            },
+            {
+                "ts_code": "600000.SH",
+                "name": "ST B",
+                "list_date": "invalid",
+            },
+        ]
+    )
+    normalized = normalize_stock_metadata(frame)
+
+    assert normalized.iloc[0]["list_date"] == "19910403"
+    assert pd.isna(normalized.iloc[1]["list_date"])
+    assert normalized["is_st"].tolist() == [False, True]
+    assert normalize_listing_date(None) is None
+
+
+def test_online_stock_list_merges_exchange_listing_dates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import akshare as ak
+
+    monkeypatch.setattr(
+        ak,
+        "stock_info_a_code_name",
+        lambda: pd.DataFrame(
+            {
+                "code": ["000001", "600000", "688001", "830001"],
+                "name": ["深市", "沪市", "科创", "北证"],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        ak,
+        "stock_info_sh_name_code",
+        lambda symbol: pd.DataFrame(
+            {
+                "证券代码": ["600000" if symbol == "主板A股" else "688001"],
+                "证券简称": ["沪市" if symbol == "主板A股" else "科创"],
+                "上市日期": ["1999-11-10" if symbol == "主板A股" else "2020-01-01"],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        ak,
+        "stock_info_sz_name_code",
+        lambda symbol: pd.DataFrame(
+            {
+                "A股代码": ["000001"],
+                "A股简称": ["深市"],
+                "A股上市日期": ["1991-04-03"],
+                "所属行业": ["金融"],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        ak,
+        "stock_info_bj_name_code",
+        lambda: pd.DataFrame(
+            {
+                "证券代码": ["830001"],
+                "证券简称": ["北证"],
+                "上市日期": ["2022-01-04"],
+                "所属行业": ["制造"],
+            }
+        ),
+    )
+    client = AkShareClient(data_config_module.DataConfig(), offline=False)
+    monkeypatch.setattr(client, "_fetch", lambda fn, **_kwargs: fn())
+
+    stocks = client.get_stock_list().set_index("ts_code")
+    assert stocks.loc["000001.SZ", "list_date"] == "19910403"
+    assert stocks.loc["600000.SH", "list_date"] == "19991110"
+    assert stocks.loc["688001.SH", "list_date"] == "20200101"
+    assert stocks.loc["830001.BJ", "list_date"] == "20220104"
 
 
 def test_call_with_timeout_bounds_a_hung_call():
@@ -50,6 +137,27 @@ def test_offline_calendar_fallback():
     dates = client.get_trade_calendar()
     assert dates
     assert all(len(d) == 8 for d in dates)
+
+
+def test_online_calendar_retains_history_needed_for_listing_age(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import akshare as ak
+
+    monkeypatch.setattr(
+        ak,
+        "tool_trade_date_hist_sina",
+        lambda: pd.DataFrame(
+            {"trade_date": ["2020-01-02", "2024-01-02", "2025-01-02"]}
+        ),
+    )
+    config = data_config_module.DataConfig(
+        start_date="2024-01-01", end_date="2024-12-31"
+    )
+    client = AkShareClient(config, offline=False)
+    monkeypatch.setattr(client, "_fetch", lambda fn, **_kwargs: fn())
+
+    assert client.get_trade_calendar() == ["20200102", "20240102"]
 
 
 def test_offline_fixtures(tmp_path: Path):

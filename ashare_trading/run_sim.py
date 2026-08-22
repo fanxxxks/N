@@ -232,7 +232,7 @@ class SimulationRunner:
                 (
                     self.loader.universe_mask[:, signal_idx]
                     & self.loader.universe_mask[:, exec_idx]
-                ).numpy(),
+                ),
                 signals[:, signal_idx],
                 np.nan,
             )

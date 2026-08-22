@@ -251,7 +251,9 @@ def get_data_status() -> dict:
         },
         "universe": {
             "indexes": list(getattr(data_config, "index_codes", []) or []),
-            "min_listed_days": getattr(data_config, "min_listed_days", None),
+            "min_listed_sessions": getattr(
+                data_config, "min_listed_sessions", None
+            ),
         },
         "model": {
             "d_model": getattr(model_config, "d_model", None),

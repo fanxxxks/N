@@ -7,7 +7,6 @@ import pytest
 from ashare_data.config import DataConfig
 from ashare_data.processor import (
     encode_industry_frame,
-    filter_universe,
     is_valid_a_share_code,
     limit_rate,
     long_factor_frame,
@@ -69,45 +68,6 @@ def test_normalize_daily_bars_drops_invalid_and_deduplicates():
     out = normalize_daily_bars(df)
     assert len(out) == 1
     assert out.iloc[0]["trade_date"] == "20240101"
-
-
-def test_filter_universe_empty():
-    assert filter_universe(pd.DataFrame(), pd.DataFrame(), None, DataConfig()) == []
-
-
-def test_filter_universe_filters_st_and_thresholds():
-    stocks = pd.DataFrame(
-        [
-            {"ts_code": "000001.SZ", "name": "平安银行", "is_st": False},
-            {"ts_code": "000002.SZ", "name": "ST 风险", "is_st": False},
-            {"ts_code": "600000.SH", "name": "浦发银行", "is_st": True},
-        ]
-    )
-    bars = _bars()
-    bars = pd.concat(
-        [
-            bars,
-            pd.DataFrame(
-                [
-                    {"ts_code": "000002.SZ", "trade_date": "20240101", "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1, "volume": 100.0, "amount": 110.0, "turnover_rate": 1.0, "adj_factor": 1.0},
-                    {"ts_code": "600000.SH", "trade_date": "20240101", "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1, "volume": 100.0, "amount": 110.0, "turnover_rate": 1.0, "adj_factor": 1.0},
-                ]
-            ),
-        ],
-        ignore_index=True,
-    )
-    config = DataConfig(min_listed_days=1, min_price=1.0, max_price=10000.0, min_amount=1.0)
-    codes = filter_universe(stocks, bars, None, config)
-    assert "000002.SZ" not in codes
-    assert "600000.SH" not in codes
-    assert "000001.SZ" in codes
-
-
-def test_filter_universe_applies_constituents_intersection():
-    bars = _bars()
-    config = DataConfig(min_listed_days=1, min_price=1.0, max_price=10000.0, min_amount=1.0)
-    codes = filter_universe(None, bars, ["000001.SZ"], config)
-    assert codes == ["000001.SZ"]
 
 
 def test_pivot_wide_shape_and_reindex():

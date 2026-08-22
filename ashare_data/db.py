@@ -156,17 +156,33 @@ class AshareDB:
     def upsert_stocks(self, rows: list[dict[str, Any]], config) -> None:
         if not rows:
             return
-        self.execute(f"DELETE FROM {config.stocks_table}")
         import pandas as pd
 
-        df = pd.DataFrame(rows)
-        self._conn.register("_stocks_df", df)
-        self.execute(
-            f"""
-            INSERT INTO {config.stocks_table}
-            SELECT ts_code, name, industry, list_date, is_st FROM _stocks_df
-            """
+        columns = ["ts_code", "name", "industry", "list_date", "is_st"]
+        df = pd.DataFrame(rows).reindex(columns=columns)
+        existing = self.query(
+            f"SELECT ts_code, list_date FROM {config.stocks_table}"
         )
+        if not existing.empty:
+            known_list_dates = existing.set_index("ts_code")["list_date"].to_dict()
+            missing = df["list_date"].isna() | df["list_date"].astype(str).str.strip().eq("")
+            df.loc[missing, "list_date"] = df.loc[missing, "ts_code"].map(
+                known_list_dates
+            )
+        self._conn.register("_stocks_df", df)
+        self.execute("BEGIN TRANSACTION")
+        try:
+            self.execute(f"DELETE FROM {config.stocks_table}")
+            self.execute(
+                f"""
+                INSERT INTO {config.stocks_table}
+                SELECT ts_code, name, industry, list_date, is_st FROM _stocks_df
+                """
+            )
+            self.execute("COMMIT")
+        except Exception:
+            self.execute("ROLLBACK")
+            raise
 
     def upsert_daily(self, rows: list[dict[str, Any]], config) -> None:
         if not rows:

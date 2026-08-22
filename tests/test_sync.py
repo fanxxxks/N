@@ -46,10 +46,11 @@ def test_read_cached_bars_missing_and_corrupt(tmp_path: Path):
 def test_calendar_stock_and_bar_rows():
     assert sync._calendar_rows(["20240101"]) == [{"trade_date": "20240101", "is_open": True}]
     stocks = pd.DataFrame(
-        [{"ts_code": "000001.SZ", "name": "ST 风险", "industry": None, "list_date": None}]
+        [{"ts_code": "000001.SZ", "name": "ST 风险", "industry": None, "list_date": "2020-01-02"}]
     )
     rows = sync._stock_rows(stocks)
     assert rows[0]["is_st"] is True
+    assert rows[0]["list_date"] == "20200102"
 
     bars = pd.DataFrame(
         [

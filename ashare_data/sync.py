@@ -15,7 +15,11 @@ from typing import Any
 import pandas as pd
 from loguru import logger
 
-from .akshare_client import AkShareClient, AkShareUnavailable
+from .akshare_client import (
+    AkShareClient,
+    AkShareUnavailable,
+    normalize_stock_metadata,
+)
 from .config import (
     DataConfig,
     load_config,
@@ -115,15 +119,7 @@ def _purge_stale_parquet_files(config: DataConfig, keep: set[str]) -> int:
 
 
 def _stock_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
-    if df is None or df.empty:
-        return []
-    df = df.copy()
-    for col in ("ts_code", "name", "industry", "list_date"):
-        if col not in df.columns:
-            df[col] = None
-    if "is_st" not in df.columns:
-        df["is_st"] = df["name"].astype(str).str.contains("ST", na=False)
-    return df[["ts_code", "name", "industry", "list_date", "is_st"]].to_dict("records")
+    return normalize_stock_metadata(df).to_dict("records")
 
 
 def _bar_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
