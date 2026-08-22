@@ -35,10 +35,13 @@ from ashare_data.config import (
     make_sim_config,
 )
 from ashare_data.schemas import SimOrder
+from ashare_data.processor import open_to_open_returns
+from ashare_execution import validate_execution_config
 
 from ashare_model.backtest import AshareBacktestEngine
-from ashare_model.data_loader import AshareDataLoader, date_index
+from ashare_model.data_loader import AshareDataLoader
 from ashare_model.reward import signal_direction
+from ashare_model.time_contract import TrainingTimeContract
 from ashare_model.vm import StackVM, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
 
@@ -93,6 +96,7 @@ class SimulationRunner:
         self.backtest_config = backtest_config
         self.sim_config = sim_config
         self.loader = loader
+        validate_execution_config(backtest_config, sim_config)
         self.portfolio = SimulationPortfolio(
             sim_config.initial_capital, sim_config.state_path
         )
@@ -145,13 +149,18 @@ class SimulationRunner:
         if not self._has_recorded_direction:
             # Legacy artifact: infer the direction from the training window
             # so a negative-IC formula is traded on its learned side.
-            train_idx = date_index(
+            contract = TrainingTimeContract.resolve(
                 self.loader.dates,
-                self.backtest_config.train_end_date.replace("-", ""),
+                self.backtest_config.train_end_date,
+            )
+            signal_end = contract.train_signal_end
+            price_end = contract.train_label_end
+            target = open_to_open_returns(
+                self.loader.raw_data_cache["open"][:, :price_end].numpy()
             )
             self.direction = signal_direction(
-                signals[:, :train_idx],
-                self.loader.target_ret[:, :train_idx].numpy(),
+                signals[:, :signal_end],
+                target[:, :signal_end],
             )
             logger.info(f"Inferred trade direction from training window: {self.direction}")
         else:

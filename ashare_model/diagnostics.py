@@ -25,10 +25,12 @@ from ashare_data.config import (
 )
 from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 from ashare_data.capital_flow import EXTERNAL_FACTOR_NAMES
+from ashare_data.processor import open_to_open_returns
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .data_loader import AshareDataLoader
 from .factors import FACTOR_REGISTRY, NEUTRAL_FEATURE_NAMES
+from .time_contract import TrainingTimeContract
 from .vocab import FEATURE_NAMES
 
 
@@ -183,23 +185,22 @@ def factor_report(
         loader.load_data()
         tensor = loader.factor_tensor
     dates = loader.dates
-    train_end = train_end_date.replace("-", "")
-    train_end_idx = len(dates)
-    for idx, date in enumerate(dates):
-        if date >= train_end:
-            train_end_idx = max(idx, 1)
-            break
-    window = tensor[:, :, :train_end_idx].numpy()
-    target = loader.target_ret[:, :train_end_idx].numpy()
+    contract = TrainingTimeContract.resolve(dates, train_end_date)
+    signal_end = contract.train_signal_end
+    price_end = contract.train_label_end
+    window = tensor[:, :, :signal_end].numpy()
+    target = open_to_open_returns(
+        loader.raw_data_cache["open"][:, :price_end].numpy()
+    )[:, :signal_end]
 
     coverage = factor_coverage(window)
-    ic = rank_ic_stats(window, target, dates[:train_end_idx])
+    ic = rank_ic_stats(window, target, dates[:signal_end])
     corr = correlation_summary(window)
     report = {
         "feature_count": len(FEATURE_NAMES),
         "stock_count": len(loader.ts_codes),
-        "date_count": train_end_idx,
-        "dates": [dates[0], dates[train_end_idx - 1]],
+        "date_count": signal_end,
+        "dates": [dates[0], dates[signal_end - 1]],
         "per_feature": [
             {
                 "name": name,

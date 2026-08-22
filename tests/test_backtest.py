@@ -22,8 +22,8 @@ def test_run_returns_expected_result(populated_db: DataConfig):
     result = AshareBacktestEngine(BacktestConfig(top_n=2, train_end_date="2024-02-01")).run(
         factors, raw, ts_codes, dates
     )
-    assert len(result.daily_returns) == len(dates) - 1
-    assert len(result.equity_curve) == len(dates)
+    assert len(result.daily_returns) == len(dates) - 2
+    assert len(result.equity_curve) == len(dates) - 1
     assert "sortino" in result.metrics
     assert result.equity_curve[-1] > 0
 
@@ -89,7 +89,15 @@ def test_run_includes_benchmark_positions_and_aligned_dates(populated_db: DataCo
     assert len(result.dates) == len(result.equity_curve)
     # Position snapshots for the dashboard selection tab.
     assert result.positions
-    assert set(result.positions[0]) == {"signal_date", "exec_date", "ts_codes", "weights"}
+    assert set(result.positions[0]) == {
+        "signal_date",
+        "entry_date",
+        "exit_date",
+        "ts_codes",
+        "weights",
+    }
+    assert result.positions[0]["entry_date"] == dates[1]
+    assert result.positions[0]["exit_date"] == dates[2]
 
 
 def test_initial_capital_from_config():

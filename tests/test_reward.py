@@ -7,19 +7,17 @@ import pytest
 
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_data.processor import open_to_open_returns, tradability_blocked_matrix
+from ashare_execution import ExecutionCostModel
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.reward import (
-    annualized_turnover_cost,
     batched_basket_rewards,
     formula_reward,
     icir_from_series,
-    per_turnover_cost_rate,
     rank_ic_series,
     signal_direction,
     simulate_basket_daily_returns,
     simulate_basket_daily_returns_batch,
     sortino_ratio,
-    trading_cost_fraction,
 )
 
 
@@ -59,7 +57,8 @@ def test_cost_min_commission_floor_binds_for_small_positions():
         + min_fee
         + (cfg.stamp_tax_rate + cfg.transfer_fee_rate + cfg.slippage_rate) / 30
     )
-    assert trading_cost_fraction(buy, sell, cfg) == pytest.approx(expected, rel=1e-9)
+    model = ExecutionCostModel.from_config(cfg)
+    assert model.rebalance_cost_fraction(buy, sell, cfg.initial_capital) == pytest.approx(expected, rel=1e-9)
 
 
 def test_cost_is_purely_proportional_when_floor_does_not_bind():
@@ -73,7 +72,9 @@ def test_cost_is_purely_proportional_when_floor_does_not_bind():
         cfg.commission_rate * 0.5
         + (cfg.stamp_tax_rate + cfg.transfer_fee_rate + cfg.slippage_rate) * 0.5
     )
-    assert trading_cost_fraction(buy, sell, cfg) == pytest.approx(
+    assert ExecutionCostModel.from_config(cfg).rebalance_cost_fraction(
+        buy, sell, cfg.initial_capital
+    ) == pytest.approx(
         expected_buy + expected_sell, rel=1e-12
     )
 
@@ -81,14 +82,17 @@ def test_cost_is_purely_proportional_when_floor_does_not_bind():
 def test_cost_zero_when_no_trades():
     # The minimum commission is a per-trade floor: zero trades -> zero cost.
     cfg = _cfg()
-    assert trading_cost_fraction(np.zeros(3), np.zeros(3), cfg) == 0.0
+    assert ExecutionCostModel.from_config(cfg).rebalance_cost_fraction(
+        np.zeros(3), np.zeros(3), cfg.initial_capital
+    ) == 0.0
 
 
 def test_cost_buy_sell_asymmetry_is_stamp_tax_only():
     cfg = _cfg(initial_capital=10_000_000.0)
     w = np.array([1.0])
-    buy = trading_cost_fraction(w, np.zeros(1), cfg)
-    sell = trading_cost_fraction(np.zeros(1), w, cfg)
+    model = ExecutionCostModel.from_config(cfg)
+    buy = model.rebalance_cost_fraction(w, np.zeros(1), cfg.initial_capital)
+    sell = model.rebalance_cost_fraction(np.zeros(1), w, cfg.initial_capital)
     assert sell - buy == pytest.approx(cfg.stamp_tax_rate, rel=1e-12)
 
 
@@ -179,9 +183,13 @@ def test_icir_zero_with_fewer_than_two_observations():
 # --- turnover cost (continuous, rate-proportional) --------------------------
 
 
-def test_per_turnover_cost_rate_formula():
+def test_exact_round_trip_cost_formula_above_commission_floor():
     cfg = _cfg()
-    assert per_turnover_cost_rate(cfg) == pytest.approx(
+    model = ExecutionCostModel.from_config(cfg)
+    exact = float(model.buy_cost(cfg.initial_capital).total) + float(
+        model.sell_cost(cfg.initial_capital).total
+    )
+    assert exact / cfg.initial_capital == pytest.approx(
         2 * cfg.commission_rate
         + cfg.stamp_tax_rate
         + 2 * cfg.transfer_fee_rate
@@ -190,13 +198,16 @@ def test_per_turnover_cost_rate_formula():
     )
 
 
-def test_annualized_turnover_cost_is_linear_in_turnover():
+def test_annualized_reward_cost_uses_exact_daily_fraction():
     cfg = _cfg()
-    rate = per_turnover_cost_rate(cfg)
-    assert annualized_turnover_cost(np.array([0.0, 0.5]), cfg).tolist() == [
-        pytest.approx(0.0),
-        pytest.approx(0.5 * rate * 252, rel=1e-12),
-    ]
+    target = np.zeros((4, 6))
+    signal = np.tile(np.arange(4, dtype=float)[:, None], (1, 6))
+    simulation = simulate_basket_daily_returns(signal, target, cfg)
+    free = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=0.0))
+    honest = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=1.0))
+    assert free - honest == pytest.approx(
+        simulation.daily_cost_fractions.mean() * 252, abs=1e-12
+    )
 
 
 # --- basket simulation vs the full backtest engine -------------------------
@@ -256,7 +267,7 @@ def test_nonfinite_signal_rows_are_excluded_from_selection():
         ]
     )
     daily, _ = simulate_basket_daily_returns(signal, target, cfg)
-    assert daily == pytest.approx(np.full(3, 0.001), abs=1e-12)
+    assert daily == pytest.approx(np.full(2, 0.001), abs=1e-12)
 
 
 # --- v3 reward semantics ----------------------------------------------------
@@ -290,8 +301,8 @@ def test_reward_penalizes_churn_continuously():
     assert to_churn > to_static
 
     for signal in (static, churn):
-        _, to = simulate_basket_daily_returns(signal, target, cfg)
-        expected_cost = annualized_turnover_cost(np.asarray([to]), cfg)[0]
+        simulation = simulate_basket_daily_returns(signal, target, cfg)
+        expected_cost = simulation.daily_cost_fractions.mean() * 252
         r_free = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=0.0))
         r_honest = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=1.0))
         assert -1.0 < r_honest < 1.0  # inside the band: the diff is exact
@@ -402,11 +413,11 @@ def test_blocked_buy_excludes_candidates_from_selection():
     _, to_blocked = simulate_basket_daily_returns(
         signal, target, cfg, blocked_buy=blocked_buy
     )
-    # Free path: the single entry into stock 0 (1 unit over 4 days = 0.25).
-    assert to_free == pytest.approx(0.25, abs=1e-12)
+    # Free path: the single entry into stock 0 (1 unit over 3 complete t+2 periods).
+    assert to_free == pytest.approx(1.0 / 3.0, abs=1e-12)
     # Blocked path: stock 0 skipped at the day-1 execution and re-selected
     # afterwards, adding two forced switches (2 extra units over 4 days).
-    assert to_blocked == pytest.approx(to_free + 0.5, abs=1e-12)
+    assert to_blocked == pytest.approx(to_free + 2.0 / 3.0, abs=1e-12)
 
 
 def test_blocked_sell_force_holds_positions():
@@ -500,27 +511,34 @@ def test_batched_rewards_match_scalar_rewards():
         n_stocks = int(rng.integers(3, 15))
         n_dates = int(rng.integers(10, 60))
         signals, target = _random_batch(rng, b, n_stocks, n_dates)
-        val_windows = [(n_dates // 2, n_dates)]
+        val_windows = [(n_dates // 2, n_dates - 2)]
         rewards, val_rewards, icir, val_icir = batched_basket_rewards(
             signals, target, cfg, reward_cfg, val_windows
         )
         for i in range(b):
             ref_r = formula_reward(signals[i], target, cfg, reward_cfg)
             ref_v = formula_reward(
-                signals[i, :, val_windows[0][0] :], target[:, val_windows[0][0] :],
-                cfg, reward_cfg,
+                signals[i],
+                target,
+                cfg,
+                reward_cfg,
+                signal_range=val_windows[0],
             )
             assert rewards[i] == pytest.approx(ref_r, rel=1e-9, abs=1e-10)
             assert val_rewards[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-10)
         # The exposed raw ICIR must match the scalar ICIR decomposition.
         ref_icir = icir_from_series(
-            rank_ic_series(signals, target, reward_cfg.ic_min_stocks)
+            rank_ic_series(
+                signals[:, :, : n_dates - 2],
+                target[:, : n_dates - 2],
+                reward_cfg.ic_min_stocks,
+            )
         )
         assert icir == pytest.approx(ref_icir, rel=1e-9, abs=1e-10)
         ref_val_icir = icir_from_series(
             rank_ic_series(
-                signals[:, :, val_windows[0][0] :],
-                target[:, val_windows[0][0] :],
+                signals[:, :, val_windows[0][0] : val_windows[0][1]],
+                target[:, val_windows[0][0] : val_windows[0][1]],
                 reward_cfg.ic_min_stocks,
             )
         )
@@ -536,7 +554,7 @@ def test_val_reward_is_median_over_windows():
     signals = rng.normal(size=(2, n_stocks, n_dates))
     # Aligned in window 1, inverted in window 2, noise in window 3.
     aligned = np.stack([target, -target, rng.normal(size=target.shape)])
-    windows = [(0, 10), (10, 20), (20, 30)]
+    windows = [(0, 9), (9, 18), (18, 28)]
     rewards, val_rewards, _, val_icir = batched_basket_rewards(
         aligned, target, cfg, reward_cfg, windows
     )
@@ -546,7 +564,11 @@ def test_val_reward_is_median_over_windows():
             np.asarray(
                 [
                     formula_reward(
-                        aligned[i, :, start:end], target[:, start:end], cfg, reward_cfg
+                        aligned[i],
+                        target,
+                        cfg,
+                        reward_cfg,
+                        signal_range=(start, end),
                     )
                     for i in range(aligned.shape[0])
                 ]

@@ -10,15 +10,21 @@ import numpy as np
 from ashare_data.config import BacktestConfig
 from ashare_data.processor import limit_rate, open_to_open_returns, tradability_blocked
 from ashare_data.schemas import BacktestResult
+from ashare_execution import (
+    ExecutionCostModel,
+    validate_execution_config,
+)
 from ashare_logging import export_log_txt, setup_run_logging
 
-from .reward import sortino_ratio, trading_cost_fraction
+from .reward import sortino_ratio
+from .time_contract import TrainingTimeContract
 
 
 class AshareBacktestEngine:
     def __init__(self, config: BacktestConfig | None = None):
         self.config = config or BacktestConfig()
         self.initial_capital = float(self.config.initial_capital)
+        self.cost_model = ExecutionCostModel.from_config(self.config)
 
     def run(
         self,
@@ -28,6 +34,7 @@ class AshareBacktestEngine:
         dates: list[str],
         benchmark_returns: list[float] | None = None,
         stock_names: dict[str, str] | None = None,
+        signal_range: range | tuple[int, int] | None = None,
     ) -> BacktestResult:
         factors = np.asarray(factors, dtype=np.float64)
         if factors.ndim != 2:
@@ -72,25 +79,42 @@ class AshareBacktestEngine:
             neginf=0.0,
         )
 
+        n_stocks, n_dates = factors.shape
+        if signal_range is None:
+            signal_indices = list(range(max(n_dates - 2, 0)))
+        elif isinstance(signal_range, range):
+            signal_indices = list(signal_range)
+        else:
+            signal_indices = list(range(int(signal_range[0]), int(signal_range[1])))
+        if any(t < 0 or t + 2 >= n_dates for t in signal_indices):
+            raise ValueError("signal_range includes a signal without a complete t+2 exit")
+        if signal_indices and signal_indices != list(
+            range(signal_indices[0], signal_indices[-1] + 1)
+        ):
+            raise ValueError("signal_range must be contiguous")
+
         target_ret = self._open_to_open_returns(open_)
         if benchmark_returns is None:
             # Default benchmark: equal-weight universe return on the same
-            # open-to-open basis as the strategy itself.
+            # complete t+2 periods as the strategy itself.
             benchmark_returns = [
-                float(np.mean(target_ret[:, t])) for t in range(target_ret.shape[1] - 1)
+                float(np.mean(target_ret[:, t])) for t in signal_indices
             ]
-        n_stocks, n_dates = factors.shape
+        elif len(benchmark_returns) != len(signal_indices):
+            raise ValueError("benchmark_returns must align with signal_range")
         prev_weights = np.zeros(n_stocks, dtype=np.float64)
+        capital = self.initial_capital
         daily_returns: list[float] = []
         turnover_list: list[float] = []
         positions: list[dict[str, Any]] = []
 
-        for t in range(n_dates - 1):
+        for t in signal_indices:
             signal = factors[:, t]
-            exec_day = t + 1
+            entry_day = t + 1
+            exit_day = t + 2
             selected = self._select_top_n(
                 signal,
-                exec_day,
+                entry_day,
                 open_,
                 high,
                 low,
@@ -111,7 +135,7 @@ class AshareBacktestEngine:
             # Positions that must be sold need to be tradable on the sell side.
             sell_required = np.where(prev_weights > target_weights)[0]
             sell_blocked = self._blocked_mask(
-                exec_day,
+                entry_day,
                 open_,
                 high,
                 low,
@@ -134,16 +158,22 @@ class AshareBacktestEngine:
             sell_weights = np.maximum(prev_weights - target_weights, 0.0)
             turnover = float(np.abs(target_weights - prev_weights).sum())
 
-            cost_fraction = trading_cost_fraction(buy_weights, sell_weights, self.config)
+            cost_fraction = float(
+                self.cost_model.rebalance_cost_fraction(
+                    buy_weights, sell_weights, capital
+                )
+            )
             gross_ret = float(np.dot(target_weights, target_ret[:, t]))
             net_ret = gross_ret - cost_fraction
             daily_returns.append(net_ret)
             turnover_list.append(turnover)
+            capital *= 1.0 + net_ret
 
             positions.append(
                 {
                     "signal_date": dates[t],
-                    "exec_date": dates[exec_day],
+                    "entry_date": dates[entry_day],
+                    "exit_date": dates[exit_day],
                     "ts_codes": [ts_codes[i] for i in np.where(target_weights > 0)[0]],
                     "weights": [
                         round(float(target_weights[i]), 6)
@@ -163,9 +193,14 @@ class AshareBacktestEngine:
         metrics["average_turnover"] = float(np.mean(turnover_list)) if turnover_list else 0.0
         return BacktestResult(
             equity_curve=[float(x) for x in equity],
-            # Dates align with the equity curve: dates[0] is the start
-            # (equity 1.0) and every later point is the end-of-day value.
-            dates=dates,
+            # Initial equity is marked at the first entry; subsequent points
+            # are marked at each t+2 exit, exactly one date per equity point.
+            dates=(
+                [dates[signal_indices[0] + 1]]
+                + [dates[t + 2] for t in signal_indices]
+                if signal_indices
+                else dates[:1]
+            ),
             daily_returns=[float(x) for x in daily_returns],
             turnover=[float(x) for x in turnover_list],
             benchmark_equity=benchmark_equity,
@@ -278,8 +313,9 @@ def main() -> None:
         make_backtest_config,
         make_data_config,
         make_model_config,
+        make_sim_config,
     )
-    from .data_loader import AshareDataLoader, date_index
+    from .data_loader import AshareDataLoader
     from .reward import signal_direction
     from .vm import StackVM, formula_decode
     from .vocab import FORMULA_VOCAB, resolve_formula_tokens
@@ -297,6 +333,8 @@ def main() -> None:
         data_config = make_data_config(raw, root)
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
+        sim_config = make_sim_config(raw, root)
+        validate_execution_config(backtest_config, sim_config)
         loader = AshareDataLoader(data_config, model_config)
         loader.load_data()
 
@@ -322,12 +360,17 @@ def main() -> None:
         # a negative-IC formula is never mechanically traded backwards.
         direction = int(payload.get("direction", 1))
         if "direction" not in payload:
-            train_idx = date_index(
-                loader.dates, backtest_config.train_end_date.replace("-", "")
+            contract = TrainingTimeContract.resolve(
+                loader.dates, backtest_config.train_end_date
+            )
+            price_end = contract.train_label_end
+            signal_end = contract.train_signal_end
+            train_target = open_to_open_returns(
+                loader.raw_data_cache["open"][:, :price_end].numpy()
             )
             direction = signal_direction(
-                factors[:, :train_idx].detach().cpu().numpy(),
-                loader.target_ret[:, :train_idx].numpy(),
+                factors[:, :signal_end].detach().cpu().numpy(),
+                train_target[:, :signal_end],
             )
         signal_np = float(direction) * factors.detach().cpu().numpy()
 

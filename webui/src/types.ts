@@ -25,7 +25,8 @@ export interface BacktestData {
 export interface TrainHistoryPoint {
   step: number
   avg_reward: number
-  best_reward: number
+  best_val_reward?: number
+  best_reward?: number
   loss: number
   value_loss?: number
 }
@@ -33,6 +34,10 @@ export interface TrainHistoryPoint {
 export interface StrategyData {
   formula?: number[]
   formula_text?: string
+  val_reward?: number
+  val_icir?: number
+  full_window_reward?: number
+  full_window_icir?: number
   best_reward?: number
   history?: TrainHistoryPoint[]
 }
@@ -66,7 +71,8 @@ export interface HoldingRow {
 
 export interface PositionSnapshot {
   signal_date: string
-  exec_date: string
+  entry_date: string
+  exit_date: string
   count: number
   rows: HoldingRow[]
 }
@@ -99,10 +105,19 @@ export interface SimRunStatus {
   progress_updated_at: string | null
 }
 
+export interface SimStartResult extends SimRunStatus {
+  ok: boolean
+  action: 'started' | 'resumed' | 'reset_and_started'
+  message: string
+  archive: string | null
+  args: string[]
+}
+
 export interface SimConfigData {
   effective: {
     initial_capital: number
     max_positions: number
+    single_weight_cap: number
     commission_rate: number
     min_commission: number
     stamp_tax_rate: number
@@ -113,6 +128,8 @@ export interface SimConfigData {
   overrides: Record<string, unknown>
   state_initial_capital: number | null
   pending_reset: boolean
+  execution_config_consistent: boolean
+  execution_config_mismatches: Record<string, { backtest: number; sim: number }>
 }
 
 export interface SimDayData {

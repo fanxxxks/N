@@ -140,7 +140,7 @@ def test_factor_tensor_and_backtest(tmp_path):
         loader.dates,
         stock_names={c: c for c in ts_codes},
     )
-    assert len(result.daily_returns) == len(loader.dates) - 1
+    assert len(result.daily_returns) == len(loader.dates) - 2
     assert result.equity_curve[-1] > 0
     assert "sortino" in result.metrics
 

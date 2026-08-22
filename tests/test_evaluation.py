@@ -81,17 +81,21 @@ class _FakeTrainer:
 def test_resolve_folds_maps_dates_to_columns(populated_db: DataConfig):
     loader = _loader(populated_db)
     fold = _fold(loader.dates)
-    assert loader.dates[fold.train_end_idx] >= "20240110"
-    assert loader.dates[fold.train_end_idx - 1] < "20240110"
-    assert loader.dates[fold.test_end_idx - 1] < "20240125"
-    assert fold.test_end_idx - fold.train_end_idx >= 3
+    contract = fold.contract
+    # Configured anchors are inclusive, while every stored boundary is
+    # half-open and keeps the two price columns required by t+2 exits.
+    assert loader.dates[contract.train_anchor_end_exclusive - 1] == "20240110"
+    assert loader.dates[contract.test_price_end - 1] == "20240125"
+    assert contract.test_signal_start == contract.train_anchor_end_exclusive
+    assert contract.test_signal_end == contract.test_price_end - 2
+    assert contract.test_signal_count >= 1
 
 
 def test_resolve_folds_rejects_insufficient_data(populated_db: DataConfig):
     loader = _loader(populated_db)
     dates = loader.dates
     # train_end past the data range: the test window collapses.
-    with pytest.raises(ValueError, match="test window is empty"):
+    with pytest.raises(ValueError, match=r"test window has no complete t\+2 returns"):
         resolve_folds([FoldConfig("2024-03-01", "2024-03-15")], dates)
     # train window clamps to one column: too small to train.
     with pytest.raises(ValueError, match="train window has"):
@@ -199,7 +203,9 @@ def test_baseline_candidates_match_factor_rows(populated_db: DataConfig):
             factors[FEATURE_NAMES.index(name)], loader, fold, BacktestConfig()
         )
         assert row["total_return"] == ref["total_return"]
-        assert row["seed"] is None and row["val_reward"] is None
+        assert row["seed"] is None
+        assert "val_reward" in row and "val_icir" in row
+        assert row["direction"] in (-1, 1)
 
 
 # --- aggregation and selection ---------------------------------------------
@@ -317,7 +323,7 @@ def test_run_fold_failure_paths(populated_db: DataConfig, monkeypatch):
     row = run_fold(
         loader, populated_db, ModelConfig(), BacktestConfig(), None, tier, fold, 42
     )
-    assert row["failed"] and row["reason"] == "no valid formula found"
+    assert row["failed"] and row["reason"] == "no eligible formula found"
 
     monkeypatch.setattr(
         evaluation, "_build_trainer", lambda *a, **k: _FakeTrainer([999])
@@ -353,13 +359,14 @@ def test_baseline_candidates_trade_learned_direction(
     loader = _loader(populated_db)
     fold = _fold(loader.dates)
     proto = ProtocolConfig(baseline_signals=["TURNOVER"])
-    monkeypatch.setattr(evaluation, "signal_direction", lambda signal, target, min_stocks=10: -1)
     rows = baseline_candidates(loader, proto, fold, BacktestConfig())
     assert len(rows) == 1
-    assert rows[0]["direction"] == -1
+    assert rows[0]["direction"] in (-1, 1)
     factors, _, _, _ = epoch_slice(loader, fold)
     idx = FEATURE_NAMES.index("TURNOVER")
-    ref = evaluate_signal(-factors[idx], loader, fold, BacktestConfig())
+    ref = evaluate_signal(
+        rows[0]["direction"] * factors[idx], loader, fold, BacktestConfig()
+    )
     assert rows[0]["total_return"] == pytest.approx(ref["total_return"])
     assert rows[0]["ic_mean"] == pytest.approx(ref["ic_mean"])
 

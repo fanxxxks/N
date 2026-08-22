@@ -93,8 +93,8 @@ class RewardConfig:
 
     Semantic changes to the reward implementation bump
     ``ashare_model.reward.REWARD_VERSION``; these values only tune the
-    current version (v4: rank-ICIR minus a continuous turnover cost, with
-    the ICIR exposed to the trainer's signal-quality gate).
+    current version (v6: direction-adjusted rank-ICIR minus the annualized
+    mean of exact daily execution costs).
     """
 
     reward_clip_low: float = -1.0
@@ -102,9 +102,7 @@ class RewardConfig:
     # Assigned by the trainer to invalid/constant formulas only; it sits
     # below ``reward_clip_low`` so unusable formulas stay distinguishable.
     bad_reward: float = -2.0
-    # Multiplier on the proportional turnover-cost drag (1.0 = honest cost;
-    # the 20260820 screening showed the v3 ordering of baselines by this
-    # reward reproduces their out-of-sample Sharpe ordering).
+    # Multiplier on exact annualized daily execution costs (1.0 = honest cost).
     cost_weight: float = 1.0
     # Subtracted from the reward of formulas without any operator (bare
     # single-factor copies), nudging the policy towards combinations.  Kept
@@ -114,7 +112,7 @@ class RewardConfig:
     # Cost-adjusted validation floor: training saves no artifact unless the
     # best validation reward reaches it (0.0 = at least zero net signal).
     min_val_reward: float = 0.0
-    # Signal-quality gate: the best formula's full-window rank-ICIR must
+    # Signal-quality gate: the candidate's validation-window rank-ICIR must
     # reach this value before anything is saved.  Guards against low-IC
     # low-turnover formulas (e.g. quarterly fundamental copies) that pass
     # the cost-adjusted floor on turnover alone.  Grounded in the factor

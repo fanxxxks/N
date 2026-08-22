@@ -11,6 +11,7 @@ export default function Overview() {
   const sim = data?.sim
   const strategy = data?.strategy
   const history = strategy?.history ?? []
+  const valReward = strategy?.val_reward ?? strategy?.best_reward
 
   return (
     <div>
@@ -104,8 +105,8 @@ export default function Overview() {
             title="最优因子公式"
             loading={loading}
             extra={
-              strategy?.best_reward != null ? (
-                <Tag color="green">验证集奖励 {strategy.best_reward.toFixed(3)}</Tag>
+              valReward != null ? (
+                <Tag color="green">验证集奖励 {valReward.toFixed(3)}</Tag>
               ) : null
             }
           >
@@ -150,7 +151,7 @@ export default function Overview() {
             x={history.map((h) => String(h.step))}
             series={[
               { name: '平均奖励', data: history.map((h) => h.avg_reward) },
-              { name: '最优验证奖励', data: history.map((h) => h.best_reward) },
+              { name: '最优验证奖励', data: history.map((h) => h.best_val_reward ?? h.best_reward ?? 0) },
               { name: '损失', data: history.map((h) => h.loss), yAxisIndex: 1 },
             ]}
             height={320}

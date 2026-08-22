@@ -78,8 +78,8 @@ export default function SimPage() {
     const doStart = async () => {
       setStarting(true)
       try {
-        await api.simStart({ reset })
-        message.success(reset ? '已重置并启动，从数据集起点重放' : '已启动，将续跑或从头重放')
+        const result = await api.simStart({ reset })
+        message.success(result.message)
         reloadAll()
       } catch (err) {
         message.error(`启动失败：${(err as Error).message}`)
@@ -405,6 +405,7 @@ function ConfigModal({
       const patch: Record<string, number> = {
         initial_capital: values.initial_capital,
         max_positions: values.max_positions,
+        single_weight_cap: config?.effective.single_weight_cap ?? 0.05,
         commission_rate: values.commission_rate,
         min_commission: values.min_commission,
         stamp_tax_rate: values.stamp_tax_rate,

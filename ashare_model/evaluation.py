@@ -44,6 +44,9 @@ vocabulary.  Scoring semantics are unchanged, but the candidate pool is
 drawn from a strictly larger operator set, so artifacts record the new
 version for comparability.
 
+v7 makes candidate scoring/selection common to RL, random search and bare
+factors, and resolves every fold through the inclusive-anchor t+2 contract.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -81,13 +84,11 @@ from ashare_data.processor import open_to_open_returns
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .backtest import AshareBacktestEngine
-from .data_loader import AshareDataLoader, date_index
+from .candidates import CandidateScorer, CandidateSelector, CandidateSpec
+from .data_loader import AshareDataLoader
 from .diagnostics import rank_ic_stats
-from .reward import (
-    REWARD_VERSION,
-    batched_basket_rewards,
-    signal_direction,
-)
+from .reward import REWARD_VERSION
+from .time_contract import FoldTimeContract
 from .train import (
     AshareTrainer,
     sample_random_formulas,
@@ -96,7 +97,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "6"
+PROTOCOL_VERSION = "7"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -114,62 +115,88 @@ METRIC_KEYS = (
     "icir",
 )
 
-# Minimum column counts for a fold to be meaningful.
-MIN_TRAIN_COLS = 2
-MIN_TEST_COLS = 3
-
-
 @dataclass(frozen=True)
 class Fold:
     """A walk-forward fold resolved against a concrete date axis."""
 
-    train_end: str
-    test_end: str
-    train_end_idx: int
-    test_end_idx: int
+    contract: FoldTimeContract
+
+    @property
+    def train_end(self) -> str:
+        return self.contract.train_end
+
+    @property
+    def test_end(self) -> str:
+        return self.contract.test_end
+
+    # Compatibility accessors for consumers of pre-v7 Fold. New code uses
+    # the explicit contract fields so anchor, signal and price ends cannot be
+    # confused.
+    @property
+    def train_end_idx(self) -> int:
+        return self.contract.train_anchor_end_exclusive
+
+    @property
+    def test_end_idx(self) -> int:
+        return self.contract.test_price_end
+
+
+@dataclass(frozen=True)
+class FoldData:
+    """Price-context slice plus the contract that declares executable columns."""
+
+    factors: np.ndarray
+    raw: dict[str, np.ndarray]
+    target: np.ndarray
+    dates: list[str]
+    contract: FoldTimeContract
+
+    @property
+    def signal_count(self) -> int:
+        return self.contract.test_signal_count
+
+    @property
+    def local_signal_range(self) -> range:
+        return range(self.signal_count)
+
+    def __iter__(self):
+        # Preserve the established four-value unpacking API while exposing
+        # the contract to new callers as an explicit attribute.
+        yield self.factors
+        yield self.raw
+        yield self.target
+        yield self.dates
 
 
 def resolve_folds(fold_cfgs: list[FoldConfig], dates: list[str]) -> list[Fold]:
     """Resolve fold configs to column indices and check data availability.
 
-    The train window is ``dates[0 : train_end_idx)`` and the test window is
-    ``dates[train_end_idx : test_end_idx)``; each window must hold at least
-    its minimum column count, otherwise the fold is reported explicitly
-    instead of producing silently degenerate metrics.
+    Configured anchors are inclusive. Test data retains the two price-context
+    columns needed to exit its final executable signal, while neither train
+    nor test scoring can observe a price beyond its anchor.
     """
 
     folds: list[Fold] = []
     for cfg in fold_cfgs:
-        train_idx = date_index(dates, cfg.train_end)
-        test_idx = date_index(dates, cfg.test_end)
-        if train_idx >= test_idx:
-            raise ValueError(
-                f"fold {cfg.train_end} -> {cfg.test_end}: test window is empty "
-                f"(data range ends at {dates[-1]})"
-            )
-        if train_idx < MIN_TRAIN_COLS:
-            raise ValueError(
-                f"fold {cfg.train_end} -> {cfg.test_end}: train window has "
-                f"{train_idx} columns, need at least {MIN_TRAIN_COLS}"
-            )
-        if test_idx - train_idx < MIN_TEST_COLS:
-            raise ValueError(
-                f"fold {cfg.train_end} -> {cfg.test_end}: test window has "
-                f"{test_idx - train_idx} columns, need at least {MIN_TEST_COLS}"
-            )
-        if test_idx == len(dates) and dates[-1] < cfg.test_end.replace("-", ""):
+        contract = FoldTimeContract.resolve(
+            dates, train_end=cfg.train_end, test_end=cfg.test_end
+        )
+        if (
+            contract.test_price_end == len(dates)
+            and dates[-1].replace("-", "") < cfg.test_end.replace("-", "")
+        ):
             logger.warning(
                 f"fold {cfg.train_end} -> {cfg.test_end}: test_end is past the "
                 f"data range; test window truncated at {dates[-1]}"
             )
-        folds.append(Fold(cfg.train_end, cfg.test_end, train_idx, test_idx))
+        folds.append(Fold(contract))
     return folds
 
 
 def epoch_slice(
     loader: AshareDataLoader,
     fold: Fold,
-) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray, list[str]]:
+) -> FoldData:
     """Factor stack, raw OHLCV cache, forward targets and dates of the test
     window.  Factor columns carry their own lookback, so slicing the test
     window loses no history (VM execution must still happen on the full
@@ -181,11 +208,18 @@ def epoch_slice(
     returns the engine deliberately drops.
     """
 
-    s0, s1 = fold.train_end_idx, fold.test_end_idx
+    contract = fold.contract
+    s0, s1 = contract.test_signal_start, contract.test_price_end
     factors = loader.factor_tensor[:, :, s0:s1].numpy()
     raw = {k: v[:, s0:s1].numpy() for k, v in loader.raw_data_cache.items()}
     target = open_to_open_returns(raw["open"])
-    return factors, raw, target, loader.dates[s0:s1]
+    return FoldData(
+        factors=factors,
+        raw=raw,
+        target=target,
+        dates=loader.dates[s0:s1],
+        contract=contract,
+    )
 
 
 def evaluate_signal(
@@ -201,7 +235,8 @@ def evaluate_signal(
     real costs, the blocked mask and the equal-weight benchmark.
     """
 
-    _, raw, target, dates = epoch_slice(loader, fold)
+    fold_data = epoch_slice(loader, fold)
+    _, raw, target, dates = fold_data
     signal = np.asarray(signal, dtype=np.float64)
     if signal.ndim != 2 or signal.shape != (len(loader.ts_codes), len(dates)):
         raise ValueError(
@@ -209,7 +244,12 @@ def evaluate_signal(
             f"({len(loader.ts_codes)}, {len(dates)})"
         )
     result = AshareBacktestEngine(bt_cfg).run(
-        signal, raw, loader.ts_codes, dates, stock_names=loader.stock_names
+        signal,
+        raw,
+        loader.ts_codes,
+        dates,
+        stock_names=loader.stock_names,
+        signal_range=fold_data.local_signal_range,
     )
     m = result.metrics
     bench_total = (
@@ -222,15 +262,19 @@ def evaluate_signal(
         if bench_total > -1.0
         else 0.0
     )
-    ic = rank_ic_stats(signal[None, :, :], target, dates, names=["formula"])[
-        "formula"
-    ]
+    signal_count = fold_data.signal_count
+    ic = rank_ic_stats(
+        signal[None, :, :signal_count],
+        target[:, :signal_count],
+        dates[:signal_count],
+        names=["formula"],
+    )["formula"]
     bench_daily: list[float] = []
     if result.benchmark_equity and len(result.benchmark_equity) >= 2:
         eq = result.benchmark_equity
         bench_daily = [float(eq[i + 1] / eq[i] - 1.0) for i in range(len(eq) - 1)]
     return {
-        "n_dates": len(dates),
+        "n_dates": signal_count,
         "total_return": float(m["total_return"]),
         "annual_return": float(m["annual_return"]),
         "sharpe": float(m["sharpe"]),
@@ -269,8 +313,9 @@ def evaluate_formula(
     signal = vm.execute(list(tokens), loader.factor_tensor)
     if signal is None:
         return None
+    contract = fold.contract
     sliced = signal.detach().cpu().numpy()[
-        :, fold.train_end_idx : fold.test_end_idx
+        :, contract.test_signal_start : contract.test_price_end
     ]
     return evaluate_signal(float(direction) * sliced, loader, fold, bt_cfg)
 
@@ -282,8 +327,9 @@ def benchmark_row(
     """Equal-weight benchmark scored on the same code path as the engine's
     reference curve (cost-free buy-and-hold reference, no turnover)."""
 
-    _, _, target, dates = epoch_slice(loader, fold)
-    daily = [float(np.mean(target[:, t])) for t in range(target.shape[1] - 1)]
+    fold_data = epoch_slice(loader, fold)
+    _, _, target, dates = fold_data
+    daily = [float(np.mean(target[:, t])) for t in fold_data.local_signal_range]
     equity = [1.0]
     for ret in daily:
         equity.append(equity[-1] * (1.0 + ret))
@@ -298,7 +344,7 @@ def benchmark_row(
         "val_reward": None,
         "final_avg_reward": None,
         "failed": False,
-        "n_dates": len(dates),
+        "n_dates": fold_data.signal_count,
         "total_return": float(m.get("total_return", 0.0)),
         "annual_return": float(m.get("annual_return", 0.0)),
         "sharpe": float(m.get("sharpe", 0.0)),
@@ -322,6 +368,8 @@ def baseline_candidates(
     proto_cfg: ProtocolConfig,
     fold: Fold,
     bt_cfg: BacktestConfig,
+    model_cfg: ModelConfig | None = None,
+    reward_cfg: RewardConfig | None = None,
 ) -> list[dict]:
     """Single-factor baseline rows: the factor row itself as the signal,
     traded in its training-window direction (a negative-IC factor is
@@ -329,15 +377,52 @@ def baseline_candidates(
     long-the-top backtest of the wrong side)."""
 
     validate_baseline_signals(proto_cfg.baseline_signals, FEATURE_NAMES)
+    model_cfg = model_cfg or ModelConfig()
+    reward_cfg = reward_cfg or RewardConfig()
+    contract = fold.contract
     factors, _, _, _ = epoch_slice(loader, fold)
-    train_factors = loader.factor_tensor[:, :, : fold.train_end_idx].numpy()
-    train_target = loader.target_ret[:, : fold.train_end_idx].numpy()
-    rows: list[dict] = []
+    train_price_end = contract.train_label_end
+    train_signal_end = contract.train_signal_end
+    train_factors = loader.factor_tensor[:, :, :train_price_end].numpy()
+    train_open = loader.raw_data_cache["open"][:, :train_price_end].numpy()
+    train_target = open_to_open_returns(train_open)
+    blocked_buy, blocked_sell = loader.tradability_masks()
+    val_windows = validation_windows(train_signal_end, model_cfg)
+    scorer = CandidateScorer(
+        bt_cfg,
+        reward_cfg,
+        operator_offset=FORMULA_VOCAB.operator_offset,
+    )
+    specs: list[CandidateSpec] = []
+    train_signals: list[np.ndarray] = []
+    indices: list[int] = []
     for name in proto_cfg.baseline_signals:
         idx = FEATURE_NAMES.index(name)
-        direction = signal_direction(
-            train_factors[idx], train_target, min_stocks=10
+        indices.append(idx)
+        specs.append(
+            CandidateSpec(
+                candidate_id=f"baseline:{name}",
+                formula_text=name,
+                source="baseline",
+                tokens=(idx + 1,),
+            )
         )
+        train_signals.append(train_factors[idx])
+    scores = scorer.score_many(
+        specs,
+        train_signals,
+        train_target,
+        val_windows,
+        blocked_buy=blocked_buy[:, :train_price_end],
+        blocked_sell=blocked_sell[:, :train_price_end],
+        full_signal_range=(contract.train_signal_start, train_signal_end),
+    )
+    # The selector is invoked even though the protocol reports every bare
+    # factor; this keeps ranking/eligibility behavior on the same code path.
+    CandidateSelector().select(scores)
+    rows: list[dict] = []
+    for name, idx, score in zip(proto_cfg.baseline_signals, indices, scores):
+        direction = score.direction
         metrics = evaluate_signal(
             float(direction) * factors[idx], loader, fold, bt_cfg
         )
@@ -349,7 +434,13 @@ def baseline_candidates(
                 "fold_train_end": fold.train_end,
                 "fold_test_end": fold.test_end,
                 "seed": None,
-                "val_reward": None,
+                "val_reward": score.val_reward,
+                "val_icir": score.val_icir,
+                "full_window_reward": score.full_window_reward,
+                "full_window_icir": score.full_window_icir,
+                "complexity_penalty": score.complexity_penalty,
+                "eligible": score.eligible,
+                "rejection_reasons": list(score.rejection_reasons),
                 "final_avg_reward": None,
                 "direction": direction,
                 "failed": False,
@@ -410,7 +501,14 @@ def run_fold(
         "seed": seed,
     }
     if tokens is None:
-        return {**base, "failed": True, "reason": "no valid formula found"}
+        selection = getattr(trainer, "selection_result", None)
+        rejected = getattr(selection, "best_rejected", None)
+        return {
+            **base,
+            "failed": True,
+            "reason": "no eligible formula found",
+            "best_rejected": rejected.to_dict() if rejected else None,
+        }
     # The trainer decides the trade direction on its validation tail
     # (strictly before the test window), so a negative-IC formula is
     # evaluated flipped, matching how it would actually be deployed.
@@ -420,12 +518,24 @@ def run_fold(
     )
     if metrics is None:
         return {**base, "failed": True, "reason": "formula invalid at eval time"}
+    selected = getattr(getattr(trainer, "selection_result", None), "selected", None)
     return {
         **base,
         "failed": False,
         "formula_text": trainer.best_formula,
         "formula": list(tokens),
-        "val_reward": float(trainer.best_reward),
+        "val_reward": float(getattr(trainer, "best_val_reward", trainer.best_reward)),
+        "val_icir": float(selected.val_icir) if selected is not None else None,
+        "full_window_reward": (
+            float(selected.full_window_reward) if selected is not None else None
+        ),
+        "full_window_icir": (
+            float(selected.full_window_icir) if selected is not None else None
+        ),
+        "eligible": bool(selected.eligible) if selected is not None else True,
+        "rejection_reasons": (
+            list(selected.rejection_reasons) if selected is not None else []
+        ),
         "direction": direction,
         "final_avg_reward": (
             float(trainer.history[-1]["avg_reward"]) if trainer.history else None
@@ -466,10 +576,33 @@ def run_random_search(
         "seed": seed,
         "n_samples": int(n_samples),
     }
+
+    def failed_row(reason: str, score=None) -> dict:
+        payload = score.to_dict() if score is not None else {}
+        return {
+            **base,
+            "failed": True,
+            "reason": reason,
+            "formula_text": payload.get("formula_text"),
+            "formula": payload.get("tokens"),
+            "val_reward": payload.get("val_reward"),
+            "val_icir": payload.get("val_icir"),
+            "full_window_reward": payload.get("full_window_reward"),
+            "full_window_icir": payload.get("full_window_icir"),
+            "complexity_penalty": payload.get("complexity_penalty"),
+            "eligible": False,
+            "rejection_reasons": payload.get("rejection_reasons", [reason]),
+            "final_avg_reward": None,
+            "direction": int(payload.get("direction", 1)),
+            "best_rejected": payload or None,
+        }
+
     reward_cfg = reward_config or RewardConfig()
-    train_end = fold.train_end_idx
-    if train_end <= 2 or n_samples <= 0:
-        return {**base, "failed": True, "reason": "degenerate window or budget"}
+    contract = fold.contract
+    train_price_end = contract.train_label_end
+    train_signal_end = contract.train_signal_end
+    if train_signal_end <= 0 or n_samples <= 0:
+        return failed_row("degenerate window or budget")
 
     vocab = FORMULA_VOCAB
     vm = StackVM(vocab)
@@ -478,83 +611,103 @@ def run_random_search(
     # for the reward path.  Device float32 arithmetic may differ by ~1e-7,
     # the same documented caveat as the trainer.
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    factors = loader.factor_tensor.to(device)
-    # Full-history alignment: the VM executes on the unsliced factor stack
-    # (factor columns carry their own lookback), so the group tensor stays
-    # unsliced too; the train-window slice happens on the executed signal.
+    factors = loader.factor_tensor[:, :, :train_price_end].to(device)
     industry_codes = getattr(loader, "industry_codes", None)
     vm.industry_codes = (
-        industry_codes.to(device) if industry_codes is not None else None
+        industry_codes[:, :train_price_end].to(device)
+        if industry_codes is not None
+        else None
     )
-    target = loader.target_ret[:, :train_end].numpy()
-    val_windows = validation_windows(train_end, model_config)
+    target = open_to_open_returns(
+        loader.raw_data_cache["open"][:, :train_price_end].numpy()
+    )
+    val_windows = validation_windows(train_signal_end, model_config)
     # Tradability masks shared by every sampled formula, sliced to the
     # training window like the signals (the same path the trainer uses).
     blocked_buy, blocked_sell = loader.tradability_masks()
-    blocked_buy = blocked_buy[:, :train_end]
-    blocked_sell = blocked_sell[:, :train_end]
+    blocked_buy = blocked_buy[:, :train_price_end]
+    blocked_sell = blocked_sell[:, :train_price_end]
+    scorer = CandidateScorer(
+        backtest_config,
+        reward_cfg,
+        operator_offset=vocab.operator_offset,
+    )
+    selector = CandidateSelector()
 
     formulas = sample_random_formulas(
         seed, vocab, model_config.max_formula_len, n_samples
     )
-    best_key: tuple[int, ...] | None = None
-    best_val: float = -float("inf")
+    scores = []
     seen: set[tuple[int, ...]] = set()
     for start in range(0, len(formulas), _RANDOM_SEARCH_CHUNK):
-        keys: list[tuple[int, ...]] = []
-        signals: list[np.ndarray] = []
+        specs: list[CandidateSpec] = []
+        signals: list[np.ndarray | None] = []
+        formula_valid: list[bool] = []
         for key in formulas[start : start + _RANDOM_SEARCH_CHUNK]:
             if key in seen:
                 continue
             seen.add(key)
+            specs.append(
+                CandidateSpec(
+                    candidate_id="random:" + ",".join(str(token) for token in key),
+                    formula_text=formula_decode(list(key), vocab),
+                    source="random_search",
+                    tokens=key,
+                )
+            )
             signal = vm.execute(list(key), factors)
             if signal is None:
+                signals.append(None)
+                formula_valid.append(False)
                 continue
-            sliced = signal.detach().cpu().numpy()[:, :train_end]
-            if np.nanstd(sliced) < 1e-4:
-                continue
-            keys.append(key)
-            signals.append(sliced)
-        if not signals:
+            signals.append(signal.detach().cpu().numpy())
+            formula_valid.append(True)
+        if not specs:
             continue
-        _, val_rewards, _, _ = batched_basket_rewards(
-            np.stack(signals),
-            target,
-            backtest_config,
-            reward_cfg,
-            val_windows,
-            blocked_buy=blocked_buy,
-            blocked_sell=blocked_sell,
+        scores.extend(
+            scorer.score_many(
+                specs,
+                signals,
+                target,
+                val_windows,
+                blocked_buy=blocked_buy,
+                blocked_sell=blocked_sell,
+                formula_valid=formula_valid,
+                full_signal_range=(
+                    contract.train_signal_start,
+                    contract.train_signal_end,
+                ),
+            )
         )
-        for key, val_reward in zip(keys, val_rewards):
-            if float(val_reward) > best_val:
-                best_val = float(val_reward)
-                best_key = key
 
-    if best_key is None:
-        return {**base, "failed": True, "reason": "no valid formula found"}
+    selection = selector.select(scores)
+    selected = selection.selected
+    if selected is None or selected.tokens is None:
+        return failed_row("no eligible formula found", selection.best_rejected)
 
-    signal = vm.execute(list(best_key), factors)
-    if signal is None:
-        return {**base, "failed": True, "reason": "formula invalid at eval time"}
-    full = signal.detach().cpu().numpy()
-    direction = signal_direction(
-        full[:, :train_end], target, reward_cfg.ic_min_stocks
-    )
-    metrics = evaluate_signal(
-        float(direction) * full[:, train_end : fold.test_end_idx],
+    metrics = evaluate_formula(
+        list(selected.tokens),
         loader,
         fold,
         backtest_config,
+        direction=selected.direction,
     )
+    if metrics is None:
+        return failed_row("formula invalid at eval time", selected)
     return {
         **base,
         "failed": False,
-        "formula_text": formula_decode(list(best_key), vocab),
-        "formula": list(best_key),
-        "val_reward": best_val,
+        "formula_text": selected.formula_text,
+        "formula": list(selected.tokens),
+        "val_reward": selected.val_reward,
+        "val_icir": selected.val_icir,
+        "full_window_reward": selected.full_window_reward,
+        "full_window_icir": selected.full_window_icir,
+        "complexity_penalty": selected.complexity_penalty,
+        "eligible": selected.eligible,
+        "rejection_reasons": list(selected.rejection_reasons),
         "final_avg_reward": None,
-        "direction": direction,
+        "direction": selected.direction,
         **metrics,
     }
 
@@ -974,7 +1127,16 @@ def run_protocol(
     rows: list[dict] = []
     for fold in folds:
         rows.append(benchmark_row(loader, fold))
-        rows.extend(baseline_candidates(loader, proto_cfg, fold, backtest_config))
+        rows.extend(
+            baseline_candidates(
+                loader,
+                proto_cfg,
+                fold,
+                backtest_config,
+                model_config,
+                reward_config,
+            )
+        )
         if proto_cfg.random_samples > 0:
             logger.info(
                 f"fold {fold.train_end} -> {fold.test_end} random-search "

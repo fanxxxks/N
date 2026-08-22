@@ -36,8 +36,8 @@ export default function SelectionPage() {
         title="最优因子公式"
         loading={strategy.loading}
         extra={
-          strategy.data?.best_reward != null ? (
-            <Tag color="green">验证集奖励 {strategy.data.best_reward.toFixed(3)}</Tag>
+          (strategy.data?.val_reward ?? strategy.data?.best_reward) != null ? (
+            <Tag color="green">验证集奖励 {(strategy.data?.val_reward ?? strategy.data?.best_reward ?? 0).toFixed(3)}</Tag>
           ) : null
         }
       >
@@ -53,7 +53,7 @@ export default function SelectionPage() {
       <Panel
         title={
           latest
-            ? `最新持仓快照（信号日 ${latest.signal_date} · 执行日 ${latest.exec_date} · ${latest.count} 只）`
+            ? `最新持仓快照（信号日 ${latest.signal_date} · 入场日 ${latest.entry_date} · 退出日 ${latest.exit_date} · ${latest.count} 只）`
             : '最新持仓快照'
         }
         loading={positions.loading}
