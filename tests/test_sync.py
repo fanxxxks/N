@@ -104,6 +104,70 @@ def test_sync_all_offline(tmp_path: Path):
         assert db.query("SELECT COUNT(*) AS n FROM constituents").iloc[0]["n"] == 0
 
 
+def test_augment_sync_universe_includes_pit_and_cached_codes(tmp_path: Path):
+    """H3: historical PIT members and cached-bar codes join the sync
+    universe even when absent from the current snapshot/stock list, while
+    invalid codes are still filtered out."""
+    cfg = _config(tmp_path)
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        db.upsert_constituents(
+            [
+                # Historical (delisted) member: absent from today's snapshot.
+                {"index_code": "000300.SH", "ts_code": "600999.SH", "in_date": "20150101", "out_date": "20201231"},
+                # Invalid code shares the 000xxx index space: filtered.
+                {"index_code": "000300.SH", "ts_code": "000300.SZ", "in_date": "20150101", "out_date": "99991231"},
+            ],
+            cfg,
+        )
+    daily_dir = cfg.parquet_dir / "daily"
+    daily_dir.mkdir(parents=True)
+    (daily_dir / "601888.SH.parquet").write_bytes(b"x")  # cached, delisted
+    (daily_dir / "not_a_code.parquet").write_bytes(b"x")
+    with AshareDB(cfg.duckdb_path) as db:
+        out = sync._augment_sync_universe(db, cfg, {"000001.SZ"})
+    assert "000001.SZ" in out
+    assert "600999.SH" in out  # PIT historical member survives
+    assert "601888.SH" in out  # cached-bar code survives
+    assert "000300.SZ" not in out
+    assert "not_a_code" not in out
+
+
+def test_sync_all_includes_pit_members_and_cached_codes(tmp_path: Path):
+    """End-to-end: a routine sync keeps syncing codes that only exist as
+    PIT members or cached bars (delisted stocks), instead of dropping
+    them via the current snapshot/stock-list intersection."""
+    cfg_path = tmp_path / "ashare_config.yaml"
+    data_dir = tmp_path / "data"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "data_dir": str(data_dir),
+                "duckdb_path": str(data_dir / "ashare.duckdb"),
+                "parquet_dir": str(data_dir / "parquet"),
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = _config(data_dir)
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        db.upsert_constituents(
+            [
+                {"index_code": "000300.SH", "ts_code": "600999.SH", "in_date": "20150101", "out_date": "20201231"},
+            ],
+            cfg,
+        )
+    (data_dir / "parquet" / "daily").mkdir(parents=True)
+    (data_dir / "parquet" / "daily" / "601888.SH.parquet").write_bytes(b"x")
+    result = sync.sync_all(cfg_path, offline=True)
+    # The two snapshot-validated fixture codes plus the PIT member and the
+    # cached code: both delisted-style codes stay in the sync universe.
+    assert result["universe"] == 4
+
+
 def test_purge_stale_daily_rows(tmp_path: Path):
     cfg = _config(tmp_path)
     with AshareDB(cfg.duckdb_path) as db:

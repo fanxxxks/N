@@ -142,6 +142,44 @@ def _bar_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     return df[cols].to_dict("records")
 
 
+def _augment_sync_universe(
+    db: AshareDB,
+    config: DataConfig,
+    base_codes: set[str],
+) -> list[str]:
+    """Extend the snapshot-derived sync codes with every historical PIT
+    member and every cached-bar code (survivorship-aware union).
+
+    The current constituent snapshot only names today's members: syncing
+    exactly that set leaves delisted/historical members without bars and
+    ``build_universe_mask`` silently marks them MISSING_BAR, biasing every
+    historical backtest optimistically (H3).  Codes appearing in the PIT
+    ``constituents`` table and codes with a local bar cache therefore join
+    the sync universe unconditionally — only the valid A-share code check
+    applies, never the current stock-list intersection, or a delisted
+    member would be dropped again.
+    """
+
+    pit = {
+        str(code)
+        for code in db.query(
+            f"SELECT DISTINCT ts_code FROM {config.constituents_table}"
+        )["ts_code"]
+    }
+    daily_dir = config.parquet_dir / "daily"
+    cached = (
+        {path.stem for path in daily_dir.glob("*.parquet")}
+        if daily_dir.exists()
+        else set()
+    )
+    union = (
+        base_codes
+        | {c for c in pit if is_valid_a_share_code(c)}
+        | {c for c in cached if is_valid_a_share_code(c)}
+    )
+    return sorted(union)
+
+
 def sync_all(
     config_path: str | Path | None = None,
     offline: bool | None = None,
@@ -189,15 +227,16 @@ def sync_all(
             logger.info(f"Current constituent snapshot for {index_code}: {len(codes)}")
         if all_constituents:
             logger.warning(
-                "Current constituent snapshots are used only to choose symbols "
-                "for daily-bar sync; no PIT membership intervals were written"
+                "Current constituent snapshots are only one of three sync-universe "
+                "sources (plus PIT constituents and the local bar cache); no PIT "
+                "membership intervals were written by this sync"
             )
 
         # Defensive validation: only real A-share stock codes may enter the
         # trading universe (index symbols, B-shares etc. are dropped).  The
-        # stock list from the exchange is the authoritative membership check,
-        # which also catches index codes that share the 000xxx space with
-        # real SZ stocks.
+        # stock list from the exchange is the authoritative membership check
+        # for *snapshot* codes, which also catches index codes that share the
+        # 000xxx space with real SZ stocks.
         stock_codes = (
             {str(c) for c in stocks_df["ts_code"].astype(str)}
             if stocks_df is not None and not stocks_df.empty
@@ -213,9 +252,13 @@ def sync_all(
                 {c for c in stock_codes if is_valid_a_share_code(c)}
             )
         if stock_codes:
-            universe = [c for c in candidate_universe if c in stock_codes]
+            base_codes = set(candidate_universe) & stock_codes
         else:
-            universe = candidate_universe
+            base_codes = set(candidate_universe)
+        # Survivorship-aware union: historical PIT members and cached-bar
+        # codes join even when absent from the current snapshot/stock list
+        # (delisted members), so their bars are backfilled and never purged.
+        universe = _augment_sync_universe(db, config, base_codes)
         if limit:
             universe = universe[:limit]
 
@@ -287,6 +330,13 @@ def sync_all(
         logger.info(
             f"Daily bars synced: {total_rows} rows, failures: {len(failures)}, "
             f"purged: {purged}"
+        )
+        # Observability for the survivorship-aware union: a falling count
+        # after a constituent-table refresh means PIT members lack bars.
+        logger.info(
+            "Sync universe: snapshot-validated base + PIT members + cached "
+            f"codes = {len(universe)} codes (snapshot symbols: "
+            f"{len(all_constituents)})"
         )
         return {
             "calendar_days": len(dates),

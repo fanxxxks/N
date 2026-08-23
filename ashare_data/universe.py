@@ -689,9 +689,43 @@ def resolve_universe_contract(
     )
 
 
+def member_bar_coverage(db: AshareDB, config: DataConfig) -> pd.DataFrame:
+    """Per-membership-interval daily-bar coverage (survivorship audit).
+
+    Returns one row per ``constituents`` interval with ``bars`` (daily-bar
+    rows inside ``[in_date, out_date]``), ``sessions`` (open calendar
+    sessions in the same span, 0 for intervals entirely beyond the data),
+    and ``coverage = bars / sessions`` (NaN when ``sessions`` is 0).  An
+    interval with open sessions but zero bars is the signature of a
+    historical member that was never synced — the current-snapshot sync
+    universe silently dropped delisted members and the PIT mask then
+    marked them MISSING_BAR, biasing every historical backtest
+    optimistically.  ``check_production_gates.py`` gates on the zero-bar
+    count and prints the coverage distribution.
+    """
+
+    sql = f"""
+        SELECT c.index_code, c.ts_code, c.in_date, c.out_date,
+               COUNT(d.trade_date) AS bars,
+               (SELECT COUNT(*)
+                FROM {config.calendar_table} k
+                WHERE k.is_open = true
+                  AND k.trade_date BETWEEN c.in_date AND c.out_date
+               ) AS sessions
+        FROM {config.constituents_table} c
+        LEFT JOIN {config.daily_table} d
+          ON d.ts_code = c.ts_code
+         AND d.trade_date BETWEEN c.in_date AND c.out_date
+        GROUP BY c.index_code, c.ts_code, c.in_date, c.out_date
+        ORDER BY c.ts_code, c.in_date
+    """
+    frame = db.query(sql)
+    frame["coverage"] = frame["bars"].astype(float) / frame["sessions"].replace(0, np.nan)
+    return frame
+
+
 def require_production_universe(config: DataConfig) -> UniverseContractStatus:
     """Non-bypassable helper for formal training/evaluation entry points."""
-
     return resolve_universe_contract(
         config, allow_development_fallback=False
     ).status
