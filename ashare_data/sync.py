@@ -28,7 +28,7 @@ from .config import (
     make_model_config,
     make_sim_config,
 )
-from .db import AshareDB
+from .db import AshareDB, sql_quoted_list
 from .processor import is_valid_a_share_code, normalize_daily_bars
 from ashare_logging import export_log_txt, setup_run_logging
 
@@ -88,7 +88,7 @@ def _purge_stale_daily_rows(
     if not universe:
         return 0
     keep = set(universe) | set(failures)
-    quoted = ",".join(f"'{c}'" for c in sorted(keep))
+    quoted = sql_quoted_list(sorted(keep))
     before = db.query(f"SELECT COUNT(*) AS n FROM {config.daily_table}").iloc[0]["n"]
     db.execute(
         f"DELETE FROM {config.daily_table} WHERE ts_code NOT IN ({quoted})"

@@ -328,7 +328,10 @@ def load_config(
         config_path = project_root / config_path
 
     if not config_path.exists():
-        return {}
+        # A missing baseline must never degrade to a silent defaults run:
+        # every entry point either fails fast (CLI) or catches this in its
+        # defensive wrapper (web API).
+        raise FileNotFoundError(f"config file not found: {config_path}")
 
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
 

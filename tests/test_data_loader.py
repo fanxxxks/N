@@ -164,6 +164,16 @@ def test_load_data_raises_when_no_bars(data_config: DataConfig):
 
 
 def test_build_loader_from_config(tmp_path):
+    # load_config raises on a missing baseline; the loader builder reads
+    # the same baseline, so provide a minimal one.
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "ashare_config.yaml").write_text(
+        "data_dir: data\n"
+        "duckdb_path: data/ashare.duckdb\n"
+        "parquet_dir: data/parquet\n",
+        encoding="utf-8",
+    )
     loader = build_loader_from_config(tmp_path)
     assert isinstance(loader, AshareDataLoader)
 

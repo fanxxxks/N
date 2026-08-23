@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from .db import AshareDB
+from .db import AshareDB, sql_quoted_list
 from .fundamentals import _cached_or_fetch, _read_cached, _write_cached
 
 # Vocabulary feature names produced by this module.
@@ -200,7 +200,7 @@ def build_capital_frames(
     }
     if not ts_codes:
         return frames
-    quoted = ",".join(f"'{c}'" for c in ts_codes)
+    quoted = sql_quoted_list(ts_codes)
     try:
         with AshareDB(config.duckdb_path, read_only=True) as db:
             margin = db.query(

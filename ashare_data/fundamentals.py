@@ -38,7 +38,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from .db import AshareDB
+from .db import AshareDB, sql_quoted_list
 
 # Feature names produced by the point-in-time pipeline (MARKET_CAP is a
 # local daily-bar factor, not a PIT field).
@@ -253,7 +253,7 @@ def _fetch_fundamental_rows(
 ) -> pd.DataFrame:
     if not ts_codes:
         return pd.DataFrame()
-    quoted = ",".join(f"'{c}'" for c in ts_codes)
+    quoted = sql_quoted_list(ts_codes)
     return db.query(
         f"""
         SELECT ts_code, report_date, announce_date, dividend_announce,

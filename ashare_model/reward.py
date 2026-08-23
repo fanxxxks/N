@@ -128,7 +128,7 @@ def sortino_ratio(
         downside_std = float(downside.std(ddof=1)) * math.sqrt(_ANNUALIZATION)
     else:
         daily_std = float(daily.std(ddof=1)) if daily.size > 1 else 0.0
-        downside_std = daily_std * math.sqrt(_ANNUALIZATION) + 1e-6
+        downside_std = daily_std * math.sqrt(_ANNUALIZATION)
     return ann_mean / (downside_std + 1e-9)
 
 

@@ -31,7 +31,7 @@ from ashare_logging import export_log_txt, setup_run_logging
 
 from .data_loader import AshareDataLoader
 from .factors import FACTOR_REGISTRY, NEUTRAL_FEATURE_NAMES
-from .reward import rank_ic_series
+from .reward import icir_from_series, rank_ic_series
 from .time_contract import TrainingTimeContract
 from .vocab import FEATURE_NAMES
 
@@ -127,12 +127,15 @@ def rank_ic_stats(
         if ics.size == 0:
             stats[name] = {"ic_mean": 0.0, "ic_abs_mean": 0.0, "icir": 0.0, "n_dates": 0}
             continue
-        arr = np.asarray(ics)
+        # The unified ICIR implementation: a single IC date is an
+        # under-identified ratio (0.0), never a NaN that would later
+        # serialize illegally into JSON artifacts.
+        icir = float(icir_from_series(ics[None])[0])
         stats[name] = {
-            "ic_mean": float(np.mean(arr)),
-            "ic_abs_mean": float(np.mean(np.abs(arr))),
-            "icir": float(np.mean(arr) / (arr.std(ddof=1) + 1e-9)),
-            "n_dates": int(len(arr)),
+            "ic_mean": float(np.mean(ics)),
+            "ic_abs_mean": float(np.mean(np.abs(ics))),
+            "icir": icir,
+            "n_dates": int(len(ics)),
         }
     return stats
 

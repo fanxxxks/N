@@ -49,6 +49,7 @@ from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
 
 from .matching import SimBroker
 from .portfolio import SimulationPortfolio
+from .signals import clear_stop_signal, stop_requested
 from ashare_logging import export_log_txt, setup_run_logging
 
 
@@ -446,33 +447,12 @@ class SimulationRunner:
         return names
 
     def _handle_stop_signal(self) -> bool:
-        path = Path(self.sim_config.stop_signal_path)
-        if not path.exists():
-            return False
-        try:
-            signal = path.read_text(encoding="utf-8").strip().upper()
-        except OSError:
-            return True
-        if signal not in {"", "STOP", "STOPPED"}:
-            return False
-        logger.warning(f"STOP signal received from {path}. Simulation will stop.")
-        try:
-            path.write_text("STOPPED", encoding="utf-8")
-        except OSError:
-            pass
-        return True
+        return stop_requested(self.sim_config.stop_signal_path)
 
 
 def _clear_stop_signal(sim_config: SimConfig) -> None:
     """Remove a leftover STOP/STOPPED file so an explicit restart can run."""
-
-    path = Path(sim_config.stop_signal_path)
-    try:
-        if path.exists():
-            path.unlink()
-            logger.debug(f"Cleared stop signal: {path}")
-    except OSError as exc:
-        logger.warning(f"Could not clear stop signal file {path}: {exc}")
+    clear_stop_signal(sim_config.stop_signal_path)
 
 
 def main() -> None:

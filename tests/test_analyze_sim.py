@@ -164,6 +164,15 @@ def test_main_end_to_end(tmp_path: Path, monkeypatch, capsys):
     import scripts.analyze_sim as analyze
 
     monkeypatch.setattr(analyze, "REPO_ROOT", tmp_path)
+    # load_config raises on a missing baseline; provide a minimal one.
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "ashare_config.yaml").write_text(
+        "data_dir: data\n"
+        "duckdb_path: data/ashare.duckdb\n"
+        "parquet_dir: data/parquet\n",
+        encoding="utf-8",
+    )
     write_trades(
         tmp_path / "data" / "sim_trades",
         "20240102",

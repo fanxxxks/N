@@ -26,8 +26,11 @@ from ashare_data.config import (
 )
 
 
-def test_load_config_missing_file_returns_empty(tmp_path: Path):
-    assert load_config(tmp_path / "nope.yaml", project_root=tmp_path) == {}
+def test_load_config_missing_file_raises(tmp_path: Path):
+    # A missing baseline fails fast instead of silently degrading to
+    # defaults (the web API catches it in its defensive wrapper).
+    with pytest.raises(FileNotFoundError):
+        load_config(tmp_path / "nope.yaml", project_root=tmp_path)
 
 
 def test_load_config_resolves_relative_paths(tmp_path: Path):

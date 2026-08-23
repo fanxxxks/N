@@ -114,7 +114,9 @@ def test_sortino_uses_downside_deviation_with_enough_negative_days():
 def test_sortino_falls_back_to_full_volatility_with_few_negative_days():
     daily = np.array([0.01, -0.005, 0.01, 0.01, 0.01, 0.01])
     ann_mean = daily.mean() * 252
-    expected = ann_mean / (daily.std(ddof=1) * math.sqrt(252) + 1e-6 + 1e-9)
+    # One epsilon guards the denominator on both branches; the fallback
+    # branch previously added a stray second epsilon.
+    expected = ann_mean / (daily.std(ddof=1) * math.sqrt(252) + 1e-9)
     assert sortino_ratio(daily) == pytest.approx(expected, rel=1e-12)
 
 
