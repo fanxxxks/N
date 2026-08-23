@@ -17,7 +17,10 @@ from ashare_trading.manager import (
 TERMINAL = ("stopped", "finished", "error")
 
 
-def _wait_for(predicate, timeout: float = 10.0) -> None:
+def _wait_for(predicate, timeout: float = 30.0) -> None:
+    # 30s ceiling: subprocess spawn/kill cycles can exceed 10s when the
+    # machine runs heavy jobs (protocol + sync) in parallel, and a
+    # satisfied predicate returns immediately regardless.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
