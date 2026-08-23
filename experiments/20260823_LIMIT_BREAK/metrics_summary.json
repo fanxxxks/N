@@ -1,0 +1,15 @@
+{
+  "formula_text": "LIMIT_BREAK",
+  "direction": -1,
+  "metrics": {
+    "total_return": -1.0,
+    "annual_return": -1.0,
+    "annual_volatility": 0.5213507021406273,
+    "sharpe": -1.9564565538235572,
+    "sortino": -0.8613284229803868,
+    "max_drawdown": 1.0,
+    "calmar": -0.9999999989999999,
+    "average_turnover": 0.009564782858726507
+  },
+  "benchmark": "全市场等权"
+}

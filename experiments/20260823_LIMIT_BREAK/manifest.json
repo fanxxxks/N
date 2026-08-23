@@ -1,0 +1,65 @@
+{
+  "run_id": "5b8482ffe3dc",
+  "created_at": "2026-08-23T17:58:44",
+  "mode": "backtest",
+  "slug": "LIMIT_BREAK",
+  "git_commit": "d9bea1101441b2e2ae592017e19a03793910eca4",
+  "git_dirty": true,
+  "formula": {
+    "formula": [
+      58,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula_text": "LIMIT_BREAK",
+    "val_reward": 0.3690793665262341,
+    "val_icir": 0.4078736596761661,
+    "full_window_reward": -0.8563428838530627,
+    "full_window_icir": -0.013012782044529617,
+    "reward_version": "7"
+  },
+  "config": {
+    "source": "ashare_config.yaml",
+    "sha256": "497fccb7e63435fc7175c37793fc770700ee154f9255005a4c2152c7db73b900",
+    "effective_sha256": "8897377848bed8ee281ce75001fda678474a0e8680875a5493235283434a886d"
+  },
+  "metrics": {
+    "source": "backtest_result.json",
+    "sha256": "f3ffeb09088a499e62c7f32758ef0e79436b9eccae888cc7689182be46ef1f01",
+    "stored": true
+  },
+  "model": null,
+  "protocol": null,
+  "data_end_date": "20260814",
+  "files": [
+    {
+      "name": "formula.json",
+      "bytes": 43692
+    },
+    {
+      "name": "config.yaml",
+      "bytes": 3960
+    },
+    {
+      "name": "config_effective.yaml",
+      "bytes": 2229
+    },
+    {
+      "name": "metrics_summary.json",
+      "bytes": 398
+    },
+    {
+      "name": "metrics.json",
+      "bytes": 4212139
+    }
+  ]
+}
