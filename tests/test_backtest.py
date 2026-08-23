@@ -291,3 +291,70 @@ def test_equal_weight_benchmark_requires_valid_targets():
         equal_weight_benchmark_returns(
             target, [0, 1], np.ones((3, 6), dtype=bool)
         )
+
+
+# --- busted-book metrics robustness -----------------------------------------
+
+
+def test_metrics_clamp_total_loss_beyond_capital():
+    # A book that lost more than its capital (costs on a collapsed book)
+    # compounds below zero.  Annualization must clamp the total return to
+    # -100% instead of raising TypeError on the complex (1 + total) ** x.
+    returns = [-0.5, -1.005, 0.1]  # the -1.005 day flips equity negative
+    equity = [1.0]
+    for ret in returns:
+        equity.append(equity[-1] * (1.0 + ret))
+    assert equity[-1] < 0.0
+    metrics = AshareBacktestEngine._metrics(returns, equity)
+    assert metrics["total_return"] == -1.0
+    assert metrics["annual_return"] == -1.0
+    assert metrics["max_drawdown"] <= 1.0
+    assert all(np.isfinite(value) for value in metrics.values())
+
+
+def test_metrics_clamp_drawdown_into_unit_interval():
+    # Drawdown is a fraction of peak equity: negative equity must not
+    # report a drawdown above 100%.
+    returns = [-0.9, -3.0]
+    equity = [1.0, 0.1, -0.2]
+    metrics = AshareBacktestEngine._metrics(returns, equity)
+    assert metrics["max_drawdown"] == 1.0
+
+
+def test_metrics_normal_books_unchanged():
+    returns = [0.01, -0.005, 0.02]
+    equity = [1.0]
+    for ret in returns:
+        equity.append(equity[-1] * (1.0 + ret))
+    metrics = AshareBacktestEngine._metrics(returns, equity)
+    assert metrics["total_return"] == pytest.approx(equity[-1] - 1.0)
+    assert metrics["max_drawdown"] < 1.0
+
+
+def test_engine_survives_busted_book_end_to_end():
+    # End-to-end reproduction of the original crash: the exit open gaps to
+    # ~0, the gross day is a -100% return and costs push the net day below
+    # -100%, so the compounded equity goes negative.  The metrics must stay
+    # finite instead of crashing on complex annualization.
+    codes = ["000001.SZ"]
+    dates = ["20240102", "20240103", "20240104", "20240105"]
+    open_ = np.array([[10.0, 10.0, 1e-9, 1e-9]])
+    raw = {
+        "open": open_,
+        "high": open_.copy(),
+        "low": open_.copy(),
+        "pre_close": open_.copy(),
+        "volume": np.ones((1, 4)),
+    }
+    result = AshareBacktestEngine(
+        BacktestConfig(top_n=1, single_weight_cap=1.0)
+    ).run(
+        np.ones((1, 4)),
+        raw,
+        codes,
+        dates,
+        universe_mask=np.ones((1, 4), dtype=bool),
+    )
+    assert all(np.isfinite(value) for value in result.metrics.values())
+    assert result.metrics["total_return"] == -1.0
+    assert result.metrics["annual_return"] == -1.0
