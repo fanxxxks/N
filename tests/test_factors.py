@@ -387,7 +387,7 @@ def test_rolling_capm_aligns_market_window_to_stock_suspension_gaps():
             "C": build_close(ret_c, suspended),
         },
         index=dates,
-    ).T
+    ).T.copy()  # .copy() defragments the transposed frame
     eligible = np.ones(close.shape, dtype=bool)
 
     # --- explicit aligned reference ------------------------------------

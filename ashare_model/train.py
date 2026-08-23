@@ -52,6 +52,15 @@ from .vm import StackVM, formula_decode
 from .vocab import FORMULA_VOCAB
 from ashare_logging import export_log_txt, setup_run_logging
 
+# Sampling-state tables, built once at import: the arity of every operator
+# token and the feature-token id range, so the per-position stack update
+# never rebuilds tensors inside the sampling loop (the policy and sampling
+# always run on CPU, matching these tensors).
+_OPERATOR_ARITY = torch.zeros(FORMULA_VOCAB.size)
+for _i, (_, _, _arity) in enumerate(OPS_CONFIG):
+    _OPERATOR_ARITY[FORMULA_VOCAB.operator_offset + _i] = _arity
+_FEATURE_IDS = torch.arange(1, FORMULA_VOCAB.operator_offset)
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -680,22 +689,19 @@ class AshareTrainer:
         return validation_windows(train_end_idx, self.model_config)
 
     @staticmethod
+    @staticmethod
     def _update_stack_state(
         action: torch.Tensor,
         open_slots: torch.Tensor,
         stack_sizes: torch.Tensor,
     ) -> None:
-        feature_ids = torch.arange(1, FORMULA_VOCAB.operator_offset, device=action.device)
         is_pad = action == FORMULA_VOCAB.pad_token_id
-        is_feature = (action.unsqueeze(1) == feature_ids).any(dim=1)
+        is_feature = (action.unsqueeze(1) == _FEATURE_IDS).any(dim=1)
 
         feature = is_feature
         pad = is_pad
-        # For every operator token, compute delta = arity - 1.
-        arity = torch.zeros_like(action)
-        for i, (_, _, a) in enumerate(OPS_CONFIG):
-            token = FORMULA_VOCAB.operator_offset + i
-            arity = torch.where(action == token, torch.tensor(a, device=action.device), arity)
+        # Precomputed per-token arity table (module level, built once).
+        arity = _OPERATOR_ARITY[action]
 
         old_stack = stack_sizes.clone()
         new_stack = old_stack.clone()

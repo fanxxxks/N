@@ -4,8 +4,9 @@ Sources (all free via AkShare):
 * Margin financing: the SSE/SZSE per-date cross-section feeds
   (``stock_margin_detail_sse`` / ``stock_margin_detail_szse``) publish the
   full market for a given trading date, so a backfill costs one request
-  per exchange per trading day.  Published after the close, so using the
-  value on the next trading day introduces no lookahead.
+  per exchange per trading day.  Published after the close of the as-of
+  date: the factor column stores the as-of value, and the engine only
+  trades the signal at the next open, so no lookahead.
 * Shenwan first-level industries: the industry index daily closes
   (``index_hist_sw``) and the CURRENT member snapshot
   (``index_component_sw``).  Membership is a current snapshot, the same
