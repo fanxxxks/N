@@ -116,8 +116,10 @@ def test_manual_archive_records_everything(repo):
     assert manifest["formula"]["formula_text"] == "TURNOVER_CHG MUL RET_5"
     assert manifest["formula"]["val_reward"] == 0.123
     assert manifest["formula"]["val_icir"] == 0.456
-    assert manifest["formula"]["full_window_reward"] == 0.111
-    assert manifest["formula"]["full_window_icir"] == 0.222
+    # The fixture artifact carries the pre-v10 full_window_* keys; the
+    # reader resolves them through the legacy fallback into train_*.
+    assert manifest["formula"]["train_reward"] == 0.111
+    assert manifest["formula"]["train_icir"] == 0.222
     assert manifest["formula"]["reward_version"] == "6"
     assert manifest["config"]["sha256"] == hashlib.sha256(
         (repo / "config.yaml").read_bytes()).hexdigest()

@@ -61,8 +61,8 @@ def _score(
     *,
     val_reward: float,
     val_icir: float,
-    full_reward: float,
-    full_icir: float,
+    train_reward: float,
+    train_icir: float,
     eligible: bool,
     token: int,
     reasons: tuple[str, ...] = (),
@@ -75,8 +75,8 @@ def _score(
         direction=1,
         val_reward=val_reward,
         val_icir=val_icir,
-        full_window_reward=full_reward,
-        full_window_icir=full_icir,
+        train_reward=train_reward,
+        train_icir=train_icir,
         complexity_penalty=0.0,
         eligible=eligible,
         rejection_reasons=reasons,
@@ -88,8 +88,8 @@ def test_selector_filters_before_ranking_and_keeps_best_rejected():
         "rejected",
         val_reward=1.0,
         val_icir=0.01,
-        full_reward=1.0,
-        full_icir=0.8,
+        train_reward=1.0,
+        train_icir=0.8,
         eligible=False,
         token=1,
         reasons=("val_icir_below_minimum",),
@@ -98,8 +98,8 @@ def test_selector_filters_before_ranking_and_keeps_best_rejected():
         "eligible",
         val_reward=0.9,
         val_icir=0.2,
-        full_reward=0.8,
-        full_icir=0.3,
+        train_reward=0.8,
+        train_icir=0.3,
         eligible=True,
         token=2,
     )
@@ -115,12 +115,12 @@ def test_selector_filters_before_ranking_and_keeps_best_rejected():
 
 def test_selector_uses_all_metrics_then_token_key_for_ties():
     left = _score(
-        "left", val_reward=0.5, val_icir=0.4, full_reward=0.3,
-        full_icir=0.2, eligible=True, token=2,
+        "left", val_reward=0.5, val_icir=0.4, train_reward=0.3,
+        train_icir=0.2, eligible=True, token=2,
     )
     right = _score(
-        "right", val_reward=0.5, val_icir=0.4, full_reward=0.3,
-        full_icir=0.2, eligible=True, token=1,
+        "right", val_reward=0.5, val_icir=0.4, train_reward=0.3,
+        train_icir=0.2, eligible=True, token=1,
     )
     assert CandidateSelector().select([left, right]).selected == right
 
@@ -232,15 +232,15 @@ def test_direction_mirror_invariance_in_scoring_and_backtest():
         [signal, -signal],
         target,
         windows,
-        full_signal_range=(0, 10),
+        train_signal_range=(0, 10),
         universe_mask=np.ones((n_stocks, n_dates), dtype=bool),
     )
     assert positive.direction == -mirrored.direction
     for field in (
         "val_reward",
         "val_icir",
-        "full_window_reward",
-        "full_window_icir",
+        "train_reward",
+        "train_icir",
     ):
         assert getattr(positive, field) == pytest.approx(
             getattr(mirrored, field), rel=0.0, abs=0.0
@@ -309,9 +309,24 @@ def test_artifact_reader_is_one_way_legacy_compatible():
         }
     )
     assert legacy.val_reward == 0.2
-    assert legacy.full_window_icir == 0.3
+    assert legacy.train_icir == 0.3
+    # v10 renamed full_window_* to train_*: artifacts from the v7..v9
+    # generations resolve through the legacy keys.
+    renamed = CandidateScore.from_payload(
+        {
+            "formula": [1],
+            "formula_text": "RET_1",
+            "val_reward": 0.4,
+            "val_icir": 0.5,
+            "full_window_reward": 0.6,
+            "full_window_icir": 0.7,
+        }
+    )
+    assert renamed.train_reward == 0.6
+    assert renamed.train_icir == 0.7
     payload = legacy.to_dict()
     assert "best_reward" not in payload and "best_icir" not in payload
+    assert "full_window_reward" not in payload and "full_window_icir" not in payload
 
 
 # --- signal-date universe eligibility in candidate scoring --------------------
@@ -357,14 +372,14 @@ def test_scorer_pre_join_extreme_does_not_change_any_field():
         "direction",
         "val_reward",
         "val_icir",
-        "full_window_reward",
-        "full_window_icir",
+        "train_reward",
+        "train_icir",
         "complexity_penalty",
         "eligible",
         "rejection_reasons",
     ):
         assert getattr(mild, field) == getattr(ext, field), field
-    # Without the mask the same perturbation does move the full-window
+    # Without the mask the same perturbation does move the training-window
     # statistics (sanity: the mask is what neutralizes it).
     mild_open = scorer.score(
         _spec("mild"), signal, target, windows,
@@ -375,8 +390,8 @@ def test_scorer_pre_join_extreme_does_not_change_any_field():
         universe_mask=np.ones((n_stocks, n_dates), dtype=bool),
     )
     assert not (
-        mild_open.full_window_icir == ext_open.full_window_icir
-        and mild_open.full_window_reward == ext_open.full_window_reward
+        mild_open.train_icir == ext_open.train_icir
+        and mild_open.train_reward == ext_open.train_reward
     )
 
 
@@ -474,7 +489,7 @@ def test_scorer_direction_mirror_invariance_holds_under_mask():
         [signal, -signal],
         target,
         windows,
-        full_signal_range=(0, 14),
+        train_signal_range=(0, 14),
         universe_mask=mask,
     )
     # Both orientations are scored under the identical mask: the applied
@@ -486,8 +501,8 @@ def test_scorer_direction_mirror_invariance_holds_under_mask():
     for field in (
         "val_reward",
         "val_icir",
-        "full_window_reward",
-        "full_window_icir",
+        "train_reward",
+        "train_icir",
     ):
         assert getattr(positive, field) == pytest.approx(
             getattr(mirrored, field), rel=0.0, abs=0.0

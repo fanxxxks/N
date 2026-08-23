@@ -11,7 +11,11 @@ from ashare_data.config import BacktestConfig, DataConfig, ModelConfig, RewardCo
 from ashare_data.processor import open_to_open_returns
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.reward import REWARD_VERSION
-from ashare_model.train import AshareTrainer, resolve_device
+from ashare_model.train import (
+    AshareTrainer,
+    resolve_device,
+    validation_start,
+)
 from ashare_model.vocab import FORMULA_VOCAB
 
 
@@ -218,20 +222,20 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
     combined = (1, 1, add_token, 0)
     bare_score = trainer._reward_cache[bare]
     combined_score = trainer._reward_cache[combined]
-    assert bare_score.full_window_reward == pytest.approx(0.25)
+    assert bare_score.train_reward == pytest.approx(0.25)
     assert bare_score.val_reward == pytest.approx(0.15)
-    assert bare_score.full_window_icir == pytest.approx(0.45)
+    assert bare_score.train_icir == pytest.approx(0.45)
     assert bare_score.val_icir == pytest.approx(0.35)
-    assert combined_score.full_window_reward == pytest.approx(0.5)
+    assert combined_score.train_reward == pytest.approx(0.5)
     assert combined_score.val_reward == pytest.approx(0.4)
-    assert combined_score.full_window_icir == pytest.approx(0.45)
+    assert combined_score.train_icir == pytest.approx(0.45)
     assert combined_score.val_icir == pytest.approx(0.35)
     # The selection prefers the unpenalized operator formula.
     assert trainer.best_tokens == list(combined)
     assert trainer.best_val_reward == pytest.approx(0.4)
     assert trainer.best_val_icir == pytest.approx(0.35)
-    assert trainer.best_full_window_reward == pytest.approx(0.5)
-    assert trainer.best_full_window_icir == pytest.approx(0.45)
+    assert trainer.best_train_reward == pytest.approx(0.5)
+    assert trainer.best_train_icir == pytest.approx(0.45)
 
 
 def test_trainer_passes_universe_mask_to_scorer(
@@ -288,6 +292,48 @@ def test_trainer_passes_universe_mask_to_scorer(
     assert mask is not None
     assert mask.shape == (len(loader.ts_codes), train_end)
     assert np.array_equal(mask, loader.universe_mask[:, :train_end])
+
+
+def test_policy_gradient_reward_window_excludes_validation_tail(
+    populated_db: DataConfig, monkeypatch
+):
+    """M2 contract: the reward window feeding the policy gradient stops
+    where the validation tail begins.
+
+    The validation tail is the *selection* data (it decides the best
+    formula); it must not also be the *learning* signal, or the policy is
+    trained toward whatever overfits the tail.  A spy around the batched
+    reward path records the primary scoring window of every call the
+    trainer makes and asserts its end never crosses the first validation
+    column, while the window itself stays non-degenerate.
+    """
+    import ashare_model.train as train_module
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    contract = trainer._training_contract()
+    val_start = validation_start(contract.train_signal_end, model_config)
+
+    real = train_module.batched_basket_rewards
+    seen: list[tuple[int, int] | None] = []
+
+    def spy(signals, target, bt, rc, val_windows, **kwargs):
+        seen.append(kwargs.get("train_signal_range"))
+        return real(signals, target, bt, rc, val_windows, **kwargs)
+
+    monkeypatch.setattr(train_module, "batched_basket_rewards", spy)
+    trainer.train(steps=1, batch_size=2, seed=42, save_artifacts=False)
+    assert seen, "the trainer never invoked the reward path"
+    assert all(rng is not None for rng in seen)
+    assert all(start < end <= val_start for (start, end) in seen)
 
 
 def test_quality_floor_blocks_save_and_returns_none(
@@ -878,7 +924,7 @@ def test_icir_gate_passes_strong_signal(tmp_path, populated_db: DataConfig, monk
     tokens = trainer.train(steps=1, batch_size=1, save_artifacts=False)
     assert tokens is not None
     assert trainer.best_val_icir == pytest.approx(0.4)
-    assert trainer.best_full_window_icir == pytest.approx(0.4)
+    assert trainer.best_train_icir == pytest.approx(0.4)
     assert trainer.best_direction in (-1, 1)
 
 
@@ -914,13 +960,14 @@ def test_artifact_records_direction_and_icir(tmp_path, populated_db: DataConfig,
     assert artifact["direction"] == trainer.best_direction
     assert artifact["val_reward"] == pytest.approx(trainer.best_val_reward)
     assert artifact["val_icir"] == pytest.approx(trainer.best_val_icir)
-    assert artifact["full_window_reward"] == pytest.approx(
-        trainer.best_full_window_reward
+    assert artifact["train_reward"] == pytest.approx(
+        trainer.best_train_reward
     )
-    assert artifact["full_window_icir"] == pytest.approx(
-        trainer.best_full_window_icir
+    assert artifact["train_icir"] == pytest.approx(
+        trainer.best_train_icir
     )
     assert "best_reward" not in artifact and "best_icir" not in artifact
+    assert "full_window_reward" not in artifact and "full_window_icir" not in artifact
 
 
 def test_collapse_warning_fires_after_consecutive_collapsed_steps(

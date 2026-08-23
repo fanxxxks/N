@@ -69,8 +69,8 @@ class CandidateScore:
     direction: int
     val_reward: float
     val_icir: float
-    full_window_reward: float
-    full_window_icir: float
+    train_reward: float
+    train_icir: float
     complexity_penalty: float
     eligible: bool
     rejection_reasons: tuple[str, ...]
@@ -93,8 +93,8 @@ class CandidateScore:
             "direction": self.direction,
             "val_reward": finite_or_none(self.val_reward),
             "val_icir": finite_or_none(self.val_icir),
-            "full_window_reward": finite_or_none(self.full_window_reward),
-            "full_window_icir": finite_or_none(self.full_window_icir),
+            "train_reward": finite_or_none(self.train_reward),
+            "train_icir": finite_or_none(self.train_icir),
             "complexity_penalty": self.complexity_penalty,
             "eligible": self.eligible,
             "rejection_reasons": list(self.rejection_reasons),
@@ -112,7 +112,12 @@ class CandidateScore:
 
         tokens = payload.get("formula", payload.get("tokens"))
         val_reward = payload.get("val_reward", payload.get("best_reward"))
-        full_icir = payload.get("full_window_icir", payload.get("best_icir"))
+        # v10 renamed full_window_* to train_*; earlier artifacts (and the
+        # pre-v6 names) resolve through the same fallback chain.
+        train_icir = payload.get(
+            "train_icir",
+            payload.get("full_window_icir", payload.get("best_icir")),
+        )
         reasons = tuple(str(reason) for reason in payload.get("rejection_reasons", []))
         return cls(
             tokens=tuple(int(t) for t in tokens) if tokens is not None else None,
@@ -122,8 +127,10 @@ class CandidateScore:
             direction=int(payload.get("direction", 1)),
             val_reward=number(val_reward),
             val_icir=number(payload.get("val_icir")),
-            full_window_reward=number(payload.get("full_window_reward")),
-            full_window_icir=number(full_icir),
+            train_reward=number(
+                payload.get("train_reward", payload.get("full_window_reward"))
+            ),
+            train_icir=number(train_icir),
             complexity_penalty=number(payload.get("complexity_penalty", 0.0)),
             eligible=bool(payload.get("eligible", not reasons)),
             rejection_reasons=reasons,
@@ -166,8 +173,8 @@ class CandidateSelector:
         return (
             -cls._metric(score.val_reward),
             -cls._metric(score.val_icir),
-            -cls._metric(score.full_window_reward),
-            -cls._metric(score.full_window_icir),
+            -cls._metric(score.train_reward),
+            -cls._metric(score.train_icir),
             score.deterministic_key,
         )
 
@@ -217,7 +224,7 @@ class CandidateScorer:
         blocked_buy: np.ndarray | None = None,
         blocked_sell: np.ndarray | None = None,
         formula_valid: bool = True,
-        full_signal_range: tuple[int, int] | None = None,
+        train_signal_range: tuple[int, int] | None = None,
     ) -> CandidateScore:
         return self.score_many(
             [spec],
@@ -228,7 +235,7 @@ class CandidateScorer:
             blocked_buy=blocked_buy,
             blocked_sell=blocked_sell,
             formula_valid=[formula_valid],
-            full_signal_range=full_signal_range,
+            train_signal_range=train_signal_range,
         )[0]
 
     def score_many(
@@ -242,7 +249,7 @@ class CandidateScorer:
         blocked_buy: np.ndarray | None = None,
         blocked_sell: np.ndarray | None = None,
         formula_valid: Sequence[bool] | None = None,
-        full_signal_range: tuple[int, int] | None = None,
+        train_signal_range: tuple[int, int] | None = None,
     ) -> list[CandidateScore]:
         """Score a batch of candidates under one PIT eligibility mask.
 
@@ -254,6 +261,15 @@ class CandidateScorer:
         direction tie-break — so a future member's extreme finite values
         can neither move a score nor flip a direction or rejection reason
         before its join day.
+
+        ``train_signal_range`` is the caller's *learning* window (the
+        primary scoring pass): the trainer passes the in-sample window
+        that ends where the validation tail begins, so the reward that
+        feeds the policy gradient never reads the selection data; the
+        protocol passes the same IS boundary so artifacts carry one
+        uniform window semantics.  The near-constant rejection scans the
+        same window: a formula constant on the learning window carries no
+        gradient signal even if it varies on the validation tail.
         """
 
         if len(specs) != len(signals):
@@ -272,10 +288,10 @@ class CandidateScorer:
                 f"universe_mask shape {universe_mask.shape} does not match "
                 f"target shape {target.shape}"
             )
-        if full_signal_range is None:
-            full_signal_range = (0, max(target.shape[1] - 2, 0))
-        full_start, full_end = full_signal_range
-        scoring_ref = universe_mask[:, full_start:full_end]
+        if train_signal_range is None:
+            train_signal_range = (0, max(target.shape[1] - 2, 0))
+        train_start, train_end = train_signal_range
+        scoring_ref = universe_mask[:, train_start:train_end]
 
         results: list[CandidateScore | None] = [None] * len(specs)
         batch_indices: list[int] = []
@@ -293,7 +309,7 @@ class CandidateScorer:
                 raise ValueError(
                     f"signal shape {array.shape} does not match target {target.shape}"
                 )
-            scoring_values = array[:, full_start:full_end]
+            scoring_values = array[:, train_start:train_end]
             ref = np.isfinite(scoring_values) & scoring_ref
             finite = scoring_values[ref]
             if finite.size == 0 or float(np.std(finite)) < self.near_constant_threshold:
@@ -321,7 +337,7 @@ class CandidateScorer:
                 val_windows,
                 blocked_buy=blocked_buy,
                 blocked_sell=blocked_sell,
-                full_signal_range=full_signal_range,
+                train_signal_range=train_signal_range,
                 universe_mask=universe_mask,
             )
             assert val_rewards is not None and val_icir is not None
@@ -348,8 +364,8 @@ class CandidateScorer:
                     direction=direction,
                     val_reward=float(val_rewards[chosen]) - penalty,
                     val_icir=float(val_icir[chosen]),
-                    full_window_reward=float(rewards[chosen]) - penalty,
-                    full_window_icir=float(icir[chosen]),
+                    train_reward=float(rewards[chosen]) - penalty,
+                    train_icir=float(icir[chosen]),
                     complexity_penalty=penalty,
                     eligible=False,
                     rejection_reasons=(),
@@ -392,8 +408,8 @@ class CandidateScorer:
             direction=1,
             val_reward=math.nan,
             val_icir=math.nan,
-            full_window_reward=float(training_reward),
-            full_window_icir=math.nan,
+            train_reward=float(training_reward),
+            train_icir=math.nan,
             complexity_penalty=self.complexity_penalty(spec),
             eligible=False,
             rejection_reasons=(reason,),

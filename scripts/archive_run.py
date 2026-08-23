@@ -109,9 +109,14 @@ def load_formula_info(path):
         "formula_text": data.get("formula_text"),
         "val_reward": data.get("val_reward", data.get("best_reward")),
         "val_icir": data.get("val_icir"),
-        "full_window_reward": data.get("full_window_reward"),
-        "full_window_icir": data.get(
-            "full_window_icir", data.get("best_icir")
+        # v10 renamed full_window_* to train_*; older artifacts resolve
+        # through the legacy keys.
+        "train_reward": data.get(
+            "train_reward", data.get("full_window_reward")
+        ),
+        "train_icir": data.get(
+            "train_icir",
+            data.get("full_window_icir", data.get("best_icir")),
         ),
         "reward_version": data.get("reward_version"),
     }

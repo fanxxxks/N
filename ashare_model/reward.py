@@ -14,6 +14,15 @@ never be compared silently.
 
 Version history
 ---------------
+* v10: the policy gradient is isolated from the validation tail.  The
+  trainer's primary scoring window (``train_signal_range``) is now the
+  in-sample head that ends where the validation tail begins, instead of
+  the full training window: REINFORCE rewards never read the selection
+  data, closing the optimistic in-training bias where formulas were
+  pushed toward whatever overfit the validation tail.  CandidateScore
+  renames ``full_window_*`` to ``train_*`` (same window semantics change,
+  recorded in artifacts); near-constant rejection scans the learning
+  window.  Artifact schema changes with the rename.
 * v9: the rolling CAPM factors (BETA_60/IVOL_60/RSQ_60) align the market
   window to each stock's own valid sessions.  The market prefix sums used
   to accumulate over every calendar session in the window while the
@@ -94,7 +103,7 @@ import numpy as np
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
 
-REWARD_VERSION = "9"
+REWARD_VERSION = "10"
 
 _ANNUALIZATION = 252
 
@@ -540,7 +549,7 @@ def batched_basket_rewards(
     val_windows: list[tuple[int, int]] | None = None,
     blocked_buy: np.ndarray | None = None,
     blocked_sell: np.ndarray | None = None,
-    full_signal_range: tuple[int, int] | None = None,
+    train_signal_range: tuple[int, int] | None = None,
     *,
     universe_mask: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray | None]:
@@ -549,18 +558,22 @@ def batched_basket_rewards(
 
     ``signals`` is ``[B, stocks, dates]``.  Returns
     ``(rewards [B], val_rewards [B] | None, icir [B], val_icir [B] | None)``:
-    the full-window reward is clipped ICIR minus the proportional
-    turnover-cost drag; with ``val_windows`` (column index pairs, half-open)
-    the validation reward is the **median** over the windows of the same
-    quantity computed on each window independently (each window's basket
-    restarts from zero weights, mirroring a fresh out-of-sample deployment),
-    and ``val_icir`` is the median window ICIR.  Without ``val_windows``
-    the second and fourth results are ``None``.  ``blocked_buy`` /
-    ``blocked_sell`` are ``[stocks, dates]`` tradability masks shared by all
-    rows (per window they are sliced exactly like the signals).
-    ``universe_mask`` is the mandatory ``[stocks, dates]`` PIT eligibility
-    mask, sliced per window exactly like the signals, so each window's IC and
-    basket see only its signal-date eligible cells.
+    the training-window reward is clipped ICIR minus the proportional
+    turnover-cost drag, computed on ``train_signal_range`` — the caller's
+    *learning* window, which for the trainer is the in-sample window
+    ending where the validation tail begins (the policy gradient must
+    never score on the selection data); with ``val_windows`` (column index
+    pairs, half-open) the validation reward is the **median** over the
+    windows of the same quantity computed on each window independently
+    (each window's basket restarts from zero weights, mirroring a fresh
+    out-of-sample deployment), and ``val_icir`` is the median window ICIR.
+    Without ``val_windows`` the second and fourth results are ``None``.
+    ``blocked_buy`` / ``blocked_sell`` are ``[stocks, dates]``
+    tradability masks shared by all rows (per window they are sliced
+    exactly like the signals).  ``universe_mask`` is the mandatory
+    ``[stocks, dates]`` PIT eligibility mask, sliced per window exactly
+    like the signals, so each window's IC and basket see only its
+    signal-date eligible cells.
     """
 
     signals = np.asarray(signals, dtype=np.float64)
@@ -571,15 +584,15 @@ def batched_basket_rewards(
             f"universe_mask shape {universe_mask.shape} does not match "
             f"target_ret shape {target_ret.shape}"
         )
-    if full_signal_range is None:
-        full_signal_range = (0, max(signals.shape[2] - 2, 0))
-    full_start, full_end = full_signal_range
+    if train_signal_range is None:
+        train_signal_range = (0, max(signals.shape[2] - 2, 0))
+    train_start, train_end = train_signal_range
     icir = icir_from_series(
         rank_ic_series(
-            signals[:, :, full_start:full_end],
-            target_ret[:, full_start:full_end],
+            signals[:, :, train_start:train_end],
+            target_ret[:, train_start:train_end],
             reward_cfg.ic_min_stocks,
-            universe_mask=universe_mask[:, full_start:full_end],
+            universe_mask=universe_mask[:, train_start:train_end],
         )
     )
     simulation = simulate_basket_daily_returns_batch(
@@ -588,7 +601,7 @@ def batched_basket_rewards(
         bt_cfg,
         blocked_buy,
         blocked_sell,
-        full_signal_range,
+        train_signal_range,
         universe_mask=universe_mask,
     )
     mean_cost = (
