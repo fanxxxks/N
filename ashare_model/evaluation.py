@@ -61,6 +61,12 @@ of the full-timeline mean/std look-ahead; see
 unchanged, but every formula containing JUMP now produces a different
 signal, so prior protocol results are not comparable for those candidates.
 
+v10 aligns the rolling CAPM factors' market window to each stock's own
+valid sessions (see ``ashare_model.reward.REWARD_VERSION`` v9): stocks
+with suspension gaps no longer regress on market returns from sessions
+they did not trade, so BETA_60/IVOL_60/RSQ_60 and every candidate built
+on them changes value.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -117,7 +123,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "9"
+PROTOCOL_VERSION = "10"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (

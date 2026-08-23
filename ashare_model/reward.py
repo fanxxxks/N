@@ -14,6 +14,14 @@ never be compared silently.
 
 Version history
 ---------------
+* v9: the rolling CAPM factors (BETA_60/IVOL_60/RSQ_60) align the market
+  window to each stock's own valid sessions.  The market prefix sums used
+  to accumulate over every calendar session in the window while the
+  observation count only counted the stock's trading days, so stocks with
+  suspension gaps regressed on market returns from sessions they did not
+  trade (biased cov/var_m).  Factor values of suspended stocks change;
+  artifacts recorded with earlier versions are not comparable for
+  CAPM-derived signals.
 * v8: the JUMP operator is causal.  It used to standardize by the
   full-timeline mean/std of the signal — a look-ahead (position ``t`` saw
   the future of the window), which leaked post-test-window data into
@@ -86,7 +94,7 @@ import numpy as np
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
 
-REWARD_VERSION = "8"
+REWARD_VERSION = "9"
 
 _ANNUALIZATION = 252
 
