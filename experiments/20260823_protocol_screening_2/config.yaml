@@ -1,0 +1,119 @@
+# AlphaGPT A-share configuration
+# Non-sensitive settings live here. Optional secrets go in config/.env.
+
+data_dir: data
+duckdb_path: data/ashare.duckdb
+parquet_dir: data/parquet
+
+calendar_table: trade_calendar
+stocks_table: stocks
+daily_table: daily_bar
+constituents_table: constituents
+factor_table: factor_cache
+
+start_date: "2015-01-01"
+end_date: "2026-12-31"
+adjust: qfq
+
+# PIT universe: configured indices must each have a trustworthy historical
+# membership source (see scripts/import_pit_universe.py).  000852.SH
+# (CSI1000) has no free historical-constituent source, so it is excluded;
+# 沪深300 + 中证500 are imported as monthly-snapshot-derived intervals.
+index_codes:
+  - "000300.SH"
+  - "000905.SH"
+
+index_names:
+  - "沪深300"
+  - "中证500"
+
+min_listed_sessions: 60
+
+# Daily bar provider: auto (Eastmoney first, Sina fallback), eastmoney, sina.
+daily_provider: auto
+
+model:
+  d_model: 64
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 128
+  num_loops: 3
+  dropout: 0.1
+  batch_size: 4096
+  train_steps: 1000
+  max_formula_len: 12
+  learning_rate: 0.001
+  validation_fraction: 0.35
+  validation_splits: 4
+  entropy_coef: 0.01
+  advantage_clip: 10.0
+
+# Reward-scoring constants; semantic changes to the reward implementation
+# bump ashare_model.reward.REWARD_VERSION and are recorded in artifacts.
+# Current semantics: reward = rank-ICIR - cost_weight * (annualized turnover cost),
+# clipped to [reward_clip_low, reward_clip_high]; validation reward is the
+# median over validation_splits sub-windows; bare single-factor formulas pay
+# a small complexity_penalty (kept tiny so the validation floor stays
+# reachable); artifacts are saved only when BOTH the best validation reward
+# reaches min_val_reward AND the best formula's full-window rank-ICIR
+# reaches min_val_icir (signal-quality gate against low-IC, low-turnover
+# fundamental copies).
+reward:
+  reward_clip_low: -1.0
+  reward_clip_high: 1.0
+  bad_reward: -2.0
+  cost_weight: 1.0
+  complexity_penalty: 0.02
+  min_val_reward: 0.0
+  min_val_icir: 0.05
+  ic_min_stocks: 10
+
+# Evaluation protocol: walk-forward folds anchored to absolute dates, multi
+# seed, IS/OOS metrics; adjudication is reward-independent (backtest-engine
+# metrics + rank IC) and corrected for candidate multiplicity (Deflated
+# Sharpe + max-t).  Signals are traded in their learned direction.  A
+# uniform random-search baseline (protocol.random_samples formulas, one
+# best per fold) separates "the RL search is ineffective" from "the reward
+# is uninformative".  frequency/horizon are record-only for now.
+# batch_size must stay >= 256: below that the advantage normalization
+# (rewards.std) risks degenerating.
+protocol:
+  frequency: daily
+  horizon: 1
+  seeds: [42, 7, 2024]
+  random_samples: 4096
+  random_seed: 1234
+  baseline_signals: [REVERSAL_5, RSQ_60, ILLIQ_20, OVERNIGHT_RET, MOMENTUM_20, ROE, TURNOVER]
+  folds:
+    - {train_end: "2020-12-31", test_end: "2021-12-31"}
+    - {train_end: "2021-12-31", test_end: "2022-12-31"}
+    - {train_end: "2022-12-31", test_end: "2023-12-31"}
+    - {train_end: "2023-12-31", test_end: "2024-12-31"}
+    - {train_end: "2024-12-31", test_end: "2025-12-31"}
+  screening: {steps: 150, batch_size: 256}
+  confirmation: {steps: 200, batch_size: 512}
+
+backtest:
+  start_date: "2015-01-01"
+  end_date: "2026-12-31"
+  train_end_date: "2023-12-31"
+  initial_capital: 100000.0
+  top_n: 30
+  single_weight_cap: 0.05
+  commission_rate: 0.00025
+  min_commission: 5.0
+  stamp_tax_rate: 0.0005
+  transfer_fee_rate: 0.00001
+  slippage_rate: 0.0005
+  benchmark: "全市场等权"
+
+sim:
+  initial_capital: 100000.0
+  max_positions: 30
+  single_weight_cap: 0.05
+  benchmark: "全市场等权"
+  stop_signal_path: STOP_SIGNAL
+  state_path: data/sim_portfolio_state.json
+  orders_dir: data/sim_orders
+  trades_dir: data/sim_trades
+  progress_path: data/sim_progress.json

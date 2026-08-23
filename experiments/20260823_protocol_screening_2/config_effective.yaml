@@ -1,0 +1,100 @@
+data_dir: D:\minequant\AlphaGPT\data
+duckdb_path: D:\minequant\AlphaGPT\data\ashare.duckdb
+parquet_dir: D:\minequant\AlphaGPT\data\parquet
+calendar_table: trade_calendar
+stocks_table: stocks
+daily_table: daily_bar
+constituents_table: constituents
+factor_table: factor_cache
+start_date: '2015-01-01'
+end_date: '2026-12-31'
+adjust: qfq
+index_codes:
+- 000300.SH
+- 000905.SH
+index_names:
+- 沪深300
+- 中证500
+min_listed_sessions: 60
+daily_provider: auto
+model:
+  d_model: 64
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 128
+  num_loops: 3
+  dropout: 0.1
+  batch_size: 4096
+  train_steps: 1000
+  max_formula_len: 12
+  learning_rate: 0.001
+  validation_fraction: 0.35
+  validation_splits: 4
+  entropy_coef: 0.01
+  advantage_clip: 10.0
+reward:
+  reward_clip_low: -1.0
+  reward_clip_high: 1.0
+  bad_reward: -2.0
+  cost_weight: 1.0
+  complexity_penalty: 0.02
+  min_val_reward: 0.0
+  min_val_icir: 0.05
+  ic_min_stocks: 10
+protocol:
+  frequency: daily
+  horizon: 1
+  seeds:
+  - 42
+  - 7
+  - 2024
+  random_samples: 4096
+  random_seed: 1234
+  baseline_signals:
+  - REVERSAL_5
+  - RSQ_60
+  - ILLIQ_20
+  - OVERNIGHT_RET
+  - MOMENTUM_20
+  - ROE
+  - TURNOVER
+  folds:
+  - train_end: '2020-12-31'
+    test_end: '2021-12-31'
+  - train_end: '2021-12-31'
+    test_end: '2022-12-31'
+  - train_end: '2022-12-31'
+    test_end: '2023-12-31'
+  - train_end: '2023-12-31'
+    test_end: '2024-12-31'
+  - train_end: '2024-12-31'
+    test_end: '2025-12-31'
+  screening:
+    steps: 150
+    batch_size: 256
+  confirmation:
+    steps: 200
+    batch_size: 512
+backtest:
+  start_date: '2015-01-01'
+  end_date: '2026-12-31'
+  train_end_date: '2023-12-31'
+  initial_capital: 100000.0
+  top_n: 30
+  single_weight_cap: 0.05
+  commission_rate: 0.00025
+  min_commission: 5.0
+  stamp_tax_rate: 0.0005
+  transfer_fee_rate: 1.0e-05
+  slippage_rate: 0.0005
+  benchmark: 全市场等权
+sim:
+  initial_capital: 100000.0
+  max_positions: 30
+  single_weight_cap: 0.05
+  benchmark: 全市场等权
+  stop_signal_path: STOP_SIGNAL
+  state_path: data/sim_portfolio_state.json
+  orders_dir: data/sim_orders
+  trades_dir: data/sim_trades
+  progress_path: data/sim_progress.json
