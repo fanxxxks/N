@@ -15,11 +15,13 @@ from ashare_data.config import (
     TierConfig,
 )
 from ashare_data.db import AshareDB
+from ashare_data.processor import open_to_open_returns
 from ashare_model import evaluation
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.evaluation import (
     PROTOCOL_VERSION,
+    _tradable_ic_mask,
     aggregate_results,
     baseline_candidates,
     benchmark_row,
@@ -144,6 +146,28 @@ def test_evaluate_signal_matches_engine_run(populated_db: DataConfig):
     # Three stocks are below the IC minimum cross-section, so IC stats
     # degrade to the documented zeros instead of NaN.
     assert metrics["ic_mean"] == 0.0 and metrics["n_ic_dates"] == 0
+    assert metrics["ic_mean_tradable"] == 0.0 and metrics["icir_tradable"] == 0.0
+
+
+def test_tradable_ic_mask_aligns_entry_days():
+    universe = np.ones((3, 8), dtype=bool)
+    universe[2, 5] = False  # ineligible cells stay excluded
+    blocked = np.zeros((3, 8), dtype=bool)
+    blocked[0, 5] = True  # stock 0 cannot be bought on entry day 5
+    mask = _tradable_ic_mask(universe, blocked, signal_count=6)
+    # Signal column 4 executes on day 5: stock 0 drops out there.
+    assert not mask[0, 4]
+    # Neighboring signal columns and other stocks are unaffected.
+    assert mask[0, 3] and mask[0, 5]
+    assert mask[1, 4]
+    # Columns beyond the signal range keep the raw universe mask.
+    assert mask[0, 6:].all()
+    # Ineligible cells stay excluded everywhere.
+    assert not mask[2, 5]
+    with pytest.raises(ValueError, match="shape"):
+        _tradable_ic_mask(universe, blocked[:1], 6)
+    with pytest.raises(ValueError, match="at least one entry column"):
+        _tradable_ic_mask(universe, blocked, signal_count=8)
 
 
 def test_evaluate_formula_equals_sliced_feature_signal(populated_db: DataConfig):
@@ -176,6 +200,106 @@ def test_evaluate_signal_rejects_misaligned_signal(populated_db: DataConfig):
         )
 
 
+def _blocked_stock_loader(tmp_path) -> tuple[AshareDataLoader, list[str], list[int]]:
+    """A 12-stock loader whose stock ``600001.SH`` opens at one-word
+    limit-up on global days 10/12/14 (buy-blocked entry days) with a
+    +2% forward target on the corresponding signal days 9/11/13."""
+
+    codes = [
+        "000001.SZ", "600000.SH", "300001.SZ", "600001.SH", "000002.SZ",
+        "600002.SH", "300002.SZ", "600003.SH", "000003.SZ", "600004.SH",
+        "300003.SZ", "600005.SH",
+    ]
+    dates, _, bars = make_bars(20, codes)
+    bars = bars.set_index(["ts_code", "trade_date"])
+    blocked = "600001.SH"
+    for e in (10, 12, 14):
+        day = dates[e]
+        next_day = dates[e + 1]
+        # One-word limit-up open (open == high == low at +10%): the engine
+        # cannot buy on this entry day while the t+2 target stays finite.
+        for field in ("open", "high", "low", "close"):
+            bars.loc[(blocked, day), field] = 11.0
+        bars.loc[(blocked, day), "pre_close"] = 10.0
+        # Follow-through open gives the signal day e-1 a +2% target.
+        bars.loc[(blocked, next_day), "open"] = 11.22
+        bars.loc[(blocked, next_day), "close"] = 11.22
+        bars.loc[(blocked, next_day), "pre_close"] = 11.0
+    bars = bars.reset_index()
+    data_config = DataConfig(
+        data_dir=tmp_path,
+        duckdb_path=tmp_path / "ashare.duckdb",
+        parquet_dir=tmp_path / "parquet",
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
+        min_listed_sessions=1,
+    )
+    with AshareDB(data_config.duckdb_path) as db:
+        db.create_schema(data_config)
+        db.upsert_daily(bars.to_dict("records"), data_config)
+        db.upsert_stocks(
+            [
+                {"ts_code": c, "name": c, "industry": None, "list_date": "20200101", "is_st": False}
+                for c in codes
+            ],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": d, "is_open": True} for d in dates],
+            data_config,
+        )
+        db.upsert_constituents(
+            [
+                # Distinct in_dates per stock: the production validator
+                # rejects a snapshot stretched across the whole history.
+                {
+                    "index_code": "000300.SH",
+                    "ts_code": c,
+                    "in_date": f"202001{i + 1:02d}",
+                    "out_date": "99991231",
+                }
+                for i, c in enumerate(codes)
+            ],
+            data_config,
+        )
+    loader = AshareDataLoader(data_config, ModelConfig()).load_data()
+    return loader, codes, [9, 11, 13]
+
+
+def test_tradable_ic_excludes_buy_blocked_stocks(tmp_path):
+    """The tradable IC drops stocks the engine could not buy on the entry
+    day: a stock whose limit-up entry days carry perfect top-ranked
+    signal/target pairs moves the universe IC up but is absent from the
+    tradable IC, so the latter must be strictly lower on the same data."""
+    loader, _, signal_days = _blocked_stock_loader(tmp_path)
+    fold = _fold(loader.dates)
+    fold_data = epoch_slice(loader, fold)
+    # The universe resolution may reorder ts_codes: align rows by name.
+    d_row = loader.ts_codes.index("600001.SH")
+    rng = np.random.default_rng(9)
+    signal = rng.normal(0.0, 0.01, size=(len(loader.ts_codes), len(fold_data.dates)))
+    # Targets on the engineered signal days, recomputed from the same
+    # opens evaluate_signal uses.
+    targets = open_to_open_returns(fold_data.raw["open"])
+    others = [i for i in range(len(loader.ts_codes)) if i != d_row]
+    for t in signal_days:
+        local = t - fold.contract.test_signal_start
+        signal[d_row, local] = 1.0  # top rank, +2% target => top rank pair
+        # Every other stock is perfectly anti-aligned with its own target,
+        # so the blocked stock's exclusion swings the daily IC by a fixed,
+        # deterministic amount.
+        signal[others, local] = -targets[others, local]
+    metrics = evaluate_signal(signal, loader, fold, BacktestConfig())
+    assert math.isfinite(metrics["ic_mean"])
+    assert math.isfinite(metrics["ic_mean_tradable"])
+    assert metrics["ic_mean_tradable"] < metrics["ic_mean"]
+    # Both ICs cover the same number of usable dates (11 cross-sections
+    # remain above the minimum after excluding the blocked stock).
+    assert metrics["n_ic_dates"] >= 1
+
+
 def test_benchmark_row_matches_engine_reference_curve(populated_db: DataConfig):
     loader = _loader(populated_db)
     fold = _fold(loader.dates)
@@ -190,6 +314,9 @@ def test_benchmark_row_matches_engine_reference_curve(populated_db: DataConfig):
         result.benchmark_equity[-1] - 1.0, abs=1e-12
     )
     assert row["average_turnover"] is None  # cost-free reference, no turnover
+    # The benchmark has no signal: tradable-IC placeholders keep the row
+    # schema identical to every scored row.
+    assert row["ic_mean_tradable"] == 0.0 and row["icir_tradable"] == 0.0
 
 
 # --- PIT universe mask in evaluation -----------------------------------------

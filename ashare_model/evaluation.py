@@ -73,6 +73,12 @@ caller (trainer, random search, baselines) scores its primary window on
 the in-sample head that stops where the validation tail begins, and the
 rows rename ``full_window_*`` to ``train_*`` accordingly.
 
+v12 adds the tradable-IC diagnostic to every scored row:
+``ic_mean_tradable`` / ``icir_tradable`` recompute the rank IC excluding
+stocks the engine could not buy on the entry day (suspension / one-word
+limit-up opens); the benchmark row carries neutral placeholders.  The
+primary ``ic_mean`` / ``icir`` semantics are unchanged.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -130,7 +136,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "11"
+PROTOCOL_VERSION = "12"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -263,6 +269,40 @@ def epoch_slice(
     )
 
 
+def _tradable_ic_mask(
+    universe_mask: np.ndarray,
+    blocked_buy: np.ndarray,
+    signal_count: int,
+) -> np.ndarray:
+    """Universe mask additionally excluding stocks the engine could not buy.
+
+    A signal at column ``t`` is executed at ``t+1`` (the entry day), so the
+    tradable IC reference for column ``t`` is the stock set that is
+    signal-date eligible AND buyable at ``t+1``: ``universe_mask[:, t] &
+    ~blocked_buy[:, t+1]``.  ``blocked_buy`` is the sliced ``[stock, date]``
+    buy-block matrix (suspension / one-word limit-up), covering at least
+    ``signal_count + 1`` columns.  Columns beyond the signal range keep the
+    raw universe mask (they never enter an IC).  Pure helper so the entry-
+    day alignment is unit-testable.
+    """
+
+    universe_mask = np.asarray(universe_mask, dtype=bool)
+    blocked_buy = np.asarray(blocked_buy, dtype=bool)
+    if blocked_buy.shape != universe_mask.shape:
+        raise ValueError(
+            f"blocked_buy shape {blocked_buy.shape} does not match "
+            f"universe_mask shape {universe_mask.shape}"
+        )
+    if signal_count >= blocked_buy.shape[1]:
+        raise ValueError(
+            "blocked_buy must cover at least one entry column "
+            f"(got {blocked_buy.shape[1]} columns for {signal_count} signals)"
+        )
+    tradable = universe_mask.copy()
+    tradable[:, :signal_count] &= ~blocked_buy[:, 1 : signal_count + 1]
+    return tradable
+
+
 def evaluate_signal(
     signal: np.ndarray,
     loader: AshareDataLoader,
@@ -273,7 +313,10 @@ def evaluate_signal(
 
     Single code path for trained formulas, single-factor baselines and the
     benchmark row: everything is scored by the same backtest engine with
-    real costs, the blocked mask and the equal-weight benchmark.
+    real costs, the blocked mask and the equal-weight benchmark.  Both IC
+    variants are reported: the universe-masked rank IC and the tradable IC
+    (additionally excluding stocks the engine could not buy on the entry
+    day).
     """
 
     fold_data = epoch_slice(loader, fold)
@@ -311,6 +354,24 @@ def evaluate_signal(
         names=["formula"],
         eligible=fold_data.universe_mask[:, :signal_count],
     )["formula"]
+    # Tradable IC: the same statistic restricted to stocks the engine
+    # could actually buy on the entry day (suspension / one-word limit-up
+    # opens excluded).  Presented alongside the primary IC so drift from
+    # untradable cells is visible instead of silently folded into the
+    # signal-quality estimate.
+    blocked_buy, _ = loader.tradability_masks()
+    tradable = _tradable_ic_mask(
+        fold_data.universe_mask,
+        blocked_buy[:, fold.contract.test_signal_start : fold.contract.test_price_end],
+        signal_count,
+    )
+    ic_tradable = rank_ic_stats(
+        signal[None, :, :signal_count],
+        target[:, :signal_count],
+        dates[:signal_count],
+        names=["formula"],
+        eligible=tradable[:, :signal_count],
+    )["formula"]
     bench_daily: list[float] = []
     if result.benchmark_equity and len(result.benchmark_equity) >= 2:
         eq = result.benchmark_equity
@@ -330,6 +391,8 @@ def evaluate_signal(
         "ic_abs_mean": float(ic["ic_abs_mean"]),
         "icir": float(ic["icir"]),
         "n_ic_dates": int(ic["n_dates"]),
+        "ic_mean_tradable": float(ic_tradable["ic_mean"]),
+        "icir_tradable": float(ic_tradable["icir"]),
         # Raw per-day series: kept in every row so the DS / max-t corrections
         # and later analysis never have to reconstruct them from aggregates.
         "daily_returns": [float(x) for x in result.daily_returns],
@@ -419,6 +482,8 @@ def benchmark_row(
         "ic_abs_mean": 0.0,
         "icir": 0.0,
         "n_ic_dates": 0,
+        "ic_mean_tradable": 0.0,
+        "icir_tradable": 0.0,
         "daily_returns": [float(x) for x in daily],
         "benchmark_daily_returns": [float(x) for x in daily],
     }
