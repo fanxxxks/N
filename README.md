@@ -164,6 +164,12 @@ python -m uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 模拟盘的启停由后端进程管理器（`ashare_trading/manager.py`）托管，状态全部
 落盘（`data/sim_run.json` + 锁文件），API 进程重启不会丢失或孤儿化子进程：
 
+**控制端点鉴权**：`/api/sim/start|stop|reset` 与 `PUT /api/sim/config` 受
+`webapi/auth.py` 保护——若 `config/.webapi_token`（gitignored）存在，变更请求必须
+携带 `X-API-Token` 头且与文件内容一致；无 token 文件时仅允许回环客户端变更，
+非回环变更请求返回 403 并提示创建 token 文件。因此把 `--host 0.0.0.0` 暴露到
+局域网之前，务必先写入 token 文件。
+
 | 端点 | 说明 |
 | --- | --- |
 | `POST /api/sim/start` | 启动 `run_sim`（body：`reset` / `start` / `end`）；有状态时自动 `--resume`，运行中返回 409 |
