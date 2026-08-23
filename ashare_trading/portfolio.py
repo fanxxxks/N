@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from loguru import logger
+
+from ashare_data.io_utils import atomic_write_json, read_json_safe
 
 
 @dataclass
@@ -61,7 +61,9 @@ class SimulationPortfolio:
         if not self.state_path.exists():
             return
         try:
-            payload = json.loads(self.state_path.read_text(encoding="utf-8"))
+            payload = read_json_safe(self.state_path)
+            if not isinstance(payload, dict):
+                raise ValueError("state payload is not a dict")
             self.cash = float(payload.get("cash", self.initial_capital))
             self.trade_count = int(payload.get("trade_count", 0))
             self.positions = {
@@ -79,7 +81,6 @@ class SimulationPortfolio:
             self.reset()
 
     def save(self) -> None:
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "initial_capital": self.initial_capital,
             "cash": self.cash,
@@ -89,12 +90,7 @@ class SimulationPortfolio:
             "equity_history": self.equity_history,
         }
         # Atomic write: a crash mid-save can never leave a truncated state.
-        tmp = self.state_path.with_suffix(".tmp.json")
-        tmp.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        os.replace(tmp, self.state_path)
+        atomic_write_json(self.state_path, payload)
 
     def add_buy(self, ts_code: str, name: str, quantity: int, price: float, date: str) -> None:
         cost = quantity * price

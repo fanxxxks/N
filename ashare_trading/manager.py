@@ -14,7 +14,6 @@ never kill the simulation.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -28,6 +27,7 @@ import psutil
 from loguru import logger
 
 from ashare_data.config import SimConfig
+from ashare_data.io_utils import atomic_write_json, read_json_safe
 
 TERMINAL_STATES = ("stopped", "finished", "error")
 DEFAULT_STOP_GRACE_SECONDS = 30.0
@@ -62,16 +62,6 @@ def build_run_sim_argv(
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
-
-
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp.json")
-    tmp.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(tmp, path)
 
 
 class SimJobManager:
@@ -111,28 +101,17 @@ class SimJobManager:
         )
 
     def _read_run(self) -> dict | None:
-        try:
-            if not self.run_file.exists():
-                return None
-            payload = json.loads(self.run_file.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else None
-        except Exception:  # noqa: BLE001 - half-written file must not kill the API
-            return None
+        payload = read_json_safe(self.run_file)
+        return payload if isinstance(payload, dict) else None
 
     def _write_run(self, payload: dict) -> None:
-        _atomic_write_json(self.run_file, payload)
+        atomic_write_json(self.run_file, payload)
 
     def _progress(self) -> dict:
         if self.sim_config is None:
             return {}
-        try:
-            path = Path(self.sim_config.progress_path)
-            if not path.exists():
-                return {}
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else {}
-        except Exception:  # noqa: BLE001
-            return {}
+        payload = read_json_safe(Path(self.sim_config.progress_path))
+        return payload if isinstance(payload, dict) else {}
 
     # ------------------------------------------------------------------ lock
 

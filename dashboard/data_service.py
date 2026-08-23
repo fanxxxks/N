@@ -2,24 +2,22 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from ashare_data.config import DataConfig, SimConfig
 from ashare_data.db import AshareDB
+from ashare_data.io_utils import read_json_safe
 
 
 def load_backtest_result(data_config: DataConfig) -> dict:
     path = data_config.data_dir / "backtest_result.json"
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = read_json_safe(path)
+    return payload if isinstance(payload, dict) else {}
 
 
 def load_sim_state(sim_config: SimConfig) -> dict:
-    if not Path(sim_config.state_path).exists():
-        return {}
-    return json.loads(Path(sim_config.state_path).read_text(encoding="utf-8"))
+    payload = read_json_safe(Path(sim_config.state_path))
+    return payload if isinstance(payload, dict) else {}
 
 
 def load_data_status(data_config: DataConfig) -> dict:
