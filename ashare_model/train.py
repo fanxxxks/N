@@ -2,7 +2,7 @@
 
 Usage:
     python -m ashare_model.train [--config config/ashare_config.yaml]
-                                [--offline] [--steps N] [--batch-size N]
+                                 [--steps N] [--batch-size N]
 """
 
 from __future__ import annotations
@@ -630,16 +630,6 @@ class AshareTrainer:
         logger.success(f"Training complete; best formula saved to {out_path}")
         return self.best_tokens
 
-    def _train_end_index(self, train_end_date: str | None = None) -> int:
-        """Exclusive inclusive-anchor price end (legacy index accessor).
-
-        ``train_end_date`` overrides ``backtest_config.train_end_date`` so
-        the evaluation protocol can train each walk-forward fold against its
-        own absolute cutoff without touching the shared config.
-        """
-
-        return self._training_contract(train_end_date).train_label_end
-
     def _training_contract(
         self, train_end_date: str | None = None
     ) -> TrainingTimeContract:
@@ -726,7 +716,6 @@ def main() -> None:
     setup_run_logging(run_name="train")
     parser = argparse.ArgumentParser(description="Train A-share AlphaGPT")
     parser.add_argument("--config", default=None)
-    parser.add_argument("--offline", action="store_true")
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument(

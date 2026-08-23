@@ -22,7 +22,7 @@ from .data_service import (
     load_data_status,
     load_sim_state,
 )
-from .visualizer import equity_figure, factor_bar_figure
+from .visualizer import equity_figure
 
 
 def _root() -> Path:

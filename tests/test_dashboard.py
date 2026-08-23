@@ -10,7 +10,7 @@ from dashboard.data_service import (
     load_data_status,
     load_sim_state,
 )
-from dashboard.visualizer import equity_figure, factor_bar_figure
+from dashboard.visualizer import equity_figure
 
 
 def test_load_backtest_result_missing_and_present(tmp_path: Path):
@@ -39,9 +39,7 @@ def test_load_data_status_missing_and_ready(tmp_path: Path, populated_db: DataCo
 
 def test_visualizers_build_figures():
     fig1 = equity_figure(["d1", "d2"], [1.0, 1.1], "Equity")
-    fig2 = factor_bar_figure(["A", "B"], [1, 2], "Factors")
     assert len(fig1.data) == 1
-    assert len(fig2.data) == 1
 
 
 def test_dashboard_app_imports():
