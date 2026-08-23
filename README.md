@@ -164,15 +164,20 @@ python -m uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 | `POST /api/sim/reset` | 先 `archive_run.py --mode sim --commit` 归档旧状态（失败则中止），再重置并移走订单/成交目录 |
 | `GET /api/sim/status` | 轮询状态机（idle/starting/running/stopping/stopped/finished/error）、PID、当前日期与净值 |
 
-首次数据同步会读取沪深 300、中证 500 的**当前**成分快照来决定需要同步
-哪些股票的日线，但快照不会写入 `constituents`、也不会伪造成历史有效期。PIT 历史成员
+首次数据同步的日线范围是**幸存者感知的并集**：当前成分快照（与股票列表取交集做防伪校验）、
+`constituents` 表中出现过的全部历史成员（含退市股，只做合法代码校验、不做过期快照过滤）
+与本地已有 bar 缓存的代码三者的并集——退市/历史成员的日线会随例行同步补齐并永不清理，
+避免"当前快照决定同步谁"带来的幸存者偏差。快照本身不会写入 `constituents`、
+也不会伪造成历史有效期。PIT 历史成员
 区间由 `scripts/import_pit_universe.py` 从 BaoStock 逐日成分查询按月末采样压缩成
 `[in_date, out_date)` 半开区间（边界精度为月），上市日期由 `scripts/import_pit_universe.py`
 经交易所批量股票资料（含退市表）回填；中证 1000（000852.SH）无免费历史成分来源，已从
 配置移除，universe 为沪深 300 + 中证 500。正式训练、
 协议、诊断、回测、模拟和归档统一执行生产数据门禁：`constituents` 必须提供
 `index_code/ts_code/in_date/out_date` 的非重叠半开区间，成员股票必须有有效
-`stocks.list_date`，日期轴必须来自 `trade_calendar.is_open = true`。退出后重新加入用
+`stocks.list_date`，日期轴必须来自 `trade_calendar.is_open = true`，且每个有开市
+交易日的成员区间必须有日线 bar（G7 幸存者审计：零 bar 区间说明历史成员从未同步，
+PIT 掩码会将其静默排除、历史回测偏乐观；运行一次同步即按并集补 bar）。退出后重新加入用
 同一股票的多个区间表达，主键为 `(index_code, ts_code, in_date)`；跨指数同期重叠和
 `[a,b)`/`[b,c)` 相邻区间合法。`scripts/check_production_gates.py` 显式核对全部门禁，
 任何门禁失败即停止正式运行。
@@ -290,7 +295,7 @@ python scripts/archive_run.py --mode sim --commit
 
 ## 已知局限（有意保留）
 
-- **历史成分区间的月粒度近似**：`constituents` 的 300/500 历史区间由 BaoStock 月末快照压缩而来，边界精度为月（真实调样日前后最多一个月的偏差）；BaoStock 无中证 1000 历史成分，故 universe 为沪深 300 + 中证 500。申万行业成分映射仍为当前快照（行业指数行情本身是完整历史），只用于行业类因子的开发性近似。当前成分快照只用于选择同步标的，不写入 PIT `constituents`。
+- **历史成分区间的月粒度近似**：`constituents` 的 300/500 历史区间由 BaoStock 月末快照压缩而来，边界精度为月（真实调样日前后最多一个月的偏差）；BaoStock 无中证 1000 历史成分，故 universe 为沪深 300 + 中证 500。申万行业成分映射仍为当前快照（行业指数行情本身是完整历史），只用于行业类因子的开发性近似。当前成分快照只是同步并集的来源之一（与 PIT 成员、本地缓存并集），不写入 PIT `constituents`；G7 门禁量化并强制成员区间的 bar 覆盖。
 - **中性占位因子**：仅 `NORTHBOUND_CHG` 保持中性（0）——北向每日净流入及个股明细自 2024-08-19 起停止披露，免费渠道无可用历史。`MARGIN_BALANCE_CHG`（融资余额 20 日变化，收盘后披露、次日可用）与 `INDUSTRY_MOMENTUM`（申万一级行业指数 20 日收益映射到成分股）已有真实数据；行业中性因子 `IND_REL_RET_5/20`、`IND_REL_VOL_20`、`IND_REL_TURNOVER` 用同一当前快照成员映射去行业均值，无行业映射或单成员行业的股票保持中性。新特征按"代"追加在词表末尾（v1 的 token id 永不偏移），旧公式经按名重映射后继续有效。
 - **换手率缺失即缺失**：换手率依赖流通股本，无法从 OHLCV 反推；缺失时保持中性而非伪造常数。
 - **基本面 PIT 的近似口径**：`MARKET_CAP` 为流通市值近似（成交额/换手率，每日可得）；`PS_TTM = PE_TTM × 扣非净利TTM/营收TTM`（避免依赖总股本历史）；PE/PS 在 TTM 亏损时保持中性；ROE/ROA/毛利率/净利率/增速为累计（YTD）报告口径；**披露时点为法定披露季节末日**（Q1→4/30、中报→8/31、三季报→10/31、年报→次年 4/30，保守方向、绝不提前可见；免费接口无逐股首发公告日，东财业绩报表的"最新公告日期"实为重述日期，不可用）；股息率按精确除权除息日对齐；财报修正不追踪（以最新披露值为准）。

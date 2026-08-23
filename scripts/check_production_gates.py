@@ -12,6 +12,9 @@ them fails:
     G4  membership intervals are non-overlapping and non-duplicate
     G5  the loader builds the PIT mask in strict mode (no dev fallback)
     G6  every major backtest window has enough eligible stocks
+    G7  every PIT membership interval has daily bars (no zero-bar member
+        intervals: current-snapshot syncs must not leave historical
+        members without bars — survivorship audit)
 
 Usage:
     python scripts/check_production_gates.py [--min-eligible N]
@@ -35,6 +38,7 @@ from ashare_data.config import load_config, make_data_config
 from ashare_data.db import AshareDB
 from ashare_data.universe import (
     UniverseContractError,
+    member_bar_coverage,
     membership_interval_issues,
     require_production_universe,
 )
@@ -155,6 +159,27 @@ def main() -> int:
         ))
     else:
         checks.append(("G6 eligible-stock minimum", False, "mask unavailable (G5 failed)"))
+
+    # G7: survivorship audit — every membership interval with open sessions
+    # must have daily bars.  A zero-bar interval means a historical member
+    # was never synced and the PIT mask silently excluded it (optimistic
+    # history); sync with the union universe (ashare_data.sync) to backfill.
+    with AshareDB(config.duckdb_path, read_only=True) as db:
+        coverage = member_bar_coverage(db, config)
+    observed = coverage[coverage["sessions"] > 0]
+    zero_bar = observed[observed["bars"] == 0]
+    median_cov = (
+        float(observed["coverage"].median()) if len(observed) else float("nan")
+    )
+    g7_ok = len(zero_bar) == 0
+    checks.append((
+        "G7 every PIT member interval has daily bars",
+        g7_ok,
+        f"{len(observed)} observed intervals, {len(zero_bar)} zero-bar, "
+        f"median coverage {median_cov:.2%}; zero-bar codes: "
+        + (", ".join(sorted(zero_bar["ts_code"].astype(str).unique())[:10])
+           if len(zero_bar) else "none"),
+    ))
 
     for name, ok, detail in checks:
         print(f"{'PASS' if ok else 'FAIL'}  {name}")

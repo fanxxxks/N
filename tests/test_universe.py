@@ -21,6 +21,7 @@ from ashare_data.universe import (
     UniversePolicy,
     UniverseReason,
     build_universe_mask,
+    member_bar_coverage,
     require_production_universe,
     resolve_universe_contract,
 )
@@ -294,6 +295,54 @@ def test_missing_dated_st_status_is_a_non_blocking_audit_reason():
 
     assert result.eligible.tolist() == [[True]]
     assert _has_reason(result.reasons[0, 0], UniverseReason.STATUS_UNKNOWN)
+
+
+def test_member_bar_coverage_audits_zero_bar_intervals(data_config: DataConfig):
+    """H3 audit: coverage rows per interval; an interval with open sessions
+    but no bars is the signature of a never-synced historical member."""
+    with AshareDB(data_config.duckdb_path) as db:
+        db.create_schema(data_config)
+        db.upsert_calendar(
+            [{"trade_date": f"2024010{i}", "is_open": True} for i in range(1, 6)],
+            data_config,
+        )
+        db.upsert_constituents(
+            [
+                {"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20240101", "out_date": "20240105"},
+                {"index_code": "000300.SH", "ts_code": "600000.SH", "in_date": "20240101", "out_date": "20240105"},
+                {"index_code": "000300.SH", "ts_code": "600999.SH", "in_date": "20250101", "out_date": "99991231"},
+            ],
+            data_config,
+        )
+        db.upsert_daily(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": f"2024010{i}",
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "pre_close": 9.9,
+                    "volume": 100.0,
+                    "amount": 1000.0,
+                    "turnover_rate": 1.0,
+                    "adj_factor": 1.0,
+                }
+                for i in range(1, 6)
+            ],
+            data_config,
+        )
+        frame = member_bar_coverage(db, data_config)
+    rows = frame.set_index("ts_code")
+    assert rows.loc["000001.SZ", "bars"] == 5
+    assert rows.loc["000001.SZ", "coverage"] == 1.0
+    # Synced member with a bar gap inside the interval: partial coverage.
+    assert rows.loc["600000.SH", "bars"] == 0
+    assert rows.loc["600000.SH", "coverage"] == 0.0
+    # Future-only interval: no open sessions, coverage undefined (NaN).
+    assert rows.loc["600999.SH", "sessions"] == 0
+    assert np.isnan(rows.loc["600999.SH", "coverage"])
 
 
 def test_universe_mask_arrays_have_fixed_dtypes_and_are_read_only():
