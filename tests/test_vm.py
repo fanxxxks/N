@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from ashare_model import vm as vm_module
 from ashare_model.ops import OPS_CONFIG
 from ashare_model.vm import StackVM, cross_sectional_zscore, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB
@@ -15,6 +16,38 @@ def _vm(feature: torch.Tensor) -> StackVM:
         FORMULA_VOCAB,
         universe_mask=torch.ones(feature.shape[1:], dtype=torch.bool),
     )
+
+
+def test_vm_logs_unexpected_execution_errors_instead_of_swallowing(
+    monkeypatch,
+):
+    """M1: an operator that raises must surface as a logged warning plus
+    the invalid-formula contract — never a silent None — and
+    ASHARE_VM_STRICT re-raises so tests can harden hidden exceptions."""
+    feature = torch.randn(FORMULA_VOCAB.feature_count, 2, 4)
+    vm = _vm(feature)
+    abs_op = FORMULA_VOCAB.operator_offset + next(
+        i for i, (name, _, _) in enumerate(OPS_CONFIG) if name == "ABS"
+    )
+
+    def boom(_x: torch.Tensor) -> torch.Tensor:
+        raise RuntimeError("boom")
+
+    vm.op_map[abs_op] = boom
+    warnings: list[str] = []
+
+    class _FakeLogger:
+        def warning(self, message: str) -> None:
+            warnings.append(message)
+
+    monkeypatch.setattr(vm_module, "logger", _FakeLogger())
+    assert vm.execute([1, abs_op], feature) is None
+    assert warnings and "boom" in warnings[-1]
+    assert "ABS" in warnings[-1]  # the formula is named, not just swallowed
+    monkeypatch.setenv("ASHARE_VM_STRICT", "1")
+    with pytest.raises(RuntimeError, match="boom"):
+        vm.execute([1, abs_op], feature)
+    monkeypatch.delenv("ASHARE_VM_STRICT")
 
 
 def test_vm_executes_binary_unary_and_ternary():
