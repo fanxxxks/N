@@ -68,7 +68,7 @@ def test_train_end_index_before_data(populated_db: DataConfig):
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     trainer = _make_trainer(populated_db.data_dir, loader)
-    idx = trainer._train_end_index()
+    idx = trainer._training_contract().train_label_end
     assert 0 < idx <= len(loader.dates)
 
 
@@ -85,7 +85,7 @@ def test_validation_split_bounds(populated_db: DataConfig):
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     trainer = _make_trainer(populated_db.data_dir, loader)
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     val_start = trainer._validation_start(train_end)
     assert 1 <= val_start < train_end
     windows = trainer._validation_windows(train_end)
@@ -129,7 +129,7 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
         loader,
         reward_config=reward_config,
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     train_signal_end = trainer._training_contract().train_signal_end
     val_start = trainer._validation_start(train_signal_end)
     target = open_to_open_returns(
@@ -189,7 +189,7 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
         loader,
         reward_config=reward_config,
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     signal = torch.arange(
         1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
     ).reshape(len(loader.ts_codes), train_end)
@@ -256,7 +256,7 @@ def test_trainer_passes_universe_mask_to_scorer(
         loader,
         reward_config=_reward_cfg(),
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     captured: dict[str, object] = {}
 
     def fake_rewards(signals, target, bt, rc, val_windows, **kwargs):
@@ -350,7 +350,7 @@ def test_quality_floor_blocks_save_and_returns_none(
         loader,
         reward_config=reward_config,
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     # Both orientations score below the validation floor. Direction symmetry
     # must not allow an ineligible candidate to become the saved best.
     signal = torch.arange(
@@ -424,7 +424,7 @@ def test_train_artifact_records_vocab_provenance(tmp_path, populated_db: DataCon
         loader,
         reward_config=_reward_cfg(),
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     monkeypatch.setattr(
         trainer.vm,
         "execute",
@@ -459,7 +459,7 @@ def test_train_artifact_records_device(tmp_path, populated_db: DataConfig, monke
         loader,
         reward_config=_reward_cfg(),
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     monkeypatch.setattr(
         trainer.vm,
         "execute",
@@ -488,7 +488,7 @@ def test_train_one_step_on_cuda(populated_db: DataConfig, monkeypatch):
         loader,
         reward_config=_reward_cfg(),
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     # The VM must receive the CUDA-resident factor tensor; signals come
     # back over the .cpu() bridge into the numpy reward path while the
     # policy itself stays on CPU.
@@ -553,7 +553,7 @@ def test_train_can_skip_artifacts(populated_db: DataConfig, monkeypatch):
         loader,
         reward_config=_reward_cfg(),
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     monkeypatch.setattr(
         trainer.vm,
         "execute",
@@ -590,18 +590,18 @@ def test_train_end_date_override_truncates_training_window(
     trainer.train(
         steps=1, batch_size=1, save_artifacts=False, train_end_date="2024-01-10"
     )
-    override_end = trainer._train_end_index("2024-01-10")
+    override_end = trainer._training_contract("2024-01-10").train_label_end
     assert captured["cols"] == override_end
     # The override lands strictly before the config-driven window.
-    assert override_end < trainer._train_end_index()
+    assert override_end < trainer._training_contract().train_label_end
 
 
 def test_validation_start_moves_with_overridden_train_end(populated_db: DataConfig):
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     trainer = _make_trainer(populated_db.data_dir, loader)
-    early = trainer._train_end_index("2024-01-10")
-    late = trainer._train_end_index()
+    early = trainer._training_contract("2024-01-10").train_label_end
+    late = trainer._training_contract().train_label_end
     early_val = trainer._validation_start(early)
     late_val = trainer._validation_start(late)
     assert 1 <= early_val < early
@@ -636,7 +636,7 @@ def test_train_constant_formula_gets_bad_reward(populated_db: DataConfig, monkey
         BacktestConfig(top_n=2, train_end_date="2024-02-01"),
         loader,
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     monkeypatch.setattr(
         trainer.vm,
         "execute",
@@ -665,7 +665,7 @@ def test_reward_cache_reuses_evaluations_across_steps(
         loader,
         reward_config=_reward_cfg(),
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     calls: dict[str, int] = {"n": 0}
 
     def counting_execute(tokens, ft):
@@ -726,7 +726,7 @@ def test_duplicate_formulas_share_one_batched_evaluation(
         loader,
         reward_config=_reward_cfg(),
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     calls: dict[str, int] = {"n": 0}
     add_token = FORMULA_VOCAB.operator_offset  # first operator (ADD)
     pattern = [1, 1, add_token, 0]
@@ -856,7 +856,7 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
         loader,
         reward_config=reward_config,
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     monkeypatch.setattr(
         trainer.vm,
         "execute",
@@ -903,7 +903,7 @@ def test_icir_gate_passes_strong_signal(tmp_path, populated_db: DataConfig, monk
         loader,
         reward_config=reward_config,
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     monkeypatch.setattr(
         trainer.vm,
         "execute",
@@ -941,7 +941,7 @@ def test_artifact_records_direction_and_icir(tmp_path, populated_db: DataConfig,
         loader,
         reward_config=_reward_cfg(),
     )
-    train_end = trainer._train_end_index()
+    train_end = trainer._training_contract().train_label_end
     # Positive ramp signal with a positively correlated target: the IC is
     # positive, so the learned direction must be +1 and the artifact must
     # record it together with the quality-gate ICIR.
@@ -999,9 +999,9 @@ def test_collapse_warning_fires_after_consecutive_collapsed_steps(
         trainer.vm,
         "execute",
         lambda tokens, ft: torch.arange(
-            len(loader.ts_codes) * trainer._train_end_index(),
+            len(loader.ts_codes) * trainer._training_contract().train_label_end,
             dtype=torch.float32,
-        ).reshape(len(loader.ts_codes), trainer._train_end_index()),
+        ).reshape(len(loader.ts_codes), trainer._training_contract().train_label_end),
     )
     # All rows sample the same feature: unique fraction 1/4 < 0.9.
     monkeypatch.setattr(

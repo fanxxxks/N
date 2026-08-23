@@ -443,30 +443,3 @@ def winsorize_cross_section(
     result = np.clip(result, -clip, clip)
     result[:, ~has_ref] = 0.0
     return pd.DataFrame(result, index=wide.index, columns=wide.columns)
-
-
-def long_factor_frame(
-    factor_tensor: np.ndarray,
-    ts_codes: list[str],
-    dates: list[str],
-    feature_names: list[str],
-) -> pd.DataFrame:
-    """Flatten a ``[feature, stock, date]`` tensor into a long DataFrame."""
-
-    records: list[dict[str, object]] = []
-    n_features, n_stocks, n_dates = factor_tensor.shape
-    for f, feature in enumerate(feature_names):
-        for s, ts_code in enumerate(ts_codes):
-            for t, date in enumerate(dates):
-                value = factor_tensor[f, s, t]
-                if not np.isfinite(value):
-                    value = np.nan
-                records.append(
-                    {
-                        "ts_code": ts_code,
-                        "trade_date": date,
-                        "factor_name": feature,
-                        "value": float(value),
-                    }
-                )
-    return pd.DataFrame(records)

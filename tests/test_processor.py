@@ -10,7 +10,6 @@ from ashare_data.processor import (
     encode_industry_frame,
     is_valid_a_share_code,
     limit_rate,
-    long_factor_frame,
     normalize_daily_bars,
     open_to_open_returns,
     pivot_wide,
@@ -91,14 +90,6 @@ def test_winsorize_cross_section_clips_and_handles_all_nan():
     all_nan = pd.DataFrame([[np.nan], [np.nan]], index=["A", "B"], columns=["d"])
     out_nan = winsorize_cross_section(all_nan, np.ones(all_nan.shape, dtype=bool))
     assert (out_nan == 0.0).all().all()
-
-
-def test_long_factor_frame_flattens_and_handles_nonfinite():
-    arr = np.zeros((2, 2, 2), dtype=np.float64)
-    arr[0, 0, 0] = np.inf
-    frame = long_factor_frame(arr, ["A", "B"], ["d1", "d2"], ["f0", "f1"])
-    assert frame.shape == (8, 4)
-    assert pd.isna(frame.loc[(frame["factor_name"] == "f0") & (frame["ts_code"] == "A") & (frame["trade_date"] == "d1"), "value"].iloc[0])
 
 
 def test_is_valid_a_share_code():

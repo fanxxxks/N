@@ -7,7 +7,7 @@ import torch
 from ashare_data.config import DataConfig, ModelConfig
 from ashare_data.db import AshareDB
 from ashare_data.universe import UniverseContractError, UniverseReason
-from ashare_model.data_loader import AshareDataLoader, build_loader_from_config, date_index
+from ashare_model.data_loader import AshareDataLoader, build_loader_from_config
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 from tests.conftest import make_bars
 
@@ -425,21 +425,3 @@ def test_loader_rejects_current_only_constituent_snapshot(data_config: DataConfi
 
     with pytest.raises(UniverseContractError, match="current snapshot stretched"):
         AshareDataLoader(data_config, ModelConfig()).load_data()
-
-
-# --- date_index -------------------------------------------------------------
-
-
-def test_date_index_finds_first_column_at_or_after():
-    dates = ["20240101", "20240102", "20240105", "20240108"]
-    assert date_index(dates, "2024-01-02") == 1
-    assert date_index(dates, "20240103") == 2  # falls between columns
-    assert date_index(dates, "2024-01-08") == 3
-
-
-def test_date_index_clamps_and_runs_past_end():
-    dates = ["20240101", "20240102"]
-    # A cutoff before the first column clamps to 1: the window never
-    # collapses to index 0.
-    assert date_index(dates, "2023-12-01") == 1
-    assert date_index(dates, "2024-02-01") == 2

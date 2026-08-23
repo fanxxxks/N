@@ -33,23 +33,6 @@ from ashare_data.universe import (
 from .factors import compute_factor_tensor
 
 
-def date_index(dates: list[str], date_str: str) -> int:
-    """First column index in ``dates`` at or after ``date_str``.
-
-    ``date_str`` accepts ``YYYY-MM-DD`` or ``YYYYMMDD``.  Returns
-    ``len(dates)`` when the date lies past the last column and clamps to at
-    least 1, mirroring the historical training-window behavior (a window
-    must never collapse to index 0).  Single code path shared by the
-    trainer and the evaluation protocol.
-    """
-
-    key = date_str.replace("-", "")
-    for idx, date in enumerate(dates):
-        if date >= key:
-            return max(idx, 1)
-    return len(dates)
-
-
 class AshareDataLoader:
     def __init__(
         self,

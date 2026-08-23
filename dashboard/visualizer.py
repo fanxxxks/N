@@ -26,9 +26,3 @@ def equity_figure(
         )
     fig.update_layout(title=title, xaxis_title="日期", yaxis_title="净值", height=420)
     return fig
-
-
-def factor_bar_figure(names, values, title: str) -> go.Figure:
-    fig = go.Figure(go.Bar(x=names, y=values))
-    fig.update_layout(title=title, height=420)
-    return fig
