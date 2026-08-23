@@ -356,13 +356,20 @@ class AshareBacktestEngine:
             return {}
         returns = np.asarray(daily_returns)
         n = len(returns)
-        total_return = float(equity[-1] - 1.0)
+        # A book that lost more than its capital (costs on a collapsed book)
+        # compounds below zero; a busted account cannot lose more than 100%,
+        # so clamp the total return before annualization — (1 + total) ** x
+        # would otherwise leave the real axis for total < -1 and raise
+        # TypeError on the complex result.
+        total_return = float(max(equity[-1] - 1.0, -1.0))
         ann_return = float((1.0 + total_return) ** (252 / n) - 1.0)
         vol = float(returns.std(ddof=1) * math.sqrt(252)) if n > 1 else 0.0
         sharpe = (ann_return - 0.02) / (vol + 1e-9)
         sortino = sortino_ratio(returns)
         running_max = np.maximum.accumulate(np.asarray(equity))
-        drawdown = 1.0 - np.asarray(equity) / (running_max + 1e-12)
+        drawdown = np.clip(
+            1.0 - np.asarray(equity) / (running_max + 1e-12), 0.0, 1.0
+        )
         max_drawdown = float(np.max(drawdown))
         calmar = ann_return / (max_drawdown + 1e-9)
         return {
