@@ -174,7 +174,11 @@ def _rolling_capm(
     cross-section (``eligible`` is the mandatory aligned ``[stock x date]``
     bool mask), so stocks outside the PIT universe can never move the
     market factor — each stock's own trailing window still uses only its
-    own history.
+    own history, and the regression pairs are restricted to the stock's
+    own valid sessions: market returns from sessions the stock did not
+    trade (suspension gaps) never enter its window sums, so a stock
+    suspended through a rally regresses on the sessions it actually
+    observed.
     """
 
     r = _returns(close)
@@ -208,8 +212,14 @@ def _rolling_capm(
     pr = prefix(r0)
     prm = prefix(rm)
     pr2 = prefix(r2)
-    pm = np.concatenate([np.zeros(1), np.cumsum(m0)])
-    pm2 = np.concatenate([np.zeros(1), np.cumsum(m2)])
+    # Market sums are accumulated per stock over the stock's own valid
+    # days: a suspended stock's regression window must not include market
+    # returns from sessions it did not trade.  n, sr, srm are already
+    # stock-valid-masked (r0 is 0 on missing days), so masking the market
+    # the same way keeps every window statistic on one denominator.
+    m_stock = np.where(valid, m0, 0.0)
+    pm = prefix(m_stock)
+    pm2 = prefix(m_stock * m_stock)
 
     idx = np.arange(t)
     start = np.maximum(idx - window + 1, 0)
@@ -218,8 +228,8 @@ def _rolling_capm(
     sr = pr[:, end] - pr[:, start]
     srm = prm[:, end] - prm[:, start]
     sr2 = pr2[:, end] - pr2[:, start]
-    sm = pm[end] - pm[start]
-    sm2 = pm2[end] - pm2[start]
+    sm = pm[:, end] - pm[:, start]
+    sm2 = pm2[:, end] - pm2[:, start]
 
     with np.errstate(all="ignore"):
         cov = srm - sr * sm / n

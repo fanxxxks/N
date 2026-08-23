@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -340,6 +341,98 @@ def test_rolling_capm_recovers_known_betas():
     assert rsq.loc["B"].iloc[-1] == pytest.approx(1.0, abs=1e-4)
     # The leading positions lack enough history and stay NaN (neutral).
     assert np.isnan(beta.loc["A"].iloc[0])
+
+
+def test_rolling_capm_aligns_market_window_to_stock_suspension_gaps():
+    """The regression pairs are the stock's own trading days.
+
+    A suspended stock must not accumulate market returns from its
+    suspension sessions: the market window sums are masked per stock, so a
+    stock suspended through a market rally regresses on the rally-free
+    subset of sessions exactly like an explicit aligned regression.  The
+    reference recomputes every (stock, date) cell with plain Python sums
+    over the trailing positional window, pairing the stock's return with
+    the market return of the same session only.
+    """
+    rng = np.random.default_rng(7)
+    n = 60
+    ret_a = rng.normal(0.0, 0.01, n)
+    ret_b = rng.normal(0.0, 0.01, n)
+    ret_c = rng.normal(0.0, 0.02, n)
+    # C is suspended on scattered sessions; while it is suspended the
+    # market rallies hard — the exact regime that biases beta when the
+    # market window is not aligned to the stock's own sessions.
+    suspended = np.zeros(n, dtype=bool)
+    suspended[10:20] = True
+    suspended[35:40] = True
+    ret_a = ret_a + np.where(suspended, 0.04, 0.0)
+    ret_b = ret_b + np.where(suspended, 0.04, 0.0)
+
+    def build_close(rets: np.ndarray, gaps: np.ndarray) -> np.ndarray:
+        # Missing bars stay NaN exactly like pivot_wide leaves them.
+        out = np.full(n, np.nan)
+        last = 10.0
+        for i in range(n):
+            if gaps[i]:
+                continue
+            last *= 1.0 + rets[i]
+            out[i] = last
+        return out
+
+    dates = [f"d{i}" for i in range(n)]
+    close = pd.DataFrame(
+        {
+            "A": build_close(ret_a, np.zeros(n, dtype=bool)),
+            "B": build_close(ret_b, np.zeros(n, dtype=bool)),
+            "C": build_close(ret_c, suspended),
+        },
+        index=dates,
+    ).T
+    eligible = np.ones(close.shape, dtype=bool)
+
+    # --- explicit aligned reference ------------------------------------
+    r = close.pct_change(fill_method=None, axis=1)
+    valid = r.notna().to_numpy()
+    r_arr = r.to_numpy(dtype=float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        market = np.nan_to_num(
+            np.nanmean(np.where(valid, r_arr, np.nan), axis=0), nan=0.0
+        )
+    window, min_periods = 30, 10
+    ref = {"beta": np.full((3, n), np.nan),
+           "ivol": np.full((3, n), np.nan),
+           "rsq": np.full((3, n), np.nan)}
+    for s in range(3):
+        for t in range(n):
+            lo = max(0, t - window + 1)
+            pairs = [
+                (market[pos], r_arr[s, pos])
+                for pos in range(lo, t + 1)
+                if valid[s, pos]
+            ]
+            m = len(pairs)
+            if m < min_periods:
+                continue
+            x = np.array([p[0] for p in pairs])
+            y = np.array([p[1] for p in pairs])
+            sx, sy = x.sum(), y.sum()
+            cov = (x * y).sum() - sx * sy / m
+            var_m = (x * x).sum() - sx * sx / m
+            var_r = (y * y).sum() - sy * sy / m
+            if var_m <= 1e-12 or var_r <= 1e-12:
+                continue
+            beta = cov / var_m
+            ref["beta"][s, t] = beta
+            ref["rsq"][s, t] = cov * cov / (var_r * var_m)
+            ref["ivol"][s, t] = np.sqrt(max(var_r - beta * cov, 0.0))
+
+    beta, ivol, rsq = _rolling_capm(
+        close, eligible, window=window, min_periods=min_periods
+    )
+    np.testing.assert_allclose(beta.to_numpy(), ref["beta"], atol=1e-10)
+    np.testing.assert_allclose(ivol.to_numpy(), ref["ivol"], atol=1e-10)
+    np.testing.assert_allclose(rsq.to_numpy(), ref["rsq"], atol=1e-10)
 
 
 def test_rsi_extremes():
