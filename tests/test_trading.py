@@ -149,6 +149,26 @@ def test_portfolio_save_is_atomic(tmp_path: Path):
     assert loaded.positions["000001.SZ"].quantity == 100
 
 
+def test_stop_signal_helpers_protocol(tmp_path: Path):
+    from ashare_trading.signals import (
+        clear_stop_signal,
+        request_stop,
+        stop_requested,
+    )
+
+    path = tmp_path / "STOP"
+    assert stop_requested(path) is False  # absent -> keep running
+    request_stop(path)
+    assert path.read_text(encoding="utf-8") == "STOP"
+    assert stop_requested(path) is True
+    assert path.read_text(encoding="utf-8") == "STOPPED"  # acknowledged
+    clear_stop_signal(path)
+    assert not path.exists()
+    # Garbage content is not a stop request.
+    path.write_text("garbage", encoding="utf-8")
+    assert stop_requested(path) is False
+
+
 def test_portfolio_last_exec_date_roundtrip(tmp_path: Path):
     path = tmp_path / "state.json"
     portfolio = SimulationPortfolio(100000.0, path)

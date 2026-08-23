@@ -8,6 +8,13 @@ from typing import Any, Iterable
 import duckdb
 
 
+def sql_quoted_list(values: Iterable[Any]) -> str:
+    """A properly quoted SQL ``IN (...)`` fragment (one code path for all
+    hand-rolled list quoting in the project)."""
+
+    return ",".join(f"'{value}'" for value in values)
+
+
 class AshareDB:
     """Small wrapper around a local DuckDB file."""
 

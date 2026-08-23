@@ -340,7 +340,14 @@ class CandidateScorer:
                 train_signal_range=train_signal_range,
                 universe_mask=universe_mask,
             )
-            assert val_rewards is not None and val_icir is not None
+            if val_rewards is None or val_icir is None:
+                # A reward function that drops the validation results is a
+                # programming error, not a candidate outcome — never let
+                # this disappear under python -O (a bare assert would).
+                raise RuntimeError(
+                    "reward function returned no validation rewards "
+                    "despite non-empty val_windows"
+                )
             for batch_index, result_index in enumerate(batch_indices):
                 spec = specs[result_index]
                 plus = batch_index * 2

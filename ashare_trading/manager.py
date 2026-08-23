@@ -28,6 +28,7 @@ from loguru import logger
 
 from ashare_data.config import SimConfig
 from ashare_data.io_utils import atomic_write_json, read_json_safe
+from .signals import clear_stop_signal, request_stop
 
 TERMINAL_STATES = ("stopped", "finished", "error")
 DEFAULT_STOP_GRACE_SECONDS = 30.0
@@ -401,12 +402,7 @@ class SimJobManager:
     def _write_stop_signal(self) -> None:
         if self.sim_config is None:
             return
-        try:
-            Path(self.sim_config.stop_signal_path).write_text(
-                "STOP", encoding="utf-8"
-            )
-        except OSError as exc:
-            logger.warning(f"Could not write stop signal: {exc}")
+        request_stop(self.sim_config.stop_signal_path)
 
     def _schedule_escalation(self, pid: int | None) -> None:
         """Background escalation so stop() returns immediately. If the API
@@ -534,12 +530,7 @@ class SimJobManager:
     def _clear_stop_signal(self) -> None:
         if self.sim_config is None:
             return
-        try:
-            path = Path(self.sim_config.stop_signal_path)
-            if path.exists():
-                path.unlink()
-        except OSError as exc:
-            logger.warning(f"Could not clear stop signal: {exc}")
+        clear_stop_signal(self.sim_config.stop_signal_path)
 
     @staticmethod
     def _remove(path: Path | None) -> None:

@@ -16,6 +16,7 @@ from ashare_data.config import (
     make_sim_config,
 )
 from ashare_data.db import AshareDB
+from ashare_trading.signals import request_stop
 
 from .data_service import (
     load_backtest_result,
@@ -135,7 +136,7 @@ def main() -> None:
             st.info("暂无模拟盘状态")
 
         if st.button("写入紧急停止信号"):
-            Path(sim_config.stop_signal_path).write_text("STOP", encoding="utf-8")
+            request_stop(sim_config.stop_signal_path)
             st.success("已写入 STOP_SIGNAL")
 
     with tab_data:

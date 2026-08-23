@@ -10,7 +10,7 @@ import torch
 
 from ashare_data.capital_flow import build_capital_frames, build_industry_member_frame
 from ashare_data.config import DataConfig, ModelConfig, make_data_config
-from ashare_data.db import AshareDB
+from ashare_data.db import AshareDB, sql_quoted_list
 from ashare_data.fundamentals import build_pit_frames
 from ashare_data.processor import (
     encode_industry_frame,
@@ -214,12 +214,12 @@ class AshareDataLoader:
 
         with AshareDB(self.config.duckdb_path, read_only=True) as db:
             if requested_dates:
-                where_dates = "AND trade_date IN (" + ",".join(
-                    f"'{date}'" for date in requested_dates
-                ) + ")"
+                where_dates = (
+                    "AND trade_date IN (" + sql_quoted_list(requested_dates) + ")"
+                )
             else:
                 where_dates = ""
-            code_list = ",".join(f"'{c}'" for c in requested_codes)
+            code_list = sql_quoted_list(requested_codes)
             df = db.query(
                 f"""
                 SELECT ts_code, trade_date, open, high, low, close, pre_close,
