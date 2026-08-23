@@ -30,6 +30,13 @@ python -m pip install "torch==2.11.0+cu128" --index-url https://download.pytorch
 python -m ashare_model.train --device auto   # 或显式 --device cuda / cpu
 ```
 
+**默认规模与实测节奏**（6GB 显存 / 16GB RAM，torch 2.11.0+cu128，Windows）：
+默认 `model.batch_size: 256`、`model.train_steps: 150`（与协议 screening 档一致）。
+数据装载约 5–6 min；batch 256 下每步约 1.3–1.8 s（前两步含 CUDA 冷启动与首次
+全量打分，约 64 s）；策略通常在 ~50 步内收敛，150 步训练全程约 5–6 min。
+batch 4096 在本机 step 0 以 `c10.dll` 访问违例崩溃（torch/Windows 组合问题），
+故默认值不高于 256；更大 batch 仅供大内存机器显式配置。
+
 GPU 只加速 VM 因子算子；**策略模型与采样始终在 CPU**（torch 的 CPU 随机流与
 dropout 跨设备一致），因此同一 `(init_seed, seed)` 在任何机器上采样出相同的
 公式序列（有测试固化该不变量）。仅 VM 的 float32 算术在 GPU 上与 CPU 有

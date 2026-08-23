@@ -39,8 +39,12 @@ model:
   dim_feedforward: 128
   num_loops: 3
   dropout: 0.1
-  batch_size: 4096
-  train_steps: 1000
+  # Defaults match the smallest documented machine (6 GB VRAM / 16 GB RAM,
+  # torch 2.11.0+cu128 on Windows): batch 4096 crashed step 0 with a
+  # c10.dll access violation, and the policy converges within ~50 steps,
+  # so 150 x 256 (the protocol screening tier) is the realistic default.
+  batch_size: 256
+  train_steps: 150
   max_formula_len: 12
   learning_rate: 0.001
   validation_fraction: 0.35
@@ -55,7 +59,7 @@ model:
 # median over validation_splits sub-windows; bare single-factor formulas pay
 # a small complexity_penalty (kept tiny so the validation floor stays
 # reachable); artifacts are saved only when BOTH the best validation reward
-# reaches min_val_reward AND the best formula's full-window rank-ICIR
+# reaches min_val_reward AND the best formula's validation-window rank-ICIR
 # reaches min_val_icir (signal-quality gate against low-IC, low-turnover
 # fundamental copies).
 reward:

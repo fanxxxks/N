@@ -59,8 +59,15 @@ class ModelConfig:
     dim_feedforward: int = 128
     num_loops: int = 3
     dropout: float = 0.1
-    batch_size: int = 4096
-    train_steps: int = 1000
+    # Defaults are calibrated to the smallest documented machine (6 GB
+    # VRAM / 16 GB RAM): batch 4096 reproducibly crashed step 0 with a
+    # c10.dll access violation on torch 2.11.0+cu128 / Windows, and the
+    # search converges within ~50 steps at batch 256 (~1.7 s/step after
+    # the cold start), so the protocol screening tier (150 x 256) is the
+    # default workload.  Larger batches remain configurable for bigger
+    # machines.
+    batch_size: int = 256
+    train_steps: int = 150
     max_formula_len: int = 12
     learning_rate: float = 1e-3
     # Tail of the training window held out for out-of-sample best-formula
