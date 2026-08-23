@@ -84,7 +84,12 @@ def test_vm_matches_cpu_on_cuda():
     for tokens in formulas:
         cpu_out = vm.execute(tokens, feature)
         assert cpu_out is not None
+        # The mask must travel with the feature tensor: the terminal
+        # cross-sectional z-score reads both on the same device, and a
+        # CPU mask against a CUDA feature raises a device mismatch.
+        vm.universe_mask = vm.universe_mask.cuda()
         gpu_out = vm.execute(tokens, feature.cuda())
+        vm.universe_mask = vm.universe_mask.cpu()
         assert gpu_out is not None
         assert torch.allclose(cpu_out, gpu_out.cpu(), atol=1e-4, rtol=1e-4)
 
