@@ -32,7 +32,8 @@ ROOT = Path(__file__).resolve().parents[1]
 _LOG_DIRS = (ROOT / "logs", ROOT / "data")
 _MAX_LOG_READ_BYTES = 16 * 1024 * 1024
 
-_stock_names: dict[str, str] = {}
+_stock_names: dict[str, str] | None = None
+_stock_names_mtime: float | None = None
 
 
 def _load_configs() -> tuple:
@@ -56,21 +57,31 @@ def _read_json(path: Path) -> dict | list | None:
 
 
 def load_stock_names() -> dict[str, str]:
-    """ts_code -> stock name from the local DuckDB (cached)."""
+    """ts_code -> stock name from the local DuckDB.
 
-    global _stock_names
-    if _stock_names:
-        return _stock_names
+    Cached with mtime invalidation: a fresh sync (or a renamed stock)
+    shows up on the next call without a permanent stale cache.
+    """
+
+    global _stock_names, _stock_names_mtime
     data_config, *_ = _get_configs()
     if data_config is None:
         return {}
+    db_path = data_config.duckdb_path
     try:
-        with AshareDB(data_config.duckdb_path, read_only=True) as db:
+        mtime = db_path.stat().st_mtime if db_path.exists() else None
+    except OSError:
+        mtime = None
+    if _stock_names is not None and mtime == _stock_names_mtime:
+        return _stock_names
+    try:
+        with AshareDB(db_path, read_only=True) as db:
             df = db.query(f"SELECT ts_code, name FROM {data_config.stocks_table}")
         _stock_names = {
             str(row.get("ts_code")): str(row.get("name") or row.get("ts_code"))
             for row in df.to_dict("records")
         }
+        _stock_names_mtime = mtime
     except Exception:  # noqa: BLE001
         return {}
     return _stock_names

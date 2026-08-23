@@ -362,15 +362,34 @@ def _cs_neutralize(
     if ids.numel() == 0:
         return _cs_demean(x, eligible)
     ref, count = _cs_reference(x, eligible)
-    out = x.clone()
-    for gid in ids:
-        member = (group == gid) & ref
-        group_count = member.sum(dim=0, keepdim=True)
-        total = torch.where(member, x, torch.zeros_like(x)).sum(
-            dim=0, keepdim=True
-        )
-        mean = total / group_count.clamp(min=1)
-        out = torch.where(group == gid, x - mean, out)
+    # Dense group ids: finite cells map to 0..G-1 via a binary search over
+    # the sorted unique values; non-finite cells get a sentinel id that
+    # never contributes to (and never receives) a mean.  One scatter-add
+    # pass replaces the previous per-industry Python loop (G full-tensor
+    # passes over [stock, date]).
+    sentinel = int(ids.numel())
+    g = torch.full_like(group, sentinel, dtype=torch.long)
+    finite_group = torch.isfinite(group)
+    g[finite_group] = torch.searchsorted(ids, group[finite_group])
+    participate = ref & finite_group
+    n_stocks, n_dates = x.shape
+    g_flat = g.reshape(-1)
+    cell_flat = torch.arange(n_stocks * n_dates, device=x.device)
+    mean_idx = g_flat * n_dates + cell_flat % n_dates
+    acc = torch.zeros((sentinel + 1) * n_dates, dtype=x.dtype, device=x.device)
+    acc.index_add_(
+        0,
+        mean_idx,
+        torch.where(
+            participate.reshape(-1),
+            x.reshape(-1),
+            torch.zeros_like(x).reshape(-1),
+        ),
+    )
+    cnt = torch.zeros((sentinel + 1) * n_dates, dtype=x.dtype, device=x.device)
+    cnt.index_add_(0, mean_idx, participate.reshape(-1).to(x.dtype))
+    means_flat = acc / cnt.clamp(min=1)
+    out = x - means_flat[mean_idx].view_as(x)
     return _masked_output(out, ref, count)
 
 

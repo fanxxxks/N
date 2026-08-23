@@ -14,6 +14,7 @@ and :func:`export_log_txt` at the end.  The default log directory is
 from __future__ import annotations
 
 import sys
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,9 @@ from typing import Any
 from loguru import logger
 
 
-_LOG_LINES: list[str] = []
+# Bounded memory buffer: an unbounded sink would grow without limit across
+# long training/sync runs.
+_LOG_LINES: deque[str] = deque(maxlen=10_000)
 
 _TXT_FORMAT = (
     "{time:YYYY-MM-DD HH:mm:ss.SSS} | "

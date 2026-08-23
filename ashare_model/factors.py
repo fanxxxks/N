@@ -130,8 +130,22 @@ def _returns(close: pd.DataFrame) -> pd.DataFrame:
 
 
 def _shift_ratio(close: pd.DataFrame, periods: int) -> pd.DataFrame:
-    shifted = close.shift(periods, axis=1)
-    return (close / shifted - 1.0).replace([np.inf, -np.inf], np.nan)
+    # Pure numpy path: pandas' axis-1 shift of a wide frame produces a
+    # fragmented block layout that emits PerformanceWarnings on every
+    # subsequent operation.  Rebuilding the frame from numpy is exactly
+    # the same shift (first ``periods`` columns become NaN) and always
+    # yields a consolidated frame.
+    values = close.to_numpy(dtype=float)
+    shifted = np.roll(values, periods, axis=1)
+    if periods > 0:
+        shifted[:, :periods] = np.nan
+    with np.errstate(all="ignore"):
+        out = values / shifted - 1.0
+    return pd.DataFrame(
+        np.where(np.isfinite(out), out, np.nan),
+        index=close.index,
+        columns=close.columns,
+    )
 
 
 def _rolling_std(returns: pd.DataFrame, window: int) -> pd.DataFrame:
