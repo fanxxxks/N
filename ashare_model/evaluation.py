@@ -93,7 +93,12 @@ from ashare_data.universe import require_production_universe
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .backtest import AshareBacktestEngine, equal_weight_benchmark_returns
-from .candidates import CandidateScorer, CandidateSelector, CandidateSpec
+from .candidates import (
+    CandidateScorer,
+    CandidateSelector,
+    CandidateSpec,
+    score_chunk_size,
+)
 from .data_loader import AshareDataLoader
 from .diagnostics import rank_ic_stats
 from .reward import REWARD_VERSION
@@ -583,11 +588,6 @@ def run_fold(
     }
 
 
-# Random-search formulas are scored in chunks so the float64 signal stack
-# stays memory-bounded (16 x [stocks, dates] x 8 bytes).
-_RANDOM_SEARCH_CHUNK = 16
-
-
 def run_random_search(
     loader: AshareDataLoader,
     model_config: ModelConfig,
@@ -688,13 +688,18 @@ def run_random_search(
     formulas = sample_random_formulas(
         seed, vocab, model_config.max_formula_len, n_samples
     )
+    # Random-search formulas are scored in budget-aware chunks so the
+    # float64 signal stack + both-direction copy stay memory-bounded
+    # (the shared chunk helper, same budget as the trainer).
+    signal_bytes = factors.shape[1] * factors.shape[2] * 8
+    chunk = score_chunk_size(signal_bytes)
     scores = []
     seen: set[tuple[int, ...]] = set()
-    for start in range(0, len(formulas), _RANDOM_SEARCH_CHUNK):
+    for start in range(0, len(formulas), chunk):
         specs: list[CandidateSpec] = []
         signals: list[np.ndarray | None] = []
         formula_valid: list[bool] = []
-        for key in formulas[start : start + _RANDOM_SEARCH_CHUNK]:
+        for key in formulas[start : start + chunk]:
             if key in seen:
                 continue
             seen.add(key)

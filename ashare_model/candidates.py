@@ -12,6 +12,33 @@ from ashare_data.config import BacktestConfig, RewardConfig
 
 from .reward import batched_basket_rewards
 
+# Peak transient of one scoring chunk: ``score_many`` holds the original
+# signal stack (1x), the stacked batch (1x) and the interleaved
+# both-direction copy (2x) at once, i.e. ~4x one signal.
+_SCORE_CHUNK_BUDGET_BYTES = 512 * (1 << 20)
+_SCORE_CHUNK_SIGNALS_MULTIPLIER = 4
+
+
+def score_chunk_size(signal_bytes: int) -> int:
+    """Formulas per scoring chunk under the ~512 MB float64 budget.
+
+    ``signal_bytes`` is the byte size of one candidate signal
+    (``stocks x dates x 8``).  The chunk keeps ``4x`` one signal inside the
+    budget so the stacked batch, the both-direction copy and the caller's
+    pending originals never exceed it together; it is capped at 64 (tiny
+    windows would otherwise build huge chunk counts) and floored at 1 so a
+    single oversized signal still makes progress.
+    """
+
+    return max(
+        1,
+        min(
+            64,
+            _SCORE_CHUNK_BUDGET_BYTES
+            // max(_SCORE_CHUNK_SIGNALS_MULTIPLIER * int(signal_bytes), 1),
+        ),
+    )
+
 
 @dataclass(frozen=True)
 class CandidateSpec:

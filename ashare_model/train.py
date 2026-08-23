@@ -39,6 +39,7 @@ from .candidates import (
     CandidateSelector,
     CandidateSpec,
     SelectionResult,
+    score_chunk_size,
 )
 from .data_loader import AshareDataLoader
 from .ops import OPS_CONFIG
@@ -227,18 +228,6 @@ class AshareTrainer:
         self._reward_cache.move_to_end(key)
 
     @staticmethod
-    def _reward_chunk_size(signal_bytes: int) -> int:
-        """Formulas per reward-scoring chunk under the ~512 MB budget.
-
-        One chunk stacks its signals as float64, so ``chunk x signal_bytes``
-        bytes stay below the budget; the chunk is capped at 64 (small
-        windows would otherwise build huge numpy stacks) and floored at 1
-        so a single oversized signal still makes progress.
-        """
-
-        return max(1, min(64, (512 * (1 << 20)) // max(signal_bytes, 1)))
-
-    @staticmethod
     def _policy_update_loss(
         log_probs: list[torch.Tensor],
         rewards: torch.Tensor,
@@ -377,9 +366,10 @@ class AshareTrainer:
         val_windows = self._validation_windows(contract.train_signal_end)
 
         # Chunk the batched reward evaluation so the stacked signal matrix
-        # stays within a fixed memory budget (~512 MB of float64 signals).
+        # (original stack + batched copy + both-direction copy) stays within
+        # a fixed memory budget (~512 MB of float64 signals).
         signal_bytes = factor_tensor.shape[1] * train_end_idx * 8
-        reward_chunk = self._reward_chunk_size(signal_bytes)
+        reward_chunk = score_chunk_size(signal_bytes)
 
         pbar = tqdm(range(steps))
         for step in pbar:
