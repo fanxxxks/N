@@ -190,8 +190,8 @@ class AshareTrainer:
         )
         self.best_val_reward = -float("inf")
         self.best_val_icir = -float("inf")
-        self.best_full_window_reward = -float("inf")
-        self.best_full_window_icir = -float("inf")
+        self.best_train_reward = -float("inf")
+        self.best_train_icir = -float("inf")
         self.best_direction = 1
         self.best_tokens: list[int] | None = None
         self.best_formula = ""
@@ -268,7 +268,7 @@ class AshareTrainer:
         universe_mask: np.ndarray,
         blocked_buy: np.ndarray | None = None,
         blocked_sell: np.ndarray | None = None,
-        full_signal_range: tuple[int, int] | None = None,
+        train_signal_range: tuple[int, int] | None = None,
     ) -> None:
         """Score one chunk of pending formulas and merge the outcomes."""
 
@@ -281,7 +281,7 @@ class AshareTrainer:
             val_windows,
             blocked_buy=blocked_buy,
             blocked_sell=blocked_sell,
-            full_signal_range=full_signal_range,
+            train_signal_range=train_signal_range,
             universe_mask=universe_mask,
         )
         for score in scores:
@@ -319,10 +319,18 @@ class AshareTrainer:
 
         contract = self._training_contract(train_end_date)
         train_end_idx = contract.train_label_end
-        train_signal_range = (
-            contract.train_signal_start,
-            contract.train_signal_end,
-        )
+        # Hold out the tail of the training window for out-of-sample best
+        # formula selection, split into independent sub-windows; the best
+        # formula is decided on the *median* validation reward so a single
+        # lucky tail stretch cannot win the selection.
+        val_windows = self._validation_windows(contract.train_signal_end)
+        # The *learning* window is the in-sample head only: the policy
+        # gradient scores candidates on columns strictly before the first
+        # validation window, so the selection data never doubles as the
+        # training signal (val rewards rank formulas; IS rewards teach the
+        # policy — two jobs, two windows).
+        val_start = validation_start(contract.train_signal_end, self.model_config)
+        train_signal_range = (contract.train_signal_start, val_start)
         factor_tensor = self.loader.factor_tensor[:, :, :train_end_idx].to(
             vm_device
         )
@@ -358,12 +366,6 @@ class AshareTrainer:
         blocked_buy, blocked_sell = self.loader.tradability_masks()
         blocked_buy = blocked_buy[:, :train_end_idx]
         blocked_sell = blocked_sell[:, :train_end_idx]
-
-        # Hold out the tail of the training window for out-of-sample best
-        # formula selection, split into independent sub-windows; the best
-        # formula is decided on the *median* validation reward so a single
-        # lucky tail stretch cannot win the selection.
-        val_windows = self._validation_windows(contract.train_signal_end)
 
         # Chunk the batched reward evaluation so the stacked signal matrix
         # (original stack + batched copy + both-direction copy) stays within
@@ -441,7 +443,7 @@ class AshareTrainer:
                         blocked_buy=blocked_buy,
                         blocked_sell=blocked_sell,
                         formula_valid=False,
-                        full_signal_range=train_signal_range,
+                        train_signal_range=train_signal_range,
                         universe_mask=train_universe_mask,
                     )
                     continue
@@ -477,7 +479,11 @@ class AshareTrainer:
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())
                 score = step_results[key]
-                rewards[i] = score.full_window_reward
+                # The gradient reads the in-sample reward only: the
+                # validation tail ranks formulas but never teaches the
+                # policy (test_policy_gradient_reward_window_excludes_
+                # validation_tail pins this contract).
+                rewards[i] = score.train_reward
                 # Cache every outcome (invalid and constant formulas too):
                 # the token sequence fully determines it, so repeats can
                 # skip the VM execution as well.
@@ -647,16 +653,16 @@ class AshareTrainer:
         if selected is None:
             self.best_val_reward = -float("inf")
             self.best_val_icir = -float("inf")
-            self.best_full_window_reward = -float("inf")
-            self.best_full_window_icir = -float("inf")
+            self.best_train_reward = -float("inf")
+            self.best_train_icir = -float("inf")
             self.best_direction = 1
             self.best_tokens = None
             self.best_formula = ""
             return
         self.best_val_reward = selected.val_reward
         self.best_val_icir = selected.val_icir
-        self.best_full_window_reward = selected.full_window_reward
-        self.best_full_window_icir = selected.full_window_icir
+        self.best_train_reward = selected.train_reward
+        self.best_train_icir = selected.train_icir
         self.best_direction = selected.direction
         self.best_tokens = list(selected.tokens) if selected.tokens is not None else None
         self.best_formula = selected.formula_text

@@ -67,6 +67,12 @@ with suspension gaps no longer regress on market returns from sessions
 they did not trade, so BETA_60/IVOL_60/RSQ_60 and every candidate built
 on them changes value.
 
+v11 isolates the training signal from the selection data (see
+``ashare_model.reward.REWARD_VERSION`` v10): every candidate-scoring
+caller (trainer, random search, baselines) scores its primary window on
+the in-sample head that stops where the validation tail begins, and the
+rows rename ``full_window_*`` to ``train_*`` accordingly.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -118,12 +124,13 @@ from .time_contract import FoldTimeContract
 from .train import (
     AshareTrainer,
     sample_random_formulas,
+    validation_start,
     validation_windows,
 )
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "10"
+PROTOCOL_VERSION = "11"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -470,7 +477,10 @@ def baseline_candidates(
         val_windows,
         blocked_buy=blocked_buy[:, :train_price_end],
         blocked_sell=blocked_sell[:, :train_price_end],
-        full_signal_range=(contract.train_signal_start, train_signal_end),
+        train_signal_range=(
+            contract.train_signal_start,
+            validation_start(train_signal_end, model_cfg),
+        ),
         universe_mask=loader.universe_mask[:, :train_price_end],
     )
     # The selector is invoked even though the protocol reports every bare
@@ -492,8 +502,8 @@ def baseline_candidates(
                 "seed": None,
                 "val_reward": score.val_reward,
                 "val_icir": score.val_icir,
-                "full_window_reward": score.full_window_reward,
-                "full_window_icir": score.full_window_icir,
+                "train_reward": score.train_reward,
+                "train_icir": score.train_icir,
                 "complexity_penalty": score.complexity_penalty,
                 "eligible": score.eligible,
                 "rejection_reasons": list(score.rejection_reasons),
@@ -582,11 +592,11 @@ def run_fold(
         "formula": list(tokens),
         "val_reward": float(getattr(trainer, "best_val_reward", trainer.best_reward)),
         "val_icir": float(selected.val_icir) if selected is not None else None,
-        "full_window_reward": (
-            float(selected.full_window_reward) if selected is not None else None
+        "train_reward": (
+            float(selected.train_reward) if selected is not None else None
         ),
-        "full_window_icir": (
-            float(selected.full_window_icir) if selected is not None else None
+        "train_icir": (
+            float(selected.train_icir) if selected is not None else None
         ),
         "eligible": bool(selected.eligible) if selected is not None else True,
         "rejection_reasons": (
@@ -638,8 +648,8 @@ def run_random_search(
             "formula": payload.get("tokens"),
             "val_reward": payload.get("val_reward"),
             "val_icir": payload.get("val_icir"),
-            "full_window_reward": payload.get("full_window_reward"),
-            "full_window_icir": payload.get("full_window_icir"),
+            "train_reward": payload.get("train_reward"),
+            "train_icir": payload.get("train_icir"),
             "complexity_penalty": payload.get("complexity_penalty"),
             "eligible": False,
             "rejection_reasons": payload.get("rejection_reasons", [reason]),
@@ -741,9 +751,9 @@ def run_random_search(
                 blocked_buy=blocked_buy,
                 blocked_sell=blocked_sell,
                 formula_valid=formula_valid,
-                full_signal_range=(
+                train_signal_range=(
                     contract.train_signal_start,
-                    contract.train_signal_end,
+                    validation_start(train_signal_end, model_config),
                 ),
                 universe_mask=train_universe_mask,
             )
@@ -770,8 +780,8 @@ def run_random_search(
         "formula": list(selected.tokens),
         "val_reward": selected.val_reward,
         "val_icir": selected.val_icir,
-        "full_window_reward": selected.full_window_reward,
-        "full_window_icir": selected.full_window_icir,
+        "train_reward": selected.train_reward,
+        "train_icir": selected.train_icir,
         "complexity_penalty": selected.complexity_penalty,
         "eligible": selected.eligible,
         "rejection_reasons": list(selected.rejection_reasons),
