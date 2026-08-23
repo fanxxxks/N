@@ -29,9 +29,11 @@ tensor moves to the compute device, exactly like any other VM data.
 
 from __future__ import annotations
 
+import os
 from typing import Iterable
 
 import torch
+from loguru import logger
 
 from .ops import (
     OPS_CONFIG,
@@ -139,7 +141,23 @@ class StackVM:
             if len(stack) != 1:
                 return None
             return cross_sectional_zscore(stack[-1], self.universe_mask)
-        except Exception:
+        except Exception as exc:
+            # Structural invalidity (unknown tokens, arity, stack shape) is
+            # rejected above; anything that still raises here is an
+            # unexpected execution error (device mismatch, OOM, a broken
+            # operator) and must never be swallowed silently — a bare
+            # swallow degrades real failures into "invalid formula" and
+            # hides bugs.  The search loop still treats the formula as
+            # invalid (the contract), but the failure is recorded, and
+            # ASHARE_VM_STRICT re-raises so tests can turn every hidden
+            # exception into a hard failure.
+            if os.environ.get("ASHARE_VM_STRICT"):
+                raise
+            logger.warning(
+                "VM execution failed for formula "
+                f"{formula_decode(list(formula_tokens), self.vocab)!r} "
+                f"({type(exc).__name__}: {exc}); treating it as invalid"
+            )
             return None
 
 
