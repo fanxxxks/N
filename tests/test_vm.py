@@ -8,9 +8,18 @@ from ashare_model.vm import StackVM, cross_sectional_zscore, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB
 
 
+def _vm(feature: torch.Tensor) -> StackVM:
+    """A VM whose mask marks every cell eligible (the test then overrides
+    ``vm.universe_mask`` when it needs a real PIT mask)."""
+    return StackVM(
+        FORMULA_VOCAB,
+        universe_mask=torch.ones(feature.shape[1:], dtype=torch.bool),
+    )
+
+
 def test_vm_executes_binary_unary_and_ternary():
-    vm = StackVM(FORMULA_VOCAB)
     feature = torch.randn(FORMULA_VOCAB.feature_count, 2, 4)
+    vm = _vm(feature)
     add = FORMULA_VOCAB.operator_offset
     neg = add + 4  # NEG follows ADD/SUB/MUL/DIV in OPS_CONFIG
     gate = add + 7  # GATE follows NEG/ABS/SIGN
@@ -20,8 +29,8 @@ def test_vm_executes_binary_unary_and_ternary():
 
 
 def test_vm_returns_none_for_illegal_tokens():
-    vm = StackVM(FORMULA_VOCAB)
     feature = torch.randn(FORMULA_VOCAB.feature_count, 2, 4)
+    vm = _vm(feature)
     assert vm.execute([1, 2], feature) is None
     assert vm.execute([-1], feature) is None
     assert vm.execute([FORMULA_VOCAB.size + 10], feature) is None
@@ -37,8 +46,8 @@ def test_formula_decode_variants_and_errors():
 
 
 def test_vm_clamps_nonfinite_results_to_neutral_zero():
-    vm = StackVM(FORMULA_VOCAB)
     feature = torch.zeros(FORMULA_VOCAB.feature_count, 2, 4)
+    vm = _vm(feature)
     feature[0] = 1e30
     feature[1] = 1e30
     mul = FORMULA_VOCAB.operator_offset + 2  # MUL is the third operator
@@ -52,9 +61,9 @@ def test_vm_clamps_nonfinite_results_to_neutral_zero():
 def test_vm_matches_cpu_on_cuda():
     # The GPU path only accelerates the VM operators; results must agree
     # with CPU execution within float32 tolerance.
-    vm = StackVM(FORMULA_VOCAB)
     torch.manual_seed(3)
     feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 16)
+    vm = _vm(feature)
     op_id = {name: FORMULA_VOCAB.operator_offset + i for i, (name, _, _) in enumerate(OPS_CONFIG)}
     formulas = [
         [1],
@@ -81,12 +90,12 @@ def test_vm_matches_cpu_on_cuda():
 
 
 def test_vm_cs_neutralize_uses_industry_codes():
-    vm = StackVM(FORMULA_VOCAB)
+    feature = torch.zeros(FORMULA_VOCAB.feature_count, 4, 3)
+    vm = _vm(feature)
     op_id = {
         name: FORMULA_VOCAB.operator_offset + i
         for i, (name, _, _) in enumerate(OPS_CONFIG)
     }
-    feature = torch.zeros(FORMULA_VOCAB.feature_count, 4, 3)
     # Two industries (rows 0-1, rows 2-3) at distinct levels: the raw
     # neutralized signal is industry-demeaned before the terminal z-score.
     feature[0, :, :] = torch.tensor(
@@ -111,13 +120,13 @@ def test_vm_cs_neutralize_uses_industry_codes():
 
 
 def test_vm_new_operators_decode_and_execute():
-    vm = StackVM(FORMULA_VOCAB)
+    torch.manual_seed(41)
+    feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 12)
+    vm = _vm(feature)
     op_id = {
         name: FORMULA_VOCAB.operator_offset + i
         for i, (name, _, _) in enumerate(OPS_CONFIG)
     }
-    torch.manual_seed(41)
-    feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 12)
     for name in (
         "CS_RANK", "CS_ZSCORE", "CS_DEMEAN", "CS_NEUTRALIZE",
         "MA5", "MA10", "MA60", "STD5", "STD10", "STD60",
@@ -143,7 +152,7 @@ def test_cross_sectional_zscore_standardizes_per_date():
             [5.0, 10.0, 4.0],
         ]
     )
-    out = cross_sectional_zscore(signal)
+    out = cross_sectional_zscore(signal, torch.ones_like(signal, dtype=torch.bool))
     assert out.shape == signal.shape
     # Non-degenerate columns are mean-zero / unit-std per date.
     assert torch.allclose(out.mean(dim=0)[[0, 2]], torch.zeros(2), atol=1e-6)
@@ -158,8 +167,9 @@ def test_cross_sectional_zscore_is_scale_invariant_and_order_preserving():
     rng = torch.Generator().manual_seed(11)
     signal = torch.randn(6, 5, generator=rng)
     scaled = signal * 37.0 + 4.0  # affine drift must cancel out entirely
-    out = cross_sectional_zscore(signal)
-    out_scaled = cross_sectional_zscore(scaled)
+    eligible = torch.ones_like(signal, dtype=torch.bool)
+    out = cross_sectional_zscore(signal, eligible)
+    out_scaled = cross_sectional_zscore(scaled, eligible)
     assert torch.allclose(out, out_scaled, atol=1e-5, rtol=1e-5)
     # Monotone per column: ranks are preserved, so rank IC and top-n
     # selection are unchanged by the terminal standardization.
@@ -167,9 +177,9 @@ def test_cross_sectional_zscore_is_scale_invariant_and_order_preserving():
 
 
 def test_vm_output_is_cross_sectionally_standardized():
-    vm = StackVM(FORMULA_VOCAB)
     torch.manual_seed(5)
     feature = torch.randn(FORMULA_VOCAB.feature_count, 4, 8)
+    vm = _vm(feature)
     out = vm.execute([1], feature)
     assert out is not None
     assert torch.allclose(out.mean(dim=0), torch.zeros(8), atol=1e-6)
@@ -183,9 +193,9 @@ def test_vm_output_is_cross_sectionally_standardized():
 def test_vm_standardizes_stacked_arithmetic_scale():
     # MUL-chained formulas drift the raw scale; the terminal standardization
     # must keep the output scale stable regardless of the arithmetic path.
-    vm = StackVM(FORMULA_VOCAB)
     torch.manual_seed(7)
     feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 10).abs() + 1.0
+    vm = _vm(feature)
     mul = FORMULA_VOCAB.operator_offset + 2
     chained = vm.execute([1, 2, mul, 2, mul, 2, mul], feature)
     assert chained is not None
@@ -204,9 +214,9 @@ def _vm_op_ids():
 
 
 def test_vm_terminal_zscore_excludes_ineligible_stocks():
-    vm = StackVM(FORMULA_VOCAB)
     torch.manual_seed(9)
     feature = torch.randn(FORMULA_VOCAB.feature_count, 4, 6)
+    vm = _vm(feature)
     eligible = torch.ones(4, 6, dtype=torch.bool)
     eligible[3] = False
     vm.universe_mask = eligible
@@ -215,17 +225,19 @@ def test_vm_terminal_zscore_excludes_ineligible_stocks():
     # Ineligible cells are non-participating (NaN), not zeros in the sort.
     assert torch.isnan(out[3]).all()
     # The eligible rows are z-scored over the eligible reference set only.
-    ref = cross_sectional_zscore(feature[0][:3])
+    ref = cross_sectional_zscore(
+        feature[0][:3], torch.ones(3, 6, dtype=torch.bool)
+    )
     assert torch.allclose(out[:3], ref, atol=1e-5, rtol=1e-5)
 
 
 def test_vm_extreme_ineligible_values_do_not_move_eligible_signals():
-    vm = StackVM(FORMULA_VOCAB)
+    base = torch.randn(FORMULA_VOCAB.feature_count, 4, 2)
+    vm = _vm(base)
     eligible = torch.tensor(
         [[True, True], [True, True], [True, True], [False, False]]
     )
     vm.universe_mask = eligible
-    base = torch.randn(FORMULA_VOCAB.feature_count, 4, 2)
     extreme = base.clone()
     extreme[0, 3] = 1e9  # future member with extreme values
     out_base = vm.execute([1], base)
@@ -238,9 +250,9 @@ def test_vm_extreme_ineligible_values_do_not_move_eligible_signals():
 
 
 def test_vm_cs_operators_honor_universe_mask():
-    vm = StackVM(FORMULA_VOCAB)
     op_id = _vm_op_ids()
     feature = torch.zeros(FORMULA_VOCAB.feature_count, 4, 3)
+    vm = _vm(feature)
     feature[0] = torch.tensor(
         [[1.0, 2.0, 3.0], [2.0, 4.0, 6.0], [3.0, 6.0, 9.0], [1e6, 1e6, 1e6]]
     )
@@ -254,7 +266,7 @@ def test_vm_cs_operators_honor_universe_mask():
         # The ineligible row is non-participating in the final signal...
         assert torch.isnan(out[3]).all(), name
         # ...and the eligible rows match the eligible-only execution.
-        vm.universe_mask = None
+        vm.universe_mask = torch.ones(3, 3, dtype=torch.bool)
         eligible_only = vm.execute(
             [1, op_id[name]], feature[:, :3]
         )
@@ -264,9 +276,9 @@ def test_vm_cs_operators_honor_universe_mask():
 
 
 def test_vm_cs_neutralize_honors_mask_through_industry_codes():
-    vm = StackVM(FORMULA_VOCAB)
-    op_id = _vm_op_ids()
     feature = torch.zeros(FORMULA_VOCAB.feature_count, 4, 2)
+    vm = _vm(feature)
+    op_id = _vm_op_ids()
     feature[0] = torch.tensor(
         [[10.0, 2.0], [20.0, 4.0], [1000.0, 2000.0], [7.0, 5.0]]
     )
@@ -289,8 +301,8 @@ def test_vm_cs_neutralize_honors_mask_through_industry_codes():
 
 
 def test_vm_day_without_eligible_stocks_is_stable():
-    vm = StackVM(FORMULA_VOCAB)
     feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 4)
+    vm = _vm(feature)
     eligible = torch.ones(3, 4, dtype=torch.bool)
     eligible[:, 2] = False
     vm.universe_mask = eligible
@@ -303,8 +315,8 @@ def test_vm_day_without_eligible_stocks_is_stable():
 
 
 def test_vm_single_eligible_stock_is_neutral_but_valid():
-    vm = StackVM(FORMULA_VOCAB)
     feature = torch.zeros(FORMULA_VOCAB.feature_count, 3, 2)
+    vm = _vm(feature)
     feature[0] = torch.tensor([[5.0, 7.0], [1e9, 1e9], [1e9, 1e9]])
     eligible = torch.tensor([[True, True], [False, False], [False, False]])
     vm.universe_mask = eligible
@@ -317,8 +329,8 @@ def test_vm_single_eligible_stock_is_neutral_but_valid():
 
 
 def test_vm_mask_shape_mismatch_returns_none():
-    vm = StackVM(FORMULA_VOCAB)
     feature = torch.randn(FORMULA_VOCAB.feature_count, 3, 4)
+    vm = _vm(feature)
     vm.universe_mask = torch.ones(2, 4, dtype=torch.bool)
     # A misaligned mask makes the execution invalid (the VM's None contract
     # for unusable executions); the underlying operators raise a clear
@@ -330,9 +342,9 @@ def test_vm_mask_shape_mismatch_returns_none():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_vm_masked_execution_matches_cpu_on_cuda():
-    vm = StackVM(FORMULA_VOCAB)
     torch.manual_seed(7)
     feature = torch.randn(FORMULA_VOCAB.feature_count, 4, 16)
+    vm = _vm(feature)
     eligible = torch.rand(4, 16) > 0.3
     industry = torch.randint(0, 2, (4, 16)).float()
     vm.universe_mask = eligible

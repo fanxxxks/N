@@ -171,7 +171,15 @@ class AshareTrainer:
         if self.loader.factor_tensor is None:
             self.loader.load_data()
         self.vocab = FORMULA_VOCAB
-        self.vm = StackVM(self.vocab)
+        # The PIT eligibility mask is wired at construction like every
+        # formal path; train() re-assigns the sliced device copy when the
+        # factor tensor moves to the compute device.
+        self.vm = StackVM(
+            self.vocab,
+            universe_mask=torch.tensor(
+                self.loader.universe_mask, dtype=torch.bool
+            ),
+        )
         # Pin the weight initialization so the same (init_seed, seed)
         # pair reproduces the same training on any machine.
         torch.manual_seed(init_seed)
@@ -268,10 +276,10 @@ class AshareTrainer:
         target_ret: np.ndarray,
         val_windows: list[tuple[int, int]],
         step_results: dict[tuple[int, ...], CandidateScore],
+        universe_mask: np.ndarray,
         blocked_buy: np.ndarray | None = None,
         blocked_sell: np.ndarray | None = None,
         full_signal_range: tuple[int, int] | None = None,
-        universe_mask: np.ndarray | None = None,
     ) -> None:
         """Score one chunk of pending formulas and merge the outcomes."""
 
@@ -331,32 +339,24 @@ class AshareTrainer:
         )
         # The VM executes on the compute device; the industry-group tensor
         # for CS_NEUTRALIZE and the PIT eligibility mask for the
-        # cross-sectional operators move with the factor stack (None when
-        # the loader carries no such data).
+        # cross-sectional operators move with the factor stack (the loader
+        # always builds the mask in load_data, so there is no fallback).
         industry_codes = getattr(self.loader, "industry_codes", None)
         self.vm.industry_codes = (
             industry_codes[:, :train_end_idx].to(vm_device)
             if industry_codes is not None
             else None
         )
-        universe_mask = getattr(self.loader, "universe_mask", None)
-        self.vm.universe_mask = (
-            torch.tensor(
-                universe_mask[:, :train_end_idx],
-                dtype=torch.bool,
-                device=vm_device,
-            )
-            if universe_mask is not None
-            else None
+        universe_mask = self.loader.universe_mask
+        self.vm.universe_mask = torch.tensor(
+            universe_mask[:, :train_end_idx],
+            dtype=torch.bool,
+            device=vm_device,
         )
         # The candidate scorer needs the same PIT mask on the numpy side:
         # every quality statistic (rank IC, basket selection, near-constant
         # rejection, direction) is gated to signal-date eligible cells.
-        train_universe_mask = (
-            universe_mask[:, :train_end_idx]
-            if universe_mask is not None
-            else None
-        )
+        train_universe_mask = universe_mask[:, :train_end_idx]
         # Recompute labels only from prices inside the inclusive training
         # anchor. Precomputed global targets at the tail may reference fold-
         # external t+1/t+2 prices and are intentionally never sliced here.
@@ -467,10 +467,10 @@ class AshareTrainer:
                         target_ret,
                         val_windows,
                         step_results,
+                        train_universe_mask,
                         blocked_buy,
                         blocked_sell,
                         train_signal_range,
-                        train_universe_mask,
                     )
                     pending = []
             self._score_pending_chunk(
@@ -478,10 +478,10 @@ class AshareTrainer:
                 target_ret,
                 val_windows,
                 step_results,
+                train_universe_mask,
                 blocked_buy,
                 blocked_sell,
                 train_signal_range,
-                train_universe_mask,
             )
 
             for i in range(batch_size):

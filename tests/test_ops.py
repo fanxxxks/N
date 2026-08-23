@@ -24,8 +24,15 @@ from ashare_model.ops import (
 def test_all_operators_preserve_batch_and_time_shape():
     x = torch.randn(2, 6)
     y = torch.randn(2, 6)
+    eligible = torch.ones_like(x, dtype=torch.bool)
     for name, fn, arity in OPS_CONFIG:
-        if arity == 1:
+        if name == "CS_NEUTRALIZE":
+            # The VM dispatches this operator by name (industry groups live
+            # on the VM); the registry slot is a bare placeholder.
+            out = _cs_neutralize(x, eligible=eligible)
+        elif name.startswith("CS_"):
+            out = fn(x, eligible)
+        elif arity == 1:
             out = fn(x)
         elif arity == 2:
             out = fn(x, y)
@@ -187,7 +194,7 @@ def test_cs_rank_matches_average_rank_oracle():
         x = torch.randn(n, t)
         # Force tie groups: quantize every other column.
         x[:, 1::2] = (x[:, 1::2] * 2).round() / 2
-        out = _cs_rank(x).numpy()
+        out = _cs_rank(x, torch.ones_like(x, dtype=torch.bool)).numpy()
         for day in range(t):
             expected = _numpy_avg_rank(x[:, day].numpy())
             assert np.allclose(out[:, day], expected, atol=1e-6)
@@ -196,10 +203,11 @@ def test_cs_rank_matches_average_rank_oracle():
 def test_cs_rank_is_monotone_invariant_and_bounded():
     torch.manual_seed(19)
     x = torch.randn(12, 6)
-    out = _cs_rank(x)
+    eligible = torch.ones_like(x, dtype=torch.bool)
+    out = _cs_rank(x, eligible)
     assert torch.all(out >= 0.0) and torch.all(out <= 1.0)
     # Affine transforms do not change ranks.
-    assert torch.allclose(_cs_rank(x * 3.0 - 2.0), out, atol=1e-6)
+    assert torch.allclose(_cs_rank(x * 3.0 - 2.0, eligible), out, atol=1e-6)
     # Rank preserves order: the largest value gets rank 1 (or the shared
     # top rank under ties).
     assert (out[x == x.max(dim=0, keepdim=True).values] >= out.max() - 1e-6).all()
@@ -210,25 +218,31 @@ def test_cs_operators_see_only_the_current_cross_section():
     # earlier column of any cross-sectional operator.
     torch.manual_seed(23)
     x = torch.randn(10, 8)
-    base = {"rank": _cs_rank(x), "z": cross_sectional_zscore(x), "dm": _cs_demean(x)}
+    eligible = torch.ones_like(x, dtype=torch.bool)
+    base = {
+        "rank": _cs_rank(x, eligible),
+        "z": cross_sectional_zscore(x, eligible),
+        "dm": _cs_demean(x, eligible),
+    }
     changed = x.clone()
     changed[:, 5] = torch.randn(10) * 100.0
     for name, out in (
-        ("rank", _cs_rank(changed)),
-        ("z", cross_sectional_zscore(changed)),
-        ("dm", _cs_demean(changed)),
+        ("rank", _cs_rank(changed, eligible)),
+        ("z", cross_sectional_zscore(changed, eligible)),
+        ("dm", _cs_demean(changed, eligible)),
     ):
         assert torch.allclose(out[:, :5], base[name][:, :5], atol=1e-6), name
 
 
 def test_cs_zscore_and_demean_numerics():
     x = torch.tensor([[1.0, 4.0, 9.0], [2.0, 4.0, 6.0], [3.0, 4.0, 3.0]])
-    z = cross_sectional_zscore(x)
+    eligible = torch.ones_like(x, dtype=torch.bool)
+    z = cross_sectional_zscore(x, eligible)
     assert torch.allclose(z.mean(dim=0)[[0, 2]], torch.zeros(2), atol=1e-6)
     assert torch.allclose(z.std(dim=0, unbiased=False)[[0, 2]], torch.ones(2), atol=1e-5)
     # The constant column is degenerate: it maps to neutral 0.
     assert (z[:, 1] == 0.0).all()
-    dm = _cs_demean(x)
+    dm = _cs_demean(x, eligible)
     assert torch.allclose(dm.mean(dim=0), torch.zeros(3), atol=1e-6)
     assert (dm[:, 1] == 0.0).all()
 
@@ -252,7 +266,7 @@ def test_cs_neutralize_subtracts_group_means():
             [float("nan"), float("nan")],
         ]
     )
-    out = _cs_neutralize(x, group)
+    out = _cs_neutralize(x, group, eligible=torch.ones_like(x, dtype=torch.bool))
     # Group 0 mean: day0 (10+20)/2=15 -> [-5, +5]; day1 (2+4)/2=3 -> [-1, +1].
     assert out[0, 0].item() == -5.0 and out[1, 0].item() == 5.0
     assert out[0, 1].item() == -1.0 and out[1, 1].item() == 1.0
@@ -265,9 +279,11 @@ def test_cs_neutralize_subtracts_group_means():
 
 def test_cs_neutralize_falls_back_to_demean_without_groups():
     x = torch.tensor([[1.0, 3.0], [3.0, 9.0], [5.0, 6.0]])
-    assert torch.allclose(_cs_neutralize(x), _cs_demean(x))
+    eligible = torch.ones_like(x, dtype=torch.bool)
+    assert torch.allclose(_cs_neutralize(x, eligible=eligible), _cs_demean(x, eligible))
     assert torch.allclose(
-        _cs_neutralize(x, torch.full_like(x, float("nan"))), _cs_demean(x)
+        _cs_neutralize(x, torch.full_like(x, float("nan")), eligible=eligible),
+        _cs_demean(x, eligible),
     )
 
 
@@ -325,7 +341,9 @@ def test_cs_zscore_reference_is_eligible_only():
     out = cross_sectional_zscore(x, eligible)
     # The eligible rows match the z-score of the eligible-only matrix: the
     # extreme ineligible row contributes nothing.
-    baseline = cross_sectional_zscore(x[:3])
+    baseline = cross_sectional_zscore(
+        x[:3], torch.ones_like(x[:3], dtype=torch.bool)
+    )
     assert torch.allclose(out[:3], baseline, atol=1e-6)
     # Ineligible cells are non-participating (NaN), not zeros in the sort.
     assert torch.isnan(out[3]).all()
@@ -334,7 +352,7 @@ def test_cs_zscore_reference_is_eligible_only():
 def test_cs_demean_reference_is_eligible_only():
     x, eligible = _masked_x()
     out = _cs_demean(x, eligible)
-    baseline = _cs_demean(x[:3])
+    baseline = _cs_demean(x[:3], torch.ones_like(x[:3], dtype=torch.bool))
     assert torch.allclose(out[:3], baseline, atol=1e-6)
     assert torch.isnan(out[3]).all()
 
@@ -342,7 +360,7 @@ def test_cs_demean_reference_is_eligible_only():
 def test_cs_rank_reference_is_eligible_only():
     x, eligible = _masked_x()
     out = _cs_rank(x, eligible)
-    baseline = _cs_rank(x[:3])
+    baseline = _cs_rank(x[:3], torch.ones_like(x[:3], dtype=torch.bool))
     assert torch.allclose(out[:3], baseline, atol=1e-6)
     assert torch.isnan(out[3]).all()
     # Eligible ranks stay in [0, 1], monotone in value, with the top
@@ -402,7 +420,7 @@ def test_cs_neutralize_industry_means_use_eligible_finite_members():
             [True, True],
         ]
     )
-    out = _cs_neutralize(x, group, eligible)
+    out = _cs_neutralize(x, group, eligible=eligible)
     # Group 0's mean counts only eligible members: (10+20)/2=15 -> [-5, +5]
     # on day 0 and (2+4)/2=3 -> [-1, +1] on day 1.
     assert out[0, 0].item() == -5.0 and out[1, 0].item() == 5.0
@@ -417,7 +435,7 @@ def test_cs_neutralize_unmapped_never_enters_other_industry_means():
     x = torch.tensor([[10.0], [20.0], [1000.0]])
     group = torch.tensor([[0.0], [0.0], [float("nan")]])
     eligible = torch.ones_like(x, dtype=torch.bool)
-    out = _cs_neutralize(x, group, eligible)
+    out = _cs_neutralize(x, group, eligible=eligible)
     # The unmapped extreme must not move industry 0's mean (still 15).
     assert out[0, 0].item() == -5.0 and out[1, 0].item() == 5.0
     assert out[2, 0].item() == 1000.0
@@ -433,7 +451,7 @@ def test_cs_ops_reject_mask_shape_mismatch():
     with pytest.raises(ValueError, match="universe_mask shape"):
         _cs_rank(x, bad)
     with pytest.raises(ValueError, match="universe_mask shape"):
-        _cs_neutralize(x, torch.zeros(3, 4), bad)
+        _cs_neutralize(x, torch.zeros(3, 4), eligible=bad)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -443,14 +461,14 @@ def test_masked_cs_ops_match_cpu_on_cuda():
     eligible = torch.rand(8, 12) > 0.3
     group = torch.randint(0, 3, (8, 12)).float()
     group[torch.rand(8, 12) < 0.2] = float("nan")
-    for fn, args in (
-        (cross_sectional_zscore, (x, eligible)),
-        (_cs_demean, (x, eligible)),
-        (_cs_rank, (x, eligible)),
-        (_cs_neutralize, (x, group, eligible)),
+    for fn, args, kwargs in (
+        (cross_sectional_zscore, (x, eligible), {}),
+        (_cs_demean, (x, eligible), {}),
+        (_cs_rank, (x, eligible), {}),
+        (_cs_neutralize, (x, group), {"eligible": eligible}),
     ):
-        cpu = fn(*args)
-        gpu = fn(*[a.cuda() for a in args])
+        cpu = fn(*args, **kwargs)
+        gpu = fn(*[a.cuda() for a in args], **{k: v.cuda() for k, v in kwargs.items()})
         # The NaN (non-participating) pattern and the finite values must
         # agree within the established float32 tolerance contract.
         assert torch.equal(torch.isnan(cpu), torch.isnan(gpu.cpu()))

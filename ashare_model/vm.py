@@ -9,12 +9,13 @@ compare against 0) and gives every formula a common scale for future signal
 combination.  It is a monotone per-date transformation, so it changes neither
 the rank IC nor the top-n selection of a signal.
 
-The VM also carries two optional execution-context tensors (``[stock, date]``):
+The VM also carries execution-context tensors (``[stock, date]``):
 
-* ``industry_codes`` — discrete group ids consumed by the ``CS_NEUTRALIZE``
-  operator; without it the operator degrades to the full-market demean.
-* ``universe_mask`` — the bool PIT eligibility mask consumed by every
-  cross-sectional operator (``CS_RANK``/``CS_ZSCORE``/``CS_DEMEAN``/
+* ``industry_codes`` — optional discrete group ids consumed by the
+  ``CS_NEUTRALIZE`` operator; without it the operator degrades to the
+  full-market demean.
+* ``universe_mask`` — the mandatory bool PIT eligibility mask consumed by
+  every cross-sectional operator (``CS_RANK``/``CS_ZSCORE``/``CS_DEMEAN``/
   ``CS_NEUTRALIZE``) and by the terminal z-score.  The reference set of each
   date column is the eligible & finite cells only, so stocks outside the
   universe can never move the statistics of eligible stocks; the final
@@ -47,7 +48,8 @@ class StackVM:
         self,
         vocab=None,
         industry_codes: torch.Tensor | None = None,
-        universe_mask: torch.Tensor | None = None,
+        *,
+        universe_mask: torch.Tensor,
     ):
         self.vocab = vocab or FORMULA_VOCAB
         self.feature_offset = 1
@@ -86,10 +88,10 @@ class StackVM:
         per date before it is returned (see
         :func:`ashare_model.ops.cross_sectional_zscore`), so all consumers —
         training reward, protocol scoring, backtest and the simulation
-        runner — see one standardized formula semantics.  With a
-        ``universe_mask`` set, the z-score's reference set is the eligible
-        & finite cells and the signal keeps NaN at ineligible cells, so
-        ineligible stocks can never be sorted into a position.
+        runner — see one standardized formula semantics.  The z-score's
+        reference set is the eligible & finite cells of the VM's PIT mask
+        and the signal keeps NaN at ineligible cells, so ineligible stocks
+        can never be sorted into a position.
         """
 
         stack: list[torch.Tensor] = []
@@ -118,7 +120,7 @@ class StackVM:
                     # the industry groups).
                     if name == "CS_NEUTRALIZE":
                         result = _cs_neutralize(
-                            args[0], self.industry_codes, self.universe_mask
+                            args[0], self.industry_codes, eligible=self.universe_mask
                         )
                     elif name == "CS_RANK":
                         result = _cs_rank(args[0], self.universe_mask)

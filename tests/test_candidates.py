@@ -128,7 +128,13 @@ def test_eligibility_accepts_equal_thresholds_and_rejects_nonfinite():
     )
     signal = np.arange(24, dtype=float).reshape(4, 6)
     target = np.zeros_like(signal)
-    score = scorer.score(_spec("edge"), signal, target, [(1, 4)])
+    score = scorer.score(
+        _spec("edge"),
+        signal,
+        target,
+        [(1, 4)],
+        universe_mask=np.ones_like(signal, dtype=bool),
+    )
     assert score.eligible
     assert score.val_reward == pytest.approx(0.1)
     assert score.val_icir == pytest.approx(0.3)
@@ -145,7 +151,13 @@ def test_eligibility_accepts_equal_thresholds_and_rejects_nonfinite():
         operator_offset=FORMULA_VOCAB.operator_offset,
         reward_function=nonfinite_reward,
     )
-    score = scorer.score(_spec("bad"), signal, target, [(1, 4)])
+    score = scorer.score(
+        _spec("bad"),
+        signal,
+        target,
+        [(1, 4)],
+        universe_mask=np.ones_like(signal, dtype=bool),
+    )
     assert not score.eligible
     assert score.rejection_reasons == (
         "val_reward_not_finite",
@@ -161,9 +173,20 @@ def test_invalid_and_near_constant_reasons_are_explicit():
     )
     target = np.zeros((4, 6))
     invalid = scorer.score(
-        _spec("invalid"), None, target, [(1, 4)], formula_valid=False
+        _spec("invalid"),
+        None,
+        target,
+        [(1, 4)],
+        universe_mask=np.ones_like(target, dtype=bool),
+        formula_valid=False,
     )
-    constant = scorer.score(_spec("constant"), np.ones_like(target), target, [(1, 4)])
+    constant = scorer.score(
+        _spec("constant"),
+        np.ones_like(target),
+        target,
+        [(1, 4)],
+        universe_mask=np.ones_like(target, dtype=bool),
+    )
     assert invalid.rejection_reasons == ("invalid_formula",)
     assert constant.rejection_reasons == ("constant_or_near_constant_signal",)
 
@@ -190,6 +213,7 @@ def test_direction_mirror_invariance_in_scoring_and_backtest():
         target,
         windows,
         full_signal_range=(0, 10),
+        universe_mask=np.ones((n_stocks, n_dates), dtype=bool),
     )
     assert positive.direction == -mirrored.direction
     for field in (
@@ -220,8 +244,9 @@ def test_direction_mirror_invariance_in_scoring_and_backtest():
     dates = [f"202401{i + 1:02d}" for i in range(n_dates)]
     codes = [f"{i:06d}.SZ" for i in range(n_stocks)]
     engine = AshareBacktestEngine(_bt())
-    left = engine.run(applied_positive, raw, codes, dates)
-    right = engine.run(applied_mirrored, raw, codes, dates)
+    mask_all = np.ones((n_stocks, n_dates), dtype=bool)
+    left = engine.run(applied_positive, raw, codes, dates, mask_all)
+    right = engine.run(applied_mirrored, raw, codes, dates, mask_all)
     assert left.daily_returns == right.daily_returns
     assert left.positions == right.positions
 
@@ -244,7 +269,11 @@ def test_direction_tie_break_is_mirror_stable():
     )
     signal = np.arange(-12, 12, dtype=float).reshape(4, 6)
     a, b = scorer.score_many(
-        [_spec("a"), _spec("b")], [signal, -signal], np.zeros_like(signal), [(1, 4)]
+        [_spec("a"), _spec("b")],
+        [signal, -signal],
+        np.zeros_like(signal),
+        [(1, 4)],
+        universe_mask=np.ones_like(signal, dtype=bool),
     )
     assert a.direction == -b.direction
     assert np.array_equal(a.direction * signal, b.direction * -signal)
@@ -317,8 +346,14 @@ def test_scorer_pre_join_extreme_does_not_change_any_field():
         assert getattr(mild, field) == getattr(ext, field), field
     # Without the mask the same perturbation does move the full-window
     # statistics (sanity: the mask is what neutralizes it).
-    mild_open = scorer.score(_spec("mild"), signal, target, windows)
-    ext_open = scorer.score(_spec("extreme"), extreme, target, windows)
+    mild_open = scorer.score(
+        _spec("mild"), signal, target, windows,
+        universe_mask=np.ones((n_stocks, n_dates), dtype=bool),
+    )
+    ext_open = scorer.score(
+        _spec("extreme"), extreme, target, windows,
+        universe_mask=np.ones((n_stocks, n_dates), dtype=bool),
+    )
     assert not (
         mild_open.full_window_icir == ext_open.full_window_icir
         and mild_open.full_window_reward == ext_open.full_window_reward
@@ -355,7 +390,10 @@ def test_scorer_near_constant_checks_only_eligible_cells():
     masked = scorer.score(
         _spec("masked"), signal, target, [(4, 6)], universe_mask=mask
     )
-    open_ = scorer.score(_spec("open"), signal, target, [(4, 6)])
+    open_ = scorer.score(
+        _spec("open"), signal, target, [(4, 6)],
+        universe_mask=np.ones_like(signal, dtype=bool),
+    )
     # The eligible cross-section is constant: rejected, regardless of the
     # ineligible extremes...
     assert masked.rejection_reasons == ("constant_or_near_constant_signal",)
@@ -391,7 +429,10 @@ def test_scorer_direction_tie_break_scans_eligible_only():
     mask = _future_mask(3, 8, join_day=5, future_row=0)
     windows = [(2, 6)]
     masked = scorer.score(_spec("masked"), signal, np.zeros_like(signal), windows, universe_mask=mask)
-    open_ = scorer.score(_spec("open"), signal, np.zeros_like(signal), windows)
+    open_ = scorer.score(
+        _spec("open"), signal, np.zeros_like(signal), windows,
+        universe_mask=np.ones_like(signal, dtype=bool),
+    )
     # With the mask the canonical orientation comes from the first eligible
     # non-zero validation observation (+2/+3) -> +1; without it the extreme
     # ineligible -1e6 decides the direction -> -1.

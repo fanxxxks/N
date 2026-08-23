@@ -2,9 +2,18 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import torch
 
-from ashare_data.config import DataConfig, ModelConfig
+from ashare_data.config import (
+    BacktestConfig,
+    DataConfig,
+    FoldConfig,
+    ModelConfig,
+    ProtocolConfig,
+    RewardConfig,
+)
 from ashare_data.db import AshareDB
+from ashare_data.processor import open_to_open_returns
 from ashare_data.universe import (
     UniverseContractError,
     UniverseDevelopmentFallbackWarning,
@@ -15,8 +24,27 @@ from ashare_data.universe import (
     require_production_universe,
     resolve_universe_contract,
 )
+from ashare_model.backtest import AshareBacktestEngine, equal_weight_benchmark_returns
+from ashare_model.candidates import CandidateScorer, CandidateSelector, CandidateSpec
 from ashare_model.data_loader import AshareDataLoader
+from ashare_model.diagnostics import factor_report
+from ashare_model.evaluation import (
+    baseline_candidates,
+    benchmark_row,
+    resolve_folds,
+)
+from ashare_model.ops import OPS_CONFIG
+from ashare_model.reward import (
+    batched_basket_rewards,
+    formula_reward,
+    icir_from_series,
+    rank_ic_series,
+)
+from ashare_model.train import sample_random_formulas
+from ashare_model.vm import StackVM
+from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 from tests.conftest import make_bars
+from tests.test_run_sim import _make_runner, _orders_for, _replace_stock_bars, _write_sim_db
 
 
 INDEX_300 = "000300.SH"
@@ -587,3 +615,369 @@ def test_loader_is_strict_by_default(data_config: DataConfig):
     assert loader.allow_development_universe_fallback is False
     with pytest.raises(UniverseContractError):
         loader.load_data(ts_codes=["000001.SZ"], dates=["20240102"])
+
+
+# --- centralized future-member sentinel contract -----------------------------
+#
+# One future member ``F`` with full pre-join bar history and extreme values is
+# carried through the whole chain (factor preprocessing -> VM CS operators ->
+# terminal z-score -> IC/ICIR -> CandidateScore -> reward -> random-search
+# selection -> baseline -> diagnostics -> benchmark -> top-N -> backtest ->
+# sim).  With ``F`` present vs removed, every eligible-stock result must be
+# identical before the join day and only allowed to differ from the join day
+# on.
+
+
+_SENTINEL_BASE = ["000001.SZ", "600000.SH", "300001.SZ"]
+_FUTURE = "300999.SZ"
+
+
+def _sentinel_setup(
+    tmp_path,
+    *,
+    join_day: int,
+    n_dates: int,
+    future_opens: list[float] | None = None,
+) -> tuple[AshareDataLoader, AshareDataLoader, list[str], object, list[dict]]:
+    """Two loaders over one DB: with the future member and without it.
+    Returns ``(full, minus, dates, bars, memberships)``."""
+
+    codes = [*_SENTINEL_BASE, _FUTURE]
+    dates, _, default_bars = make_bars(n_dates, codes)
+    # Extreme pre-join history: open/close scale 1e6 so any unmasked
+    # cross-sectional statistic would be wrecked by F.
+    bars = _replace_stock_bars(
+        default_bars, _FUTURE, future_opens or [1e6] * n_dates
+    )
+    memberships = [
+        {
+            "index_code": "000300.SH",
+            "ts_code": code,
+            "in_date": "20200101",
+            "out_date": "99991231",
+        }
+        for code in _SENTINEL_BASE
+    ] + [
+        {
+            "index_code": "000300.SH",
+            "ts_code": _FUTURE,
+            "in_date": dates[join_day],
+            "out_date": "99991231",
+        }
+    ]
+    stocks = [
+        {
+            "ts_code": code,
+            "name": code,
+            "industry": None,
+            "list_date": "20200101",
+            "is_st": False,
+        }
+        for code in codes
+    ]
+    data_config = DataConfig(
+        data_dir=tmp_path,
+        duckdb_path=tmp_path / "ashare.duckdb",
+        parquet_dir=tmp_path / "parquet",
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        min_listed_sessions=1,
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
+    )
+    _write_sim_db(
+        data_config, dates, codes, bars,
+        memberships=memberships, stocks=stocks,
+    )
+    full = AshareDataLoader(data_config, ModelConfig(max_formula_len=6))
+    full.load_data(ts_codes=codes, dates=dates)
+    minus = AshareDataLoader(data_config, ModelConfig(max_formula_len=6))
+    minus.load_data(ts_codes=_SENTINEL_BASE, dates=dates)
+    return full, minus, dates, bars, memberships, stocks
+
+
+def _base_rows(loader: AshareDataLoader) -> list[int]:
+    return [loader.ts_codes.index(code) for code in _SENTINEL_BASE]
+
+
+def _future_row(loader: AshareDataLoader) -> int | None:
+    try:
+        return loader.ts_codes.index(_FUTURE)
+    except ValueError:
+        return None
+
+
+def test_sentinel_future_member_changes_nothing_before_join(tmp_path):
+    """The full-chain sentinel: F joins on the last signal date, so every
+    computed quantity on the whole analysis window is pre-join and must be
+    identical whether F is present or removed."""
+
+    n_dates = 16
+    join_day = n_dates - 2  # dates[14]: the last signal date's entry day
+    full, minus, dates, bars, memberships, stocks = _sentinel_setup(
+        tmp_path, join_day=join_day, n_dates=n_dates
+    )
+    f_row = _future_row(full)
+    assert f_row is not None
+    base_full = _base_rows(full)
+    pre = slice(0, join_day + 1)  # dates[:join_day+1] are strictly pre-join
+    # The mask itself: F ineligible before its join day.
+    assert not full.universe_mask[f_row, :join_day].any()
+    assert full.universe_mask[f_row, join_day:].all()
+
+    # --- factor preprocessing -------------------------------------------
+    f_full = full.factor_tensor.numpy()
+    f_minus = minus.factor_tensor.numpy()
+    assert np.allclose(
+        f_full[:, base_full, : join_day], f_minus[:, :, : join_day]
+    )
+    # F's own pre-join history stays observable (never zeroed), only its
+    # reference membership is excluded.
+    assert np.isfinite(f_full[:, f_row, : join_day]).all()
+
+    # --- VM CS operators + terminal z-score ------------------------------
+    op_id = {
+        name: FORMULA_VOCAB.operator_offset + i
+        for i, (name, _, _) in enumerate(OPS_CONFIG)
+    }
+    cs_formula = [1, op_id["CS_RANK"]]
+    vm_full = StackVM(
+        FORMULA_VOCAB,
+        universe_mask=torch.tensor(full.universe_mask, dtype=torch.bool),
+    )
+    vm_minus = StackVM(
+        FORMULA_VOCAB,
+        universe_mask=torch.tensor(minus.universe_mask, dtype=torch.bool),
+    )
+    sig_full = vm_full.execute(cs_formula, full.factor_tensor)
+    sig_minus = vm_minus.execute(cs_formula, minus.factor_tensor)
+    assert sig_full is not None and sig_minus is not None
+    sig_full_np = sig_full.detach().numpy()
+    sig_minus_np = sig_minus.detach().numpy()
+    # Ineligible cells stay NaN (non-participating), never neutral zeros.
+    assert np.isnan(sig_full_np[f_row, : join_day]).all()
+    assert np.allclose(sig_full_np[base_full, : join_day], sig_minus_np[:, : join_day], equal_nan=True)
+
+    # --- IC / ICIR --------------------------------------------------------
+    target_full = full.mask_by_universe(
+        open_to_open_returns(full.raw_data_cache["open"].numpy())
+    )
+    target_minus = minus.mask_by_universe(
+        open_to_open_returns(minus.raw_data_cache["open"].numpy())
+    )
+    ic_full = rank_ic_series(
+        sig_full_np[None], target_full, min_stocks=3,
+        universe_mask=full.universe_mask,
+    )
+    ic_minus = rank_ic_series(
+        sig_minus_np[None], target_minus, min_stocks=3,
+        universe_mask=minus.universe_mask,
+    )
+    pre_ic = slice(0, join_day)
+    assert np.allclose(ic_full[:, pre_ic], ic_minus[:, pre_ic], equal_nan=True)
+    assert np.allclose(icir_from_series(ic_full[:, pre_ic]), icir_from_series(ic_minus[:, pre_ic]))
+
+    # --- CandidateScore (bare-factor signal: F's extreme row is finite) --
+    bt_cfg = BacktestConfig(top_n=2, train_end_date="2024-01-10")
+    reward_cfg = RewardConfig()
+    val_windows = [(4, 10)]
+    scorer_full = CandidateScorer(bt_cfg, reward_cfg, operator_offset=FORMULA_VOCAB.operator_offset)
+    scorer_minus = CandidateScorer(bt_cfg, reward_cfg, operator_offset=FORMULA_VOCAB.operator_offset)
+    spec = CandidateSpec(candidate_id="sentinel", formula_text="RET_1", source="sentinel", tokens=(1,))
+    raw_signal_full = f_full[FEATURE_NAMES.index("RET_1")]
+    raw_signal_minus = f_minus[FEATURE_NAMES.index("RET_1")]
+    score_full = scorer_full.score(
+        spec, raw_signal_full, target_full, val_windows,
+        universe_mask=full.universe_mask,
+    )
+    score_minus = scorer_minus.score(
+        spec, raw_signal_minus, target_minus, val_windows,
+        universe_mask=minus.universe_mask,
+    )
+    assert score_full.to_dict() == score_minus.to_dict()
+
+    # --- reward -----------------------------------------------------------
+    r_full = formula_reward(
+        raw_signal_full, target_full, bt_cfg, reward_cfg,
+        universe_mask=full.universe_mask,
+    )
+    r_minus = formula_reward(
+        raw_signal_minus, target_minus, bt_cfg, reward_cfg,
+        universe_mask=minus.universe_mask,
+    )
+    assert r_full == r_minus
+    b_full = batched_basket_rewards(
+        raw_signal_full[None], target_full, bt_cfg, reward_cfg, val_windows,
+        universe_mask=full.universe_mask,
+    )
+    b_minus = batched_basket_rewards(
+        raw_signal_minus[None], target_minus, bt_cfg, reward_cfg, val_windows,
+        universe_mask=minus.universe_mask,
+    )
+    for left, right in zip(b_full, b_minus):
+        if left is None:
+            assert right is None
+        else:
+            assert np.allclose(left, right)
+
+    # --- random-search best candidate -------------------------------------
+    formulas = sample_random_formulas(seed=7, vocab=FORMULA_VOCAB, max_len=6, n=8)
+    specs_full, signals_full = [], []
+    specs_minus, signals_minus = [], []
+    for key in formulas:
+        spec = CandidateSpec(
+            candidate_id="sentinel:" + ",".join(str(t) for t in key),
+            formula_text="".join(str(t) for t in key),
+            source="sentinel", tokens=key,
+        )
+        s_f = vm_full.execute(list(key), full.factor_tensor)
+        s_m = vm_minus.execute(list(key), minus.factor_tensor)
+        assert (s_f is None) == (s_m is None)
+        specs_full.append(spec)
+        specs_minus.append(spec)
+        signals_full.append(None if s_f is None else s_f.detach().numpy())
+        signals_minus.append(None if s_m is None else s_m.detach().numpy())
+    selection_full = CandidateSelector().select(
+        scorer_full.score_many(
+            specs_full, signals_full, target_full, val_windows,
+            universe_mask=full.universe_mask,
+        )
+    )
+    selection_minus = CandidateSelector().select(
+        scorer_minus.score_many(
+            specs_minus, signals_minus, target_minus, val_windows,
+            universe_mask=minus.universe_mask,
+        )
+    )
+    assert selection_full.to_dict() == selection_minus.to_dict()
+
+    # --- baseline + benchmark + diagnostics -------------------------------
+    fold = resolve_folds(
+        [FoldConfig("2024-01-10", "2024-01-18")], dates
+    )[0]
+    proto = ProtocolConfig(baseline_signals=["RET_1"])
+    base_full_rows = baseline_candidates(full, proto, fold, bt_cfg)
+    base_minus_rows = baseline_candidates(minus, proto, fold, bt_cfg)
+    assert base_full_rows == base_minus_rows
+    assert benchmark_row(full, fold) == benchmark_row(minus, fold)
+    report_full = factor_report(full, "2024-01-10")
+    report_minus = factor_report(minus, "2024-01-10")
+    # The code-union count legitimately differs (F exists in one loader);
+    # every eligible-derived statistic must be identical.
+    assert report_full["stock_count"] == 4 and report_minus["stock_count"] == 3
+    assert {
+        k: v for k, v in report_full.items() if k != "stock_count"
+    } == {k: v for k, v in report_minus.items() if k != "stock_count"}
+
+    # --- benchmark helper + top-N + backtest ------------------------------
+    sig_range = list(range(join_day - 1))
+    bench_full = equal_weight_benchmark_returns(
+        target_full, sig_range, full.universe_mask
+    )
+    bench_minus = equal_weight_benchmark_returns(
+        target_minus, sig_range, minus.universe_mask
+    )
+    assert bench_full == bench_minus
+    engine_full = AshareBacktestEngine(bt_cfg)
+    engine_minus = AshareBacktestEngine(bt_cfg)
+    t = join_day - 2
+    sel_full = engine_full._select_top_n(
+        raw_signal_full[:, t], t + 1,
+        full.raw_data_cache["open"].numpy(),
+        full.raw_data_cache["high"].numpy(),
+        full.raw_data_cache["low"].numpy(),
+        full.raw_data_cache["pre_close"].numpy(),
+        full.raw_data_cache["volume"].numpy(),
+        full.ts_codes, "buy",
+        eligible=full.universe_mask[:, t] & full.universe_mask[:, t + 1],
+    )
+    sel_minus = engine_minus._select_top_n(
+        raw_signal_minus[:, t], t + 1,
+        minus.raw_data_cache["open"].numpy(),
+        minus.raw_data_cache["high"].numpy(),
+        minus.raw_data_cache["low"].numpy(),
+        minus.raw_data_cache["pre_close"].numpy(),
+        minus.raw_data_cache["volume"].numpy(),
+        minus.ts_codes, "buy",
+        eligible=minus.universe_mask[:, t] & minus.universe_mask[:, t + 1],
+    )
+    assert [full.ts_codes[i] for i in sel_full] == [minus.ts_codes[i] for i in sel_minus]
+    result_full = engine_full.run(
+        raw_signal_full,
+        {k: v.numpy() for k, v in full.raw_data_cache.items()},
+        full.ts_codes, dates,
+        universe_mask=full.universe_mask,
+    )
+    result_minus = engine_minus.run(
+        raw_signal_minus,
+        {k: v.numpy() for k, v in minus.raw_data_cache.items()},
+        minus.ts_codes, dates,
+        universe_mask=minus.universe_mask,
+    )
+    assert result_full.daily_returns[: join_day - 1] == result_minus.daily_returns[: join_day - 1]
+    assert [p["ts_codes"] for p in result_full.positions[: join_day - 1]] == [
+        p["ts_codes"] for p in result_minus.positions[: join_day - 1]
+    ]
+
+    # --- sim ---------------------------------------------------------------
+    runner_full, run_dates = _make_runner(
+        tmp_path / "sim_full", n_dates=n_dates, top_n=1, max_positions=1,
+        ts_codes=[*_SENTINEL_BASE, _FUTURE], bars=bars,
+        memberships=memberships, stocks=stocks,
+    )
+    runner_minus, _ = _make_runner(
+        tmp_path / "sim_minus", n_dates=n_dates, top_n=1, max_positions=1,
+        ts_codes=_SENTINEL_BASE, bars=bars,
+        memberships=memberships, stocks=stocks,
+    )
+    runner_full.run()
+    runner_minus.run()
+    for exec_date in run_dates[1 : join_day + 1]:
+        assert _orders_for(runner_full, exec_date) == _orders_for(runner_minus, exec_date)
+
+
+def test_sentinel_differences_allowed_from_join_day(tmp_path):
+    """Mid-window join: identical pre-join, and the join day itself may
+    change factors, the selected set and the backtest."""
+
+    n_dates = 14
+    join_day = 7
+    # F's return jumps massively exactly on the join day, so its final
+    # signal ranks top the moment it becomes eligible.
+    full, minus, dates, _, _, _ = _sentinel_setup(
+        tmp_path, join_day=join_day, n_dates=n_dates,
+        future_opens=[1e6] * join_day + [2e6] * (n_dates - join_day),
+    )
+    f_row = _future_row(full)
+    base_full = _base_rows(full)
+    f_full = full.factor_tensor.numpy()
+    f_minus = minus.factor_tensor.numpy()
+    # Pre-join: identical factor cross-sections for every eligible stock.
+    assert np.allclose(f_full[:, base_full, :join_day], f_minus[:, :, :join_day])
+    # From the join day on F enters the reference set: eligible stocks'
+    # factor values are allowed to differ.
+    assert not np.allclose(f_full[:, base_full, join_day], f_minus[:, :, join_day])
+
+    # The engine cannot hold F before the join day and can hold it from
+    # the join day on (F's extreme signal ranks top once eligible).
+    bt_cfg = BacktestConfig(top_n=1, single_weight_cap=1.0, train_end_date="2024-01-08")
+    raw_signal_full = f_full[FEATURE_NAMES.index("RET_1")]
+    raw_signal_minus = f_minus[FEATURE_NAMES.index("RET_1")]
+    result_full = AshareBacktestEngine(bt_cfg).run(
+        raw_signal_full,
+        {k: v.numpy() for k, v in full.raw_data_cache.items()},
+        full.ts_codes, dates,
+        universe_mask=full.universe_mask,
+    )
+    result_minus = AshareBacktestEngine(bt_cfg).run(
+        raw_signal_minus,
+        {k: v.numpy() for k, v in minus.raw_data_cache.items()},
+        minus.ts_codes, dates,
+        universe_mask=minus.universe_mask,
+    )
+    assert result_full.daily_returns[:join_day] == result_minus.daily_returns[:join_day]
+    assert all(
+        _FUTURE not in p["ts_codes"] for p in result_full.positions[:join_day]
+    )
+    assert _FUTURE in result_full.positions[join_day]["ts_codes"]
+    assert result_full.daily_returns[join_day:] != result_minus.daily_returns[join_day:]

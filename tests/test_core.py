@@ -102,7 +102,7 @@ def test_config_paths_resolve_to_project_root():
 
 
 def test_stackvm_valid_and_invalid():
-    vm = StackVM(FORMULA_VOCAB)
+    vm = StackVM(FORMULA_VOCAB, universe_mask=torch.ones((2, 4), dtype=torch.bool))
     factor = torch.randn(FORMULA_VOCAB.feature_count, 2, 4)
     add_id = FORMULA_VOCAB.operator_offset
     out = vm.execute([1, 2, add_id], factor)
@@ -139,6 +139,7 @@ def test_factor_tensor_and_backtest(tmp_path):
         {k: v.numpy() for k, v in loader.raw_data_cache.items()},
         loader.ts_codes,
         loader.dates,
+        np.ones((len(loader.ts_codes), len(loader.dates)), dtype=bool),
     )
     assert len(result.daily_returns) == len(loader.dates) - 2
     assert result.equity_curve[-1] > 0

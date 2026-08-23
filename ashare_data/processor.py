@@ -392,18 +392,18 @@ def pivot_wide(
 
 def winsorize_cross_section(
     wide: pd.DataFrame,
+    eligible: np.ndarray,
     lower_q: float = 0.01,
     upper_q: float = 0.99,
     clip: float = 5.0,
-    eligible: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Winsorize then robust z-score each date cross-section.
 
     The input is ``[stock x date]``.  The quantile points, median and MAD of
     each date column are computed only over the *eligible and finite*
-    reference cells: ``eligible`` is an optional ``[stock x date]`` bool mask
-    aligned with ``wide`` (the PIT universe mask), so stocks outside the
-    universe can never shift the reference statistics.  The same
+    reference cells: ``eligible`` is the mandatory ``[stock x date]`` bool
+    mask aligned with ``wide`` (the PIT universe mask), so stocks outside
+    the universe can never shift the reference statistics.  The same
     clip/standardize transform is then applied to every cell, keeping each
     stock's own history on one per-date scale (a future member's pre-join
     values stay observable for time-series use instead of being zeroed);
@@ -415,15 +415,12 @@ def winsorize_cross_section(
     """
 
     arr = wide.to_numpy(dtype=float).copy()
-    if eligible is None:
-        eligible = np.ones(arr.shape, dtype=bool)
-    else:
-        eligible = np.asarray(eligible, dtype=bool)
-        if eligible.shape != arr.shape:
-            raise ValueError(
-                f"eligible shape {eligible.shape} does not match "
-                f"wide shape {arr.shape}"
-            )
+    eligible = np.asarray(eligible, dtype=bool)
+    if eligible.shape != arr.shape:
+        raise ValueError(
+            f"eligible shape {eligible.shape} does not match "
+            f"wide shape {arr.shape}"
+        )
     ref = eligible & np.isfinite(arr)
     has_ref = ref.any(axis=0)
     # Reference matrix for the quantile points: non-reference cells are NaN

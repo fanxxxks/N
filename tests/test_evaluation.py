@@ -124,11 +124,12 @@ def test_epoch_slice_aligns_to_fold_indices(populated_db: DataConfig):
 def test_evaluate_signal_matches_engine_run(populated_db: DataConfig):
     loader = _loader(populated_db)
     fold = _fold(loader.dates)
-    factors, raw, _, dates = epoch_slice(loader, fold)
+    fold_data = epoch_slice(loader, fold)
+    factors, raw, _, dates = fold_data
     signal = factors[0]
     metrics = evaluate_signal(signal, loader, fold, BacktestConfig())
     result = AshareBacktestEngine(BacktestConfig()).run(
-        signal, raw, loader.ts_codes, dates
+        signal, raw, loader.ts_codes, dates, fold_data.universe_mask
     )
     assert metrics["total_return"] == pytest.approx(
         result.metrics["total_return"], abs=1e-12
@@ -178,9 +179,10 @@ def test_evaluate_signal_rejects_misaligned_signal(populated_db: DataConfig):
 def test_benchmark_row_matches_engine_reference_curve(populated_db: DataConfig):
     loader = _loader(populated_db)
     fold = _fold(loader.dates)
-    factors, raw, _, dates = epoch_slice(loader, fold)
+    fold_data = epoch_slice(loader, fold)
+    factors, raw, _, dates = fold_data
     result = AshareBacktestEngine(BacktestConfig()).run(
-        factors[0], raw, loader.ts_codes, dates
+        factors[0], raw, loader.ts_codes, dates, fold_data.universe_mask
     )
     row = benchmark_row(loader, fold)
     assert row["candidate"] == "benchmark:equal_weight"

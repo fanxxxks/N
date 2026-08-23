@@ -226,7 +226,7 @@ python scripts/archive_run.py --mode sim --commit
 ## 与现实对应的关键设计
 
 - **无未来泄漏**：因子只使用当前及历史截面；`open_to_open_returns` 以 t+1 开盘买入、t+2 开盘卖出为目标收益；缺 bar、未上市或非成员单元的 target 为 `NaN`，绝不产生虚假收益。基本面因子按**公告日期**（不是报告期）进入截面，公告前保持中性。
-- **交易规则**：A 股 T+1、买入 100 股整手、卖出可零股清仓、涨停不买/跌停不卖、一字板判定、ST 股 5% 涨跌停（按股票名称识别）。
+- **交易规则**：A 股 T+1、买入 100 股整手、卖出可零股清仓、涨停不买/跌停不卖、一字板判定。涨跌停价幅与名称解耦：历史回放与回测只按板块价幅（主板 10%、创业板/科创板 20%），股票名称仅用于展示；真实当日模拟（执行日期等于今天）才额外按 `stocks.is_st` 当前快照使用 5% 价幅，且仅限当日。
 - **费用模型**：佣金万 2.5（最低 5 元）、印花税卖出 0.05%、过户费 0.001%、滑点 0.05%；回测与训练奖励使用同一套费用口径。
 - **涨跌停事件因子**：`LIMIT_UP_EVENT`/`LIMIT_DOWN_EVENT` 由一字板真实计算（创业板/科创板 20%，其余 10%）。
 - **训练**：REINFORCE + value baseline + 熵正则（advantage 裁剪防数值爆炸）；训练
@@ -273,7 +273,14 @@ python scripts/archive_run.py --mode sim --commit
   单元；协议 benchmark 行复用引擎的基准路径，IC 与回测消费同一个 mask。
   协议（`PROTOCOL_VERSION` v8）与回测产物记录实际生效的 universe policy
   字段（index_codes / min_listed_sessions / membership_end_inclusive /
-  degraded），不记录数据 hash、不建立 lineage。
+  degraded），不记录数据 hash、不建立 lineage。**所有正式路径都强制传入
+  mask**——回测引擎、奖励/IC、候选打分、VM/截面算子、因子预处理、诊断与
+  模拟盘均无 `None`/无约束的兼容旁路；`tests/test_universe.py` 的集中式
+  未来成员哨兵契约把一个全历史、极端行情的未来成员 F 同时放进（与移除出）
+  全链路（因子预处理 → VM 截面算子 → 终端 z-score → IC/ICIR →
+  CandidateScore → reward → 随机搜索最优候选 → baseline → diagnostics →
+  benchmark → top-N → 回测 → 模拟盘），断言加入前所有结果与删除 F 时完全
+  一致，且差异只允许从加入日起出现。
 - **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式对照首发词表（v1：34 特征/16 算子）重映射，退役重复特征经 `FEATURE_ALIASES`（`RET_20` → `MOMENTUM_20`，两者原为同一计算）解析，语义永不漂移。
 - **回测输出**：包含持仓快照与全市场等权基准（与策略同一 open-to-open 口径），供看板展示。
 

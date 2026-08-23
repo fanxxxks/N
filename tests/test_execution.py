@@ -87,7 +87,9 @@ def test_exact_cost_path_covers_capital_and_topn_grid(capital: float, top_n: int
     n_stocks, n_dates = top_n + 2, 5
     signal = np.tile(np.arange(n_stocks, dtype=float)[:, None], (1, n_dates))
     target = np.zeros_like(signal)
-    simulation = simulate_basket_daily_returns(signal, target, cfg)
+    simulation = simulate_basket_daily_returns(
+        signal, target, cfg, universe_mask=np.ones_like(signal, dtype=bool)
+    )
     assert simulation.daily_cost_fractions.shape == (n_dates - 2,)
     assert simulation.turnover[0] == pytest.approx(1.0)
     assert np.all(simulation.daily_cost_fractions >= 0.0)
