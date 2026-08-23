@@ -13,8 +13,28 @@ from ashare_model.candidates import (
     CandidateScorer,
     CandidateSelector,
     CandidateSpec,
+    score_chunk_size,
 )
 from ashare_model.vocab import FORMULA_VOCAB
+
+
+def test_score_chunk_size_bounds():
+    # Tiny windows hit the 64 cap; huge signals floor at 1 so a single
+    # oversized signal still makes progress.
+    assert score_chunk_size(0) == 64
+    assert score_chunk_size(1024) == 64
+    assert score_chunk_size(1 << 30) == 1
+    # The transient peak of one chunk (original stack + batched copy +
+    # both-direction copy = 4x one signal) must stay inside the budget,
+    # except when the chunk is floored at 1 by a single oversized signal
+    # (the documented make-progress exception).
+    budget = 512 * (1 << 20)
+    for signal_bytes in (1, 2**10, 2**16, 2**20, 2**24, 2**28):
+        chunk = score_chunk_size(signal_bytes)
+        assert chunk == 1 or chunk * 4 * signal_bytes <= budget
+    # Monotone: larger signals never allow a larger chunk.
+    sizes = [score_chunk_size(sb) for sb in (1, 2**10, 2**16, 2**20, 2**24, 2**28, 2**30)]
+    assert sizes == sorted(sizes, reverse=True)
 
 
 def _bt(**kwargs) -> BacktestConfig:

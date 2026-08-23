@@ -718,18 +718,6 @@ def test_duplicate_formulas_share_one_batched_evaluation(
 # --- streaming reward scoring (memory-bounded pending buffer) ----------------
 
 
-def test_reward_chunk_size_bounds():
-    f = AshareTrainer._reward_chunk_size
-    # Tiny windows hit the 64 cap; huge signals floor at 1 so a single
-    # oversized signal still makes progress.
-    assert f(0) == 64
-    assert f(1024) == 64
-    assert f(1 << 30) == 1
-    # Monotone: larger signals never allow a larger chunk.
-    sizes = [f(sb) for sb in (1, 2**10, 2**16, 2**20, 2**24, 2**28, 2**30)]
-    assert sizes == sorted(sizes, reverse=True)
-
-
 def test_streamed_reward_chunks_match_single_pass(
     populated_db: DataConfig, monkeypatch
 ):
@@ -757,9 +745,9 @@ def test_streamed_reward_chunks_match_single_pass(
 
     def run_trainer(chunk_size: int, calls: list[int]) -> AshareTrainer:
         monkeypatch.setattr(
-            AshareTrainer,
-            "_reward_chunk_size",
-            staticmethod(lambda signal_bytes: chunk_size),
+            train_module,
+            "score_chunk_size",
+            lambda signal_bytes: chunk_size,
         )
         trainer = AshareTrainer(
             populated_db,
