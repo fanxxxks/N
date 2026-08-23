@@ -39,6 +39,12 @@ import pandas as pd
 from ashare_data.akshare_client import AkShareClient, normalize_listing_date
 from ashare_data.config import load_config, make_data_config
 from ashare_data.db import AshareDB
+from ashare_data.pit_import import (
+    bs_code_to_ts_code,
+    merge_list_dates,
+    month_end_samples,
+    timeline_to_intervals,
+)
 from ashare_data.processor import is_valid_a_share_code
 from ashare_data.universe import membership_interval_issues
 
@@ -75,34 +81,6 @@ def _sessions(config) -> list[str]:
     return sessions
 
 
-def _month_end_samples(sessions: list[str]) -> list[str]:
-    """One sample per calendar month plus the final session.
-
-    The 12 months before the first session are included too, so the first
-    dataset session is covered by a prior adjustment snapshot (an interval
-    can only begin at a provider update date).
-    """
-    samples: dict[str, str] = {}
-    for session in sessions:
-        samples[session[:6]] = session
-    pre_year = int(sessions[0][:4]) - 1
-    for month in range(1, 13):
-        key = f"{pre_year}{month:02d}28"
-        samples[key] = key
-    ordered = [samples[key] for key in sorted(samples)]
-    if ordered and ordered[-1] != sessions[-1]:
-        ordered.append(sessions[-1])
-    return ordered
-
-
-def _bs_code_to_ts_code(code: str) -> str:
-    market, symbol = code.split(".")
-    suffix = "SH" if market == "sh" else "SZ" if market == "sz" else None
-    if suffix is None:
-        raise ValueError(f"unexpected baostock code format: {code!r}")
-    return f"{symbol}.{suffix}"
-
-
 def _snapshot_members(bs, query_name: str, date: str) -> tuple[str, set[str]]:
     """Constituents as of ``date`` plus the provider's snapshot update date.
 
@@ -127,7 +105,7 @@ def _snapshot_members(bs, query_name: str, date: str) -> tuple[str, set[str]]:
         update_dates.append(str(row[update_idx]).replace("-", ""))
         code = str(row[code_idx])
         try:
-            ts_code = _bs_code_to_ts_code(code)
+            ts_code = bs_code_to_ts_code(code)
         except ValueError:
             continue
         if is_valid_a_share_code(ts_code):
@@ -137,23 +115,6 @@ def _snapshot_members(bs, query_name: str, date: str) -> tuple[str, set[str]]:
             f"baostock {query_name}({query_date}) returned no members"
         )
     return max(update_dates), members
-
-
-def _timeline_to_intervals(
-    dates: list[str], present: list[bool]
-) -> list[tuple[str, str]]:
-    """Compress a sampled membership timeline into half-open intervals."""
-    intervals: list[tuple[str, str]] = []
-    start: str | None = None
-    for date, is_member in zip(dates, present):
-        if is_member and start is None:
-            start = date
-        elif not is_member and start is not None:
-            intervals.append((start, date))
-            start = None
-    if start is not None:
-        intervals.append((start, "99991231"))
-    return intervals
 
 
 def import_calendar(config) -> int:
@@ -184,7 +145,7 @@ def import_constituents(config) -> dict[str, int]:
                 "from config index_codes or add a provider mapping"
             )
     sessions = _sessions(config)
-    samples = _month_end_samples(sessions)
+    samples = month_end_samples(sessions)
     print(f"sampling membership at {len(samples)} month-end sessions "
           f"({samples[0]} .. {samples[-1]})")
 
@@ -207,7 +168,7 @@ def import_constituents(config) -> dict[str, int]:
             for code, present in timelines.items():
                 dates = [d for d, _ in present]
                 flags = [f for _, f in present]
-                for in_date, out_date in _timeline_to_intervals(dates, flags):
+                for in_date, out_date in timeline_to_intervals(dates, flags):
                     rows.append(
                         {
                             "index_code": index_code,
@@ -266,7 +227,7 @@ def _all_stock_list_dates() -> pd.DataFrame:
             row = rs.get_row_data()
             code = str(row[code_idx])
             try:
-                ts_code = _bs_code_to_ts_code(code)
+                ts_code = bs_code_to_ts_code(code)
             except ValueError:
                 continue
             if not is_valid_a_share_code(ts_code):
@@ -296,31 +257,10 @@ def import_list_dates(config) -> int:
 
     with AshareDB(config.duckdb_path) as db:
         stocks = db.query(f"SELECT * FROM {config.stocks_table}")
-        merged = stocks.copy()
-        merged["list_date"] = merged["list_date"].astype(object)
-        for _, row in fetched.iterrows():
-            code = row["ts_code"]
-            if code in set(merged["ts_code"].astype(str)):
-                mask = merged["ts_code"].astype(str) == code
-                merged.loc[mask, "list_date"] = row["list_date"]
-            else:
-                merged = pd.concat(
-                    [
-                        merged,
-                        pd.DataFrame(
-                            [
-                                {
-                                    "ts_code": code,
-                                    "name": code,
-                                    "industry": None,
-                                    "list_date": row["list_date"],
-                                    "is_st": False,
-                                }
-                            ]
-                        ),
-                    ],
-                    ignore_index=True,
-                )
+        # One vectorized merge replaces the previous per-row concat +
+        # in-loop membership scan (O(n^2)); upsert_stocks then merges the
+        # result without deleting anything.
+        merged = merge_list_dates(stocks, fetched)
         db.upsert_stocks(merged.to_dict("records"), config)
     filled = int(merged["list_date"].notna().sum())
     print(f"stocks table: {len(merged)} rows, {filled} with list_date")
