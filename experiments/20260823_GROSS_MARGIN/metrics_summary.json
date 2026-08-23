@@ -1,0 +1,15 @@
+{
+  "formula_text": "GROSS_MARGIN",
+  "direction": 1,
+  "metrics": {
+    "total_return": -0.4825238721122985,
+    "annual_return": -0.05715171559756094,
+    "annual_volatility": 0.3009997249833307,
+    "sharpe": -0.25631822535889476,
+    "sortino": -0.06233498459985278,
+    "max_drawdown": 0.7528325017428947,
+    "calmar": -0.07591557934777324,
+    "average_turnover": 0.010447750075439282
+  },
+  "benchmark": "全市场等权"
+}
