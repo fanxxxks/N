@@ -15,15 +15,17 @@ start_date: "2015-01-01"
 end_date: "2026-12-31"
 adjust: qfq
 
+# PIT universe: configured indices must each have a trustworthy historical
+# membership source (see scripts/import_pit_universe.py).  000852.SH
+# (CSI1000) has no free historical-constituent source, so it is excluded;
+# 沪深300 + 中证500 are imported as monthly-snapshot-derived intervals.
 index_codes:
   - "000300.SH"
   - "000905.SH"
-  - "000852.SH"
 
 index_names:
   - "沪深300"
   - "中证500"
-  - "中证1000"
 
 min_listed_sessions: 60
 
