@@ -14,6 +14,15 @@ never be compared silently.
 
 Version history
 ---------------
+* v8: the JUMP operator is causal.  It used to standardize by the
+  full-timeline mean/std of the signal — a look-ahead (position ``t`` saw
+  the future of the window), which leaked post-test-window data into
+  walk-forward evaluation whenever a JUMP formula was executed on the full
+  tensor and sliced to the test window.  It now measures the value against
+  its trailing 60-session baseline (expanding before that, population
+  std), matching the windowed-operator conventions of the rest of the
+  registry.  Signals and rewards of v7 artifacts containing JUMP are not
+  comparable with v8.
 * v7: signal-date universe eligibility in every candidate-quality path.
   ``rank_ic_series``/``signal_direction``/``formula_reward``/
   ``batched_basket_rewards``/``simulate_basket_daily_returns(_batch)`` and
@@ -77,7 +86,7 @@ import numpy as np
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
 
-REWARD_VERSION = "7"
+REWARD_VERSION = "8"
 
 _ANNUALIZATION = 252
 

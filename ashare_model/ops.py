@@ -2,10 +2,11 @@
 
 Conventions
 -----------
-* Windowed operators (MA20/STD20/TS_RANK20/CORR20/DOWNVOL20) only look
-  backwards.  Leading positions use the values actually available (an
-  expanding window), so a constant series has a constant moving average and
-  zero standard deviation; CORR20 with a degenerate window yields 0.
+* Windowed operators (MA20/STD20/TS_RANK20/CORR20/DOWNVOL20 and the JUMP
+  detector's 60-session baseline) only look backwards.  Leading positions
+  use the values actually available (an expanding window), so a constant
+  series has a constant moving average and zero standard deviation; CORR20
+  with a degenerate window yields 0.
 * Delay-based operators (DELAY1/MAX3/DECAY/DELTA5) extend the series with
   the first available value (constant extension) instead of zeros, so the
   leading positions do not fabricate spurious jumps or decay.
@@ -114,9 +115,23 @@ def _op_gate(condition: torch.Tensor, x: torch.Tensor, y: torch.Tensor) -> torch
 
 
 def _op_jump(x: torch.Tensor) -> torch.Tensor:
-    mean = x.mean(dim=1, keepdim=True)
-    std = x.std(dim=1, keepdim=True) + 1e-6
-    z = (x - mean) / std
+    """Trailing-window jump detector: ``relu(z - 3)`` of the value against
+    its own trailing 60-session mean and (population) standard deviation.
+
+    Causality: the baseline is a trailing window with the same expanding
+    convention as the other windowed operators, so position ``t`` depends
+    only on ``t`` and earlier.  The previous implementation standardized by
+    the full-timeline mean/std — a look-ahead that leaked post-window data
+    into walk-forward evaluation whenever a JUMP formula ran on the full
+    tensor and was sliced afterwards.  The 60-session baseline (the longest
+    enumerated window) stays closest to the original long-memory semantics;
+    with a single outlier in a window of ``n`` the z-score is bounded by
+    ``sqrt(n - 1)``, so the fixed 3-sigma threshold remains reachable
+    (sqrt(59) ≈ 7.7) while expanding head windows shorter than 10 sessions
+    can never fire.
+    """
+
+    z = (x - _ts_ma(x, 60)) / (_ts_std(x, 60) + 1e-6)
     return torch.relu(z - 3.0)
 
 

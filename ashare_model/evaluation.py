@@ -55,6 +55,12 @@ the protocol row IC is computed over signal-date eligible cells with the
 unified rank-IC implementation.  Artifacts record the applied universe
 policy fields (no data hash, no lineage).
 
+v9 makes the JUMP operator causal (a trailing 60-session baseline instead
+of the full-timeline mean/std look-ahead; see
+``ashare_model.reward.REWARD_VERSION`` v8).  The scoring machinery is
+unchanged, but every formula containing JUMP now produces a different
+signal, so prior protocol results are not comparable for those candidates.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -111,7 +117,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "8"
+PROTOCOL_VERSION = "9"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (

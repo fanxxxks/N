@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -9,6 +11,7 @@ from ashare_model.ops import (
     _cs_demean,
     _cs_neutralize,
     _cs_rank,
+    _op_jump,
     _ts_corr,
     _ts_delay,
     _ts_delta,
@@ -40,6 +43,61 @@ def test_all_operators_preserve_batch_and_time_shape():
             out = fn(x, x, x)
         assert out.shape == x.shape, name
         assert torch.isfinite(out).all(), name
+
+
+def test_all_operators_are_causal():
+    """No-leakage contract over the whole operator registry.
+
+    Perturbing any input column at or after ``cut`` must not change any
+    earlier output column.  This is the regression test for the JUMP
+    look-ahead (it standardized by the full-timeline mean/std) and a
+    permanent guard for every operator added to OPS_CONFIG afterwards.
+
+    The past region carries a planted outlier so saturating operators
+    (JUMP's relu(z - 3) maps most values to exactly 0) have a nonzero past
+    output to move; the perturbation is a deterministic large constant so
+    any statistic that reads the future shifts visibly.
+    """
+    torch.manual_seed(41)
+    b, t = 6, 40
+    cut = t // 2
+    x = torch.randn(b, t)
+    x[:, cut - 1] = 50.0  # fires JUMP at a past column (z = sqrt(n-1) > 3)
+    y = torch.randn(b, t)
+    cond = torch.randn(b, t)
+    group = torch.randint(0, 3, (b, t)).float()
+    eligible = torch.ones(b, t, dtype=torch.bool)
+
+    def perturbed(src: torch.Tensor) -> torch.Tensor:
+        dst = src.clone()
+        if dst.dtype == torch.bool:
+            dst[:, cut:] = False
+        else:
+            dst[:, cut:] = 1000.0
+        return dst
+
+    for name, fn, arity in OPS_CONFIG:
+        if name == "CS_NEUTRALIZE":
+            # The registry slot is a bare placeholder (the VM dispatches
+            # this operator by name); call the real implementation.
+            fn = _cs_neutralize
+            args, kwargs = (x, group), {"eligible": eligible}
+        elif name.startswith("CS_"):
+            args, kwargs = (x,), {"eligible": eligible}
+        elif arity == 1:
+            args, kwargs = (x,), {}
+        elif arity == 2:
+            args, kwargs = (x, y), {}
+        else:  # GATE
+            args, kwargs = (cond, x, y), {}
+        base = fn(*args, **kwargs)
+        out = fn(
+            *(perturbed(a) for a in args),
+            **{k: perturbed(v) for k, v in kwargs.items()},
+        )
+        assert torch.allclose(
+            base[:, :cut], out[:, :cut], atol=1e-6, equal_nan=True
+        ), name
 
 
 def test_ts_window_expanding_for_short_series():
@@ -119,6 +177,32 @@ def test_delay1_extends_with_first_value():
     assert out[0, 0].item() == 1.0
     assert out[0, 1].item() == 1.0
     assert out[0, 2].item() == 2.0
+
+
+def test_jump_detects_spike_against_trailing_window_only():
+    # An isolated spike fires exactly at the spike: with a single outlier
+    # in a window of n values the population-std z-score is sqrt(n-1), so
+    # at position 40 (expanding window of 41 values) z = sqrt(40) > 3.
+    # Before the spike the window is constant (z = 0); after it the mean is
+    # dragged up so the neutral value has a negative z (relu keeps 0).
+    x = torch.zeros(1, 80)
+    x[0, 40] = 10.0
+    out = _op_jump(x)
+    assert torch.allclose(out[0, :40], torch.zeros(40), atol=1e-6)
+    assert out[0, 40].item() == pytest.approx(math.sqrt(40.0) - 3.0, abs=1e-4)
+    assert torch.allclose(out[0, 41:], torch.zeros(39), atol=1e-6)
+
+
+def test_jump_baseline_is_limited_to_trailing_window():
+    # A sustained level shift is a jump only on the day it happens: 60
+    # sessions later the shifted level has filled the trailing baseline,
+    # so the z-score of the (now constant) window is neutral again.  Under
+    # the old full-timeline standardization the shift day itself scored
+    # z = 1 against the forever-mixed distribution and never fired.
+    x = torch.cat([torch.zeros(1, 60), torch.full((1, 60), 5.0)], dim=1)
+    out = _op_jump(x)
+    assert out[0, 60].item() > 0.0
+    assert torch.allclose(out[0, -20:], torch.zeros(20), atol=1e-6)
 
 
 def _op(name):

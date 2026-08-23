@@ -50,7 +50,7 @@ model:
 
 # Reward-scoring constants; semantic changes to the reward implementation
 # bump ashare_model.reward.REWARD_VERSION and are recorded in artifacts.
-# v4 semantics: reward = rank-ICIR - cost_weight * (annualized turnover cost),
+# Current semantics: reward = rank-ICIR - cost_weight * (annualized turnover cost),
 # clipped to [reward_clip_low, reward_clip_high]; validation reward is the
 # median over validation_splits sub-windows; bare single-factor formulas pay
 # a small complexity_penalty (kept tiny so the validation floor stays
