@@ -10,6 +10,7 @@ venv/
 
 # Secrets / environment
 .env
+config/.webapi_token
 
 # Runtime config overrides (edited via the web UI; baseline stays in git)
 config/runtime_overrides.yaml

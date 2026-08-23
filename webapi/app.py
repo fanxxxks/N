@@ -6,8 +6,15 @@ Dev:
 
 Prod:
     npm run build --prefix webui
-    uvicorn webapi.app:app --host 0.0.0.0 --port 8000
+    uvicorn webapi.app:app --host 127.0.0.1 --port 8000
     (webui/dist is served at /)
+
+The simulation control endpoints (start/stop/reset, config update) are
+guarded by ``webapi.auth``: with ``config/.webapi_token`` present every
+mutating request must send its content as ``X-API-Token``; without the
+token file only loopback clients may mutate, so binding ``--host
+0.0.0.0`` without a token file refuses non-local control requests
+instead of exposing the paper account to the LAN.
 """
 
 from __future__ import annotations
@@ -16,12 +23,13 @@ import mimetypes
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import service
+from .auth import require_mutation_token
 
 # Windows' mimetypes module resolves `.js` from the registry and frequently
 # returns text/plain, which makes browsers refuse ES module scripts and leaves
@@ -104,7 +112,7 @@ def sim_day(date: str) -> dict:
     return service.get_sim_day(date)
 
 
-@app.post("/api/sim/stop")
+@app.post("/api/sim/stop", dependencies=[Depends(require_mutation_token)])
 def sim_stop() -> JSONResponse:
     result = service.sim_stop_run()
     return JSONResponse(result, status_code=200 if result.get("ok") else 500)
@@ -115,14 +123,14 @@ def sim_run_status() -> dict:
     return service.sim_status()
 
 
-@app.post("/api/sim/start")
+@app.post("/api/sim/start", dependencies=[Depends(require_mutation_token)])
 def sim_run_start(req: service.SimStartRequest) -> JSONResponse:
     result = service.sim_start(req)
     code = 409 if result.get("conflict") else (200 if result.get("ok") else 400)
     return JSONResponse(result, status_code=code)
 
 
-@app.post("/api/sim/reset")
+@app.post("/api/sim/reset", dependencies=[Depends(require_mutation_token)])
 def sim_run_reset() -> JSONResponse:
     result = service.sim_reset_run()
     code = 409 if result.get("conflict") else (200 if result.get("ok") else 500)
@@ -134,7 +142,7 @@ def sim_config_get() -> dict:
     return service.get_sim_config()
 
 
-@app.put("/api/sim/config")
+@app.put("/api/sim/config", dependencies=[Depends(require_mutation_token)])
 def sim_config_update(patch: service.SimConfigPatch) -> JSONResponse:
     result = service.write_sim_config(patch)
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)

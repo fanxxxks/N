@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from ashare_data.config import BacktestConfig, DataConfig, ModelConfig, SimConfig
 from ashare_data.db import AshareDB
-from webapi import service
+from webapi import auth, service
+from webapi.app import app
 
 
 def _make_root(tmp_path: Path) -> Path:
@@ -159,3 +164,64 @@ def test_sim_start_enforces_production_universe_before_spawn(
     assert result["ok"] is False
     assert "production universe contract violation" in result["reason"]
     assert spawned is False
+
+
+# --- M6: control-endpoint authorization -------------------------------------
+
+
+def _request(host: str, token: str | None = None) -> SimpleNamespace:
+    headers = {"X-API-Token": token} if token is not None else {}
+    return SimpleNamespace(
+        headers=headers,
+        client=SimpleNamespace(host=host),
+    )
+
+
+def test_mutation_dependency_without_token_file_allows_loopback_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("ASHARE_WEBAPI_ROOT", str(tmp_path))
+    # No token file: loopback passes, anything else is rejected with a hint.
+    asyncio.run(auth.require_mutation_token(_request("127.0.0.1")))
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(auth.require_mutation_token(_request("192.168.1.20")))
+    assert exc_info.value.status_code == 403
+    assert ".webapi_token" in exc_info.value.detail
+
+
+def test_mutation_dependency_requires_matching_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root = tmp_path / "config"
+    root.mkdir(parents=True)
+    (root / ".webapi_token").write_text("s3cret", encoding="utf-8")
+    monkeypatch.setenv("ASHARE_WEBAPI_ROOT", str(tmp_path))
+    asyncio.run(auth.require_mutation_token(_request("192.168.1.20", token="s3cret")))
+    for bad in (None, "", "wrong"):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                auth.require_mutation_token(_request("192.168.1.20", token=bad))
+            )
+        assert exc_info.value.status_code == 401
+
+
+def test_mutating_endpoints_enforce_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # With a token file, POST/PUT control endpoints demand the matching
+    # header before the service layer is even reached.
+    root = tmp_path / "config"
+    root.mkdir(parents=True)
+    (root / ".webapi_token").write_text("s3cret", encoding="utf-8")
+    monkeypatch.setenv("ASHARE_WEBAPI_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        service, "sim_stop_run", lambda: {"ok": True, "state": "idle"}
+    )
+    client = TestClient(app)
+    assert client.post("/api/sim/stop").status_code == 401
+    assert client.post("/api/sim/stop", headers={"X-API-Token": "wrong"}).status_code == 401
+    ok = client.post("/api/sim/stop", headers={"X-API-Token": "s3cret"})
+    assert ok.status_code == 200
+    assert ok.json()["ok"] is True
+    # Read endpoints stay unauthenticated.
+    assert client.get("/api/health").status_code == 200
