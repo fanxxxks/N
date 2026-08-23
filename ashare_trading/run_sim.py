@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import replace
 from datetime import datetime
@@ -35,6 +34,7 @@ from ashare_data.config import (
     make_model_config,
     make_sim_config,
 )
+from ashare_data.io_utils import atomic_write_json
 from ashare_data.schemas import SimOrder
 from ashare_data.processor import open_to_open_returns
 from ashare_data.universe import require_production_universe
@@ -65,23 +65,17 @@ def write_progress_file(
     """Atomically write the sim progress file consumed by the status API.
 
     Phases: ``loading`` (data/factor warm-up), ``executing`` (day loop),
-    ``stopped`` (STOP_SIGNAL), ``finished``, ``error``.
+    ``stopped`` (STOP_SIGNAL), ``finished``, ``error``.  Shares the
+    project-wide atomic writer (ashare_data.io_utils.atomic_write_json).
     """
 
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "phase": phase,
         "current_date": current_date,
         "equity": equity,
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
-    tmp = path.with_suffix(".tmp.json")
-    tmp.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(tmp, path)
+    atomic_write_json(path, payload)
 
 
 class SimulationRunner:
@@ -306,11 +300,11 @@ class SimulationRunner:
             )
             # Persist orders after execution so their final status/reason
             # (filled, skipped, limit_up, ...) is part of the paper-trail.
-            self._write_json(
+            atomic_write_json(
                 self.sim_config.orders_dir / f"{exec_date}.json",
                 [o.__dict__ for o in orders],
             )
-            self._write_json(
+            atomic_write_json(
                 self.sim_config.trades_dir / f"{exec_date}.json",
                 [t.__dict__ for t in trades],
             )
@@ -467,14 +461,6 @@ class SimulationRunner:
         except OSError:
             pass
         return True
-
-    @staticmethod
-    def _write_json(path: Path, payload: object) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
 
 
 def _clear_stop_signal(sim_config: SimConfig) -> None:

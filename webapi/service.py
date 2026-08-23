@@ -7,7 +7,6 @@ a JSON payload is temporarily truncated by an atomic-write rename.
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +24,7 @@ from ashare_data.config import (
 )
 from ashare_execution import execution_config_mismatches, validate_execution_config
 from ashare_data.db import AshareDB
+from ashare_data.io_utils import read_json_safe
 from ashare_data.universe import UniverseContractError, require_production_universe
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,12 +52,7 @@ def _get_configs() -> tuple:
 
 
 def _read_json(path: Path) -> dict | list | None:
-    try:
-        if not path.exists():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return None
+    return read_json_safe(path)
 
 
 def load_stock_names() -> dict[str, str]:
