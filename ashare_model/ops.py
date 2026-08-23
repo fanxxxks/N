@@ -188,11 +188,10 @@ def _ts_downvol(x: torch.Tensor, d: int) -> torch.Tensor:
 
 
 def _validate_eligible(
-    x: torch.Tensor, eligible: torch.Tensor | None
-) -> torch.Tensor | None:
+    x: torch.Tensor, eligible: torch.Tensor
+) -> torch.Tensor:
     """Return ``eligible`` after enforcing the ``[stock, date]`` alignment."""
-    if eligible is None:
-        return None
+
     if eligible.shape != x.shape:
         raise ValueError(
             f"universe_mask shape {tuple(eligible.shape)} does not match "
@@ -202,17 +201,17 @@ def _validate_eligible(
 
 
 def _cs_reference(
-    x: torch.Tensor, eligible: torch.Tensor | None
+    x: torch.Tensor, eligible: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """``(ref, count)``: the per-cell reference mask and its per-date count.
 
-    A cell is a reference cell when it is finite and — when a PIT universe
-    mask is supplied — eligible.  ``count`` has shape ``[T]``.
+    A cell is a reference cell when it is finite and PIT-eligible.
+    ``count`` has shape ``[T]``.
     """
 
     eligible = _validate_eligible(x, eligible)
     finite = torch.isfinite(x)
-    ref = finite if eligible is None else finite & eligible
+    ref = finite & eligible
     return ref, ref.sum(dim=0)
 
 
@@ -235,13 +234,13 @@ def _masked_output(
 
 def cross_sectional_zscore(
     signal: torch.Tensor,
-    eligible: torch.Tensor | None = None,
+    eligible: torch.Tensor,
 ) -> torch.Tensor:
     """Per-date cross-sectional z-score of a ``[stock, date]`` signal.
 
     The mean and standard deviation are taken over the *reference* cells of
-    each date column — finite, and additionally eligible when the optional
-    ``[stock, date]`` PIT mask is supplied — so only the current
+    each date column — finite and PIT-eligible (``eligible`` is the
+    mandatory ``[stock, date]`` bool mask) — so only the current
     cross-section counts and no future information enters.  Reference cells
     get the z-score; non-reference cells map to NaN (non-participating).  A
     degenerate column (zero standard deviation, e.g. an all-neutral date)
@@ -262,10 +261,10 @@ def cross_sectional_zscore(
 
 
 def _cs_demean(
-    x: torch.Tensor, eligible: torch.Tensor | None = None
+    x: torch.Tensor, eligible: torch.Tensor
 ) -> torch.Tensor:
-    """Subtract the per-date reference mean (full-market demean without a
-    mask; eligible-only demean with one).  Non-reference cells stay NaN."""
+    """Subtract the per-date eligible-only reference mean.  Non-reference
+    cells stay NaN."""
 
     ref, count = _cs_reference(x, eligible)
     safe = torch.where(ref, x, torch.zeros_like(x))
@@ -274,12 +273,12 @@ def _cs_demean(
 
 
 def _cs_rank(
-    x: torch.Tensor, eligible: torch.Tensor | None = None
+    x: torch.Tensor, eligible: torch.Tensor
 ) -> torch.Tensor:
     """Per-date cross-sectional percentile rank in ``[0, 1]``.
 
-    Ranks are computed among the reference cells (finite, and eligible when
-    the PIT mask is supplied); non-reference cells map to NaN.  Ties share
+    Ranks are computed among the reference cells (finite and PIT-eligible);
+    non-reference cells map to NaN.  Ties share
     the *average* rank of their group, so the result depends only on the
     values — never on the sort order of equal elements — and is therefore
     identical on CPU and CUDA.  Implemented with a stable argsort and
@@ -326,14 +325,15 @@ def _cs_rank(
 def _cs_neutralize(
     x: torch.Tensor,
     group: torch.Tensor | None = None,
-    eligible: torch.Tensor | None = None,
+    *,
+    eligible: torch.Tensor,
 ) -> torch.Tensor:
     """Subtract the per-date mean within each group (industry neutralization).
 
     ``group`` is a ``[stock, date]`` tensor of discrete group ids aligned
     with ``x``; non-finite cells (stocks without a mapping) belong to no
     group, so their values are untouched — and never enter another group's
-    mean.  ``eligible`` is the optional ``[stock, date]`` PIT universe mask:
+    mean.  ``eligible`` is the mandatory ``[stock, date]`` PIT universe mask:
     a group's mean uses only the same-day members that are eligible *and*
     finite, and ineligible cells map to NaN (non-participating).  Without
     ``group`` — or when no finite group id exists — the operator degrades

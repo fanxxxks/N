@@ -108,7 +108,9 @@ class SimulationRunner:
             sim_config.initial_capital, sim_config.state_path
         )
         self.broker = SimBroker()
-        self.vm = StackVM(FORMULA_VOCAB)
+        # Built lazily in compute_signals() once the loader's PIT mask is
+        # guaranteed to exist.
+        self.vm: StackVM | None = None
         self.formula_tokens: list[int] | None = None
         self.formula_text = ""
         self.direction = 1
@@ -144,12 +146,15 @@ class SimulationRunner:
         if self.loader.universe_mask is None:
             raise ValueError("simulation requires the loader's PIT universe mask")
 
-        # Industry-group context for CS_NEUTRALIZE and the PIT eligibility
-        # mask for the cross-sectional operators, aligned with the factor
-        # stack.
-        self.vm.industry_codes = getattr(self.loader, "industry_codes", None)
-        self.vm.universe_mask = torch.tensor(
-            self.loader.universe_mask, dtype=torch.bool
+        # The VM is constructed with the loader's PIT eligibility mask and
+        # the industry-group context for CS_NEUTRALIZE, aligned with the
+        # factor stack — every formal execution path carries the mask.
+        self.vm = StackVM(
+            FORMULA_VOCAB,
+            industry_codes=getattr(self.loader, "industry_codes", None),
+            universe_mask=torch.tensor(
+                self.loader.universe_mask, dtype=torch.bool
+            ),
         )
         factors = self.vm.execute(self.formula_tokens, self.loader.factor_tensor)
         if factors is None:

@@ -23,34 +23,29 @@ from .time_contract import TrainingTimeContract
 def equal_weight_benchmark_returns(
     target_ret: np.ndarray,
     signal_indices: list[int],
-    universe_mask: np.ndarray | None = None,
+    universe_mask: np.ndarray,
 ) -> list[float]:
     """Equal-weight universe return per executed signal period.
 
-    The default benchmark averages the forward target over the cells that
-    are eligible on the signal date **and** on the entry date
+    The benchmark averages the forward target over the cells that are
+    eligible on the signal date **and** on the entry date
     (``universe_mask[:, t] & universe_mask[:, t + 1]``) and whose target is
     finite; a period without any such cell earns 0.0 (stable, no NaN
-    spread).  Without a mask every finite cell counts.  Single code path
-    shared by the backtest engine and the evaluation protocol's benchmark
-    row, so both report the identical universe return.
+    spread).  The mask is mandatory — there is no unconstrained path.
+    Single code path shared by the backtest engine and the evaluation
+    protocol's benchmark row, so both report the identical universe return.
     """
 
     target_ret = np.asarray(target_ret, dtype=np.float64)
-    if universe_mask is not None:
-        universe_mask = np.asarray(universe_mask, dtype=bool)
-        if universe_mask.shape != target_ret.shape:
-            raise ValueError(
-                f"universe_mask shape {universe_mask.shape} does not match "
-                f"target shape {target_ret.shape}"
-            )
+    universe_mask = np.asarray(universe_mask, dtype=bool)
+    if universe_mask.shape != target_ret.shape:
+        raise ValueError(
+            f"universe_mask shape {universe_mask.shape} does not match "
+            f"target shape {target_ret.shape}"
+        )
     returns: list[float] = []
     for t in signal_indices:
-        eligible = (
-            (universe_mask[:, t] & universe_mask[:, t + 1])
-            if universe_mask is not None
-            else np.ones(target_ret.shape[0], dtype=bool)
-        )
+        eligible = universe_mask[:, t] & universe_mask[:, t + 1]
         values = target_ret[eligible, t]
         values = values[np.isfinite(values)]
         returns.append(float(np.mean(values)) if values.size else 0.0)
@@ -69,13 +64,13 @@ class AshareBacktestEngine:
         raw_cache: dict[str, np.ndarray],
         ts_codes: list[str],
         dates: list[str],
+        universe_mask: np.ndarray,
         benchmark_returns: list[float] | None = None,
         signal_range: range | tuple[int, int] | None = None,
-        universe_mask: np.ndarray | None = None,
     ) -> BacktestResult:
         """Execute the daily top-n strategy over the signal columns.
 
-        ``universe_mask`` is the explicit ``[stock, date]`` bool PIT
+        ``universe_mask`` is the mandatory ``[stock, date]`` bool PIT
         eligibility mask: a position can only be newly opened in a stock
         eligible on the signal date **and** on the entry date
         (``universe_mask[:, t] & universe_mask[:, t + 1]``), the default
@@ -84,9 +79,8 @@ class AshareBacktestEngine:
         both the strategy (flat book) and the benchmark.  Existing
         positions of a stock that exits the universe are sold through the
         ordinary sell path — the mask never erases them silently.  A mask
-        whose shape does not match the signal raises ``ValueError``; with
-        ``universe_mask=None`` the engine keeps the legacy unconstrained
-        semantics.
+        whose shape does not match the signal raises ``ValueError``; there
+        is no unconstrained execution path.
 
         Limit detection always uses board rates (main board 10%,
         ChiNext / STAR 20%): the engine replays history, there is no dated
@@ -98,10 +92,9 @@ class AshareBacktestEngine:
             raise ValueError("factors must be [stock, date]")
         if factors.shape != (len(ts_codes), len(dates)):
             raise ValueError("factor shape does not match ts_codes/dates")
-        if universe_mask is not None:
-            universe_mask = np.asarray(universe_mask, dtype=bool)
-            if universe_mask.shape != factors.shape:
-                raise ValueError("universe_mask shape does not match factors")
+        universe_mask = np.asarray(universe_mask, dtype=bool)
+        if universe_mask.shape != factors.shape:
+            raise ValueError("universe_mask shape does not match factors")
 
         open_ = np.nan_to_num(
             np.asarray(raw_cache["open"], dtype=np.float64),
@@ -177,11 +170,7 @@ class AshareBacktestEngine:
             # observed and still be a member when the buy executes at the
             # t+1 open.  Non-finite signal cells are excluded inside the
             # selection itself.
-            eligible = (
-                (universe_mask[:, t] & universe_mask[:, entry_day])
-                if universe_mask is not None
-                else None
-            )
+            eligible = universe_mask[:, t] & universe_mask[:, entry_day]
             exit_day = t + 2
             selected = self._select_top_n(
                 signal,
@@ -293,12 +282,12 @@ class AshareBacktestEngine:
         volume: np.ndarray,
         ts_codes: list[str],
         side: str,
-        eligible: np.ndarray | None = None,
+        eligible: np.ndarray,
         st_mask: np.ndarray | None = None,
     ) -> list[int]:
         """Top-n indices of the current signal column.
 
-        ``eligible`` is the optional per-stock bool eligibility vector for
+        ``eligible`` is the mandatory per-stock bool eligibility vector for
         this signal date (signal-date & entry-date universe membership):
         ineligible stocks are excluded from the selection regardless of
         their signal value, so a position can never be newly opened in a
@@ -323,9 +312,7 @@ class AshareBacktestEngine:
         valid = [
             (i, float(signal[i]))
             for i in range(len(signal))
-            if (eligible is None or eligible[i])
-            and not blocked[i]
-            and np.isfinite(signal[i])
+            if eligible[i] and not blocked[i] and np.isfinite(signal[i])
         ]
         valid.sort(key=lambda x: x[1], reverse=True)
         return [i for i, _ in valid[: self.config.top_n]]
@@ -437,14 +424,13 @@ def main() -> None:
 
         import torch
 
-        universe_mask = getattr(loader, "universe_mask", None)
+        # load_data always builds the PIT mask; the formal entry never
+        # executes without it.
         vm = StackVM(
             FORMULA_VOCAB,
             industry_codes=getattr(loader, "industry_codes", None),
-            universe_mask=(
-                torch.tensor(universe_mask, dtype=torch.bool)
-                if universe_mask is not None
-                else None
+            universe_mask=torch.tensor(
+                loader.universe_mask, dtype=torch.bool
             ),
         )
         factors = vm.execute(tokens, loader.factor_tensor)
@@ -469,11 +455,7 @@ def main() -> None:
             direction = signal_direction(
                 factors[:, :signal_end].detach().cpu().numpy(),
                 train_target[:, :signal_end],
-                universe_mask=(
-                    loader.universe_mask[:, :signal_end]
-                    if loader.universe_mask is not None
-                    else None
-                ),
+                universe_mask=loader.universe_mask[:, :signal_end],
             )
         signal_np = float(direction) * factors.detach().cpu().numpy()
 

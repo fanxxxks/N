@@ -326,15 +326,21 @@ def evaluate_formula(
     signal; the direction is decided on data strictly before the test
     window by the callers).  Returns ``None`` for an invalid formula."""
 
-    vm = vm or StackVM(FORMULA_VOCAB)
-    vm.industry_codes = getattr(loader, "industry_codes", None)
-    universe_mask = getattr(loader, "universe_mask", None)
-    if universe_mask is None:
+    if loader.universe_mask is None:
+        # load_data always builds the mask; this guard keeps the failure
+        # mode explicit for callers that skipped loading.
         raise ValueError(
             "loader carries no universe mask; production evaluation "
             "requires the PIT eligibility mask"
         )
-    vm.universe_mask = torch.tensor(universe_mask, dtype=torch.bool)
+    vm = vm or StackVM(
+        FORMULA_VOCAB,
+        universe_mask=torch.tensor(loader.universe_mask, dtype=torch.bool),
+    )
+    vm.industry_codes = getattr(loader, "industry_codes", None)
+    # Force the loader's full-window PIT mask even onto an injected VM: the
+    # production evaluation path can never execute without the mask.
+    vm.universe_mask = torch.tensor(loader.universe_mask, dtype=torch.bool)
     signal = vm.execute(list(tokens), loader.factor_tensor)
     if signal is None:
         return None
@@ -638,7 +644,6 @@ def run_random_search(
         return failed_row("degenerate window or budget")
 
     vocab = FORMULA_VOCAB
-    vm = StackVM(vocab)
     # The VM runs on the compute device exactly like the trainer's loop
     # (CUDA when available); only the sliced windows cross back to numpy
     # for the reward path.  Device float32 arithmetic may differ by ~1e-7,
@@ -646,28 +651,23 @@ def run_random_search(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     factors = loader.factor_tensor[:, :, :train_price_end].to(device)
     industry_codes = getattr(loader, "industry_codes", None)
-    vm.industry_codes = (
-        industry_codes[:, :train_price_end].to(device)
-        if industry_codes is not None
-        else None
-    )
-    universe_mask = getattr(loader, "universe_mask", None)
-    vm.universe_mask = (
-        torch.tensor(
+    universe_mask = loader.universe_mask
+    vm = StackVM(
+        vocab,
+        industry_codes=(
+            industry_codes[:, :train_price_end].to(device)
+            if industry_codes is not None
+            else None
+        ),
+        universe_mask=torch.tensor(
             universe_mask[:, :train_price_end], dtype=torch.bool, device=device
-        )
-        if universe_mask is not None
-        else None
+        ),
     )
     # The scorer gates every quality statistic to signal-date eligible
     # cells; the mask is sliced to the exact training window like the
     # signals and targets (no off-by-one with the val windows, which are
     # index ranges inside the same slice).
-    train_universe_mask = (
-        universe_mask[:, :train_price_end]
-        if universe_mask is not None
-        else None
-    )
+    train_universe_mask = universe_mask[:, :train_price_end]
     target = open_to_open_returns(
         loader.raw_data_cache["open"][:, :train_price_end].numpy()
     )

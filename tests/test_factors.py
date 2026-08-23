@@ -36,7 +36,9 @@ from ashare_model.vocab import FEATURE_NAMES
 
 def test_compute_factor_tensor_shape_and_finite(bars_data):
     dates, ts_codes, bars = bars_data
-    tensor = compute_factor_tensor(bars, ts_codes, dates)
+    tensor = compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool)
+    )
     assert tensor.shape == (len(FEATURE_NAMES), len(ts_codes), len(dates))
     assert tensor.dtype == np.float32
     assert np.isfinite(tensor).all()
@@ -44,7 +46,10 @@ def test_compute_factor_tensor_shape_and_finite(bars_data):
 
 def test_compute_factor_tensor_without_pit_fundamentals(bars_data):
     dates, ts_codes, bars = bars_data
-    tensor = compute_factor_tensor(bars, ts_codes, dates, pit_fundamentals={})
+    tensor = compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool),
+        pit_fundamentals={},
+    )
     assert tensor.shape == (len(FEATURE_NAMES), len(ts_codes), len(dates))
 
 
@@ -64,14 +69,18 @@ def test_factor_engine_helpers(bars_data):
 
 def test_factor_tensor_is_cross_sectionally_standardized(bars_data):
     dates, ts_codes, bars = bars_data
-    tensor = compute_factor_tensor(bars, ts_codes, dates)
+    tensor = compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool)
+    )
     first_factor = tensor[0]
     assert np.nanmax(np.abs(first_factor)) <= 5.0 + 1e-6
 
 
 def test_missing_returns_are_neutral_in_tensor(bars_data):
     dates, ts_codes, bars = bars_data
-    tensor = compute_factor_tensor(bars, ts_codes, dates)
+    tensor = compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool)
+    )
     ret1 = tensor[FEATURE_NAMES.index("RET_1")]
     # The first date column has no prior close; after standardization it must
     # be the neutral 0 rather than a biased raw 0 imputation.
@@ -91,7 +100,9 @@ def test_limit_event_features_detect_one_word_moves():
         {"ts_code": "600000.SH", "trade_date": "20240103", "open": 8.2, "high": 8.4, "low": 8.1, "close": 8.3, "pre_close": 8.2, "volume": 1e6, "amount": 8e6, "turnover_rate": 1.0, "adj_factor": 1.0},
     ]
     bars = pd.DataFrame(rows)
-    tensor = compute_factor_tensor(bars, codes, dates)
+    tensor = compute_factor_tensor(
+        bars, codes, dates, np.ones((len(codes), len(dates)), dtype=bool)
+    )
     up = tensor[FEATURE_NAMES.index("LIMIT_UP_EVENT")]
     # 000001.SZ locked limit-up (10%) on day 2: it must outrank the normal
     # stock in the standardized cross-section.
@@ -107,7 +118,10 @@ def test_pit_fundamentals_injected_and_missing_stay_neutral(bars_data):
     pe_frame = pd.DataFrame(np.nan, index=ts_codes, columns=dates)
     pe_frame.loc["000001.SZ", dates[5]] = 15.0
     pe_frame.loc["600000.SH", dates[5]] = 8.0
-    tensor = compute_factor_tensor(bars, ts_codes, dates, pit_fundamentals={"PE_TTM": pe_frame})
+    tensor = compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool),
+        pit_fundamentals={"PE_TTM": pe_frame},
+    )
     pe = tensor[FEATURE_NAMES.index("PE_TTM")]
     assert pe[0, 5] > 0
     assert np.allclose(pe[:, :5], 0.0)
@@ -160,7 +174,8 @@ def test_extra_frames_injected_and_missing_stay_neutral(bars_data):
     margin_frame.loc["000001.SZ", dates[5]] = 0.5
     margin_frame.loc["600000.SH", dates[5]] = -0.5
     tensor = compute_factor_tensor(
-        bars, ts_codes, dates, extra_frames={"MARGIN_BALANCE_CHG": margin_frame}
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool),
+        extra_frames={"MARGIN_BALANCE_CHG": margin_frame},
     )
     margin = tensor[FEATURE_NAMES.index("MARGIN_BALANCE_CHG")]
     assert margin[0, 5] > 0
@@ -185,7 +200,9 @@ _GOLDEN_TENSOR_SHA256 = "0eabd18dc9f100bdc9f9ac94c72688bf28424e83fc7955ce63edd3d
 
 def test_factor_tensor_matches_pre_refactor_golden_values(bars_data):
     dates, ts_codes, bars = bars_data
-    tensor = compute_factor_tensor(bars, ts_codes, dates)
+    tensor = compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool)
+    )
     legacy = np.ascontiguousarray(tensor[:33])
     assert hashlib.sha256(legacy.tobytes()).hexdigest() == _GOLDEN_TENSOR_SHA256
     assert legacy.sum() == pytest.approx(199.50612, abs=1e-3)
@@ -202,7 +219,9 @@ def test_factor_tensor_matches_pre_refactor_golden_values(bars_data):
 def test_engine_computes_subset_of_features(bars_data):
     dates, ts_codes, bars = bars_data
     engine = AshareFactorEngine(feature_names=["RET_1", "PE_TTM", "NORTHBOUND_CHG"])
-    tensor = engine.compute_factor_tensor(bars, ts_codes, dates)
+    tensor = engine.compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool)
+    )
     assert tensor.shape == (3, len(ts_codes), len(dates))
     # Unbacked features stay neutral 0 everywhere; the local factor works.
     assert np.allclose(tensor[1], 0.0)
@@ -217,7 +236,8 @@ def _factor_fn(name):
 def _context_for(bars: pd.DataFrame, dates: list[str], codes: list[str], names: list[str]):
     engine = AshareFactorEngine(feature_names=names)
     close = engine._pivot(bars, codes, dates, "close")
-    return engine._build_context(bars, codes, dates, close)
+    eligible = pd.DataFrame(True, index=close.index, columns=close.columns)
+    return engine._build_context(bars, codes, dates, close, eligible)
 
 
 def _rows_to_bars(rows: list[dict]) -> pd.DataFrame:
@@ -249,7 +269,8 @@ def test_amount_share_sums_to_one():
         {"d1": [30.0, 70.0], "d2": [50.0, 50.0], "d3": [np.nan, np.nan]},
         index=["A", "B"],
     )
-    share = _factor_amount_share(amount)
+    eligible = pd.DataFrame(True, index=amount.index, columns=amount.columns)
+    share = _factor_amount_share(amount, eligible)
     assert share.loc["A", "d1"] == pytest.approx(0.3)
     assert share.loc["B", "d1"] == pytest.approx(0.7)
     assert share.loc["A", "d2"] == pytest.approx(0.5)
@@ -309,7 +330,9 @@ def test_rolling_capm_recovers_known_betas():
         },
         index=["A", "B"],
     )
-    beta, ivol, rsq = _rolling_capm(close, window=60, min_periods=2)
+    beta, ivol, rsq = _rolling_capm(
+        close, np.ones(close.shape, dtype=bool), window=60, min_periods=2
+    )
     assert beta.loc["A"].iloc[-1] == pytest.approx(1.6, abs=1e-4)
     assert beta.loc["B"].iloc[-1] == pytest.approx(0.4, abs=1e-4)
     assert ivol.loc["A"].iloc[-1] == pytest.approx(0.0, abs=1e-6)
@@ -390,13 +413,19 @@ def test_new_factors_have_no_lookahead(bars_data):
     industry.loc["600000.SH"] = "801780"
     industry.loc["300001.SZ"] = "801880"
     engine = AshareFactorEngine(feature_names=names)
-    base = engine.compute_factor_tensor(bars, ts_codes, dates, industry_frame=industry)
+    base = engine.compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool),
+        industry_frame=industry,
+    )
     shocked = bars.copy()
     last = dates[-1]
     shocked.loc[shocked["trade_date"] == last, "close"] *= 5.0
     shocked.loc[shocked["trade_date"] == last, "high"] *= 5.0
     shocked.loc[shocked["trade_date"] == last, "low"] *= 5.0
-    after = engine.compute_factor_tensor(shocked, ts_codes, dates, industry_frame=industry)
+    after = engine.compute_factor_tensor(
+        shocked, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool),
+        industry_frame=industry,
+    )
     assert np.allclose(base[:, :, :-1], after[:, :, :-1])
 
 
@@ -416,6 +445,7 @@ def _empty_ctx(index: list[str], columns: list[str]) -> FactorContext:
         volume=empty.copy(),
         amount=empty.copy(),
         turnover=empty.copy(),
+        eligible=pd.DataFrame(True, index=index, columns=columns),
     )
 
 
@@ -450,7 +480,9 @@ def test_industry_demean_without_frame_is_all_neutral():
 
 def test_industry_relative_factors_neutral_without_frame(bars_data):
     dates, ts_codes, bars = bars_data
-    tensor = compute_factor_tensor(bars, ts_codes, dates)
+    tensor = compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool)
+    )
     for name in ("IND_REL_RET_5", "IND_REL_RET_20", "IND_REL_VOL_20", "IND_REL_TURNOVER"):
         assert np.allclose(tensor[FEATURE_NAMES.index(name)], 0.0), name
 
@@ -461,7 +493,10 @@ def test_industry_relative_tensor_demeaned(bars_data):
     industry.loc["000001.SZ"] = "801780"
     industry.loc["600000.SH"] = "801780"
     industry.loc["300001.SZ"] = "801880"
-    tensor = compute_factor_tensor(bars, ts_codes, dates, industry_frame=industry)
+    tensor = compute_factor_tensor(
+        bars, ts_codes, dates, np.ones((len(ts_codes), len(dates)), dtype=bool),
+        industry_frame=industry,
+    )
     # The two same-industry stocks have different raw returns, so their
     # demeaned values are exact opposites; the single-member industry
     # demeans to exactly zero and stays neutral after standardization.
@@ -590,7 +625,9 @@ def test_limit_break_uses_board_specific_limit_rate():
     ]
     bars = pd.DataFrame(rows)
     codes = ["300001.SZ", "600000.SH"]
-    tensor = compute_factor_tensor(bars, codes, dates)
+    tensor = compute_factor_tensor(
+        bars, codes, dates, np.ones((len(codes), len(dates)), dtype=bool)
+    )
     breaks = tensor[FEATURE_NAMES.index("LIMIT_BREAK")]
     # 300001 (+15%, touched its 20% limit) is a break; 600000 (+9%, below
     # its 10% limit) is not.
@@ -755,7 +792,9 @@ def test_join_day_momentum_uses_pre_join_history():
     mask = _universe_mask(codes, dates, join_day)
     engine = AshareFactorEngine()
     masked = engine.compute_factor_tensor(bars, codes, dates, universe_mask=mask)
-    unmasked = engine.compute_factor_tensor(bars, codes, dates)
+    unmasked = engine.compute_factor_tensor(
+        bars, codes, dates, np.ones((len(codes), len(dates)), dtype=bool)
+    )
     f_row = codes.index("300001.SZ")
     for name in ("RET_5", "MOMENTUM_20"):
         idx = FEATURE_NAMES.index(name)
@@ -830,9 +869,11 @@ def test_rolling_capm_market_excludes_ineligible_stocks():
     assert beta.loc["B"].iloc[-1] == pytest.approx(0.4, abs=1e-4)
     assert ivol.loc["A"].iloc[-1] == pytest.approx(0.0, abs=1e-6)
     assert rsq.loc["A"].iloc[-1] == pytest.approx(1.0, abs=1e-4)
-    # Without the mask the extreme future member distorts the market factor
-    # and the recovered betas shift.
-    beta_all, _, _ = _rolling_capm(close, window=60, min_periods=2)
+    # With an all-eligible mask the extreme future member distorts the
+    # market factor and the recovered betas shift.
+    beta_all, _, _ = _rolling_capm(
+        close, np.ones(close.shape, dtype=bool), window=60, min_periods=2
+    )
     assert abs(beta_all.loc["A"].iloc[-1] - 1.6) > 1e-3
 
 

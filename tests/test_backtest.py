@@ -21,7 +21,8 @@ def _engine_inputs(populated_db: DataConfig):
 def test_run_returns_expected_result(populated_db: DataConfig):
     factors, raw, ts_codes, dates = _engine_inputs(populated_db)
     result = AshareBacktestEngine(BacktestConfig(top_n=2, train_end_date="2024-02-01")).run(
-        factors, raw, ts_codes, dates
+        factors, raw, ts_codes, dates,
+        np.ones((len(ts_codes), len(dates)), dtype=bool),
     )
     assert len(result.daily_returns) == len(dates) - 2
     assert len(result.equity_curve) == len(dates) - 1
@@ -33,7 +34,10 @@ def test_run_validates_factor_shape(populated_db: DataConfig):
     factors, raw, ts_codes, dates = _engine_inputs(populated_db)
     engine = AshareBacktestEngine(BacktestConfig())
     with pytest.raises(ValueError):
-        engine.run(factors.reshape(1, -1), raw, ts_codes, dates)
+        engine.run(
+            factors.reshape(1, -1), raw, ts_codes, dates,
+            np.ones((len(ts_codes), len(dates)), dtype=bool),
+        )
 
 
 def test_open_to_open_returns():
@@ -86,14 +90,16 @@ def test_engine_uses_board_rates_not_current_st_names():
     result = AshareBacktestEngine(
         BacktestConfig(top_n=1, single_weight_cap=1.0)
     ).run(signal, {"open": open_, "high": high, "low": low,
-                   "pre_close": pre_close, "volume": volume}, codes, dates)
+                   "pre_close": pre_close, "volume": volume}, codes, dates,
+          np.ones((len(codes), len(dates)), dtype=bool))
     assert result.positions[0]["ts_codes"] == ["000001.SZ"]
 
 
 def test_run_includes_benchmark_positions_and_aligned_dates(populated_db: DataConfig):
     factors, raw, ts_codes, dates = _engine_inputs(populated_db)
     result = AshareBacktestEngine(BacktestConfig(top_n=2)).run(
-        factors, raw, ts_codes, dates
+        factors, raw, ts_codes, dates,
+        np.ones((len(ts_codes), len(dates)), dtype=bool),
     )
     # Equal-weight benchmark computed on the same open-to-open basis.
     assert result.benchmark_equity is not None
@@ -202,8 +208,8 @@ def test_engine_extreme_future_member_changes_nothing_pre_join():
         return out
 
     assert _costs(mild_result) == _costs(extreme_result)
-    # Sanity: without the mask the extreme values do change the outcome.
-    open_result = _run_engine(extreme, raw, codes, dates, None, **cfg)
+    # Sanity: with an all-eligible mask the extreme values do change the outcome.
+    open_result = _run_engine(extreme, raw, codes, dates, np.ones((4, 8), dtype=bool), **cfg)
     assert open_result.daily_returns != mild_result.daily_returns
 
 

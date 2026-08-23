@@ -30,7 +30,7 @@ def test_factor_coverage_counts_nonzero_cells():
     tensor = np.zeros((3, 2, 4), dtype=np.float32)
     tensor[0, :, :] = 1.0  # fully informative
     tensor[1, 0, 0] = 1.0  # one cell
-    coverage = factor_coverage(tensor)
+    coverage = factor_coverage(tensor, eligible=np.ones((2, 4), dtype=bool))
     assert coverage[FEATURE_NAMES[0]] == pytest.approx(1.0)
     assert coverage[FEATURE_NAMES[1]] == pytest.approx(1.0 / 8.0)
     assert coverage[FEATURE_NAMES[2]] == pytest.approx(0.0)
@@ -43,7 +43,10 @@ def test_rank_ic_perfect_alignment_and_inversion():
     tensor = np.zeros((3, n_stocks, n_dates), dtype=np.float32)
     tensor[0] = target * 10.0  # aligned
     tensor[1] = -target * 10.0  # inverted
-    stats = rank_ic_stats(tensor, target, [f"d{i}" for i in range(n_dates)])
+    stats = rank_ic_stats(
+        tensor, target, [f"d{i}" for i in range(n_dates)],
+        eligible=np.ones((n_stocks, n_dates), dtype=bool),
+    )
     assert stats[FEATURE_NAMES[0]]["ic_mean"] == pytest.approx(1.0, abs=1e-6)
     assert stats[FEATURE_NAMES[1]]["ic_mean"] == pytest.approx(-1.0, abs=1e-6)
     # The zero feature correlates 0 with anything.
@@ -56,7 +59,10 @@ def test_rank_ic_skips_degenerate_dates():
     target = np.zeros((n_stocks, n_dates))
     target[:, 0] = np.nan  # fewer than 10 valid stocks
     tensor = np.zeros((1, n_stocks, n_dates), dtype=np.float32)
-    stats = rank_ic_stats(tensor, target, [f"d{i}" for i in range(n_dates)])
+    stats = rank_ic_stats(
+        tensor, target, [f"d{i}" for i in range(n_dates)],
+        eligible=np.ones((n_stocks, n_dates), dtype=bool),
+    )
     # Dates 1..4 are valid but constant targets: the correlation of a
     # zero factor with a constant is NaN -> skipped, so no usable dates.
     assert stats[FEATURE_NAMES[0]]["n_dates"] == 0
@@ -66,7 +72,7 @@ def test_correlation_summary_recovers_identical_pairs():
     rng = np.random.default_rng(3)
     base = rng.normal(size=(12, 8)).astype(np.float32)
     tensor = np.stack([base, base, -base], axis=0)  # 3 features, 12 stocks, 8 days
-    summary = correlation_summary(tensor)
+    summary = correlation_summary(tensor, eligible=np.ones(base.shape, dtype=bool))
     top = {(p["a"], p["b"]): p["abs_corr"] for p in summary["top_pairs"]}
     assert top[(FEATURE_NAMES[0], FEATURE_NAMES[1])] == pytest.approx(1.0, abs=1e-4)
     assert top[(FEATURE_NAMES[0], FEATURE_NAMES[2])] == pytest.approx(1.0, abs=1e-4)
@@ -80,7 +86,7 @@ def test_correlation_summary_survives_constant_cross_sections():
     base = rng.normal(size=(10, 6)).astype(np.float32)
     tensor = np.stack([base, base, np.zeros_like(base)], axis=0)
     tensor[0, :, 0] = 0.0  # constant cross-section on the first date
-    summary = correlation_summary(tensor)
+    summary = correlation_summary(tensor, eligible=np.ones(base.shape, dtype=bool))
     matrix = summary["matrix"]
     assert all(
         v == v  # no NaN anywhere in the reported matrix
@@ -156,9 +162,12 @@ def test_coverage_ic_and_correlations_ignore_ineligible_extremes():
     assert correlation_summary(base, eligible=mask) == correlation_summary(
         extreme, eligible=mask
     )
-    # Sanity: without the mask the extreme finite values do move the ICs.
-    assert rank_ic_stats(base, target, dates, min_stocks=3) != rank_ic_stats(
-        extreme, target, dates, min_stocks=3
+    # Sanity: with an all-eligible mask the extreme finite values do move the ICs.
+    all_eligible = np.ones(mask.shape, dtype=bool)
+    assert rank_ic_stats(
+        base, target, dates, min_stocks=3, eligible=all_eligible
+    ) != rank_ic_stats(
+        extreme, target, dates, min_stocks=3, eligible=all_eligible
     )
 
 
@@ -191,8 +200,10 @@ def test_correlation_summary_uses_eligible_cells_per_day():
     summary = correlation_summary(tensor, eligible=mask)
     top = {(p["a"], p["b"]): p["abs_corr"] for p in summary["top_pairs"]}
     assert top[(FEATURE_NAMES[0], FEATURE_NAMES[1])] == pytest.approx(1.0, abs=1e-4)
-    # Without the mask the ineligible divergence breaks the correlation.
-    open_summary = correlation_summary(tensor)
+    # With an all-eligible mask the ineligible divergence breaks the correlation.
+    open_summary = correlation_summary(
+        tensor, eligible=np.ones((n_stocks, n_dates), dtype=bool)
+    )
     open_top = {(p["a"], p["b"]): p["abs_corr"] for p in open_summary["top_pairs"]}
     assert open_top[(FEATURE_NAMES[0], FEATURE_NAMES[1])] < 1.0
 
@@ -212,7 +223,7 @@ def test_rank_ic_stats_reuses_unified_rank_ic_series():
         tensor, target, [f"d{i}" for i in range(n_dates)],
         eligible=mask, min_stocks=5,
     )
-    daily = rank_ic_series(tensor, target, 5, mask)
+    daily = rank_ic_series(tensor, target, 5, universe_mask=mask)
     for i, name in enumerate(FEATURE_NAMES[:3]):
         finite = daily[i][np.isfinite(daily[i])]
         expected_mean = float(finite.mean()) if finite.size else 0.0
@@ -225,8 +236,8 @@ def test_diagnostics_reject_mask_shape_mismatch():
     target = np.zeros((4, 6))
     bad = np.ones((3, 6), dtype=bool)
     with pytest.raises(ValueError, match="eligible shape"):
-        factor_coverage(tensor, bad)
+        factor_coverage(tensor, eligible=bad)
     with pytest.raises(ValueError, match="eligible shape"):
         rank_ic_stats(tensor, target, [], eligible=bad)
     with pytest.raises(ValueError, match="eligible shape"):
-        correlation_summary(tensor, bad)
+        correlation_summary(tensor, eligible=bad)

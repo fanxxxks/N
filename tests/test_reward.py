@@ -126,7 +126,7 @@ def test_rank_ic_series_perfect_positive_correlation():
     n_stocks, n_dates = 12, 20
     target = rng.normal(size=(n_stocks, n_dates))
     signals = np.stack([target, -target]).astype(float)
-    ic = rank_ic_series(signals, target, min_stocks=5)
+    ic = rank_ic_series(signals, target, min_stocks=5, universe_mask=np.ones(target.shape, dtype=bool))
     assert np.allclose(ic[0], 1.0)
     assert np.allclose(ic[1], -1.0)
     assert icir_from_series(ic)[0] > 100.0  # near-perfect: huge positive ICIR
@@ -140,7 +140,7 @@ def test_rank_ic_series_average_ranks_tie_handling():
         [[0.01, 0.02], [0.02, 0.01], [-0.01, 0.03], [0.005, 0.001]]
     )
     constant = np.ones_like(target)
-    ic = rank_ic_series(constant[None], target, min_stocks=2)
+    ic = rank_ic_series(constant[None], target, min_stocks=2, universe_mask=np.ones(target.shape, dtype=bool))
     assert np.isnan(ic).all()
     assert icir_from_series(ic)[0] == 0.0
 
@@ -151,7 +151,7 @@ def test_rank_ic_series_skips_days_below_min_stocks():
         [[0.01, 0.02, np.nan], [0.02, np.nan, np.nan], [0.03, np.nan, 0.02]]
     )
     signal = target.copy()
-    ic = rank_ic_series(signal[None], target, min_stocks=2)
+    ic = rank_ic_series(signal[None], target, min_stocks=2, universe_mask=np.ones(target.shape, dtype=bool))
     assert ic[0, 0] == pytest.approx(1.0)
     assert np.isnan(ic[0, 1])
     assert np.isnan(ic[0, 2])
@@ -164,11 +164,11 @@ def test_rank_ic_series_excludes_nonfinite_signal_cells_per_row():
     target = np.tile(np.array([0.01, 0.02, 0.03, 0.04])[:, None], (1, 5))
     signal = target.copy()
     signal[0, :] = np.nan
-    ic = rank_ic_series(signal[None], target, min_stocks=2)
+    ic = rank_ic_series(signal[None], target, min_stocks=2, universe_mask=np.ones(target.shape, dtype=bool))
     assert np.allclose(ic[0], 1.0)
     extreme = target.copy()
     extreme[0, :] = 1e9
-    ic_extreme = rank_ic_series(extreme[None], target, min_stocks=2)
+    ic_extreme = rank_ic_series(extreme[None], target, min_stocks=2, universe_mask=np.ones(target.shape, dtype=bool))
     assert not np.allclose(ic_extreme[0], 1.0)
 
 
@@ -202,9 +202,11 @@ def test_annualized_reward_cost_uses_exact_daily_fraction():
     cfg = _cfg()
     target = np.zeros((4, 6))
     signal = np.tile(np.arange(4, dtype=float)[:, None], (1, 6))
-    simulation = simulate_basket_daily_returns(signal, target, cfg)
-    free = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=0.0))
-    honest = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=1.0))
+    simulation = simulate_basket_daily_returns(
+        signal, target, cfg, universe_mask=np.ones(signal.shape, dtype=bool)
+    )
+    free = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=0.0), universe_mask=np.ones(signal.shape, dtype=bool))
+    honest = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=1.0), universe_mask=np.ones(signal.shape, dtype=bool))
     assert free - honest == pytest.approx(
         simulation.daily_cost_fractions.mean() * 252, abs=1e-12
     )
@@ -236,9 +238,10 @@ def test_simulate_basket_matches_backtest_engine_daily_returns():
     ts_codes, dates, raw, signal, target = _synthetic_market()
     cfg = _cfg()
     result = AshareBacktestEngine(cfg).run(
-        signal, raw, ts_codes, dates
+        signal, raw, ts_codes, dates,
+        universe_mask=np.ones(signal.shape, dtype=bool),
     )
-    daily, avg_turnover = simulate_basket_daily_returns(signal, target, cfg)
+    daily, avg_turnover = simulate_basket_daily_returns(signal, target, cfg, universe_mask=np.ones(signal.shape, dtype=bool))
     assert daily == pytest.approx(np.asarray(result.daily_returns), abs=1e-12)
     assert avg_turnover == pytest.approx(
         float(np.mean(result.turnover)), abs=1e-12
@@ -266,7 +269,7 @@ def test_nonfinite_signal_rows_are_excluded_from_selection():
             [0.001] * 4,
         ]
     )
-    daily, _ = simulate_basket_daily_returns(signal, target, cfg)
+    daily, _ = simulate_basket_daily_returns(signal, target, cfg, universe_mask=np.ones(signal.shape, dtype=bool))
     assert daily == pytest.approx(np.full(2, 0.001), abs=1e-12)
 
 
@@ -281,7 +284,7 @@ def test_formula_reward_is_icir_minus_continuous_cost():
     target = rng.normal(size=(n_stocks, n_dates))
     signal = target.copy()
     # Near-perfect IC -> the ICIR term saturates the clip band.
-    reward = formula_reward(signal, target, cfg, rc)
+    reward = formula_reward(signal, target, cfg, rc, universe_mask=np.ones(signal.shape, dtype=bool))
     assert reward == pytest.approx(rc.reward_clip_high, abs=1e-12)
 
 
@@ -296,15 +299,15 @@ def test_reward_penalizes_churn_continuously():
     static = np.tile(np.arange(n_stocks, dtype=float)[::-1][:, None], (1, n_dates))
     churn = static.copy()
     churn[0, 1::2] = 1.0  # odd days: stock 0 drops out of the top-2 basket
-    _, to_static = simulate_basket_daily_returns(static, target, cfg)
-    _, to_churn = simulate_basket_daily_returns(churn, target, cfg)
+    _, to_static = simulate_basket_daily_returns(static, target, cfg, universe_mask=np.ones(static.shape, dtype=bool))
+    _, to_churn = simulate_basket_daily_returns(churn, target, cfg, universe_mask=np.ones(churn.shape, dtype=bool))
     assert to_churn > to_static
 
     for signal in (static, churn):
-        simulation = simulate_basket_daily_returns(signal, target, cfg)
+        simulation = simulate_basket_daily_returns(signal, target, cfg, universe_mask=np.ones(signal.shape, dtype=bool))
         expected_cost = simulation.daily_cost_fractions.mean() * 252
-        r_free = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=0.0))
-        r_honest = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=1.0))
+        r_free = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=0.0), universe_mask=np.ones(signal.shape, dtype=bool))
+        r_honest = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=1.0), universe_mask=np.ones(signal.shape, dtype=bool))
         assert -1.0 < r_honest < 1.0  # inside the band: the diff is exact
         assert r_free - r_honest == pytest.approx(expected_cost, abs=1e-12)
 
@@ -314,7 +317,7 @@ def test_degenerate_input_has_zero_icir_and_no_cost():
     # (the trainer reserves clip_low/bad_reward for invalid formulas).
     cfg = _cfg()
     rc = _reward_cfg()
-    reward = formula_reward(np.zeros((3, 1)), np.zeros((3, 1)), cfg, rc)
+    reward = formula_reward(np.zeros((3, 1)), np.zeros((3, 1)), cfg, rc, universe_mask=np.ones((3, 1), dtype=bool))
     assert reward == 0.0
 
 
@@ -324,7 +327,7 @@ def test_formula_reward_clips_to_configured_band():
     rng = np.random.default_rng(4)
     target = rng.normal(size=(10, 40))
     signal = -target  # ICIR strongly negative
-    assert formula_reward(signal, target, cfg, rc) == -0.25
+    assert formula_reward(signal, target, cfg, rc, universe_mask=np.ones(signal.shape, dtype=bool)) == -0.25
 
 
 # --- batched basket simulation: equivalence with the scalar path ------------
@@ -343,9 +346,9 @@ def test_batch_sim_matches_scalar_reference():
     cfg = _cfg(top_n=3, single_weight_cap=1.0)
     for b, n_stocks, n_dates in ((1, 6, 30), (4, 12, 45), (3, 5, 8)):
         signals, target = _random_batch(rng, b, n_stocks, n_dates)
-        df, tf = simulate_basket_daily_returns_batch(signals, target, cfg)
+        df, tf = simulate_basket_daily_returns_batch(signals, target, cfg, universe_mask=np.ones(target.shape, dtype=bool))
         for i in range(b):
-            ref_f, ref_tf = simulate_basket_daily_returns(signals[i], target, cfg)
+            ref_f, ref_tf = simulate_basket_daily_returns(signals[i], target, cfg, universe_mask=np.ones(target.shape, dtype=bool))
             assert df[i] == pytest.approx(ref_f, rel=1e-9, abs=1e-11)
             assert tf[i] == pytest.approx(ref_tf, rel=1e-9, abs=1e-11)
 
@@ -359,11 +362,13 @@ def test_batch_sim_restarting_a_window_matches_scalar():
     cfg = _cfg(top_n=2)
     start, end = 8, 16
     df, _ = simulate_basket_daily_returns_batch(
-        signals[:, :, start:end], target[:, start:end], cfg
+        signals[:, :, start:end], target[:, start:end], cfg,
+        universe_mask=np.ones(target[:, start:end].shape, dtype=bool),
     )
     for i in range(2):
         ref_v, _ = simulate_basket_daily_returns(
-            signals[i, :, start:end], target[:, start:end], cfg
+            signals[i, :, start:end], target[:, start:end], cfg,
+            universe_mask=np.ones(target[:, start:end].shape, dtype=bool),
         )
         assert df[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-11)
 
@@ -372,23 +377,28 @@ def test_batch_sim_degenerate_shapes_match_scalar():
     cfg = _cfg()
     # Fewer than two dates: empty daily series.
     df, tf = simulate_basket_daily_returns_batch(
-        np.zeros((2, 3, 1)), np.zeros((3, 1)), cfg
+        np.zeros((2, 3, 1)), np.zeros((3, 1)), cfg,
+        universe_mask=np.ones((3, 1), dtype=bool),
     )
     assert df.shape == (2, 0)
     assert list(tf) == [0.0, 0.0]
     ref_daily, ref_to = simulate_basket_daily_returns(
-        np.zeros((3, 1)), np.zeros((3, 1)), cfg
+        np.zeros((3, 1)), np.zeros((3, 1)), cfg,
+        universe_mask=np.ones((3, 1), dtype=bool),
     )
     assert ref_daily.size == 0 and ref_to == 0.0
     # top_n <= 0: every day skipped, zero daily and zero turnover.
     df, tf = simulate_basket_daily_returns_batch(
-        np.zeros((2, 3, 6)), np.zeros((3, 6)), _cfg(top_n=0)
+        np.zeros((2, 3, 6)), np.zeros((3, 6)), _cfg(top_n=0),
+        universe_mask=np.ones((3, 6), dtype=bool),
     )
     assert np.all(df == 0.0)
     assert list(tf) == [0.0, 0.0]
     # Not enough finite rows on any day: same zero behavior.
     sig = np.full((1, 3, 6), np.nan)
-    df, tf = simulate_basket_daily_returns_batch(sig, np.zeros((3, 6)), cfg)
+    df, tf = simulate_basket_daily_returns_batch(
+        sig, np.zeros((3, 6)), cfg, universe_mask=np.ones((3, 6), dtype=bool)
+    )
     assert np.all(df == 0.0)
     assert list(tf) == [0.0]
 
@@ -409,9 +419,12 @@ def test_blocked_buy_excludes_candidates_from_selection():
     blocked_buy[0, 1] = True
     # Zero targets and zero costs: returns are 0 everywhere, so the mask's
     # effect shows up purely in the turnover of the forced selection switch.
-    _, to_free = simulate_basket_daily_returns(signal, target, cfg)
+    _, to_free = simulate_basket_daily_returns(
+        signal, target, cfg, universe_mask=np.ones(signal.shape, dtype=bool)
+    )
     _, to_blocked = simulate_basket_daily_returns(
-        signal, target, cfg, blocked_buy=blocked_buy
+        signal, target, cfg, blocked_buy=blocked_buy,
+        universe_mask=np.ones(signal.shape, dtype=bool),
     )
     # Free path: the single entry into stock 0 (1 unit over 3 complete t+2 periods).
     assert to_free == pytest.approx(1.0 / 3.0, abs=1e-12)
@@ -433,9 +446,12 @@ def test_blocked_sell_force_holds_positions():
     signal[0, 2] = 0.5
     blocked_sell = np.zeros((n_stocks, n_dates), dtype=bool)
     blocked_sell[0, 3] = True
-    _, to_free = simulate_basket_daily_returns(signal, target, cfg)
+    _, to_free = simulate_basket_daily_returns(
+        signal, target, cfg, universe_mask=np.ones(signal.shape, dtype=bool)
+    )
     _, to_held = simulate_basket_daily_returns(
-        signal, target, cfg, blocked_sell=blocked_sell
+        signal, target, cfg, blocked_sell=blocked_sell,
+        universe_mask=np.ones(signal.shape, dtype=bool),
     )
     # The forced hold suppresses the day-3 sell exactly like the engine.
     assert to_held < to_free
@@ -449,11 +465,13 @@ def test_blocked_batch_matches_scalar_reference():
     blocked_buy = rng.random((n_stocks, n_dates)) < 0.1
     blocked_sell = rng.random((n_stocks, n_dates)) < 0.1
     df, tf = simulate_basket_daily_returns_batch(
-        signals, target, cfg, blocked_buy, blocked_sell
+        signals, target, cfg, blocked_buy, blocked_sell,
+        universe_mask=np.ones(target.shape, dtype=bool),
     )
     for i in range(signals.shape[0]):
         ref_f, ref_tf = simulate_basket_daily_returns(
-            signals[i], target, cfg, blocked_buy, blocked_sell
+            signals[i], target, cfg, blocked_buy, blocked_sell,
+            universe_mask=np.ones(target.shape, dtype=bool),
         )
         assert df[i] == pytest.approx(ref_f, rel=1e-9, abs=1e-11)
         assert tf[i] == pytest.approx(ref_tf, rel=1e-9, abs=1e-11)
@@ -461,15 +479,18 @@ def test_blocked_batch_matches_scalar_reference():
 
 def test_blocked_mask_shape_validation():
     cfg = _cfg()
+    mask = np.ones((3, 6), dtype=bool)
     with pytest.raises(ValueError, match="blocked_buy shape"):
         simulate_basket_daily_returns_batch(
             np.zeros((2, 3, 6)), np.zeros((3, 6)), cfg,
             blocked_buy=np.zeros((3, 5), dtype=bool),
+            universe_mask=mask,
         )
     with pytest.raises(ValueError, match="blocked_sell shape"):
         simulate_basket_daily_returns_batch(
             np.zeros((2, 3, 6)), np.zeros((3, 6)), cfg,
             blocked_sell=np.zeros((2, 6), dtype=bool),
+            universe_mask=mask,
         )
 
 
@@ -486,7 +507,10 @@ def test_blocked_basket_matches_backtest_engine_with_limits():
     raw["low"][1, 5] = raw["open"][1, 5]
     target = open_to_open_returns(raw["open"])
     cfg = _cfg(top_n=3, single_weight_cap=1.0)
-    result = AshareBacktestEngine(cfg).run(signal, raw, ts_codes, dates)
+    result = AshareBacktestEngine(cfg).run(
+        signal, raw, ts_codes, dates,
+        universe_mask=np.ones(signal.shape, dtype=bool),
+    )
     blocked_buy = tradability_blocked_matrix(
         raw["open"], raw["high"], raw["low"], raw["pre_close"], raw["volume"],
         ts_codes, "buy",
@@ -496,7 +520,8 @@ def test_blocked_basket_matches_backtest_engine_with_limits():
         ts_codes, "sell",
     )
     daily, avg_turnover = simulate_basket_daily_returns(
-        signal, target, cfg, blocked_buy, blocked_sell
+        signal, target, cfg, blocked_buy, blocked_sell,
+        universe_mask=np.ones(signal.shape, dtype=bool),
     )
     assert daily == pytest.approx(np.asarray(result.daily_returns), abs=1e-12)
     assert avg_turnover == pytest.approx(float(np.mean(result.turnover)), abs=1e-12)
@@ -513,16 +538,21 @@ def test_batched_rewards_match_scalar_rewards():
         signals, target = _random_batch(rng, b, n_stocks, n_dates)
         val_windows = [(n_dates // 2, n_dates - 2)]
         rewards, val_rewards, icir, val_icir = batched_basket_rewards(
-            signals, target, cfg, reward_cfg, val_windows
+            signals, target, cfg, reward_cfg, val_windows,
+            universe_mask=np.ones(target.shape, dtype=bool),
         )
         for i in range(b):
-            ref_r = formula_reward(signals[i], target, cfg, reward_cfg)
+            ref_r = formula_reward(
+                signals[i], target, cfg, reward_cfg,
+                universe_mask=np.ones(target.shape, dtype=bool),
+            )
             ref_v = formula_reward(
                 signals[i],
                 target,
                 cfg,
                 reward_cfg,
                 signal_range=val_windows[0],
+                universe_mask=np.ones(target.shape, dtype=bool),
             )
             assert rewards[i] == pytest.approx(ref_r, rel=1e-9, abs=1e-10)
             assert val_rewards[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-10)
@@ -532,6 +562,7 @@ def test_batched_rewards_match_scalar_rewards():
                 signals[:, :, : n_dates - 2],
                 target[:, : n_dates - 2],
                 reward_cfg.ic_min_stocks,
+                universe_mask=np.ones(target[:, : n_dates - 2].shape, dtype=bool),
             )
         )
         assert icir == pytest.approx(ref_icir, rel=1e-9, abs=1e-10)
@@ -540,6 +571,10 @@ def test_batched_rewards_match_scalar_rewards():
                 signals[:, :, val_windows[0][0] : val_windows[0][1]],
                 target[:, val_windows[0][0] : val_windows[0][1]],
                 reward_cfg.ic_min_stocks,
+                universe_mask=np.ones(
+                    target[:, val_windows[0][0] : val_windows[0][1]].shape,
+                    dtype=bool,
+                ),
             )
         )
         assert val_icir == pytest.approx(ref_val_icir, rel=1e-9, abs=1e-10)
@@ -556,7 +591,8 @@ def test_val_reward_is_median_over_windows():
     aligned = np.stack([target, -target, rng.normal(size=target.shape)])
     windows = [(0, 9), (9, 18), (18, 28)]
     rewards, val_rewards, _, val_icir = batched_basket_rewards(
-        aligned, target, cfg, reward_cfg, windows
+        aligned, target, cfg, reward_cfg, windows,
+        universe_mask=np.ones(target.shape, dtype=bool),
     )
     per_window = []
     for start, end in windows:
@@ -569,6 +605,7 @@ def test_val_reward_is_median_over_windows():
                         cfg,
                         reward_cfg,
                         signal_range=(start, end),
+                        universe_mask=np.ones(target.shape, dtype=bool),
                     )
                     for i in range(aligned.shape[0])
                 ]
@@ -579,7 +616,11 @@ def test_val_reward_is_median_over_windows():
     # The perfect-alignment window dominates the median for row 0.
     assert val_rewards[0] == pytest.approx(reward_cfg.reward_clip_high, abs=1e-12)
     assert rewards[0] == pytest.approx(
-        formula_reward(aligned[0], target, cfg, reward_cfg), abs=1e-12
+        formula_reward(
+            aligned[0], target, cfg, reward_cfg,
+            universe_mask=np.ones(target.shape, dtype=bool),
+        ),
+        abs=1e-12,
     )
 
 
@@ -587,7 +628,8 @@ def test_batched_rewards_without_val_windows_returns_none():
     rng = np.random.default_rng(10)
     signals, target = _random_batch(rng, 3, 8, 25)
     rewards, val_rewards, icir, val_icir = batched_basket_rewards(
-        signals, target, _cfg(), _reward_cfg()
+        signals, target, _cfg(), _reward_cfg(),
+        universe_mask=np.ones(target.shape, dtype=bool),
     )
     assert rewards.shape == (3,)
     assert val_rewards is None
@@ -601,8 +643,14 @@ def test_batched_rewards_are_deterministic():
     cfg = _cfg()
     reward_cfg = _reward_cfg()
     windows = [(0, 8), (8, 16)]
-    first = batched_basket_rewards(signals, target, cfg, reward_cfg, windows)
-    second = batched_basket_rewards(signals, target, cfg, reward_cfg, windows)
+    first = batched_basket_rewards(
+        signals, target, cfg, reward_cfg, windows,
+        universe_mask=np.ones(target.shape, dtype=bool),
+    )
+    second = batched_basket_rewards(
+        signals, target, cfg, reward_cfg, windows,
+        universe_mask=np.ones(target.shape, dtype=bool),
+    )
     assert np.array_equal(first[0], second[0])
     assert np.array_equal(first[1], second[1])
     assert np.array_equal(first[2], second[2])
@@ -620,16 +668,29 @@ def test_batched_rewards_are_deterministic():
 def test_signal_direction_flips_negative_ic_signals():
     rng = np.random.default_rng(21)
     target = rng.normal(size=(20, 40))
-    assert signal_direction(target, target, min_stocks=5) == 1
-    assert signal_direction(-target, target, min_stocks=5) == -1
+    mask = np.ones(target.shape, dtype=bool)
+    assert signal_direction(target, target, min_stocks=5, universe_mask=mask) == 1
+    assert signal_direction(-target, target, min_stocks=5, universe_mask=mask) == -1
 
 
 def test_signal_direction_defaults_to_positive_without_observations():
     rng = np.random.default_rng(22)
     # Constant signal: undefined correlation -> no finite IC -> neutral +1.
-    assert signal_direction(np.ones((20, 40)), rng.normal(size=(20, 40))) == 1
+    assert (
+        signal_direction(
+            np.ones((20, 40)), rng.normal(size=(20, 40)),
+            universe_mask=np.ones((20, 40), dtype=bool),
+        )
+        == 1
+    )
     # Below the minimum cross-section: every date is skipped -> neutral +1.
-    assert signal_direction(np.ones((3, 10)), rng.normal(size=(3, 10)), min_stocks=5) == 1
+    assert (
+        signal_direction(
+            np.ones((3, 10)), rng.normal(size=(3, 10)), min_stocks=5,
+            universe_mask=np.ones((3, 10), dtype=bool),
+        )
+        == 1
+    )
 
 
 # --- v7 signal-date universe eligibility -------------------------------------
@@ -652,7 +713,12 @@ def test_rank_ic_series_ignores_ineligible_extreme_values():
     extreme[-1, :join_day] = 1e9  # future member's extreme pre-join values
     mask = _universe_mask(n_stocks, n_dates, join_day=join_day)
     ic_masked = rank_ic_series(extreme[None], target, min_stocks=3, universe_mask=mask)
-    ic_open = rank_ic_series(extreme[None], target, min_stocks=3)
+    # The unmasked reference is now an all-eligible mask: identical to the
+    # PIT mask from the join day on, polluted by the extreme values before.
+    ic_open = rank_ic_series(
+        extreme[None], target, min_stocks=3,
+        universe_mask=np.ones(target.shape, dtype=bool),
+    )
     # Pre-join the masked IC keeps the perfect eligible-only correlation...
     assert np.allclose(ic_masked[0, :join_day], 1.0)
     # ...while the unmasked path is polluted by the extreme finite values.
@@ -680,7 +746,13 @@ def test_signal_direction_ignores_ineligible_extreme_values():
     signal[2] = target[2]
     mask = _universe_mask(3, 10, join_day=10)  # row 2 never eligible
     assert signal_direction(signal, target, min_stocks=2, universe_mask=mask) == -1
-    assert signal_direction(signal, target, min_stocks=2) == 1
+    assert (
+        signal_direction(
+            signal, target, min_stocks=2,
+            universe_mask=np.ones(target.shape, dtype=bool),
+        )
+        == 1
+    )
 
 
 def test_basket_excludes_ineligible_and_switches_on_join_day():
@@ -695,7 +767,11 @@ def test_basket_excludes_ineligible_and_switches_on_join_day():
     target = np.zeros((n_stocks, n_dates))
     mask = _universe_mask(n_stocks, n_dates, join_day=join_day)
     masked = simulate_basket_daily_returns(signal, target, cfg, universe_mask=mask)
-    free = simulate_basket_daily_returns(signal, target, cfg)
+    # The unmasked reference is an all-eligible mask: it buys the future
+    # member on day 0 because every cell is eligible.
+    free = simulate_basket_daily_returns(
+        signal, target, cfg, universe_mask=np.ones(signal.shape, dtype=bool)
+    )
     # Unmasked: the future member is bought on day 0 and held throughout.
     assert free.turnover[0] == pytest.approx(1.0)
     assert np.allclose(free.turnover[1:], 0.0)
@@ -729,7 +805,9 @@ def test_basket_pre_join_extreme_values_do_not_move_returns_or_costs():
     assert np.array_equal(extreme_sim.turnover, mild_sim.turnover)
     # Without the mask the extreme values change the outcome (sanity: the
     # perturbation is real and the mask is what neutralizes it).
-    open_sim = simulate_basket_daily_returns(extreme, target, cfg)
+    open_sim = simulate_basket_daily_returns(
+        extreme, target, cfg, universe_mask=np.ones(extreme.shape, dtype=bool)
+    )
     assert not np.array_equal(open_sim.daily_net_returns, extreme_sim.daily_net_returns)
 
 
@@ -849,7 +927,7 @@ def test_masked_scalar_and_batched_rewards_agree():
                 signals[i][None, :, : n_dates - 2],
                 target[:, : n_dates - 2],
                 reward_cfg.ic_min_stocks,
-                mask[:, : n_dates - 2],
+                universe_mask=mask[:, : n_dates - 2],
             )
         )[0]
         assert icir[i] == pytest.approx(ref_icir, rel=1e-9, abs=1e-10)
@@ -896,7 +974,7 @@ def test_mask_slices_align_exactly_without_off_by_one():
             signal[None, :, window[0] : window[1]],
             target[:, window[0] : window[1]],
             reward_cfg.ic_min_stocks,
-            mask[:, window[0] : window[1]],
+            universe_mask=mask[:, window[0] : window[1]],
         )
     )[0]
     assert val_icir[0] == pytest.approx(ref_val_icir, rel=1e-9, abs=1e-10)

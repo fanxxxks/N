@@ -996,7 +996,10 @@ def test_sample_random_formulas_are_valid_and_deterministic():
     second = sample_random_formulas(7, FORMULA_VOCAB, max_len, n)
     assert first == second
     assert len(first) == n
-    vm = StackVM(FORMULA_VOCAB)
+    vm = StackVM(
+        FORMULA_VOCAB,
+        universe_mask=torch.ones((5, 8), dtype=torch.bool),
+    )
     factor_tensor = torch.zeros((FORMULA_VOCAB.feature_count, 5, 8))
     for tokens in first:
         assert len(tokens) == max_len

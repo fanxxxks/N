@@ -84,12 +84,12 @@ def test_winsorize_cross_section_clips_and_handles_all_nan():
         index=["A", "B"],
         columns=["d1", "d2"],
     )
-    out = winsorize_cross_section(wide)
+    out = winsorize_cross_section(wide, np.ones(wide.shape, dtype=bool))
     assert out.shape == wide.shape
     assert np.isfinite(out.to_numpy()).all()
 
     all_nan = pd.DataFrame([[np.nan], [np.nan]], index=["A", "B"], columns=["d"])
-    out_nan = winsorize_cross_section(all_nan)
+    out_nan = winsorize_cross_section(all_nan, np.ones(all_nan.shape, dtype=bool))
     assert (out_nan == 0.0).all().all()
 
 
@@ -137,11 +137,11 @@ def test_open_to_open_returns_masks_suspension():
 
 def test_winsorize_constant_cross_section_maps_to_zero():
     wide = pd.DataFrame([[1.0], [1.0], [1.0]], index=["A", "B", "C"], columns=["d"])
-    out = winsorize_cross_section(wide)
+    out = winsorize_cross_section(wide, np.ones(wide.shape, dtype=bool))
     assert (out == 0.0).all().all()
 
     event_like = pd.DataFrame({"d": [0.0, 0.0, 1.0, 1.0]}, index=list("ABCD"))
-    out2 = winsorize_cross_section(event_like)
+    out2 = winsorize_cross_section(event_like, np.ones(event_like.shape, dtype=bool))
     assert np.isfinite(out2.to_numpy()).all()
     assert out2["d"].abs().max() <= 5.0
 
@@ -160,7 +160,7 @@ def test_winsorize_reference_set_is_eligible_only():
         [[True, True], [True, True], [True, True], [False, False]]
     )
     out = winsorize_cross_section(wide, eligible=eligible)
-    baseline = winsorize_cross_section(wide.iloc[:3])
+    baseline = winsorize_cross_section(wide.iloc[:3], np.ones(wide.iloc[:3].shape, dtype=bool))
     for day in ("d1", "d2"):
         assert np.allclose(out.loc[["A", "B", "C"], day], baseline[day])
     # The ineligible row keeps a bounded, finite transform of its own value

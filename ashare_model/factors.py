@@ -114,8 +114,8 @@ class FactorContext:
     volume: pd.DataFrame
     amount: pd.DataFrame
     turnover: pd.DataFrame
+    eligible: pd.DataFrame
     industry: pd.DataFrame | None = None
-    eligible: pd.DataFrame | None = None
     _cache: dict | None = None
 
     def __post_init__(self) -> None:
@@ -160,9 +160,9 @@ def _safe_ratio(numerator: pd.DataFrame, denominator: pd.DataFrame) -> pd.DataFr
 
 def _rolling_capm(
     close: pd.DataFrame,
+    eligible: np.ndarray,
     window: int = 60,
     min_periods: int = 20,
-    eligible: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Rolling CAPM regression of each stock on the equal-weight market.
 
@@ -171,25 +171,22 @@ def _rolling_capm(
     days, and a non-degenerate market/stock variance).  Prefix-sum
     vectorization keeps it cheap on the full cross-section.  The market is
     the equal-weight mean return per date over the *eligible and finite*
-    cross-section (``eligible`` is an optional aligned ``[stock x date]``
-    bool mask; without it every finite cell counts), so stocks outside the
-    PIT universe can never move the market factor — each stock's own
-    trailing window still uses only its own history.
+    cross-section (``eligible`` is the mandatory aligned ``[stock x date]``
+    bool mask), so stocks outside the PIT universe can never move the
+    market factor — each stock's own trailing window still uses only its
+    own history.
     """
 
     r = _returns(close)
     arr = r.to_numpy(dtype=float)  # [S, T], NaN on missing days
     s, t = arr.shape
-    if eligible is not None:
-        eligible = np.asarray(eligible, dtype=bool)
-        if eligible.shape != arr.shape:
-            raise ValueError(
-                f"eligible shape {eligible.shape} does not match "
-                f"close shape {arr.shape}"
-            )
-    ref = ~np.isnan(arr)
-    if eligible is not None:
-        ref = ref & eligible
+    eligible = np.asarray(eligible, dtype=bool)
+    if eligible.shape != arr.shape:
+        raise ValueError(
+            f"eligible shape {eligible.shape} does not match "
+            f"close shape {arr.shape}"
+        )
+    ref = ~np.isnan(arr) & eligible
     with warnings.catch_warnings():
         # All-NaN columns (e.g. the first date, or a date whose eligible
         # cross-section is empty) legitimately produce an empty-slice
@@ -247,17 +244,17 @@ def _rolling_capm(
 
 def _factor_amount_share(
     amount: pd.DataFrame,
-    eligible: pd.DataFrame | None = None,
+    eligible: pd.DataFrame,
 ) -> pd.DataFrame:
     """Cross-sectional share of the day's total turnover amount.
 
     The per-date denominator sums only the eligible and finite amounts
-    (``eligible`` is an optional aligned bool frame), so stocks outside the
+    (``eligible`` is the mandatory aligned bool frame), so stocks outside the
     PIT universe cannot dilute the share.  Days with no eligible amount keep
     NaN (neutral).
     """
 
-    reference = amount if eligible is None else amount.where(eligible)
+    reference = amount.where(eligible)
     denom = reference.fillna(0.0).sum(axis=0).replace(0.0, np.nan)
     return (amount / denom).replace([np.inf, -np.inf], np.nan)
 
@@ -266,13 +263,11 @@ def _factor_capm(ctx: FactorContext, which: int) -> pd.DataFrame:
     """Shared CAPM triple; ``which`` picks beta (0), ivol (1) or rsq (2)."""
     triple = ctx._cache.get("capm60")
     if triple is None:
-        eligible = (
-            None
-            if ctx.eligible is None
-            else ctx.eligible.to_numpy(dtype=bool)
-        )
         triple = _rolling_capm(
-            ctx.close, window=60, min_periods=20, eligible=eligible
+            ctx.close,
+            ctx.eligible.to_numpy(dtype=bool),
+            window=60,
+            min_periods=20,
         )
         ctx._cache["capm60"] = triple
     return triple[which]
@@ -471,11 +466,9 @@ def _industry_demean(ctx: FactorContext, frame: pd.DataFrame) -> pd.DataFrame:
         # No usable membership at all: stay neutral rather than asking
         # groupby to demean an empty set of groups.
         return pd.DataFrame(np.nan, index=frame.index, columns=frame.columns)
-    reference = frame
-    if ctx.eligible is not None:
-        reference = frame.where(
-            ctx.eligible.reindex(index=frame.index, columns=frame.columns)
-        )
+    reference = frame.where(
+        ctx.eligible.reindex(index=frame.index, columns=frame.columns)
+    )
     means = reference.groupby(codes, dropna=True).transform("mean")
     return frame - means
 
@@ -829,8 +822,8 @@ class AshareFactorEngine:
         ts_codes: list[str],
         dates: list[str],
         close: pd.DataFrame,
+        eligible_frame: pd.DataFrame,
         industry_frame: pd.DataFrame | None = None,
-        eligible_frame: pd.DataFrame | None = None,
     ) -> FactorContext:
         """Pivot exactly the columns the requested registered factors need."""
 
@@ -863,10 +856,10 @@ class AshareFactorEngine:
         bars: pd.DataFrame,
         ts_codes: list[str],
         dates: list[str],
+        universe_mask: np.ndarray,
         pit_fundamentals: dict[str, pd.DataFrame] | None = None,
         extra_frames: dict[str, pd.DataFrame] | None = None,
         industry_frame: pd.DataFrame | None = None,
-        universe_mask: np.ndarray | None = None,
     ) -> np.ndarray:
         """Return a ``[feature, stock, date]`` float32 tensor.
 
@@ -882,7 +875,7 @@ class AshareFactorEngine:
         the builders.  Missing names/frames stay neutral (0) after
         standardization.
 
-        ``universe_mask`` is the optional ``[stock x date]`` bool PIT
+        ``universe_mask`` is the mandatory ``[stock x date]`` bool PIT
         eligibility mask aligned with ``(ts_codes, dates)``.  Every
         stock-axis reference statistic (winsorize quantiles / median / MAD,
         the CAPM equal-weight market return, the amount-share denominator,
@@ -896,22 +889,19 @@ class AshareFactorEngine:
         bars = normalize_daily_bars(bars)
         date_order = sorted(range(len(dates)), key=dates.__getitem__)
         dates = [dates[i] for i in date_order]
-        if universe_mask is not None:
-            universe_mask = np.asarray(universe_mask, dtype=bool)
-            if universe_mask.shape != (len(ts_codes), len(dates)):
-                raise ValueError(
-                    f"universe_mask shape {universe_mask.shape} does not match "
-                    f"(stock={len(ts_codes)}, date={len(dates)})"
-                )
-            universe_mask = universe_mask[:, date_order]
-            eligible_frame = pd.DataFrame(
-                universe_mask, index=ts_codes, columns=dates
+        universe_mask = np.asarray(universe_mask, dtype=bool)
+        if universe_mask.shape != (len(ts_codes), len(dates)):
+            raise ValueError(
+                f"universe_mask shape {universe_mask.shape} does not match "
+                f"(stock={len(ts_codes)}, date={len(dates)})"
             )
-        else:
-            eligible_frame = None
+        universe_mask = universe_mask[:, date_order]
+        eligible_frame = pd.DataFrame(
+            universe_mask, index=ts_codes, columns=dates
+        )
         close = self._pivot(bars, ts_codes, dates, "close")
         context = self._build_context(
-            bars, ts_codes, dates, close, industry_frame, eligible_frame
+            bars, ts_codes, dates, close, eligible_frame, industry_frame
         )
 
         empty = pd.DataFrame(index=close.index, columns=close.columns, dtype=float)
@@ -948,14 +938,14 @@ def compute_factor_tensor(
     bars: pd.DataFrame,
     ts_codes: list[str],
     dates: list[str],
+    universe_mask: np.ndarray,
     pit_fundamentals: dict[str, pd.DataFrame] | None = None,
     extra_frames: dict[str, pd.DataFrame] | None = None,
     industry_frame: pd.DataFrame | None = None,
-    universe_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     return AshareFactorEngine().compute_factor_tensor(
-        bars, ts_codes, dates, pit_fundamentals, extra_frames, industry_frame,
-        universe_mask,
+        bars, ts_codes, dates, universe_mask, pit_fundamentals, extra_frames,
+        industry_frame,
     )
 
 

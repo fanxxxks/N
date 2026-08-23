@@ -36,10 +36,9 @@ from .time_contract import TrainingTimeContract
 from .vocab import FEATURE_NAMES
 
 
-def _validate_eligible(tensor: np.ndarray, eligible: np.ndarray | None) -> np.ndarray | None:
+def _validate_eligible(tensor: np.ndarray, eligible: np.ndarray) -> np.ndarray:
     """Return ``eligible`` after enforcing the ``[stock, date]`` alignment."""
-    if eligible is None:
-        return None
+
     eligible = np.asarray(eligible, dtype=bool)
     if eligible.shape != tensor.shape[1:]:
         raise ValueError(
@@ -72,13 +71,14 @@ def _names_for(tensor: np.ndarray) -> list[str]:
 
 def factor_coverage(
     tensor: np.ndarray,
-    eligible: np.ndarray | None = None,
+    *,
+    eligible: np.ndarray,
 ) -> dict[str, float]:
     """Fraction of non-neutral (non-zero) cells per feature.
 
     After cross-sectional standardization the neutral value is exactly 0,
     so a non-zero cell means the factor carried information that date.
-    ``eligible`` is the optional ``[stock, date]`` bool PIT universe mask:
+    ``eligible`` is the mandatory ``[stock, date]`` bool PIT universe mask:
     the denominator counts only eligible cells (cells outside the universe
     neither count as covered nor inflate the denominator), so a future
     member can never change an eligible factor's coverage.
@@ -86,12 +86,8 @@ def factor_coverage(
 
     arr = np.asarray(tensor)
     eligible = _validate_eligible(arr, eligible)
-    if eligible is None:
-        nonzero = np.count_nonzero(arr, axis=(1, 2))
-        cells = arr.shape[1] * arr.shape[2]
-    else:
-        nonzero = np.count_nonzero(arr[:, eligible], axis=1)
-        cells = int(eligible.sum())
+    nonzero = np.count_nonzero(arr[:, eligible], axis=1)
+    cells = int(eligible.sum())
     return {
         name: float(nonzero[i]) / max(cells, 1)
         for i, name in enumerate(_names_for(arr))
@@ -103,8 +99,9 @@ def rank_ic_stats(
     target: np.ndarray,
     dates: list[str],
     names: list[str] | None = None,
-    eligible: np.ndarray | None = None,
     min_stocks: int = 10,
+    *,
+    eligible: np.ndarray,
 ) -> dict[str, dict[str, float]]:
     """Per-feature rank IC of the standardized factor vs the forward target.
 
@@ -115,7 +112,7 @@ def rank_ic_stats(
     passes ``["formula"]``).  The daily ICs reuse the unified
     :func:`ashare_model.reward.rank_ic_series` implementation (one Spearman
     code path for research, scoring and the protocol); ``eligible`` is the
-    optional ``[stock, date]`` bool PIT universe mask gating each day's
+    mandatory ``[stock, date]`` bool PIT universe mask gating each day's
     correlation to signal-date eligible cells.
     """
 
@@ -123,7 +120,7 @@ def rank_ic_stats(
     target = np.asarray(target, dtype=np.float64)
     eligible = _validate_eligible(tensor, eligible)
     names = _names_for(tensor) if names is None else list(names)
-    daily_ics = rank_ic_series(tensor, target, min_stocks, eligible)
+    daily_ics = rank_ic_series(tensor, target, min_stocks, universe_mask=eligible)
     stats: dict[str, dict[str, float]] = {}
     for i, name in enumerate(names):
         ics = daily_ics[i][np.isfinite(daily_ics[i])]
@@ -142,14 +139,15 @@ def rank_ic_stats(
 
 def correlation_summary(
     tensor: np.ndarray,
-    eligible: np.ndarray | None = None,
+    *,
+    eligible: np.ndarray,
 ) -> dict[str, object]:
     """Cross-sectional correlation structure of the factor stack.
 
     Per date, the ``[feature x feature]`` Pearson correlation over stocks
     is computed; the averages (of the absolute values) are returned as a
     matrix, together with the mean within-family |corr| and the top
-    correlated pairs.  ``eligible`` is the optional ``[stock, date]`` bool
+    correlated pairs.  ``eligible`` is the mandatory ``[stock, date]`` bool
     PIT universe mask: each day's correlation uses only the eligible cells
     of that date, so a future member's extreme pre-join values can never
     move an eligible factor's correlations.
@@ -161,13 +159,10 @@ def correlation_summary(
     mean_abs = np.zeros((f, f), dtype=np.float64)
     n_dates = 0
     for day in range(t):
-        if eligible is not None:
-            sel = eligible[:, day]
-            if int(sel.sum()) < 2:
-                continue
-            block = tensor[:, sel, day].astype(np.float64)
-        else:
-            block = tensor[:, :, day].astype(np.float64)
+        sel = eligible[:, day]
+        if int(sel.sum()) < 2:
+            continue
+        block = tensor[:, sel, day].astype(np.float64)
         if np.count_nonzero(block) == 0:
             continue
         corr = np.corrcoef(block)
