@@ -154,29 +154,47 @@ class AshareDB:
         )
 
     def upsert_stocks(self, rows: list[dict[str, Any]], config) -> None:
+        """Merge-upsert the stock snapshot: update overlapping rows, insert
+        new ones, never delete.
+
+        The exchange snapshot is not a PIT universe.  Rows absent from the
+        current snapshot (delisted stocks, PIT-import backfills) must
+        survive a routine ``sync_all``, or the production contract restored
+        by ``scripts/import_pit_universe.py`` is silently erased.  A
+        backfilled ``list_date`` is preserved whenever the snapshot carries
+        none; a non-null snapshot value wins for currently listed stocks.
+        """
         if not rows:
             return
         import pandas as pd
 
         columns = ["ts_code", "name", "industry", "list_date", "is_st"]
         df = pd.DataFrame(rows).reindex(columns=columns)
-        existing = self.query(
-            f"SELECT ts_code, list_date FROM {config.stocks_table}"
-        )
-        if not existing.empty:
-            known_list_dates = existing.set_index("ts_code")["list_date"].to_dict()
-            missing = df["list_date"].isna() | df["list_date"].astype(str).str.strip().eq("")
-            df.loc[missing, "list_date"] = df.loc[missing, "ts_code"].map(
-                known_list_dates
-            )
         self._conn.register("_stocks_df", df)
         self.execute("BEGIN TRANSACTION")
         try:
-            self.execute(f"DELETE FROM {config.stocks_table}")
+            self.execute(
+                f"""
+                UPDATE {config.stocks_table} s SET
+                    name = d.name,
+                    industry = d.industry,
+                    list_date = COALESCE(
+                        NULLIF(CAST(d.list_date AS VARCHAR), ''), s.list_date
+                    ),
+                    is_st = d.is_st
+                FROM _stocks_df d
+                WHERE s.ts_code = d.ts_code
+                """
+            )
             self.execute(
                 f"""
                 INSERT INTO {config.stocks_table}
-                SELECT ts_code, name, industry, list_date, is_st FROM _stocks_df
+                SELECT d.ts_code, d.name, d.industry, d.list_date, d.is_st
+                FROM _stocks_df d
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {config.stocks_table} s
+                    WHERE s.ts_code = d.ts_code
+                )
                 """
             )
             self.execute("COMMIT")
