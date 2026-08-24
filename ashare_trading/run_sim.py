@@ -37,7 +37,7 @@ from ashare_data.config import (
 from ashare_data.io_utils import atomic_write_json
 from ashare_data.schemas import SimOrder
 from ashare_data.processor import open_to_open_returns
-from ashare_data.universe import require_production_universe
+from ashare_data.gates import ProductionGateRunner
 from ashare_execution import validate_execution_config
 
 from ashare_model.backtest import AshareBacktestEngine
@@ -467,13 +467,20 @@ def main() -> None:
         action="store_true",
         help="continue from the portfolio state's last processed date",
     )
+    parser.add_argument(
+        "--min-eligible",
+        type=int,
+        default=None,
+        help="production gate G6: minimum eligible stocks per major window "
+        "(default: 100)",
+    )
     args = parser.parse_args()
 
     try:
         root = _project_root()
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
-        require_production_universe(data_config)
+        ProductionGateRunner(data_config, min_eligible=args.min_eligible).require_production()
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         sim_config = make_sim_config(raw, root)

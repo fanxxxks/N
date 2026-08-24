@@ -335,7 +335,9 @@ def test_member_bar_coverage_audits_zero_bar_intervals(data_config: DataConfig):
         )
         frame = member_bar_coverage(db, data_config)
     rows = frame.set_index("ts_code")
-    assert rows.loc["000001.SZ", "bars"] == 5
+    # Half-open interval [20240101, 20240105): the bar on 20240105 must
+    # not count, so five synced bars yield four audited bars.
+    assert rows.loc["000001.SZ", "bars"] == 4
     assert rows.loc["000001.SZ", "coverage"] == 1.0
     # Synced member with a bar gap inside the interval: partial coverage.
     assert rows.loc["600000.SH", "bars"] == 0

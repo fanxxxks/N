@@ -519,6 +519,7 @@ def _job_manager():
 
 
 def sim_start(req: SimStartRequest) -> dict:
+    from ashare_data.gates import ProductionGateRunner
     from ashare_trading.manager import RunConflictError
 
     data_config, _, backtest_config, sim_config = _get_configs()
@@ -526,7 +527,7 @@ def sim_start(req: SimStartRequest) -> dict:
         return {"ok": False, "reason": "config load failed"}
     try:
         validate_execution_config(backtest_config, sim_config)
-        require_production_universe(data_config)
+        ProductionGateRunner(data_config).require_production()
     except (ValueError, UniverseContractError) as exc:
         return {"ok": False, "reason": str(exc)}
     strategy = data_config.data_dir / "best_ashare_strategy.json"

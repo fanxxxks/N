@@ -112,8 +112,8 @@ from ashare_data.config import (
     make_reward_config,
     validate_baseline_signals,
 )
+from ashare_data.gates import ProductionGateRunner
 from ashare_data.processor import open_to_open_returns
-from ashare_data.universe import require_production_universe
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .backtest import AshareBacktestEngine, equal_weight_benchmark_returns
@@ -1400,13 +1400,20 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--max-t-perms", type=int, default=5000, help="max-t permutation count"
     )
+    parser.add_argument(
+        "--min-eligible",
+        type=int,
+        default=None,
+        help="production gate G6: minimum eligible stocks per major window "
+        "(default: 100)",
+    )
     args = parser.parse_args(argv)
 
     try:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
-        require_production_universe(data_config)
+        ProductionGateRunner(data_config, min_eligible=args.min_eligible).require_production()
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         reward_config = make_reward_config(raw)

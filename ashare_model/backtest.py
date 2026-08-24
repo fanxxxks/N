@@ -395,7 +395,7 @@ def main() -> None:
         make_model_config,
         make_sim_config,
     )
-    from ashare_data.universe import require_production_universe
+    from ashare_data.gates import ProductionGateRunner
     from .data_loader import AshareDataLoader
     from .reward import signal_direction
     from .vm import StackVM, formula_decode
@@ -406,13 +406,20 @@ def main() -> None:
     parser.add_argument("--config", default=None)
     parser.add_argument("--formula-file", default=None)
     parser.add_argument("--output", default="data/backtest_result.json")
+    parser.add_argument(
+        "--min-eligible",
+        type=int,
+        default=None,
+        help="production gate G6: minimum eligible stocks per major window "
+        "(default: 100)",
+    )
     args = parser.parse_args()
 
     try:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
-        require_production_universe(data_config)
+        ProductionGateRunner(data_config, min_eligible=args.min_eligible).require_production()
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         sim_config = make_sim_config(raw, root)
