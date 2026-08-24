@@ -69,6 +69,37 @@ def test_vm_returns_none_for_illegal_tokens():
     assert vm.execute([FORMULA_VOCAB.size + 10], feature) is None
 
 
+def test_vm_eos_grammar_enforcement():
+    feature = torch.randn(FORMULA_VOCAB.feature_count, 2, 4)
+    vm = _vm(feature)
+    eos = FORMULA_VOCAB.eos_token_id
+    add = FORMULA_VOCAB.operator_offset
+    # EOS terminates a complete formula; padding after EOS is ignored.
+    assert vm.execute([1, eos], feature) is not None
+    assert vm.execute([1, eos, 0, 0], feature) is not None
+    assert vm.execute([1, 2, add, eos], feature) is not None
+    # EOS requires exactly one value on the stack.
+    assert vm.execute([eos], feature) is None
+    assert vm.execute([1, 2, eos], feature) is None
+    assert vm.execute([1, 2, add, 2, eos], feature) is None
+    # PAD may not appear before the formula is complete.
+    assert vm.execute([1, 0, 2, add], feature) is None
+    assert vm.execute([1, 2, 0, add], feature) is None
+    # No non-PAD token may follow EOS.
+    assert vm.execute([1, eos, 2], feature) is None
+    assert vm.execute([1, eos, add], feature) is None
+
+
+def test_vm_formula_decode_includes_eos_and_legacy_forms():
+    add = FORMULA_VOCAB.operator_offset
+    eos = FORMULA_VOCAB.eos_token_id
+    assert formula_decode([1, 2, add, eos], FORMULA_VOCAB).startswith("(")
+    # Legacy sequences without EOS decode to the same AST text.
+    assert formula_decode([1, 2, add], FORMULA_VOCAB) == formula_decode(
+        [1, 2, add, eos], FORMULA_VOCAB
+    )
+
+
 def test_formula_decode_variants_and_errors():
     add = FORMULA_VOCAB.operator_offset
     assert formula_decode([1, 2, add], FORMULA_VOCAB).startswith("(")

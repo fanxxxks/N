@@ -16,7 +16,7 @@ from ashare_model.train import (
     resolve_device,
     validation_start,
 )
-from ashare_model.vocab import FORMULA_VOCAB
+from ashare_model.vocab import FORMULA_VOCAB, GRAMMAR_VERSION
 
 
 def test_resolve_device_auto_prefers_cuda(monkeypatch):
@@ -74,11 +74,29 @@ def test_train_end_index_before_data(populated_db: DataConfig):
 
 def test_update_stack_state_feature_and_operator():
     action = torch.tensor([1, FORMULA_VOCAB.operator_offset], dtype=torch.long)
-    open_slots = torch.ones(2, dtype=torch.long)
     stack_sizes = torch.zeros(2, dtype=torch.long)
-    AshareTrainer._update_stack_state(action, open_slots, stack_sizes)
+    done = torch.zeros(2, dtype=torch.bool)
+    AshareTrainer._update_stack_state(action, stack_sizes, done)
     assert stack_sizes[0].item() == 1
-    assert open_slots[0].item() == 0
+    assert done[0].item() is False
+
+
+def test_update_stack_state_eos_terminates_and_pad_latches_done():
+    eos = FORMULA_VOCAB.eos_token_id
+    action = torch.tensor([1, eos], dtype=torch.long)
+    # Row 0 samples a feature (stack 0 -> 1); row 1 samples EOS on an
+    # already-complete stack.
+    stack_sizes = torch.tensor([0, 1], dtype=torch.long)
+    done = torch.zeros(2, dtype=torch.bool)
+    AshareTrainer._update_stack_state(action, stack_sizes, done)
+    assert stack_sizes[0].item() == 1
+    assert done[1].item() is True  # row 1 sampled EOS
+    assert done[0].item() is False  # row 0 sampled a feature
+    # PAD after EOS keeps the done latch and never touches the stack.
+    AshareTrainer._update_stack_state(
+        torch.tensor([0, 0], dtype=torch.long), stack_sizes, done
+    )
+    assert done.all() and (stack_sizes == 1).all()
 
 
 def test_validation_split_bounds(populated_db: DataConfig):
@@ -146,7 +164,7 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
     # Force an operator-bearing formula so the bare-copy penalty does not
     # apply: the validation reward then clips at exactly the ceiling.
     add_token = FORMULA_VOCAB.operator_offset
-    pattern = [1, 1, add_token, 0]
+    pattern = [1, 1, add_token, FORMULA_VOCAB.eos_token_id]
     state = {"pos": -1}
 
     def fixed_sample(self):
@@ -278,10 +296,17 @@ def test_trainer_passes_universe_mask_to_scorer(
         ).reshape(len(loader.ts_codes), train_end),
     )
 
+    add_token = FORMULA_VOCAB.operator_offset
+    # A legal operator-bearing sequence under the EOS grammar: two features,
+    # ADD, EOS.  The mask makes each of these tokens legal in turn.
+    pattern = [1, 1, add_token, FORMULA_VOCAB.eos_token_id]
+    state = {"pos": -1}
+
     def fixed_sample(self):
+        state["pos"] += 1
         return torch.full(
             (self.logits.shape[0],),
-            1,
+            pattern[state["pos"] % len(pattern)],
             dtype=torch.long,
             device=self.logits.device,
         )
@@ -330,6 +355,31 @@ def test_policy_gradient_reward_window_excludes_validation_tail(
         return real(signals, target, bt, rc, val_windows, **kwargs)
 
     monkeypatch.setattr(train_module, "batched_basket_rewards", spy)
+    # Deterministic legal sampling (the seed-dependent real sampling could
+    # draw a constant formula and never reach the reward path); the signal
+    # is monotone so the candidate is never rejected as near-constant.
+    add_token = FORMULA_VOCAB.operator_offset
+    pattern = [1, 1, add_token, FORMULA_VOCAB.eos_token_id]
+    state = {"pos": -1}
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        return torch.full(
+            (self.logits.shape[0],),
+            pattern[state["pos"] % len(pattern)],
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            1.0, len(loader.ts_codes) * contract.train_label_end + 1.0,
+            dtype=torch.float32,
+        ).reshape(len(loader.ts_codes), contract.train_label_end),
+    )
     trainer.train(steps=1, batch_size=2, seed=42, save_artifacts=False)
     assert seen, "the trainer never invoked the reward path"
     assert all(rng is not None for rng in seen)
@@ -441,6 +491,7 @@ def test_train_artifact_records_vocab_provenance(tmp_path, populated_db: DataCon
     assert artifact["feature_names"] == list(FORMULA_VOCAB.feature_names)
     assert artifact["operator_names"] == list(FORMULA_VOCAB.operator_names)
     assert artifact["feature_version"] == FORMULA_VOCAB.feature_version
+    assert artifact["grammar_version"] == GRAMMAR_VERSION
     assert artifact["reward_version"] == REWARD_VERSION
     # The recorded metadata must be enough to resolve the formula back.
     assert resolve_formula_tokens(artifact) == list(tokens)
@@ -675,18 +726,23 @@ def test_reward_cache_reuses_evaluations_across_steps(
         ).reshape(len(loader.ts_codes), train_end)
 
     monkeypatch.setattr(trainer.vm, "execute", counting_execute)
-    # Force every sampled token to be feature 1: all four sequences in the
-    # batch are the same formula, so only one unique evaluation per step.
-    monkeypatch.setattr(
-        Categorical,
-        "sample",
-        lambda self: torch.full(
+    # Force one legal formula for every row (two features + ADD + EOS): all
+    # four sequences in the batch are the same formula, so only one unique
+    # evaluation per step.
+    add_token = FORMULA_VOCAB.operator_offset
+    pattern = [1, 1, add_token, FORMULA_VOCAB.eos_token_id]
+    state = {"pos": -1}
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        return torch.full(
             (self.logits.shape[0],),
-            1,
+            pattern[state["pos"] % len(pattern)],
             dtype=torch.long,
             device=self.logits.device,
-        ),
-    )
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
     trainer.train(steps=2, batch_size=4, save_artifacts=False)
     # Step 1 evaluates the unique formula once; step 2 hits the cache and
     # never touches the VM again (invalid formulas are cached too).  The
@@ -729,7 +785,7 @@ def test_duplicate_formulas_share_one_batched_evaluation(
     train_end = trainer._training_contract().train_label_end
     calls: dict[str, int] = {"n": 0}
     add_token = FORMULA_VOCAB.operator_offset  # first operator (ADD)
-    pattern = [1, 1, add_token, 0]
+    pattern = [1, 1, add_token, FORMULA_VOCAB.eos_token_id]
     state = {"pos": -1}
 
     def counting_execute(tokens, ft):
@@ -866,7 +922,8 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
     )
     # The scorer reports a strong cost-adjusted reward but a sub-threshold
     # ICIR: the quality gate must block the save even though the
-    # cost-adjusted floor passes.
+    # cost-adjusted floor passes.  A bare feature formula is forced so the
+    # bare-copy penalty (0.02) deterministically shaves the reward.
     monkeypatch.setattr(
         train_module,
         "batched_basket_rewards",
@@ -877,6 +934,19 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
             np.full(signals.shape[0], 0.01),
         ),
     )
+    state = {"pos": -1}
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        pattern = [1, FORMULA_VOCAB.eos_token_id, 0, 0]
+        return torch.full(
+            (self.logits.shape[0],),
+            pattern[state["pos"] % len(pattern)],
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
     tokens = trainer.train(steps=1, batch_size=1)
     assert tokens is None
     # The bare-copy penalty (0.02 by default config) shaves the reported
@@ -1003,14 +1073,24 @@ def test_collapse_warning_fires_after_consecutive_collapsed_steps(
             dtype=torch.float32,
         ).reshape(len(loader.ts_codes), trainer._training_contract().train_label_end),
     )
-    # All rows sample the same feature: unique fraction 1/4 < 0.9.
-    monkeypatch.setattr(
-        Categorical,
-        "sample",
-        lambda self: torch.full(
-            (self.logits.shape[0],), 1, dtype=torch.long, device=self.logits.device
-        ),
-    )
+    # All rows sample the same legal formula (features + ADD + EOS):
+    # unique fraction 1/4 < 0.9.  The EOS grammar forbids padding before
+    # completion, so the forced sequence is the shortest operator-bearing
+    # formula the mask admits.
+    add_token = FORMULA_VOCAB.operator_offset
+    pattern = [1, 1, add_token, FORMULA_VOCAB.eos_token_id]
+    state = {"pos": -1}
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        return torch.full(
+            (self.logits.shape[0],),
+            pattern[state["pos"] % len(pattern)],
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
     first = trainer.train(steps=1, batch_size=4, save_artifacts=False)
     assert first is not None
     assert not warnings  # first collapsed step: below the streak threshold

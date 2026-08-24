@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import pytest
 
+from ashare_model.ir import Feature, decode
 from ashare_model.vocab import (
     FEATURE_ALIASES,
     FEATURE_NAMES,
     FORMULA_VOCAB,
+    GRAMMAR_VERSION,
     LEGACY_FEATURE_NAMES,
     LEGACY_OPERATOR_NAMES,
     FormulaVocab,
@@ -20,6 +22,11 @@ def test_formula_vocab_consistency():
     assert FORMULA_VOCAB.token_names[0] == "PAD"
     assert FORMULA_VOCAB.token_names[1] == FEATURE_NAMES[0]
     assert FORMULA_VOCAB.size == len(FORMULA_VOCAB.token_names)
+    # The independent EOS token sits at the end of the token space so the
+    # pre-EOS feature/operator ids never shift.
+    assert FORMULA_VOCAB.has_eos
+    assert FORMULA_VOCAB.eos_token_id == FORMULA_VOCAB.size - 1
+    assert FORMULA_VOCAB.token_names[-1] == "EOS"
     # v6 vocabulary: the original 18 operators plus 4 cross-sectional
     # operators and 17 enumerated windows (5/10/60 + DELTA10/20).
     assert len(FORMULA_VOCAB.operator_names) == 39
@@ -30,11 +37,22 @@ def test_formula_vocab_consistency():
 
 
 def test_feature_version_pinned():
-    # Changing the feature or operator name lists must change this version;
-    # the test pins the released vocabulary generation so accidental edits
-    # to FEATURE_NAMES are caught in review, not silently in production.
-    assert FORMULA_VOCAB.feature_version == "49b58d17e9fd"
+    # Changing the feature/operator name lists or the grammar generation
+    # must change this version; the test pins the released vocabulary
+    # generation so accidental edits are caught in review, not silently
+    # in production.
+    assert FORMULA_VOCAB.feature_version == "29ac4001dd3c"
     assert len(FORMULA_VOCAB.feature_version) == 12
+    # v2 grammar: the independent EOS token and the stack-only postfix
+    # rules (v1 was the open_slots era without EOS).
+    assert GRAMMAR_VERSION == 2
+    # A grammar bump changes the version even with identical name lists.
+    legacy = FormulaVocab(
+        feature_names=FORMULA_VOCAB.feature_names,
+        operator_names=FORMULA_VOCAB.operator_names,
+        has_eos=False,
+    )
+    assert legacy.feature_version != FORMULA_VOCAB.feature_version
 
 
 def test_legacy_lists_pinned_to_first_generation():
@@ -68,13 +86,23 @@ def test_resolve_formula_tokens_aliases_retired_features():
     # (legacy token layout or recorded metadata) resolves to MOMENTUM_20's
     # current token id with unchanged semantics.
     legacy_token = 1 + LEGACY_FEATURE_NAMES.index("RET_20")
+    expected = [1 + FEATURE_NAMES.index("MOMENTUM_20")]
     resolved = resolve_formula_tokens({"formula": [legacy_token]})
-    assert resolved == [1 + FEATURE_NAMES.index("MOMENTUM_20")]
+    assert resolved == expected
     payload = {
         "formula": [1],
         "feature_names": ["RET_20", "MOMENTUM_20"],
     }
-    assert resolve_formula_tokens(payload) == [1 + FEATURE_NAMES.index("MOMENTUM_20")]
+    assert resolve_formula_tokens(payload) == expected
+
+
+def test_legacy_bare_factor_migrates_to_feature_ast():
+    # Old bare-factor artifacts ([1] = first feature) migrate by name and
+    # decode to Feature(name): the AST is the single source of truth.
+    canonical = resolve_formula_tokens({"formula": [1]})
+    assert canonical == [1]
+    ast = decode(canonical)
+    assert ast == Feature(FEATURE_NAMES[0])
 
 
 def test_resolve_formula_tokens_alias_target_must_exist():
@@ -95,12 +123,19 @@ def test_resolve_formula_tokens_alias_target_must_exist():
 
 
 def test_tokens_to_names_roundtrip():
-    tokens = [1, 2, FORMULA_VOCAB.operator_offset, FORMULA_VOCAB.pad_token_id]
+    tokens = [
+        1,
+        2,
+        FORMULA_VOCAB.operator_offset,
+        FORMULA_VOCAB.eos_token_id,
+        FORMULA_VOCAB.pad_token_id,
+    ]
     names = tokens_to_names(tokens)
     assert names == [
         FEATURE_NAMES[0],
         FEATURE_NAMES[1],
         FORMULA_VOCAB.operator_names[0],
+        "EOS",
         "PAD",
     ]
 
@@ -160,6 +195,16 @@ def test_resolve_formula_tokens_remaps_legacy_under_future_vocab():
 
 def test_resolve_formula_tokens_accepts_bare_token_list():
     assert resolve_formula_tokens([1, 2]) == [1, 2]
+
+
+def test_resolve_formula_tokens_v2_payload_keeps_eos_token():
+    # Payloads written under the v2 grammar record ``grammar_version`` and
+    # carry the EOS token; resolution must remap EOS by name, not misread
+    # it as a feature of the legacy layout.
+    payload = _sample_payload()
+    payload["grammar_version"] = 2
+    payload["formula"] = [1, 2, FORMULA_VOCAB.operator_offset, FORMULA_VOCAB.eos_token_id]
+    assert resolve_formula_tokens(payload) == payload["formula"]
 
 
 def test_resolve_formula_tokens_rejects_unknown_feature_name():

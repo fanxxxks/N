@@ -830,8 +830,8 @@ def test_sentinel_future_member_changes_nothing_before_join(tmp_path):
     bt_cfg = BacktestConfig(top_n=2, train_end_date="2024-01-10")
     reward_cfg = RewardConfig()
     val_windows = [(4, 10)]
-    scorer_full = CandidateScorer(bt_cfg, reward_cfg, operator_offset=FORMULA_VOCAB.operator_offset)
-    scorer_minus = CandidateScorer(bt_cfg, reward_cfg, operator_offset=FORMULA_VOCAB.operator_offset)
+    scorer_full = CandidateScorer(bt_cfg, reward_cfg)
+    scorer_minus = CandidateScorer(bt_cfg, reward_cfg)
     spec = CandidateSpec(candidate_id="sentinel", formula_text="RET_1", source="sentinel", tokens=(1,))
     raw_signal_full = f_full[FEATURE_NAMES.index("RET_1")]
     raw_signal_minus = f_minus[FEATURE_NAMES.index("RET_1")]

@@ -143,7 +143,6 @@ def test_eligibility_accepts_equal_thresholds_and_rejects_nonfinite():
             min_val_icir=0.3,
             ic_min_stocks=2,
         ),
-        operator_offset=FORMULA_VOCAB.operator_offset,
         reward_function=threshold_reward,
     )
     signal = np.arange(24, dtype=float).reshape(4, 6)
@@ -168,7 +167,6 @@ def test_eligibility_accepts_equal_thresholds_and_rejects_nonfinite():
     scorer = CandidateScorer(
         _bt(),
         RewardConfig(complexity_penalty=0.0, ic_min_stocks=2),
-        operator_offset=FORMULA_VOCAB.operator_offset,
         reward_function=nonfinite_reward,
     )
     score = scorer.score(
@@ -189,8 +187,7 @@ def test_invalid_and_near_constant_reasons_are_explicit():
     scorer = CandidateScorer(
         _bt(),
         RewardConfig(ic_min_stocks=2),
-        operator_offset=FORMULA_VOCAB.operator_offset,
-    )
+        )
     target = np.zeros((4, 6))
     invalid = scorer.score(
         _spec("invalid"),
@@ -223,9 +220,7 @@ def test_direction_mirror_invariance_in_scoring_and_backtest():
         min_val_icir=-1e9,
         ic_min_stocks=4,
     )
-    scorer = CandidateScorer(
-        _bt(), reward_cfg, operator_offset=FORMULA_VOCAB.operator_offset
-    )
+    scorer = CandidateScorer(_bt(), reward_cfg)
     windows = [(4, 10)]
     positive, mirrored = scorer.score_many(
         [_spec("positive"), _spec("mirrored")],
@@ -284,7 +279,6 @@ def test_direction_tie_break_is_mirror_stable():
             min_val_icir=-1.0,
             ic_min_stocks=2,
         ),
-        operator_offset=FORMULA_VOCAB.operator_offset,
         reward_function=tied_reward,
     )
     signal = np.arange(-12, 12, dtype=float).reshape(4, 6)
@@ -349,8 +343,7 @@ def _scorer(**reward_kwargs):
     return CandidateScorer(
         _bt(),
         RewardConfig(**defaults),
-        operator_offset=FORMULA_VOCAB.operator_offset,
-    )
+        )
 
 
 def test_scorer_pre_join_extreme_does_not_change_any_field():
@@ -450,7 +443,6 @@ def test_scorer_direction_tie_break_scans_eligible_only():
             min_val_icir=-1.0,
             ic_min_stocks=2,
         ),
-        operator_offset=FORMULA_VOCAB.operator_offset,
         reward_function=tied_reward,
     )
     # Row 0 (the future member) carries an extreme negative value at the

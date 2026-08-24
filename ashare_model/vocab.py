@@ -1,10 +1,19 @@
 """A-share factor/operator vocabulary.
 
 The vocabulary is versioned: :attr:`FormulaVocab.feature_version` is a hash
-of the feature/operator name lists, recorded in every training artifact.
-Saved formulas are resolved against the current vocabulary *by name* (see
-:func:`resolve_formula_tokens`), so vocabulary additions never silently
-reinterpret token ids.
+of the feature/operator name lists *and* the grammar generation, recorded
+in every training artifact.  Saved formulas are resolved against the
+current vocabulary *by name* (see :func:`resolve_formula_tokens`), so
+vocabulary additions never silently reinterpret token ids.
+
+Grammar generations:
+
+* v1 (open_slots era): ``PAD`` only, no ``EOS`` token; the sampling mask
+  mixed an ``open_slots`` counter with the stack (removed).
+* v2 (current): an independent ``EOS`` token terminates every formula;
+  ``PAD`` is legal only after ``EOS``; postfix legality is stack-only
+  (see :mod:`ashare_model.ir`).  ``EOS`` sits at the end of the token
+  space so pre-v2 feature/operator ids never shift.
 """
 
 from __future__ import annotations
@@ -150,23 +159,51 @@ LEGACY_OPERATOR_NAMES = (
 )
 
 
+# Grammar generation of the current vocabulary.  v1 was the open_slots-era
+# layout (PAD only, no EOS); v2 adds the independent EOS token and the
+# stack-only postfix grammar.  Bumping this constant changes
+# ``feature_version`` and therefore invalidates the token layout recorded
+# in older training artifacts (which resolve by name, so they still load).
+GRAMMAR_VERSION = 2
+
+
 @dataclass(frozen=True)
 class FormulaVocab:
     feature_names: tuple[str, ...]
     operator_names: tuple[str, ...]
     pad_token_id: int = 0
+    # Whether the grammar has an independent EOS token.  Legacy source
+    # vocabularies (pre-v2 artifacts being remapped by name) are built
+    # without one; the live vocabulary always has it.
+    has_eos: bool = True
 
     @property
     def feature_count(self) -> int:
         return len(self.feature_names)
 
     @property
+    def feature_offset(self) -> int:
+        """Id of the first feature token (immediately after PAD)."""
+        return 1
+
+    @property
     def operator_offset(self) -> int:
-        return 1 + self.feature_count
+        return self.feature_offset + self.feature_count
+
+    @property
+    def eos_token_id(self) -> int | None:
+        """Id of the EOS token; ``None`` for legacy source vocabularies.
+
+        EOS sits at the end of the token space (``size - 1``) so the
+        pre-EOS feature/operator ids never shift: legacy bytecode keeps
+        its ids and only gains a trailing EOS when canonicalized.
+        """
+        return self.size - 1 if self.has_eos else None
 
     @property
     def token_names(self) -> tuple[str, ...]:
-        return ("PAD",) + self.feature_names + self.operator_names
+        names = ("PAD",) + self.feature_names + self.operator_names
+        return names + (("EOS",) if self.has_eos else ())
 
     @property
     def size(self) -> int:
@@ -174,13 +211,16 @@ class FormulaVocab:
 
     @property
     def feature_version(self) -> str:
-        """Short hash of the feature/operator name lists.
+        """Short hash of the feature/operator name lists and the grammar.
 
         Stored in training artifacts so a formula can always be mapped back
-        to the vocabulary it was sampled against.
+        to the vocabulary and grammar it was sampled against.  A grammar
+        bump (e.g. v1 open_slots layout -> v2 EOS grammar) changes this
+        hash even when the name lists are unchanged.
         """
         payload = json.dumps(
             {
+                "grammar": GRAMMAR_VERSION if self.has_eos else 1,
                 "features": list(self.feature_names),
                 "operators": list(self.operator_names),
             },
@@ -221,12 +261,19 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
 
     Payloads written by the trainer record the feature/operator name lists
     they were sampled against (``feature_names`` / ``operator_names`` /
-    ``feature_version``), so formulas are remapped **by name** and survive
-    vocabulary additions.  Legacy payloads without metadata resolve against
-    the pinned first-generation lists (:data:`LEGACY_FEATURE_NAMES` /
-    :data:`LEGACY_OPERATOR_NAMES`); the by-name remapping keeps them valid
-    after vocabulary growth.  A bare token list is accepted as a legacy
-    payload.
+    ``feature_version`` / ``grammar_version``), so formulas are remapped
+    **by name** and survive vocabulary additions.  Legacy payloads without
+    metadata resolve against the pinned first-generation lists
+    (:data:`LEGACY_FEATURE_NAMES` / :data:`LEGACY_OPERATOR_NAMES`); the
+    by-name remapping keeps them valid after vocabulary growth, and a bare
+    legacy factor resolves to its :class:`~ashare_model.ir.Feature` token
+    (the AST migration happens when the bytecode is decoded).  A bare token
+    list is accepted as a legacy payload.
+
+    This function only remaps ids by name; structural validity is the
+    grammar's job (:func:`ashare_model.ir.decode`), so structurally invalid
+    legacy artifacts keep their historical "resolves, then fails in the VM"
+    behavior instead of a new load-time break.
     """
 
     vocab = vocab or FORMULA_VOCAB
@@ -245,7 +292,15 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
         src_operators = LEGACY_OPERATOR_NAMES
     src_operators = tuple(str(name) for name in src_operators)
 
-    src_vocab = FormulaVocab(feature_names=src_features, operator_names=src_operators)
+    # Payloads written by the v2 (EOS) grammar record ``grammar_version``;
+    # older artifacts are remapped against the pinned v1 layout, where the
+    # token after PAD is the first feature rather than EOS.
+    src_has_eos = int(payload.get("grammar_version", 1)) >= 2
+    src_vocab = FormulaVocab(
+        feature_names=src_features,
+        operator_names=src_operators,
+        has_eos=src_has_eos,
+    )
     names = tokens_to_names(payload["formula"], src_vocab)
     if names is None:
         raise ValueError("formula tokens out of range for the recorded vocabulary")
@@ -254,10 +309,16 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     for name in names:
         if name == "PAD":
             resolved.append(vocab.pad_token_id)
+        elif name == "EOS":
+            if vocab.eos_token_id is None:
+                raise ValueError("formula references EOS against a legacy vocabulary")
+            resolved.append(vocab.eos_token_id)
         elif name in vocab.feature_names:
-            resolved.append(1 + vocab.feature_names.index(name))
+            resolved.append(vocab.feature_offset + vocab.feature_names.index(name))
         elif name in FEATURE_ALIASES and FEATURE_ALIASES[name] in vocab.feature_names:
-            resolved.append(1 + vocab.feature_names.index(FEATURE_ALIASES[name]))
+            resolved.append(
+                vocab.feature_offset + vocab.feature_names.index(FEATURE_ALIASES[name])
+            )
         elif name in vocab.operator_names:
             resolved.append(vocab.operator_offset + vocab.operator_names.index(name))
         else:

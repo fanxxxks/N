@@ -49,7 +49,7 @@ from .reward import (
 )
 from .time_contract import TrainingTimeContract
 from .vm import StackVM, formula_decode
-from .vocab import FORMULA_VOCAB
+from .vocab import FORMULA_VOCAB, GRAMMAR_VERSION
 from ashare_logging import export_log_txt, setup_run_logging
 
 # Sampling-state tables, built once at import: the arity of every operator
@@ -59,7 +59,7 @@ from ashare_logging import export_log_txt, setup_run_logging
 _OPERATOR_ARITY = torch.zeros(FORMULA_VOCAB.size)
 for _i, (_, _, _arity) in enumerate(OPS_CONFIG):
     _OPERATOR_ARITY[FORMULA_VOCAB.operator_offset + _i] = _arity
-_FEATURE_IDS = torch.arange(1, FORMULA_VOCAB.operator_offset)
+_FEATURE_IDS = torch.arange(FORMULA_VOCAB.feature_offset, FORMULA_VOCAB.operator_offset)
 
 
 def _project_root() -> Path:
@@ -116,15 +116,16 @@ def sample_random_formulas(
     prior over the legal action mask (the exact legality rules the policy
     samples under, so the random-search baseline and the RL policy share
     one search space).  Deterministic in ``seed``; pins torch's CPU RNG
-    exactly like the trainer does.
+    exactly like the trainer does.  Every sequence is EOS-terminated, so
+    its effective (non-padded) length is always >= 2.
     """
 
     torch.manual_seed(seed)
-    open_slots = torch.ones(n, dtype=torch.long)
     stack_sizes = torch.zeros(n, dtype=torch.long)
+    done = torch.zeros(n, dtype=torch.bool)
     seqs: list[torch.Tensor] = []
     for pos in range(max_len):
-        mask = build_action_mask(open_slots, stack_sizes, pos, max_len, vocab)
+        mask = build_action_mask(stack_sizes, done, pos, max_len, vocab)
         allowed = (mask == 0.0).float()
         totals = allowed.sum(dim=1, keepdim=True)
         # The legal mask guarantees at least one allowed token per row; the
@@ -136,7 +137,7 @@ def sample_random_formulas(
         probs = safe / safe.sum(dim=1, keepdim=True)
         action = torch.multinomial(probs, 1).squeeze(1)
         seqs.append(action)
-        AshareTrainer._update_stack_state(action, open_slots, stack_sizes)
+        AshareTrainer._update_stack_state(action, stack_sizes, done)
     return [tuple(int(t) for t in row) for row in torch.stack(seqs, dim=1).tolist()]
 
 
@@ -209,7 +210,6 @@ class AshareTrainer:
         self.candidate_scorer = CandidateScorer(
             self.backtest_config,
             self.reward_config,
-            operator_offset=self.vocab.operator_offset,
             # Resolve through the train module at call time so test/adaptor
             # injection and every generation path still share one scorer.
             reward_function=lambda *args, **kwargs: batched_basket_rewards(
@@ -390,12 +390,10 @@ class AshareTrainer:
             inp = torch.zeros(
                 (batch_size, 1), dtype=torch.long, device=policy_device
             )
-            open_slots = torch.ones(
-                batch_size, dtype=torch.long, device=policy_device
-            )
             stack_sizes = torch.zeros(
                 batch_size, dtype=torch.long, device=policy_device
             )
+            done = torch.zeros(batch_size, dtype=torch.bool, device=policy_device)
             log_probs: list[torch.Tensor] = []
             sampled_tokens: list[torch.Tensor] = []
             values: list[torch.Tensor] = []
@@ -405,7 +403,7 @@ class AshareTrainer:
                 logits, value, _ = self.model(inp)
                 values.append(value.squeeze(-1))
                 mask = build_action_mask(
-                    open_slots, stack_sizes, pos, max_len, self.vocab
+                    stack_sizes, done, pos, max_len, self.vocab
                 )
                 dist = Categorical(logits=logits + mask)
                 action = dist.sample()
@@ -413,9 +411,7 @@ class AshareTrainer:
                 entropies.append(dist.entropy())
                 sampled_tokens.append(action)
                 inp = torch.cat([inp, action.unsqueeze(1)], dim=1)
-                self._update_stack_state(
-                    action, open_slots, stack_sizes
-                )
+                self._update_stack_state(action, stack_sizes, done)
 
             sequences = torch.stack(sampled_tokens, dim=1)
             rewards = torch.zeros(batch_size, device=policy_device)
@@ -625,6 +621,7 @@ class AshareTrainer:
             "feature_names": list(self.vocab.feature_names),
             "operator_names": list(self.vocab.operator_names),
             "feature_version": self.vocab.feature_version,
+            "grammar_version": GRAMMAR_VERSION,
             # Reward provenance: reward values are only comparable within
             # the same scoring implementation generation.
             "reward_version": REWARD_VERSION,
@@ -689,33 +686,40 @@ class AshareTrainer:
         return validation_windows(train_end_idx, self.model_config)
 
     @staticmethod
-    @staticmethod
     def _update_stack_state(
         action: torch.Tensor,
-        open_slots: torch.Tensor,
         stack_sizes: torch.Tensor,
+        done: torch.Tensor,
     ) -> None:
+        """Advance the stack-only sampling state by one sampled action.
+
+        Postfix rules (see :mod:`ashare_model.ir`): a feature pushes one
+        value, an operator of arity ``a`` pops ``a`` and pushes one
+        (``stack - a + 1``), EOS terminates at ``stack == 1``, and PAD is
+        only ever sampled after EOS.  ``done`` latches once EOS (or a
+        legacy padding termination) is sampled.
+        """
+
         is_pad = action == FORMULA_VOCAB.pad_token_id
+        eos_id = FORMULA_VOCAB.eos_token_id
+        is_eos = (
+            action == eos_id
+            if eos_id is not None
+            else torch.zeros_like(action, dtype=torch.bool)
+        )
         is_feature = (action.unsqueeze(1) == _FEATURE_IDS).any(dim=1)
 
-        feature = is_feature
-        pad = is_pad
         # Precomputed per-token arity table (module level, built once).
         arity = _OPERATOR_ARITY[action]
 
-        old_stack = stack_sizes.clone()
-        new_stack = old_stack.clone()
-        new_stack = torch.where(feature, old_stack + 1, new_stack)
-        new_stack = torch.where(~feature & ~pad, old_stack - arity + 1, new_stack)
-        new_stack = torch.clamp(new_stack, min=0)
-
-        open_slots_new = open_slots.clone()
-        open_slots_new = torch.where(feature, open_slots - 1, open_slots_new)
-        open_slots_new = torch.where(
-            ~feature & ~pad, open_slots + arity - 1, open_slots_new
+        new_stack = stack_sizes.clone()
+        new_stack = torch.where(is_feature, stack_sizes + 1, new_stack)
+        new_stack = torch.where(
+            ~is_feature & ~is_pad & ~is_eos, stack_sizes - arity + 1, new_stack
         )
-        open_slots.copy_(torch.clamp(open_slots_new, min=0))
+        new_stack = torch.clamp(new_stack, min=0)
         stack_sizes.copy_(new_stack)
+        done.copy_(done | is_eos | is_pad)
 
 
 def main() -> None:
