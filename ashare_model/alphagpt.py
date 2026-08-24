@@ -183,37 +183,61 @@ class AlphaGPTModel(nn.Module):
 
 
 def build_action_mask(
-    open_slots: torch.Tensor,
     stack_sizes: torch.Tensor,
+    done: torch.Tensor,
     step: int,
     max_len: int,
     vocab=None,
 ) -> torch.Tensor:
     """Mask tokens so sampled sequences remain legal postfix formulas.
 
-    ``open_slots`` is the number of operands still required to complete a
-    single result. ``stack_sizes`` is the number of operands currently on the
-    stack. Padding is the only legal token after completion.
+    Legality is stack-only (the legacy ``open_slots`` hybrid is gone; see
+    :mod:`ashare_model.ir`):
+
+    * feature: ``stack + 1``, and the pushed value must still be reducible
+      to one result plus an EOS within the remaining positions;
+    * unary: ``stack >= 1`` (stack unchanged);
+    * binary: ``stack >= 2``, ``stack - 1`` after execution;
+    * ternary: ``stack >= 3``, ``stack - 2`` after execution;
+    * EOS: only when ``stack == 1``;
+    * PAD: only after EOS (``done``); EOS is emitted explicitly, so PAD
+      never appears mid-formula.
+
+    ``done`` marks rows that already emitted EOS; their only legal token is
+    PAD.  A completed formula therefore always carries an explicit EOS
+    before its padding.  The feasibility bound is conservative (binary-only
+    reductions: finishing from stack ``s`` needs at least ``s`` tokens), so
+    the mask never admits a sequence that cannot terminate.
     """
 
     vocab = vocab or FORMULA_VOCAB
-    b = open_slots.shape[0]
-    mask = torch.full((b, vocab.size), float("-inf"), device=open_slots.device)
-    remaining_steps = max_len - step
-    done = open_slots == 0
+    b = stack_sizes.shape[0]
+    mask = torch.full((b, vocab.size), float("-inf"), device=stack_sizes.device)
+    remaining = max_len - step
+
+    if done.any():
+        mask[done, vocab.pad_token_id] = 0.0
+
     active = ~done
+    if not active.any():
+        return mask
 
-    mask[done, vocab.pad_token_id] = 0.0
+    eos = vocab.eos_token_id
+    if eos is not None:
+        can_eos = active & (stack_sizes == 1)
+        mask[can_eos, eos] = 0.0
 
-    can_feature = active & (open_slots - 1 <= remaining_steps - 1)
-    mask[can_feature, 1 : vocab.operator_offset] = 0.0
+    # A feature pushes one value; from stack s the formula needs at least
+    # s+1 more tokens (s binary reductions + EOS) to terminate.
+    can_feature = active & (stack_sizes + 1 <= remaining - 1)
+    mask[can_feature, vocab.feature_offset : vocab.operator_offset] = 0.0
 
     for i, (_, _, arity) in enumerate(OPS_CONFIG):
         token = vocab.operator_offset + i
         can_op = (
             active
             & (stack_sizes >= arity)
-            & (open_slots + arity - 1 <= remaining_steps - 1)
+            & (stack_sizes - arity + 1 <= remaining - 1)
         )
         mask[can_op, token] = 0.0
     return mask

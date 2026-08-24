@@ -303,7 +303,8 @@ python scripts/archive_run.py --mode sim --commit
   CandidateScore → reward → 随机搜索最优候选 → baseline → diagnostics →
   benchmark → top-N → 回测 → 模拟盘），断言加入前所有结果与删除 F 时完全
   一致，且差异只允许从加入日起出现。
-- **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式对照首发词表（v1：34 特征/16 算子）重映射，退役重复特征经 `FEATURE_ALIASES`（`RET_20` → `MOMENTUM_20`，两者原为同一计算）解析，语义永不漂移。
+- **词表版本化**：训练产物记录 `feature_names`/`operator_names`/`feature_version`/`grammar_version`；加载公式时按**名称**重映射 token，词表新增特征不会错位旧公式；无元数据的旧公式对照首发词表（v1：34 特征/16 算子）重映射，退役重复特征经 `FEATURE_ALIASES`（`RET_20` → `MOMENTUM_20`，两者原为同一计算）解析，语义永不漂移。
+- **公式语法（v2，EOS 终止）**：AST（`ashare_model/ir.py`）是公式语义的唯一事实来源，postfix token 只是 VM 字节码与模型序列化格式。每个公式以独立 `EOS` token 终止（位于词表末尾，v1 的 feature/operator id 永不偏移），`PAD` 只允许出现在 EOS 之后；postfix 合法性只依据 stack（特征 +1、一元要求 stack≥1、二元要求 stack≥2 且执行后 -1、`EOS` 仅当 stack==1），旧 `open_slots` 混合前缀逻辑已删除。旧裸因子（如 token 58 → `LIMIT_BREAK`）按名称迁移为 `Feature(name)`；旧产物无 EOS 时按 stack==1 隐式终止兼容加载。
 - **回测输出**：包含持仓快照与全市场等权基准（与策略同一 open-to-open 口径），供看板展示。
 
 ## 已知局限（有意保留）

@@ -54,8 +54,9 @@ class StackVM:
         universe_mask: torch.Tensor,
     ):
         self.vocab = vocab or FORMULA_VOCAB
-        self.feature_offset = 1
+        self.feature_offset = self.vocab.feature_offset
         self.operator_offset = self.vocab.operator_offset
+        self.eos_token_id = self.vocab.eos_token_id
         self.op_map = {
             self.operator_offset + i: cfg[1] for i, cfg in enumerate(OPS_CONFIG)
         }
@@ -97,10 +98,26 @@ class StackVM:
         """
 
         stack: list[torch.Tensor] = []
+        terminated = False
         try:
             for raw_token in formula_tokens:
                 token = int(raw_token)
                 if token == self.vocab.pad_token_id:
+                    # New grammar: PAD only after EOS.  Legacy sequences
+                    # pad at completion without an explicit EOS; accept
+                    # that only when the formula is complete (stack == 1).
+                    if terminated:
+                        continue
+                    if len(stack) != 1:
+                        return None
+                    terminated = True
+                    continue
+                if terminated:
+                    return None
+                if self.eos_token_id is not None and token == self.eos_token_id:
+                    if len(stack) != 1:
+                        return None
+                    terminated = True
                     continue
                 if token < self.operator_offset:
                     feature_idx = token - self.feature_offset
@@ -162,37 +179,18 @@ class StackVM:
 
 
 def formula_decode(tokens: Iterable[int], vocab=None) -> str:
-    """Convert postfix tokens to a human-readable infix formula."""
+    """Convert postfix tokens to a human-readable infix formula.
+
+    The AST is the single source of truth: the bytecode is parsed with
+    :func:`ashare_model.ir.decode` and rendered from the AST, so the text
+    is exactly one function of the formula's semantics.  Structurally
+    invalid sequences render as ``INVALID``.
+    """
+
+    from .ir import FormulaSyntaxError, decode, infix
 
     vocab = vocab or FORMULA_VOCAB
-    names = vocab.token_names
-    arity = {vocab.operator_offset + i: cfg[2] for i, cfg in enumerate(OPS_CONFIG)}
-    op_names = {vocab.operator_offset + i: cfg[0] for i, cfg in enumerate(OPS_CONFIG)}
-    stack: list[str] = []
-
-    for raw_token in tokens:
-        token = int(raw_token)
-        if token == vocab.pad_token_id:
-            continue
-        if token < vocab.operator_offset:
-            feature_idx = token - 1
-            if feature_idx < 0 or feature_idx >= len(vocab.feature_names):
-                return "INVALID"
-            stack.append(vocab.feature_names[feature_idx])
-            continue
-        if token not in arity:
-            return "INVALID"
-        a = arity[token]
-        if len(stack) < a:
-            return "INVALID"
-        args = [stack.pop() for _ in range(a)]
-        args.reverse()
-        op = op_names[token]
-        if a == 1:
-            stack.append(f"{op}({args[0]})")
-        elif a == 2:
-            stack.append(f"({args[0]} {op} {args[1]})")
-        else:
-            stack.append(f"{op}({', '.join(args)})")
-
-    return stack[-1] if len(stack) == 1 else "INVALID"
+    try:
+        return infix(decode(tokens, vocab))
+    except FormulaSyntaxError:
+        return "INVALID"

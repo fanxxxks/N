@@ -197,19 +197,33 @@ class CandidateScorer:
         backtest_config: BacktestConfig,
         reward_config: RewardConfig,
         *,
-        operator_offset: int,
         near_constant_threshold: float = 1e-4,
         reward_function: Callable = batched_basket_rewards,
     ) -> None:
         self.backtest_config = backtest_config
         self.reward_config = reward_config
-        self.operator_offset = int(operator_offset)
         self.near_constant_threshold = float(near_constant_threshold)
         self.reward_function = reward_function
 
     def complexity_penalty(self, spec: CandidateSpec) -> float:
+        """Penalty for bare single-factor formulas (no operator anywhere).
+
+        The AST is the single source of truth: the bytecode is decoded once
+        and the penalty applies exactly when the AST is a bare
+        :class:`~ashare_model.ir.Feature` — EOS and padding tokens never
+        count as operators.
+        """
+
+        from .ir import FormulaSyntaxError, decode, operator_names
+
         tokens = spec.tokens or ()
-        if any(int(token) >= self.operator_offset for token in tokens):
+        if not tokens:
+            return float(self.reward_config.complexity_penalty)
+        try:
+            ast = decode(tokens)
+        except FormulaSyntaxError:
+            return float(self.reward_config.complexity_penalty)
+        if operator_names(ast):
             return 0.0
         return float(self.reward_config.complexity_penalty)
 

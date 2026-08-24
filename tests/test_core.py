@@ -113,14 +113,14 @@ def test_stackvm_valid_and_invalid():
 
 
 def test_action_mask_has_legal_initial_tokens():
-    open_slots = torch.ones(8, dtype=torch.long)
     stack_sizes = torch.zeros(8, dtype=torch.long)
-    mask = build_action_mask(open_slots, stack_sizes, 0, 6, FORMULA_VOCAB)
+    done = torch.zeros(8, dtype=torch.bool)
+    mask = build_action_mask(stack_sizes, done, 0, 6, FORMULA_VOCAB)
     assert (mask == 0.0).sum() > 0
     assert not torch.isnan(mask).any()
     # Done samples may only pad.
-    open_slots[:] = 0
-    mask_done = build_action_mask(open_slots, stack_sizes, 0, 6, FORMULA_VOCAB)
+    done[:] = True
+    mask_done = build_action_mask(stack_sizes, done, 0, 6, FORMULA_VOCAB)
     assert (mask_done == 0.0).sum() == 8
 
 

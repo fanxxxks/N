@@ -17,7 +17,7 @@ AlphaGPT 仓库速读
 
 核心思想
 - 不是直接预测价格，而是“生成公式 → 解释执行 → 回测评分 → 优化生成器”。
-- 公式 = token 序列；token 由“特征 + 算子”组成，StackVM 执行成因子信号。
+- 公式 = token 序列；token 由“特征 + 算子”组成，以独立 `EOS` 终止、`PAD` 仅在 EOS 后；AST（`ashare_model/ir.py`）是公式语义唯一事实来源，postfix token 只是 VM 字节码与序列化格式，StackVM 执行成因子信号。
 - 交易层只消费最终信号分数，负责现实规则（涨跌停、停牌、T+1、整手、费用）与风控。
 
 当前因子与算子一览
@@ -27,7 +27,7 @@ AlphaGPT 仓库速读
 现状与依赖（实话版）
 - 只需 Python + AkShare 网络访问，无数据库服务依赖；配置在 config/ashare_config.yaml，密钥可选 config/.env。
 - 已知局限：PIT `constituents` 必须提供历史成员区间与有效上市日期——300/500 区间由 `scripts/import_pit_universe.py` 从 BaoStock 月末快照压缩（月粒度），中证 1000 无免费历史来源已从配置移除，上市日期经交易所批量资料（含退市表）回填；当前成分快照只用于选择同步标的、绝不写入历史资格，正式入口（训练/协议/诊断/回测/模拟/归档）由生产门禁与 `scripts/check_production_gates.py` 统一把关。申万行业成分映射仍为当前快照（行业指数行情为完整历史）；北向因子中性占位（日度数据 2024-08 起停披露）；财报回填按法定披露季节末日对齐（保守方向；东财业绩报表的公告列实为重述日期不可用；不追踪修正、累计口径、PS 为 PE×扣非净利率近似）；离线日历用工作日近似。历史回放无日期化 ST 数据，涨跌停一律按板块价幅判定，`stocks.is_st` 快照仅用于真实当日撮合。
-- 词表版本化：训练产物带 feature_names/feature_version，加载时按名称重映射；无元数据的旧公式对照 v1 首发词表（34 特征/16 算子）重映射，退役重复特征经 FEATURE_ALIASES（RET_20 → MOMENTUM_20）解析，语义永不漂移。
+- 词表版本化：训练产物带 feature_names/operator_names/feature_version/grammar_version，加载时按名称重映射；无元数据的旧公式对照 v1 首发词表（34 特征/16 算子）重映射，退役重复特征经 FEATURE_ALIASES（RET_20 → MOMENTUM_20）解析，语义永不漂移；v2 语法（EOS 终止、stack-only postfix）已取代旧 open_slots 前缀逻辑，旧裸因子按名称迁移为 Feature(name)。
 - 因子治理：`python -m ashare_model.diagnostics` 输出覆盖率/rank-IC/相关性报告；`scripts/ablate_families.py` 逐族消融（同 seed 对比验证集奖励），新因子族先过证据再过训练预算。
 - best_ashare_strategy.json 需先训练或提供，仓库默认不带。
 

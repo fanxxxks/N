@@ -518,7 +518,6 @@ def baseline_candidates(
     scorer = CandidateScorer(
         bt_cfg,
         reward_cfg,
-        operator_offset=FORMULA_VOCAB.operator_offset,
     )
     specs: list[CandidateSpec] = []
     train_signals: list[np.ndarray] = []
@@ -768,7 +767,6 @@ def run_random_search(
     scorer = CandidateScorer(
         backtest_config,
         reward_cfg,
-        operator_offset=vocab.operator_offset,
     )
     selector = CandidateSelector()
 
