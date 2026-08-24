@@ -36,7 +36,7 @@ import torch
 from loguru import logger
 
 from .ops import (
-    OPS_CONFIG,
+    OPS_BY_NAME,
     _cs_demean,
     _cs_neutralize,
     _cs_rank,
@@ -57,12 +57,19 @@ class StackVM:
         self.feature_offset = self.vocab.feature_offset
         self.operator_offset = self.vocab.operator_offset
         self.eos_token_id = self.vocab.eos_token_id
-        self.op_map = {
-            self.operator_offset + i: cfg[1] for i, cfg in enumerate(OPS_CONFIG)
-        }
-        self.arity_map = {
-            self.operator_offset + i: cfg[2] for i, cfg in enumerate(OPS_CONFIG)
-        }
+        # Operators are resolved by name through OPS_BY_NAME so the VM
+        # stays correctly aligned for any vocabulary whose operator names
+        # are a subset of the operator table (e.g. toy test vocabularies).
+        self.op_map: dict[int, object] = {}
+        self.arity_map: dict[int, int] = {}
+        self._cs_token_names: dict[int, str] = {}
+        for i, name in enumerate(self.vocab.operator_names):
+            token = self.operator_offset + i
+            fn, arity = OPS_BY_NAME[name]
+            self.op_map[token] = fn
+            self.arity_map[token] = arity
+            if name.startswith("CS_"):
+                self._cs_token_names[token] = name
         # Execution-context data for the CS_NEUTRALIZE operator: discrete
         # industry group ids aligned with the [stock, date] factor columns.
         # The trainer (re)assigns this attribute when it moves the factor
@@ -74,11 +81,6 @@ class StackVM:
         # trainer (re)assigns this attribute when it moves the factor
         # tensor to the compute device.
         self.universe_mask = universe_mask
-        self._cs_token_names = {
-            self.operator_offset + i: name
-            for i, (name, _, _) in enumerate(OPS_CONFIG)
-            if name.startswith("CS_")
-        }
 
     def execute(
         self,

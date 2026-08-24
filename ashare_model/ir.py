@@ -239,6 +239,27 @@ def postfix_valid(tokens: Iterable[int], vocab: FormulaVocab | None = None) -> b
     return stack == 1
 
 
+def formula_length(tokens: Iterable[int], vocab: FormulaVocab | None = None) -> int:
+    """Effective length of a formula sequence.
+
+    Counts every token up to and including the terminator: the EOS token
+    when present, otherwise the first PAD (a legacy implicit terminator).
+    A sequence without any terminator counts its full length.  Used by the
+    training runtime to report formula-length statistics.
+    """
+
+    vocab = vocab or _default_vocab()
+    length = 0
+    for raw_token in tokens:
+        token = int(raw_token)
+        length += 1
+        if token == vocab.pad_token_id:
+            return length
+        if vocab.eos_token_id is not None and token == vocab.eos_token_id:
+            return length
+    return length
+
+
 def _default_vocab() -> FormulaVocab:
     # Imported lazily so the module stays importable without torch-side
     # initialization order concerns (vocab imports ops only).

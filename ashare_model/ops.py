@@ -441,3 +441,10 @@ OPS_CONFIG = [
     ("DELTA10", lambda x: _ts_delta(x, 10), 1),
     ("DELTA20", lambda x: _ts_delta(x, 20), 1),
 ]
+
+# Operator name -> (implementation, arity).  Consumers that operate on a
+# *vocabulary* (sampling mask, VM) resolve operators by name through this
+# table, never by OPS_CONFIG position, so any vocabulary whose operator
+# names are a subset of OPS_CONFIG (e.g. toy test vocabularies) stays
+# correctly aligned.
+OPS_BY_NAME = {name: (fn, arity) for name, fn, arity in OPS_CONFIG}

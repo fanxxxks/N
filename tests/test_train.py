@@ -672,8 +672,11 @@ def test_train_invalid_formula_gets_clip_low(populated_db: DataConfig, monkeypat
         reward_config=_reward_cfg(),
     )
     monkeypatch.setattr(trainer.vm, "execute", lambda tokens, ft: None)
-    tokens = trainer.train(steps=1, batch_size=1, save_artifacts=False)
-    assert tokens is None
+    # Every formula is invalid, so nothing is ever executed: the reward is
+    # the clip low, and the zero-operator-coverage guard hard-fails the run
+    # (no artifact can be produced from a run that executed nothing).
+    with pytest.raises(RuntimeError, match="operator coverage is zero"):
+        trainer.train(steps=1, batch_size=1, save_artifacts=False)
     assert trainer.history[0]["avg_reward"] == trainer.reward_config.reward_clip_low
 
 
@@ -749,6 +752,10 @@ def test_reward_cache_reuses_evaluations_across_steps(
     # Direction is scored in the same shared +/- batch, so no late VM
     # execution is needed after selection.
     assert calls["n"] == 1
+    # The cache-hit rate reports the cross-step reuse: step 1 starts cold,
+    # step 2 finds every row in the cache.
+    assert trainer.history[0]["cache_hit_frac"] == pytest.approx(0.0)
+    assert trainer.history[-1]["cache_hit_frac"] == pytest.approx(1.0)
 
 
 def test_reward_cache_is_bounded_lru(monkeypatch):
@@ -922,8 +929,8 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
     )
     # The scorer reports a strong cost-adjusted reward but a sub-threshold
     # ICIR: the quality gate must block the save even though the
-    # cost-adjusted floor passes.  A bare feature formula is forced so the
-    # bare-copy penalty (0.02) deterministically shaves the reward.
+    # cost-adjusted floor passes.  An operator-bearing formula is forced so
+    # the run's operator coverage stays non-zero.
     monkeypatch.setattr(
         train_module,
         "batched_basket_rewards",
@@ -934,11 +941,12 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
             np.full(signals.shape[0], 0.01),
         ),
     )
+    add_token = FORMULA_VOCAB.operator_offset
+    pattern = [1, 1, add_token, FORMULA_VOCAB.eos_token_id]
     state = {"pos": -1}
 
     def fixed_sample(self):
         state["pos"] += 1
-        pattern = [1, FORMULA_VOCAB.eos_token_id, 0, 0]
         return torch.full(
             (self.logits.shape[0],),
             pattern[state["pos"] % len(pattern)],
@@ -949,12 +957,10 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
     monkeypatch.setattr(Categorical, "sample", fixed_sample)
     tokens = trainer.train(steps=1, batch_size=1)
     assert tokens is None
-    # The bare-copy penalty (0.02 by default config) shaves the reported
-    # cost-adjusted reward; the raw ICIR stays below the gate.
     assert trainer.best_val_reward == -float("inf")
     rejected = trainer.selection_result.best_rejected
     assert rejected is not None
-    assert rejected.val_reward == pytest.approx(0.78)
+    assert rejected.val_reward == pytest.approx(0.8)
     assert rejected.val_icir == pytest.approx(0.01)
     assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
 
@@ -1100,6 +1106,105 @@ def test_collapse_warning_fires_after_consecutive_collapsed_steps(
     # The second consecutive collapsed step crosses the threshold.
     assert len(warnings) == 1
     assert "policy sampling collapsed" in warnings[0]
+
+
+def test_train_grammar_stats_recorded_in_history(
+    tmp_path, populated_db: DataConfig, monkeypatch
+):
+    """T0-02: the training runtime reports formula length, operator
+    coverage, the syntax/semantic unique rates and the cache-hit rate for
+    every step, derived from the AST (the single source of truth)."""
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=4, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    train_end = trainer._training_contract().train_label_end
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end),
+    )
+    add_token = FORMULA_VOCAB.operator_offset
+    pattern = [1, 1, add_token, FORMULA_VOCAB.eos_token_id]
+    state = {"pos": -1}
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        return torch.full(
+            (self.logits.shape[0],),
+            pattern[state["pos"] % len(pattern)],
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
+    trainer.train(steps=1, batch_size=4, save_artifacts=False)
+    step = trainer.history[0]
+    # Effective length of the forced formula [f1, f1, ADD, EOS] is 4.
+    assert step["mean_formula_len"] == pytest.approx(4.0)
+    # One distinct operator (ADD) used this step.
+    assert step["op_coverage"] == pytest.approx(1.0)
+    # Syntax and semantic unique rates: one unique token sequence and one
+    # unique AST over a batch of 4 identical rows.
+    assert step["unique_frac"] == pytest.approx(0.25)
+    assert step["semantic_unique_frac"] == pytest.approx(0.25)
+    # Cold cache: nothing was reused from a previous step.
+    assert step["cache_hit_frac"] == pytest.approx(0.0)
+    assert trainer._run_operator_coverage == {"ADD"}
+
+
+def test_train_zero_operator_coverage_hard_fails(
+    tmp_path, populated_db: DataConfig, monkeypatch
+):
+    """T0-02: a run whose executed formulas never used an operator is
+    bare-factor screening, not formula search: it hard-fails and writes no
+    artifact."""
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    train_end = trainer._training_contract().train_label_end
+    monkeypatch.setattr(
+        trainer.vm,
+        "execute",
+        lambda tokens, ft: torch.arange(
+            1.0, len(loader.ts_codes) * train_end + 1.0, dtype=torch.float32
+        ).reshape(len(loader.ts_codes), train_end),
+    )
+    # Every row samples the same bare feature formula: valid, executable,
+    # but operator coverage stays zero.
+    pattern = [1, FORMULA_VOCAB.eos_token_id, 0, 0]
+    state = {"pos": -1}
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        return torch.full(
+            (self.logits.shape[0],),
+            pattern[state["pos"] % len(pattern)],
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
+    with pytest.raises(RuntimeError, match="operator coverage is zero"):
+        trainer.train(steps=1, batch_size=1, save_artifacts=False)
+    assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
 
 
 def test_sample_random_formulas_are_valid_and_deterministic():
