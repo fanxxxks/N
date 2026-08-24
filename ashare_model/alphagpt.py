@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .ops import OPS_CONFIG
+from .ops import OPS_BY_NAME
 from .vocab import FORMULA_VOCAB
 
 
@@ -232,8 +232,12 @@ def build_action_mask(
     can_feature = active & (stack_sizes + 1 <= remaining - 1)
     mask[can_feature, vocab.feature_offset : vocab.operator_offset] = 0.0
 
-    for i, (_, _, arity) in enumerate(OPS_CONFIG):
+    # Operators are resolved by name through OPS_BY_NAME so the mask stays
+    # correctly aligned for any vocabulary whose operator names are a
+    # subset of the operator table (e.g. toy test vocabularies).
+    for i, name in enumerate(vocab.operator_names):
         token = vocab.operator_offset + i
+        arity = OPS_BY_NAME[name][1]
         can_op = (
             active
             & (stack_sizes >= arity)

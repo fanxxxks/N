@@ -50,6 +50,7 @@ from .reward import (
 from .time_contract import TrainingTimeContract
 from .vm import StackVM, formula_decode
 from .vocab import FORMULA_VOCAB, GRAMMAR_VERSION
+from . import ir as ir_module
 from ashare_logging import export_log_txt, setup_run_logging
 
 # Sampling-state tables, built once at import: the arity of every operator
@@ -222,6 +223,9 @@ class AshareTrainer:
             OrderedDict()
         )
         self._reward_cache: OrderedDict[tuple[int, ...], CandidateScore] = OrderedDict()
+        # Operators observed across the whole run's executed formulas; the
+        # run hard-fails when this stays empty (bare-factor screening).
+        self._run_operator_coverage: set[str] = set()
 
     def _cache_put(
         self,
@@ -423,11 +427,18 @@ class AshareTrainer:
             step_results: dict[tuple[int, ...], CandidateScore] = {}
             pending: list[tuple[CandidateSpec, np.ndarray]] = []
             seen: set[tuple[int, ...]] = set()
+            cache_hits = 0
+            # Grammar stats are accumulated at execution time, so only
+            # formulas the VM actually executed and produced a signal for
+            # count toward length/operator coverage (a formula the VM
+            # rejected is structurally invalid — never an operator user).
+            executed_stats: list[tuple[tuple[int, ...], int, set[str]]] = []
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())
                 if key in self._reward_cache:
                     self._cache_touch(key)
                     step_results[key] = self._reward_cache[key]
+                    cache_hits += 1
                     continue
                 if key in seen:
                     continue
@@ -452,6 +463,14 @@ class AshareTrainer:
                         universe_mask=train_universe_mask,
                     )
                     continue
+                ast = ir_module.decode(key, self.vocab)
+                executed_stats.append(
+                    (
+                        key,
+                        ir_module.formula_length(key, self.vocab),
+                        ir_module.operator_names(ast),
+                    )
+                )
                 signal_np = signal.detach().cpu().numpy()
                 pending.append((spec, signal_np))
                 # Score as soon as one full chunk is ready: buffering every
@@ -529,6 +548,24 @@ class AshareTrainer:
             else:
                 self._collapse_streak = 0
 
+            # Grammar observability: formula length, operator coverage and
+            # the syntax/semantic unique rates are derived from the AST
+            # (the single source of truth); the cache-hit rate measures how
+            # much of the batch reused cross-step evaluations.
+            lengths = [length for _, length, _ in executed_stats]
+            step_op_coverage: set[str] = set()
+            for _, _, ops in executed_stats:
+                step_op_coverage |= ops
+            mean_formula_len = (
+                float(sum(lengths)) / len(lengths) if lengths else 0.0
+            )
+            semantic_forms = {
+                step_results[key].formula_text for key, _, _ in executed_stats
+            }
+            semantic_unique_frac = len(semantic_forms) / max(batch_size, 1)
+            cache_hit_frac = cache_hits / max(batch_size, 1)
+            self._run_operator_coverage |= step_op_coverage
+
             # Actor-critic update: REINFORCE with the learned value as
             # baseline, advantage clipping, and an entropy bonus.
             loss, _, value_loss, entropy = self._policy_update_loss(
@@ -552,15 +589,43 @@ class AshareTrainer:
                     "loss": float(loss.detach()),
                     "value_loss": float(value_loss.detach()),
                     "entropy": float(entropy.detach()),
+                    # Syntax unique rate: distinct token sequences / batch.
                     "unique_frac": float(unique_frac),
+                    # Grammar stats (T0-02): formula length, operator
+                    # coverage, semantic unique rate, cache hit rate.
+                    "mean_formula_len": mean_formula_len,
+                    "op_coverage": float(len(step_op_coverage)),
+                    "semantic_unique_frac": semantic_unique_frac,
+                    "cache_hit_frac": cache_hit_frac,
                 }
             )
             pbar.set_postfix(
                 {
                     "avg_reward": f"{rewards.mean().item():.3f}",
                     "best": f"{self.best_val_reward:.3f}",
+                    "len": f"{mean_formula_len:.1f}",
+                    "ops": len(step_op_coverage),
+                    "sem": f"{semantic_unique_frac:.2f}",
+                    "cache": f"{cache_hit_frac:.2f}",
                 }
             )
+
+        # Hard fail on zero operator coverage: a run whose executed
+        # formulas never used an operator is bare-factor screening, not
+        # formula search — no artifact may be produced from it.
+        if not self._run_operator_coverage:
+            raise RuntimeError(
+                "operator coverage is zero across the whole run: no executed "
+                "formula used any operator (bare-factor screening only); "
+                "training is invalid"
+            )
+        logger.info(
+            "grammar stats (run): mean_formula_len={:.2f}, "
+            "operator_coverage={}/39, unique_steps={}",
+            float(np.mean([h["mean_formula_len"] for h in self.history])),
+            len(self._run_operator_coverage),
+            len(self.history),
+        )
 
         selection_path = self.data_config.data_dir / "training_selection.json"
         if save_artifacts:
