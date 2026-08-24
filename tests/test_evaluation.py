@@ -853,6 +853,7 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
                     "duckdb_path": str(populated_db.duckdb_path),
                     "parquet_dir": str(populated_db.parquet_dir),
                     "index_codes": ["000300.SH"],
+                    "min_listed_sessions": 1,
                 "model": {"max_formula_len": 6},
                 "protocol": {
                     "folds": [
@@ -874,6 +875,8 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
             "screening",
             "--output",
             str(out_path),
+            "--min-eligible",
+            "3",
         ]
     )
     assert rc == 0
@@ -1083,6 +1086,7 @@ def test_cli_confirmation_smoke(tmp_path, populated_db: DataConfig):
                     "duckdb_path": str(populated_db.duckdb_path),
                     "parquet_dir": str(populated_db.parquet_dir),
                     "index_codes": ["000300.SH"],
+                    "min_listed_sessions": 1,
                 "model": {"max_formula_len": 6},
                 "protocol": {
                     "folds": [
@@ -1103,6 +1107,8 @@ def test_cli_confirmation_smoke(tmp_path, populated_db: DataConfig):
             "confirmation",
             "--output",
             str(out_path),
+            "--min-eligible",
+            "3",
         ]
     )
     assert rc == 0
@@ -1123,6 +1129,7 @@ def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
                     "duckdb_path": str(populated_db.duckdb_path),
                     "parquet_dir": str(populated_db.parquet_dir),
                     "index_codes": ["000300.SH"],
+                    "min_listed_sessions": 1,
                 "protocol": {
                     "folds": [
                         {"train_end": "2024-01-10", "test_end": "2024-01-25"},
@@ -1142,6 +1149,8 @@ def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
             "200",
             "--output",
             str(out_path),
+            "--min-eligible",
+            "3",
         ]
     )
     assert rc == 0

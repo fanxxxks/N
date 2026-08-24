@@ -693,29 +693,51 @@ def member_bar_coverage(db: AshareDB, config: DataConfig) -> pd.DataFrame:
     """Per-membership-interval daily-bar coverage (survivorship audit).
 
     Returns one row per ``constituents`` interval with ``bars`` (daily-bar
-    rows inside ``[in_date, out_date]``), ``sessions`` (open calendar
-    sessions in the same span, 0 for intervals entirely beyond the data),
-    and ``coverage = bars / sessions`` (NaN when ``sessions`` is 0).  An
-    interval with open sessions but zero bars is the signature of a
-    historical member that was never synced — the current-snapshot sync
-    universe silently dropped delisted members and the PIT mask then
-    marked them MISSING_BAR, biasing every historical backtest
-    optimistically.  ``check_production_gates.py`` gates on the zero-bar
-    count and prints the coverage distribution.
+    rows inside the interval), ``sessions`` (open calendar sessions in the
+    same span, 0 for intervals entirely beyond the data), and
+    ``coverage = bars / sessions`` (NaN when ``sessions`` is 0).
+
+    Interval semantics are the module's canonical **half-open**
+    ``[in_date, out_date)`` form (provider inclusive end dates are already
+    converted), and both counts are capped to the daily-bar horizon
+    ``[min(trade_date), max(trade_date)]``: sessions outside the data can
+    never fabricate a zero-bar interval (e.g. an interval entirely before
+    the first synced bar is not auditable with the current data).  An
+    interval that *overlaps* the horizon but has open sessions and zero
+    bars is the signature of a historical member that was never synced —
+    the current-snapshot sync universe silently dropped delisted members
+    and the PIT mask then marked them MISSING_BAR, biasing every
+    historical backtest optimistically.  The production gate (G7 in
+    ``ashare_data.gates``) fails on those intervals.
     """
 
+    horizon = db.query(
+        f"SELECT MIN(trade_date) AS mn, MAX(trade_date) AS mx "
+        f"FROM {config.daily_table}"
+    ).iloc[0]
+    if pd.isna(horizon["mn"]):
+        frame = db.query(
+            f"SELECT index_code, ts_code, in_date, out_date, "
+            f"0 AS bars, 0 AS sessions FROM {config.constituents_table}"
+        )
+        frame["coverage"] = np.nan
+        return frame
+    min_bar = str(horizon["mn"])
+    max_bar = str(horizon["mx"])
     sql = f"""
         SELECT c.index_code, c.ts_code, c.in_date, c.out_date,
                COUNT(d.trade_date) AS bars,
                (SELECT COUNT(*)
                 FROM {config.calendar_table} k
                 WHERE k.is_open = true
-                  AND k.trade_date BETWEEN c.in_date AND c.out_date
+                  AND k.trade_date >= GREATEST(c.in_date, '{min_bar}')
+                  AND k.trade_date < LEAST(c.out_date, '{max_bar}')
                ) AS sessions
         FROM {config.constituents_table} c
         LEFT JOIN {config.daily_table} d
           ON d.ts_code = c.ts_code
-         AND d.trade_date BETWEEN c.in_date AND c.out_date
+         AND d.trade_date >= GREATEST(c.in_date, '{min_bar}')
+         AND d.trade_date < LEAST(c.out_date, '{max_bar}')
         GROUP BY c.index_code, c.ts_code, c.in_date, c.out_date
         ORDER BY c.ts_code, c.in_date
     """

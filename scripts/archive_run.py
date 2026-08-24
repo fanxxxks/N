@@ -248,17 +248,17 @@ def load_effective_config(config_path, root):
         return None
 
 
-def require_archive_production_universe(config_path, root):
+def require_archive_production_universe(config_path, root, min_eligible=None):
     """Validate the non-degradable data gate before a formal archive write."""
 
     effective = load_effective_config(config_path, root) if config_path else None
     if effective is None:
         raise ValueError("could not load effective data config for production gate")
     from ashare_data.config import make_data_config
-    from ashare_data.universe import require_production_universe
+    from ashare_data.gates import ProductionGateRunner
 
     data_config = make_data_config(effective, Path(root))
-    require_production_universe(data_config)
+    ProductionGateRunner(data_config, min_eligible=min_eligible).require_production()
 
 
 def git_commit_run_dir(run_dir, mode, root):
@@ -299,6 +299,9 @@ def main(argv=None):
                         help="metrics files larger than this are summarized only (default 5)")
     parser.add_argument("--root", default=str(DEFAULT_ROOT),
                         help="repo root (default: auto-detected; used by tests)")
+    parser.add_argument("--min-eligible", type=int, default=None,
+                        help="production gate G6: minimum eligible stocks per "
+                             "major window (default: 100)")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -365,7 +368,7 @@ def main(argv=None):
 
     if args.mode != "manual":
         try:
-            require_archive_production_universe(config_path, root)
+            require_archive_production_universe(config_path, root, args.min_eligible)
         except (ImportError, ValueError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2

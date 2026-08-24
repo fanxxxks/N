@@ -49,6 +49,7 @@ def repo(tmp_path):
         "duckdb_path: data/ashare.duckdb\n"
         "parquet_dir: data/parquet\n"
         "index_codes: [000300.SH]\n"
+        "min_listed_sessions: 1\n"
         "model:\n  d_model: 64\n"
     )
     (tmp_path / "config.yaml").write_text(config_text, encoding="utf-8")
@@ -72,12 +73,36 @@ def repo(tmp_path):
             data_config,
         )
         db.upsert_calendar(
-            [{"trade_date": "20240102", "is_open": True}], data_config
+            [{"trade_date": "20240101", "is_open": True},
+             {"trade_date": "20240102", "is_open": True}],
+            data_config,
         )
         db.upsert_constituents(
             [
                 {"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20150101", "out_date": "99991231"},
                 {"index_code": "000300.SH", "ts_code": "600000.SH", "in_date": "20160101", "out_date": "99991231"},
+            ],
+            data_config,
+        )
+        # Daily bars so the production gate's bar-window audits (G3/G6/G7)
+        # hold: both members have bars over the whole seeded window.
+        db.upsert_daily(
+            [
+                {
+                    "ts_code": code,
+                    "trade_date": date,
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "pre_close": 9.9,
+                    "volume": 100.0,
+                    "amount": 1000.0,
+                    "turnover_rate": 1.0,
+                    "adj_factor": 1.0,
+                }
+                for code in ("000001.SZ", "600000.SH")
+                for date in ("20240101", "20240102")
             ],
             data_config,
         )
@@ -273,7 +298,7 @@ def _write_protocol(repo):
 
 def test_protocol_mode_archives_with_manifest_block(repo):
     _write_protocol(repo)
-    r = run_archive(repo, "--mode", "protocol")
+    r = run_archive(repo, "--mode", "protocol", "--min-eligible", "2")
     assert r.returncode == 0, r.stderr
     run_dir = next((repo / "experiments").iterdir())
     assert run_dir.name.endswith("protocol_screening")
@@ -306,7 +331,7 @@ def test_protocol_mode_archives_with_manifest_block(repo):
 def test_protocol_mode_does_not_require_formula(repo):
     (repo / "data" / "best.json").unlink()
     _write_protocol(repo)
-    r = run_archive(repo, "--mode", "protocol")
+    r = run_archive(repo, "--mode", "protocol", "--min-eligible", "2")
     assert r.returncode == 0, r.stderr
 
 
@@ -317,7 +342,7 @@ def test_formal_archive_refuses_invalid_production_universe(repo):
     con = duckdb.connect(str(repo / "data" / "ashare.duckdb"))
     con.execute("UPDATE stocks SET list_date = NULL WHERE ts_code = '000001.SZ'")
     con.close()
-    r = run_archive(repo, "--mode", "protocol")
+    r = run_archive(repo, "--mode", "protocol", "--min-eligible", "2")
     assert r.returncode == 2
     assert "production universe contract violation" in r.stderr
     assert "stocks.list_date" in r.stderr
@@ -337,7 +362,7 @@ def test_protocol_manifest_records_actual_run_scope(repo):
         {"candidate": "trained", "fold_train_end": "2021-12-31", "fold_test_end": "2022-12-31", "seed": 42},
     ]
     (repo / "data" / "protocol_result.json").write_text(json.dumps(proto), encoding="utf-8")
-    r = run_archive(repo, "--mode", "protocol")
+    r = run_archive(repo, "--mode", "protocol", "--min-eligible", "2")
     assert r.returncode == 0, r.stderr
     run_dir = next((repo / "experiments").iterdir())
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))

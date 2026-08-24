@@ -25,8 +25,8 @@ from ashare_data.config import (
 )
 from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 from ashare_data.capital_flow import EXTERNAL_FACTOR_NAMES
+from ashare_data.gates import ProductionGateRunner
 from ashare_data.processor import open_to_open_returns
-from ashare_data.universe import require_production_universe
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .data_loader import AshareDataLoader
@@ -292,12 +292,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Factor quality report")
     parser.add_argument("--config", default=None)
     parser.add_argument("--output", default="data/factor_report.json")
+    parser.add_argument(
+        "--min-eligible",
+        type=int,
+        default=None,
+        help="production gate G6: minimum eligible stocks per major window "
+        "(default: 100)",
+    )
     args = parser.parse_args()
     try:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
-        require_production_universe(data_config)
+        ProductionGateRunner(data_config, min_eligible=args.min_eligible).require_production()
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         loader = AshareDataLoader(data_config, model_config)
