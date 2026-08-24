@@ -160,6 +160,136 @@ def test_online_calendar_retains_history_needed_for_listing_age(
     assert client.get_trade_calendar() == ["20200102", "20240102"]
 
 
+def test_get_daily_bar_tencent_fallback_for_delisted(monkeypatch: pytest.MonkeyPatch):
+    """T0-04: when eastmoney and sina serve nothing for a code (delisted /
+    merged members), the Tencent endpoint backfills the history.  Tencent's
+    turnover is already a fraction and keeps the sina unit convention."""
+
+    import akshare as ak
+
+    cfg = data_config_module.DataConfig(start_date="2024-01-01", end_date="2024-12-31")
+    client = AkShareClient(cfg, offline=False)
+    monkeypatch.setattr(client, "_fetch", lambda *args, **_kwargs: args[0]())
+
+    from ashare_data.akshare_client import AkShareUnavailable
+
+    def boom(*_args, **_kwargs):
+        # The real client translates provider failures into
+        # AkShareUnavailable inside _fetch.
+        raise AkShareUnavailable("eastmoney blocked")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", boom)
+    monkeypatch.setattr(
+        ak,
+        "stock_zh_a_daily",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AkShareUnavailable("sina has no delisted history")
+        ),
+    )
+    tencent_calls: list[dict] = []
+
+    def tencent(**kwargs):
+        tencent_calls.append(kwargs)
+        return pd.DataFrame(
+            [
+                {
+                    "date": "2024-01-02",
+                    "open": 1.0,
+                    "close": 1.1,
+                    "high": 1.2,
+                    "low": 0.9,
+                    "volume": 100.0,
+                    "turnover": 0.0068,
+                    "amount": 1100.0,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist_tx", tencent)
+    df = client.get_daily_bar("000046.SZ", "20240101", "20240301")
+    assert tencent_calls, "tencent fallback was never reached"
+    assert tencent_calls[0]["symbol"] == "sz000046"
+    assert tencent_calls[0]["adjust"] == cfg.adjust
+    assert df.iloc[0]["trade_date"] == "20240102"
+    assert df.iloc[0]["ts_code"] == "000046.SZ"
+    assert df.iloc[0]["turnover_rate"] == pytest.approx(0.0068)
+
+
+def test_get_daily_bar_baostock_fallback_for_absorbed(monkeypatch: pytest.MonkeyPatch):
+    """T0-04: when every web provider serves nothing (an absorbed member
+    like 宏源证券), the Baostock fallback supplies the official record
+    including suspension rows (flat price, zero volume); turnover is
+    converted from percent to fraction."""
+
+    import akshare as ak
+
+    from ashare_data.akshare_client import AkShareUnavailable
+
+    cfg = data_config_module.DataConfig(start_date="2024-01-01", end_date="2024-12-31")
+    client = AkShareClient(cfg, offline=False)
+    monkeypatch.setattr(client, "_fetch", lambda *args, **_kwargs: args[0]())
+
+    monkeypatch.setattr(
+        ak, "stock_zh_a_hist", lambda **_kwargs: (_ for _ in ()).throw(AkShareUnavailable("blocked"))
+    )
+    monkeypatch.setattr(
+        ak,
+        "stock_zh_a_daily",
+        lambda **_kwargs: (_ for _ in ()).throw(AkShareUnavailable("no delisted data")),
+    )
+    monkeypatch.setattr(
+        ak,
+        "stock_zh_a_hist_tx",
+        lambda **_kwargs: (_ for _ in ()).throw(AkShareUnavailable("no kline")),
+    )
+
+    import baostock as bs
+
+    rows = iter(
+        [
+            ["2015-01-05", "30.5", "30.5", "30.5", "30.5", "30.5", "0", "0.0", ""],
+            ["2015-01-06", "30.5", "30.5", "30.5", "30.5", "30.5", "0", "0.0", "0.5"],
+        ]
+    )
+
+    class _FakeRs:
+        error_code = "0"
+        error_msg = ""
+        _current = None
+
+        def next(self):
+            try:
+                self._current = next(rows)
+            except StopIteration:
+                return False
+            return True
+
+        def get_row_data(self):
+            return self._current
+
+    calls = {"login": 0, "logout": 0}
+
+    def fake_login():
+        calls["login"] += 1
+        return type("L", (), {"error_code": "0", "error_msg": ""})()
+
+    def fake_logout():
+        calls["logout"] += 1
+
+    monkeypatch.setattr(bs, "login", fake_login)
+    monkeypatch.setattr(bs, "logout", fake_logout)
+    monkeypatch.setattr(bs, "query_history_k_data_plus", lambda *a, **k: _FakeRs())
+    df = client.get_daily_bar("000562.SZ", "20150101", "20150301")
+    assert calls["login"] == 1 and calls["logout"] == 1
+    assert len(df) == 2
+    assert df.iloc[0]["trade_date"] == "20150105"
+    assert df.iloc[0]["close"] == 30.5
+    assert df.iloc[0]["volume"] == 0.0
+    # Percent -> fraction conversion (0.5% -> 0.005).
+    assert df.iloc[1]["turnover_rate"] == pytest.approx(0.005)
+    assert df.iloc[1]["ts_code"] == "000562.SZ"
+
+
 def test_offline_fixtures(tmp_path: Path):
     cfg = data_config_module.DataConfig(start_date="2024-01-01", end_date="2024-12-31")
     fixture_dir = tmp_path / "fixtures"

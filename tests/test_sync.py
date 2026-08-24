@@ -197,3 +197,177 @@ def test_purge_stale_daily_rows(tmp_path: Path):
         assert removed == 1  # only the index code row is removed
         remaining = db.query("SELECT ts_code FROM daily_bar")["ts_code"].tolist()
         assert set(remaining) == {"000001.SZ", "600000.SH"}
+
+
+def _seed_backfill_db(tmp_path: Path) -> DataConfig:
+    """Fixture DB: one live member with bars, one historical member with a
+    zero-bar interval overlapping the horizon (the delisted signature)."""
+    cfg = _config(tmp_path)
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        db.upsert_calendar(
+            [{"trade_date": d, "is_open": True} for d in ("20240102", "20240103")],
+            cfg,
+        )
+        db.upsert_stocks(
+            [
+                {"ts_code": "000001.SZ", "name": "A", "industry": None, "list_date": "20200101", "is_st": False},
+                {"ts_code": "600999.SH", "name": "D", "industry": None, "list_date": "20200101", "is_st": False},
+            ],
+            cfg,
+        )
+        db.upsert_constituents(
+            [
+                {"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20240101", "out_date": "99991231"},
+                {"index_code": "000300.SH", "ts_code": "600999.SH", "in_date": "20240101", "out_date": "20241231"},
+            ],
+            cfg,
+        )
+        db.upsert_daily(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": d,
+                    "open": 10.0,
+                    "high": 10.2,
+                    "low": 9.9,
+                    "close": 10.1,
+                    "pre_close": 9.9,
+                    "volume": 100.0,
+                    "amount": 1000.0,
+                    "turnover_rate": 1.0,
+                    "adj_factor": 1.0,
+                }
+                for d in ("20240102", "20240103")
+            ],
+            cfg,
+        )
+    return cfg
+
+
+class _FakeClient:
+    def __init__(self, frames: dict[str, pd.DataFrame]):
+        self.frames = frames
+        self.calls: list[str] = []
+
+    def get_daily_bar(self, ts_code, start_date, end_date):
+        self.calls.append(ts_code)
+        return self.frames.get(ts_code, pd.DataFrame())
+
+
+def test_backfill_member_bars_fetches_zero_bar_members(tmp_path: Path):
+    """T0-04: a zero-bar historical member is audited, fetched and
+    upserted (daily table + parquet cache), and the re-audit is clean."""
+
+    cfg = _seed_backfill_db(tmp_path)
+    bars = pd.DataFrame(
+        [
+            {
+                "ts_code": "600999.SH",
+                "trade_date": d,
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.05,
+                "volume": 10.0,
+                "amount": 100.0,
+            }
+            for d in ("20240102", "20240103")
+        ]
+    )
+    client = _FakeClient({"600999.SH": bars})
+    result = sync.backfill_member_bars(cfg, client=client)
+    assert client.calls == ["600999.SH"]  # only the zero-bar member
+    assert result["fetched_codes"] == 1
+    assert result["daily_rows"] == 2
+    assert result["failures"] == []
+    assert result["remaining_zero_bar_intervals"] == 0
+    # The bars landed in the daily table and the parquet cache.
+    with AshareDB(cfg.duckdb_path) as db:
+        rows = db.query(
+            "SELECT COUNT(*) AS n FROM daily_bar WHERE ts_code='600999.SH'"
+        ).iloc[0]["n"]
+        assert rows == 2
+    cached = sync._read_cached_bars(cfg, "600999.SH")
+    assert len(cached) == 2
+    # A re-run audits the now-covered member and touches nothing.
+    result2 = sync.backfill_member_bars(cfg, client=client)
+    assert result2["audited_zero_bar_codes"] == 0
+    assert result2["fetched_codes"] == 0
+    assert result2["remaining_zero_bar_intervals"] == 0
+
+
+def test_backfill_member_bars_reports_unfetchable_codes(tmp_path: Path):
+    cfg = _seed_backfill_db(tmp_path)
+    client = _FakeClient({})  # the delisted member is unfetchable
+    result = sync.backfill_member_bars(cfg, client=client)
+    assert result["audited_zero_bar_codes"] == 1
+    assert result["fetched_codes"] == 0
+    assert result["failures"] == ["600999.SH"]
+    assert result["remaining_zero_bar_intervals"] == 1
+
+
+class _SuspendedSpanClient(_FakeClient):
+    """A client whose main fetch resumes after the interval (long
+    suspension), plus a Baostock supplement that carries the official
+    suspension rows (flat price, zero volume)."""
+
+    def _get_daily_bar_baostock(self, ts_code, start_date, end_date):
+        self.calls.append(f"bs:{ts_code}")
+        return pd.DataFrame(
+            [
+                {
+                    "ts_code": ts_code,
+                    "trade_date": "20240102",
+                    "open": 4.64,
+                    "high": 4.64,
+                    "low": 4.64,
+                    "close": 4.64,
+                    "pre_close": 4.64,
+                    "volume": 0.0,
+                    "amount": 0.0,
+                    "turnover_rate": None,
+                }
+            ]
+        )
+
+
+def test_backfill_member_bars_supplements_suspended_span(tmp_path: Path):
+    """T0-04: when the main fetch resumes only after the interval (the
+    member was suspended through the whole audited span), the Baostock
+    supplement supplies the official suspension rows so the interval is
+    no longer zero-bar (presence with blocked trading, volume zero)."""
+
+    cfg = _seed_backfill_db(tmp_path)
+    # Main fetch returns data only after the interval (like 中银绒业's
+    # post-suspension resume): the audited span stays bare without the
+    # Baostock supplement.
+    late = pd.DataFrame(
+        [
+            {
+                "ts_code": "600999.SH",
+                "trade_date": "20240301",
+                "open": 5.0,
+                "high": 5.1,
+                "low": 4.9,
+                "close": 5.05,
+                "volume": 100.0,
+                "amount": 500.0,
+            }
+        ]
+    )
+    client = _SuspendedSpanClient({"600999.SH": late})
+    result = sync.backfill_member_bars(cfg, client=client)
+    assert "600999.SH" in client.calls
+    assert "bs:600999.SH" in client.calls  # supplement was invoked
+    assert result["fetched_codes"] == 1
+    assert result["failures"] == []
+    assert result["remaining_zero_bar_intervals"] == 0
+    with AshareDB(cfg.duckdb_path) as db:
+        rows = db.query(
+            "SELECT trade_date, volume FROM daily_bar "
+            "WHERE ts_code='600999.SH' ORDER BY trade_date"
+        )
+        assert len(rows) == 2
+        # The suspension row has zero volume: present but untradeable.
+        assert rows.iloc[0]["volume"] == 0.0

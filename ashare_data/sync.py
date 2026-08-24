@@ -30,6 +30,7 @@ from .config import (
 )
 from .db import AshareDB, sql_quoted_list
 from .processor import is_valid_a_share_code, normalize_daily_bars
+from .universe import member_bar_coverage
 from ashare_logging import export_log_txt, setup_run_logging
 
 
@@ -353,6 +354,89 @@ def sync_all(
         }
     finally:
         db.close()
+
+
+def backfill_member_bars(
+    config: DataConfig,
+    client: AkShareClient | None = None,
+) -> dict[str, Any]:
+    """Backfill daily bars for historical PIT members with zero-bar
+    intervals (delisted / merged / never-synced members).
+
+    The zero-bar audit comes from :func:`ashare_data.universe.member_bar_coverage`
+    (half-open intervals, capped to the daily-bar horizon): every member
+    whose interval overlaps the data window without a single bar is
+    fetched through the client (the Tencent fallback serves delisted
+    history) and upserted into both the daily table and the parquet cache.
+
+    When the main fetch still leaves an interval's audited span bare — the
+    member was suspended through the whole span (e.g. 宏源证券 absorbed
+    2015, 中银绒业's long restructuring suspension) — the Baostock record
+    supplements the official suspension rows (flat price, zero volume),
+    which the pipeline's tradability layer treats as blocked, so presence
+    never fabricates a tradeable member.
+
+    Idempotent: codes that already have bars are untouched, and a re-run
+    audits the current state.  Returns per-code statistics plus the
+    re-audited remaining zero-bar interval count.
+    """
+
+    with AshareDB(config.duckdb_path, read_only=True) as db:
+        coverage = member_bar_coverage(db, config)
+    observed = coverage[coverage["sessions"] > 0]
+    zero_bar = observed[observed["bars"] == 0]
+    intervals = zero_bar.loc[:, ["index_code", "ts_code", "in_date", "out_date"]]
+
+    client = client or AkShareClient(config)
+    start = config.start_date.replace("-", "")
+    end = config.end_date.replace("-", "")
+    result: dict[str, Any] = {
+        "audited_zero_bar_codes": int(zero_bar["ts_code"].nunique()),
+        "fetched_codes": 0,
+        "daily_rows": 0,
+        "failures": [],
+    }
+    baostock_fallback = getattr(client, "_get_daily_bar_baostock", None)
+    db = AshareDB(config.duckdb_path)
+    try:
+        for _, interval in intervals.iterrows():
+            code = str(interval["ts_code"])
+            span_start = max(str(interval["in_date"]), start)
+            span_end = min(str(interval["out_date"]), end)
+            frames: list[pd.DataFrame] = []
+            df = client.get_daily_bar(code, start_date=start, end_date=end)
+            if df is not None and not df.empty:
+                frames.append(df)
+            # Suspension-span supplement: if the interval's audited span
+            # still has no bars, the Baostock record (which includes the
+            # official suspension rows) fills it.
+            have = db.query(
+                f"SELECT COUNT(*) AS n FROM {config.daily_table} "
+                f"WHERE ts_code = ? AND trade_date >= ? AND trade_date < ?",
+                [code, span_start, span_end],
+            ).iloc[0]["n"]
+            if have == 0 and baostock_fallback is not None:
+                bs_df = baostock_fallback(code, span_start, span_end)
+                if bs_df is not None and not bs_df.empty:
+                    frames.append(bs_df)
+            if not frames:
+                result["failures"].append(code)
+                continue
+            combined = pd.concat(frames, ignore_index=True)
+            _write_cached_bars(config, code, combined)
+            rows = _bar_rows(combined)
+            if rows:
+                db.upsert_daily(rows, config)
+                result["daily_rows"] += len(rows)
+            result["fetched_codes"] += 1
+    finally:
+        db.close()
+
+    with AshareDB(config.duckdb_path, read_only=True) as db:
+        after = member_bar_coverage(db, config)
+    remaining = after[(after["sessions"] > 0) & (after["bars"] == 0)]
+    result["remaining_zero_bar_intervals"] = int(len(remaining))
+    return result
 
 
 def main() -> None:

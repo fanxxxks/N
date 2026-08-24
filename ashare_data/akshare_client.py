@@ -427,6 +427,45 @@ class AkShareClient:
                     self.config.request_retries,
                 )
                 source = "sina"
+            except AkShareUnavailable:
+                # Fall through to the Tencent fallback: sina serves no
+                # history for delisted/merged members.
+                pass
+
+        if df is None or df.empty:
+            # Tencent fallback: the last resort for delisted/merged members
+            # whose history eastmoney/sina no longer serve (stock_zh_a_daily
+            # returns nothing for delisted codes).  Tencent keeps their full
+            # adjusted history; turnover is already a fraction (the same
+            # unit the sina path stores).
+            try:
+                df = self._fetch(
+                    lambda: ak.stock_zh_a_hist_tx(
+                        symbol=_sina_symbol(ts_code),
+                        start_date=start_date,
+                        end_date=end_date,
+                        adjust=self.config.adjust,
+                    ),
+                    self.config.request_retries,
+                )
+                source = "tencent"
+            except AkShareUnavailable:
+                # Fall through to the Baostock fallback: some absorbed
+                # members have no Tencent kline history at all.
+                pass
+
+        if df is None or df.empty:
+            # Baostock fallback: the final source for absorbed members
+            # whose kline history the free web providers dropped entirely
+            # (e.g. 宏源证券, absorbed 2015).  Baostock keeps the official
+            # record, including suspension rows (flat price, zero volume)
+            # which the pipeline's tradability layer treats as blocked.
+            try:
+                df = self._fetch(
+                    lambda: self._get_daily_bar_baostock(ts_code, start_date, end_date),
+                    self.config.request_retries,
+                )
+                source = "baostock"
             except AkShareUnavailable as exc:
                 raise AkShareUnavailable(
                     f"All daily providers failed for {ts_code}: {exc}"
@@ -453,6 +492,12 @@ class AkShareClient:
                 df["turnover_rate"] = (
                     pd.to_numeric(df["turnover_rate"], errors="coerce") / 100.0
                 )
+        elif source == "tencent":
+            rename = {
+                "date": "trade_date",
+                "turnover": "turnover_rate",
+            }
+            df = df.rename(columns=rename)
         else:  # sina
             rename = {
                 "date": "trade_date",
@@ -465,6 +510,74 @@ class AkShareClient:
         df["ts_code"] = ts_code
         df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d")
         return df
+
+    def _get_daily_bar_baostock(
+        self,
+        ts_code: str,
+        start_date: str = "20150101",
+        end_date: str = "20261231",
+    ) -> pd.DataFrame:
+        """Baostock daily bars (qfq), the final fallback for absorbed
+        members whose kline history the web providers dropped.
+
+        Baostock is an optional dependency (also used by the PIT-universe
+        import) and is imported lazily here.  Its record includes
+        suspension rows — flat price with zero volume — which the
+        pipeline's tradability layer treats as blocked, matching the
+        official exchange record.  ``turn`` is percent; it is converted to
+        the fraction convention.  Rows with a missing close (e.g. the
+        delisting day) are dropped.
+        """
+
+        import baostock as bs
+
+        symbol = ts_code.split(".")[0]
+        suffix = ts_code.split(".")[1].lower()
+        bs_code = f"{suffix}.{symbol}"
+        login = bs.login()
+        if login.error_code != "0":
+            raise AkShareUnavailable(f"baostock login failed: {login.error_msg}")
+        try:
+            rs = bs.query_history_k_data_plus(
+                bs_code,
+                "date,open,high,low,close,preclose,volume,amount,turn",
+                start_date=f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}",
+                end_date=f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}",
+                frequency="d",
+                adjustflag="2",  # qfq
+            )
+            if rs.error_code != "0":
+                raise AkShareUnavailable(
+                    f"baostock query failed for {ts_code}: {rs.error_msg}"
+                )
+            rows: list[dict[str, object]] = []
+            while rs.next():
+                row = rs.get_row_data()
+                rows.append(
+                    {
+                        "date": row[0],
+                        "open": row[1],
+                        "high": row[2],
+                        "low": row[3],
+                        "close": row[4],
+                        "pre_close": row[5],
+                        "volume": row[6],
+                        "amount": row[7],
+                        "turnover_rate": row[8],
+                    }
+                )
+        finally:
+            bs.logout()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        for column in ("open", "high", "low", "close", "pre_close", "volume", "amount"):
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+        # Baostock reports turnover in percent; store as fraction.
+        df["turnover_rate"] = pd.to_numeric(df["turnover_rate"], errors="coerce") / 100.0
+        df = df.dropna(subset=["close"])
+        df["ts_code"] = ts_code
+        return df.rename(columns={"date": "trade_date"})
 
     def get_earnings_report(self, quarter: str) -> pd.DataFrame:
         """Whole-market earnings report for one quarter (Eastmoney 业绩报表).
