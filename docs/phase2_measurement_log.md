@@ -8,7 +8,7 @@ pre-existing environment blocker: starlette 1.3.1's TestClient requires
 | Stage | Commit | Tests passed | Δ | Notes |
 |---|---|---|---|---|
 | Baseline (main, pre-Phase-2) | 25bc994 | 672 | — | 20:39; webapi excluded; matches Phase-1 closing count |
-| T2-01 AST canonicalization + semantic cache | <commit> + merge | 726 | +54 | 0 regressions; 16:43; PROTOCOL_VERSION 17→18 |
+| T2-01 AST canonicalization + semantic cache | 4d81bb5 + merge 737fc29 | 726 | +54 | 0 regressions; 16:43; PROTOCOL_VERSION 17→18 |
 
 ## T2-01 invariants (asserted by tests)
 
