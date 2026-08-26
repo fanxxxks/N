@@ -1,0 +1,247 @@
+{
+  "experiment": "t2-03-rl-admission",
+  "fold": 0,
+  "fold_train_end": "2020-12-31",
+  "fold_test_end": "2021-12-31",
+  "admission_tier": {
+    "steps": 8,
+    "batch_size": 128,
+    "window_cap": [
+      300,
+      400
+    ]
+  },
+  "init_seeds": [
+    42,
+    7,
+    2024,
+    1337,
+    999
+  ],
+  "sampling_seed": 42,
+  "dataset_id": null,
+  "protocol_version": "19",
+  "seeds": [
+    {
+      "init_seed": 42,
+      "rl_budget": 799,
+      "rl_area": 0.9030000000000001,
+      "rl_oos_ir": -10.490938374472998,
+      "rl_formula": "(ILLIQ_20 CORR5 (DELTA5(RET_10) CORR20 (INTRADAY_RET DIV (LIMIT_BREAK MUL STD60(VOL_60)))))",
+      "baselines": {
+        "random": {
+          "budget_used": 500,
+          "area": 0.93919672389961,
+          "oos_ir": -2.5737800215235627
+        },
+        "gp": {
+          "budget_used": 311,
+          "area": 0.9755364338572288,
+          "oos_ir": -10.452438178969794
+        },
+        "tpe": {
+          "budget_used": 799,
+          "area": 0.9228293700458907,
+          "oos_ir": -1.054035005236778
+        }
+      }
+    },
+    {
+      "init_seed": 7,
+      "rl_budget": 782,
+      "rl_area": 0.9076666666666666,
+      "rl_oos_ir": -6.394804094603444,
+      "rl_formula": "(STD5(LIMIT_DOWN_EVENT) ADD (SIGN(RSQ_60) DIV (MACD_DIF SUB (REVERSAL_5 CORR60 MARGIN_BALANCE_CHG))))",
+      "baselines": {
+        "random": {
+          "budget_used": 535,
+          "area": 0.9378631079300591,
+          "oos_ir": -2.6068354847082604
+        },
+        "gp": {
+          "budget_used": 311,
+          "area": 0.9754393998106469,
+          "oos_ir": -10.452438178969794
+        },
+        "tpe": {
+          "budget_used": 782,
+          "area": 0.9215865302642796,
+          "oos_ir": -1.054035005236778
+        }
+      }
+    },
+    {
+      "init_seed": 2024,
+      "rl_budget": 609,
+      "rl_area": 0.899,
+      "rl_oos_ir": -4.125584883481152,
+      "rl_formula": "CS_ZSCORE((MAX3(SIGN(DOWNVOL20(SUSPEND_DAYS_60))) ADD GATE(ILLIQ_20, KURT_20, DOWNVOL5(CLOSE_POSITION))))",
+      "baselines": {
+        "random": {
+          "budget_used": 412,
+          "area": 0.9297150399249033,
+          "oos_ir": -3.879371860818894
+        },
+        "gp": {
+          "budget_used": 311,
+          "area": 0.974143859855379,
+          "oos_ir": -10.452438178969794
+        },
+        "tpe": {
+          "budget_used": 609,
+          "area": 0.91312096332786,
+          "oos_ir": -1.054035005236778
+        }
+      }
+    },
+    {
+      "init_seed": 1337,
+      "rl_budget": 717,
+      "rl_area": 0.897,
+      "rl_oos_ir": -5.412628606316257,
+      "rl_formula": "(GATE(RET_10, LIMIT_DOWN_EVENT, TURNOVER_STD20) SUB (MA20(DELTA5(KURT_20)) CORR10 CS_DEMEAN(CLOSE_POSITION)))",
+      "baselines": {
+        "random": {
+          "budget_used": 481,
+          "area": 0.9349765433617775,
+          "oos_ir": -5.821492680620188
+        },
+        "gp": {
+          "budget_used": 311,
+          "area": 0.9750259562788366,
+          "oos_ir": -10.452438178969794
+        },
+        "tpe": {
+          "budget_used": 717,
+          "area": 0.9162910274291028,
+          "oos_ir": -1.054035005236778
+        }
+      }
+    },
+    {
+      "init_seed": 999,
+      "rl_budget": 656,
+      "rl_area": 0.899,
+      "rl_oos_ir": -1.0543154414340834,
+      "rl_formula": "(IVOL_60 DIV (ATR_14 CORR60 (ABS(DEBT_RATIO) CORR5 (DEBT_RATIO CORR20 DOWNVOL20(REVERSAL_60)))))",
+      "baselines": {
+        "random": {
+          "budget_used": 428,
+          "area": 0.9393623961101737,
+          "oos_ir": -7.8862802315567855
+        },
+        "gp": {
+          "budget_used": 311,
+          "area": 0.9745634308718382,
+          "oos_ir": -10.452438178969794
+        },
+        "tpe": {
+          "budget_used": 656,
+          "area": 0.913183943089431,
+          "oos_ir": -1.054035005236778
+        }
+      }
+    }
+  ],
+  "metrics": {
+    "rl_areas": [
+      0.9030000000000001,
+      0.9076666666666666,
+      0.899,
+      0.897,
+      0.899
+    ],
+    "rl_oos_irs": [
+      -10.490938374472998,
+      -6.394804094603444,
+      -4.125584883481152,
+      -5.412628606316257,
+      -1.0543154414340834
+    ],
+    "baseline_areas": {
+      "random": [
+        0.93919672389961,
+        0.9378631079300591,
+        0.9297150399249033,
+        0.9349765433617775,
+        0.9393623961101737
+      ],
+      "gp": [
+        0.9755364338572288,
+        0.9754393998106469,
+        0.974143859855379,
+        0.9750259562788366,
+        0.9745634308718382
+      ],
+      "tpe": [
+        0.9228293700458907,
+        0.9215865302642796,
+        0.91312096332786,
+        0.9162910274291028,
+        0.913183943089431
+      ]
+    },
+    "baseline_oos_irs": {
+      "random": [
+        -2.5737800215235627,
+        -2.6068354847082604,
+        -3.879371860818894,
+        -5.821492680620188,
+        -7.8862802315567855
+      ],
+      "gp": [
+        -10.452438178969794,
+        -10.452438178969794,
+        -10.452438178969794,
+        -10.452438178969794,
+        -10.452438178969794
+      ],
+      "tpe": [
+        -1.054035005236778,
+        -1.054035005236778,
+        -1.054035005236778,
+        -1.054035005236778,
+        -1.054035005236778
+      ]
+    }
+  },
+  "verdict": {
+    "n_seeds": 5,
+    "win_fraction": 0.8,
+    "min_wins": 4,
+    "admitted": false,
+    "default_searcher": "gp",
+    "evidence": {
+      "random": {
+        "wins_area": 0,
+        "wins_oos_ir": 2,
+        "min_wins": 4,
+        "rl_median_area": 0.899,
+        "baseline_median_area": 0.9378631079300591,
+        "rl_median_oos_ir": -5.412628606316257,
+        "baseline_median_oos_ir": -3.879371860818894,
+        "rl_dominates": false
+      },
+      "gp": {
+        "wins_area": 0,
+        "wins_oos_ir": 4,
+        "min_wins": 4,
+        "rl_median_area": 0.899,
+        "baseline_median_area": 0.9750259562788366,
+        "rl_median_oos_ir": -5.412628606316257,
+        "baseline_median_oos_ir": -10.452438178969794,
+        "rl_dominates": false
+      },
+      "tpe": {
+        "wins_area": 0,
+        "wins_oos_ir": 0,
+        "min_wins": 4,
+        "rl_median_area": 0.899,
+        "baseline_median_area": 0.9162910274291028,
+        "rl_median_oos_ir": -5.412628606316257,
+        "baseline_median_oos_ir": -1.054035005236778,
+        "rl_dominates": false
+      }
+    }
+  }
+}

@@ -39,6 +39,12 @@ model:
   dim_feedforward: 128
   num_loops: 3
   dropout: 0.1
+  # Default formula searcher (T2-03 admission verdict: RL was NOT admitted
+  # — best-so-far area 0.899 vs GP 0.975 / random 0.938 / TPE 0.916 median
+  # under identical unique-semantic-evaluation budgets across 5 independent
+  # seeds).  "gp" is the production default; RL stays available as an
+  # experimental opt-in via "rl".
+  searcher: gp
   # Defaults match the smallest documented machine (6 GB VRAM / 16 GB RAM,
   # torch 2.11.0+cu128 on Windows): batch 4096 crashed step 0 with a
   # c10.dll access violation, and the policy converges within ~50 steps,
@@ -88,6 +94,12 @@ protocol:
   random_samples: 4096
   random_seed: 1234
   baseline_signals: [REVERSAL_5, RSQ_60, ILLIQ_20, OVERNIGHT_RET, MOMENTUM_20, ROE, TURNOVER]
+  # T2-03 baseline ladder: strongly-typed GP (DEAP) and TPE (Optuna) join
+  # the random baseline with the same matched budget per fold.
+  gp_enabled: true
+  gp_seed: 1235
+  tpe_enabled: true
+  tpe_seed: 1236
   folds:
     - {train_end: "2020-12-31", test_end: "2021-12-31"}
     - {train_end: "2021-12-31", test_end: "2022-12-31"}

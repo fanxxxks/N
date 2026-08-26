@@ -52,6 +52,41 @@ _ANNUALIZATION = 252
 _CAP = 1e9
 
 
+def canonical_form_pool(
+    seed: int,
+    vocab: FormulaVocab,
+    max_formula_len: int,
+    target_count: int,
+) -> list[tuple[int, ...]]:
+    """Uniform mask-legal samples, canonically deduplicated.
+
+    Structurally invalid and degenerate (constant-producing) formulas are
+    dropped; commuted and otherwise identical canonical forms collapse to
+    one entry.  Returns at most ``target_count`` canonical token
+    sequences.  The random baseline's proposal pool, shared by the
+    harness, the protocol row and the train entry.
+    """
+
+    sampled = sample_random_formulas(seed, vocab, max_formula_len, target_count * 8)
+    canonical_forms: list[tuple[int, ...]] = []
+    seen: set[tuple[int, ...]] = set()
+    for key in sampled:
+        try:
+            canonical = canonical_tokens(key, vocab)
+        except FormulaSyntaxError:
+            continue  # structurally invalid: never evaluated
+        if canonical is None:
+            continue  # degenerate (constant-producing): never evaluated
+        ctuple = tuple(canonical)
+        if ctuple in seen:
+            continue
+        seen.add(ctuple)
+        canonical_forms.append(ctuple)
+        if len(canonical_forms) >= target_count:
+            break
+    return canonical_forms
+
+
 def oos_active_ir(
     daily_returns: np.ndarray,
     benchmark_daily_returns: np.ndarray,
@@ -204,6 +239,8 @@ class SemanticBudgetEvaluator:
         window_id: str,
         tie_break_keys: np.ndarray | None = None,
         adv: np.ndarray | None = None,
+        blocked_buy: np.ndarray | None = None,
+        blocked_sell: np.ndarray | None = None,
         source: str = "search",
         candidate_prefix: str = "search",
         chunk: int | None = None,
@@ -215,6 +252,12 @@ class SemanticBudgetEvaluator:
         self._train_signal_range = train_signal_range
         self._tie_break_keys = tie_break_keys
         self._adv = adv
+        self._blocked_buy = (
+            np.asarray(blocked_buy, dtype=bool) if blocked_buy is not None else None
+        )
+        self._blocked_sell = (
+            np.asarray(blocked_sell, dtype=bool) if blocked_sell is not None else None
+        )
         self._budget = int(budget)
         self._execute = execute
         self._fingerprint_execute = fingerprint_execute
@@ -300,6 +343,8 @@ class SemanticBudgetEvaluator:
                 None,
                 self._target,
                 self._val_windows,
+                blocked_buy=self._blocked_buy,
+                blocked_sell=self._blocked_sell,
                 formula_valid=False,
                 train_signal_range=self._train_signal_range,
                 universe_mask=self._universe_mask,
@@ -315,6 +360,16 @@ class SemanticBudgetEvaluator:
             return self._scores[-1], True
         return None, True
 
+    def score_of(self, tokens) -> CandidateScore | None:
+        """Cached score of an evaluated proposal (``None`` when not
+        evaluated).  Lets batched searchers read every proposal's real
+        score after a :meth:`flush`, without re-evaluating."""
+
+        ckey = self._cache.key_for(tokens)
+        if ckey is None:
+            return None
+        return self._cache.get(ckey)
+
     def flush(self) -> None:
         """Score the buffered pending signals (bounded memory chunks)."""
 
@@ -327,6 +382,8 @@ class SemanticBudgetEvaluator:
             signals,
             self._target,
             self._val_windows,
+            blocked_buy=self._blocked_buy,
+            blocked_sell=self._blocked_sell,
             train_signal_range=self._train_signal_range,
             universe_mask=self._universe_mask,
             tie_break_keys=self._tie_break_keys,
@@ -452,23 +509,9 @@ def run_matched_baseline(
     # dropped and structurally identical sequences collapse, so the pool
     # reaches the budget with fresh forms.
     headroom = budget * 8 if semantic_mode else budget * 2
-    sampled = sample_random_formulas(seed, vocab, max_formula_len, headroom)
-    canonical_forms: list[tuple[int, ...]] = []
-    seen: set[tuple[int, ...]] = set()
-    for key in sampled:
-        try:
-            canonical = canonical_tokens(key, vocab)
-        except FormulaSyntaxError:
-            continue  # structurally invalid: never evaluated
-        if canonical is None:
-            continue  # degenerate (constant-producing): never evaluated
-        ctuple = tuple(canonical)
-        if ctuple in seen:
-            continue
-        seen.add(ctuple)
-        canonical_forms.append(ctuple)
-        if len(canonical_forms) >= headroom:
-            break
+    canonical_forms = canonical_form_pool(
+        seed, vocab, max_formula_len, headroom
+    )
 
     if semantic_mode:
         # The semantic budget is enforced by the shared evaluator (the same

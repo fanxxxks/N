@@ -25,6 +25,8 @@ stream stalls (repeatedly re-proposing already-evaluated classes).
 
 from __future__ import annotations
 
+import math
+
 import torch
 import optuna
 
@@ -75,13 +77,17 @@ def run_tpe_baseline(
     vocab: FormulaVocab | None = None,
     n_startup_trials: int = 10,
     stall_limit: int = 50,
+    tell_batch: int = 16,
 ) -> BaselineHarnessResult:
     """TPE search over mask-legal token sequences under the semantic budget.
 
     ``n_startup_trials`` keeps Optuna's default random-startup phase
-    (uniform proposals before the surrogate kicks in).  The search stops
-    when the evaluation budget is exhausted or ``stall_limit`` consecutive
-    trials produced no new evaluation.
+    (uniform proposals before the surrogate kicks in).  Trials are asked
+    in batches of ``tell_batch`` and told after the evaluator flushed the
+    batched scoring, so the search keeps the memory-bounded chunked
+    evaluation instead of paying per-proposal scoring overhead.  The
+    search stops when the evaluation budget is exhausted or
+    ``stall_limit`` consecutive trials produced no new evaluation.
     """
 
     vocab = vocab or evaluator.vocab
@@ -106,22 +112,38 @@ def run_tpe_baseline(
             stack, done = _advance(vocab, token, stack, done)
         return tuple(tokens)
 
-    stall = 0
-    while evaluator.budget_used < evaluator.budget:
-        budget_before = evaluator.budget_used
-        trial = study.ask()
-        score, _ = evaluator.propose(propose(trial))
-        if score is not None:
+    def tell(trial, tokens) -> None:
+        score = evaluator.score_of(tokens)
+        if score is not None and math.isfinite(float(score.val_reward)):
             study.tell(trial, float(score.val_reward))
         else:
             # Skipped proposals (duplicate, degenerate or claimed classes)
-            # get the current best as a neutral value: they neither help
-            # nor hurt the surrogate.
+            # and non-finite rewards get the current best as a neutral
+            # value: they neither help nor hurt the surrogate (Optuna
+            # rejects NaN objectives outright).
             study.tell(trial, evaluator.best_reward)
+
+    stall = 0
+    batch: list = []
+    while evaluator.budget_used < evaluator.budget:
+        budget_before = evaluator.budget_used
+        trial = study.ask()
+        tokens = propose(trial)
+        evaluator.propose(tokens)
+        batch.append((trial, tokens))
+        if len(batch) >= tell_batch or evaluator.budget_used >= evaluator.budget:
+            evaluator.flush()
+            for trial, tokens in batch:
+                tell(trial, tokens)
+            batch = []
         if evaluator.budget_used == budget_before:
             stall += 1
             if stall >= stall_limit:
                 break  # the proposal stream stopped yielding new classes
         else:
             stall = 0
+    if batch:
+        evaluator.flush()
+        for trial, tokens in batch:
+            tell(trial, tokens)
     return evaluator.finish()

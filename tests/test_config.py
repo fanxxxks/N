@@ -142,16 +142,53 @@ def test_make_model_config_v3_training_fields(tmp_path: Path):
     assert overridden.entropy_coef == 0.05
 
 
+def test_make_model_config_searcher_validated(tmp_path: Path):
+    cfg = make_model_config({})
+    assert cfg.searcher == "rl"  # code-level fallback (experimental path)
+    with pytest.raises(ValueError, match="searcher"):
+        make_model_config({"model": {"searcher": "grid"}})
+    assert make_model_config({"model": {"searcher": "gp"}}).searcher == "gp"
+
+
+def test_production_default_searcher_is_gp():
+    """T2-03 admission verdict pinned: the production config's default
+    searcher is the strongly-typed GP (RL was not admitted; it stays an
+    opt-in experimental backend)."""
+
+    from ashare_data.config import load_config
+
+    root = Path(__file__).resolve().parents[1]
+    raw = load_config(None, project_root=root)
+    assert make_model_config(raw).searcher == "gp"
+
+
 def test_make_protocol_config_random_search_fields(tmp_path: Path):
     proto = make_protocol_config({})
     assert proto.screening.steps == 150
     assert proto.random_samples == 4096
     assert proto.random_seed == 1234
+    assert proto.gp_enabled is True
+    assert proto.gp_seed == 1235
+    assert proto.tpe_enabled is True
+    assert proto.tpe_seed == 1236
     overridden = make_protocol_config(
-        {"protocol": {"random_samples": 0, "random_seed": 99}}
+        {
+            "protocol": {
+                "random_samples": 0,
+                "random_seed": 99,
+                "gp_enabled": False,
+                "gp_seed": 7,
+                "tpe_enabled": False,
+                "tpe_seed": 8,
+            }
+        }
     )
     assert overridden.random_samples == 0
     assert overridden.random_seed == 99
+    assert overridden.gp_enabled is False
+    assert overridden.gp_seed == 7
+    assert overridden.tpe_enabled is False
+    assert overridden.tpe_seed == 8
     with pytest.raises(ValueError, match="random_samples"):
         make_protocol_config({"protocol": {"random_samples": -1}})
 

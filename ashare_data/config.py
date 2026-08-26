@@ -89,6 +89,12 @@ class ModelConfig:
     collapse_warn_fraction: float = 0.95
     collapse_warn_steps: int = 10
     feature_names: list[str] | None = None
+    # Default formula searcher (T2-03 admission decision): "rl" (REINFORCE
+    # policy), "gp" (strongly-typed GP, DEAP) or "random" (uniform
+    # mask-legal search) — all billed in unique semantic evaluations.  The
+    # admission experiment decides whether RL keeps this default; if it
+    # fails, the default flips to "gp" and RL stays an opt-in experiment.
+    searcher: str = "rl"
 
 
 @dataclass
@@ -230,6 +236,14 @@ class ProtocolConfig:
     # per fold, making the RL-vs-baseline comparison budget-fair;
     # ``random_samples`` then only applies when this is False.
     random_match_budget: bool = True
+    # T2-02/T2-03 baseline ladder: strongly-typed GP (DEAP) and TPE
+    # (Optuna) join the random baseline with the same matched budget per
+    # fold; False disables either.  The admission experiment (T2-03)
+    # decides whether RL stays the default searcher.
+    gp_enabled: bool = True
+    gp_seed: int = 1235
+    tpe_enabled: bool = True
+    tpe_seed: int = 1236
 
 
 def validate_folds(folds: list[FoldConfig]) -> list[FoldConfig]:
@@ -413,7 +427,12 @@ def make_model_config(raw: dict[str, Any]) -> ModelConfig:
         k: model_raw.get(k, getattr(defaults, k))
         for k in ModelConfig.__dataclass_fields__
     }
-    return ModelConfig(**data)
+    cfg = ModelConfig(**data)
+    if cfg.searcher not in ("rl", "gp", "random"):
+        raise ValueError(
+            f"model.searcher must be 'rl', 'gp' or 'random', got {cfg.searcher!r}"
+        )
+    return cfg
 
 
 def make_reward_config(raw: dict[str, Any]) -> RewardConfig:
@@ -463,6 +482,10 @@ def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
         random_match_budget=bool(
             proto_raw.get("random_match_budget", defaults.random_match_budget)
         ),
+        gp_enabled=bool(proto_raw.get("gp_enabled", defaults.gp_enabled)),
+        gp_seed=int(proto_raw.get("gp_seed", defaults.gp_seed)),
+        tpe_enabled=bool(proto_raw.get("tpe_enabled", defaults.tpe_enabled)),
+        tpe_seed=int(proto_raw.get("tpe_seed", defaults.tpe_seed)),
     )
     if not cfg.seeds:
         raise ValueError("protocol.seeds must not be empty")
