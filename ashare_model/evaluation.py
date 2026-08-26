@@ -110,6 +110,12 @@ gate (``capacity_above_maximum``) rejects illiquid positions; best-
 formula selection uses constrained/Pareto ranking on those objectives
 with IC as the auxiliary tie-break, instead of the fragile scalar.
 
+v17 makes the random-search baseline **budget-matched** (T1-05): by
+default it receives the trained candidate's exact evaluation budget
+(``tier.steps x tier.batch_size`` unique formula evaluations) per fold,
+and artifacts record ``random_budget_matched`` / ``random_budget``, so
+RL-vs-baseline comparisons are budget-fair.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -169,7 +175,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "16"
+PROTOCOL_VERSION = "17"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -737,6 +743,7 @@ def run_random_search(
     fold: Fold,
     n_samples: int,
     seed: int,
+    budget: int | None = None,
 ) -> dict:
     """Uniform random-search baseline over structurally valid formulas.
 
@@ -747,6 +754,11 @@ def run_random_search(
     out-of-sample in its learned direction.  The row is shaped exactly like
     a trained row so aggregates and the DS/max-t corrections treat both
     searches identically.
+
+    With ``budget`` (T1-05) the baseline is **budget-matched**: it scores
+    exactly ``budget`` unique formulas (duplicates never count), so the
+    comparison against a trained candidate that evaluated
+    ``steps x batch_size`` unique formulas is budget-fair.
     """
 
     base = {
@@ -755,6 +767,7 @@ def run_random_search(
         "fold_test_end": fold.test_end,
         "seed": seed,
         "n_samples": int(n_samples),
+        "budget": int(budget) if budget is not None else None,
     }
 
     def failed_row(reason: str, score=None) -> dict:
@@ -830,24 +843,35 @@ def run_random_search(
     )
     selector = CandidateSelector()
 
-    formulas = sample_random_formulas(
-        seed, vocab, model_config.max_formula_len, n_samples
+    # T1-05 matched budget: score exactly ``budget`` unique formulas
+    # (duplicates never count against the budget, exactly like the
+    # trainer's reward cache).
+    target_count = int(budget) if budget is not None else int(n_samples)
+    if target_count <= 0:
+        return failed_row("degenerate window or budget")
+    sampled = sample_random_formulas(
+        seed, vocab, model_config.max_formula_len, target_count * 2
     )
+    formulas: list[tuple[int, ...]] = []
+    seen: set[tuple[int, ...]] = set()
+    for key in sampled:
+        if key in seen:
+            continue
+        seen.add(key)
+        formulas.append(key)
+        if len(formulas) >= target_count:
+            break
     # Random-search formulas are scored in budget-aware chunks so the
     # float64 signal stack + both-direction copy stay memory-bounded
     # (the shared chunk helper, same budget as the trainer).
     signal_bytes = factors.shape[1] * factors.shape[2] * 8
     chunk = score_chunk_size(signal_bytes)
     scores = []
-    seen: set[tuple[int, ...]] = set()
     for start in range(0, len(formulas), chunk):
         specs: list[CandidateSpec] = []
         signals: list[np.ndarray | None] = []
         formula_valid: list[bool] = []
         for key in formulas[start : start + chunk]:
-            if key in seen:
-                continue
-            seen.add(key)
             specs.append(
                 CandidateSpec(
                     candidate_id="random:" + ",".join(str(token) for token in key),
@@ -1284,6 +1308,8 @@ def build_result(
     max_t_perms: int = 5000,
     universe_policy: dict | None = None,
     dataset_id: str | None = None,
+    random_budget_matched: bool | None = None,
+    random_budget: int | None = None,
 ) -> dict:
     """Assemble the protocol artifact (schema contract, see module docstring).
 
@@ -1294,6 +1320,8 @@ def build_result(
     universe policy fields that produced the rows.  ``dataset_id`` binds
     the artifact to the immutable dataset manifest the rows were measured
     on (``None`` for legacy databases, recorded as ``null``).
+    ``random_budget_matched`` / ``random_budget`` record the T1-05
+    baseline budget actually used.
     """
 
     trial_pool = list(rows) + list(extra_trial_rows or [])
@@ -1310,6 +1338,8 @@ def build_result(
             "seeds": list(proto_cfg.seeds),
             "random_samples": proto_cfg.random_samples,
             "random_seed": proto_cfg.random_seed,
+            "random_budget_matched": random_budget_matched,
+            "random_budget": random_budget,
             "folds": [
                 {"train_end": f.train_end, "test_end": f.test_end}
                 for f in proto_cfg.folds
@@ -1375,9 +1405,17 @@ def run_protocol(
             )
         )
         if proto_cfg.random_samples > 0:
+            # T1-05: the baseline is budget-matched to the trained
+            # candidate (steps x batch_size unique evaluations) unless
+            # explicitly disabled.
+            random_budget = (
+                tier.steps * tier.batch_size
+                if proto_cfg.random_match_budget
+                else None
+            )
             logger.info(
                 f"fold {fold.train_end} -> {fold.test_end} random-search "
-                f"baseline samples={proto_cfg.random_samples} "
+                f"baseline budget={random_budget or proto_cfg.random_samples} "
                 f"seed={proto_cfg.random_seed}"
             )
             rows.append(
@@ -1389,6 +1427,7 @@ def run_protocol(
                     fold,
                     proto_cfg.random_samples,
                     proto_cfg.random_seed,
+                    budget=random_budget,
                 )
             )
         for seed in seeds:
@@ -1418,6 +1457,14 @@ def run_protocol(
         max_t_perms=max_t_perms,
         universe_policy=universe_policy_payload(loader),
         dataset_id=loader.dataset_id,
+        random_budget_matched=(
+            proto_cfg.random_match_budget and proto_cfg.random_samples > 0
+        ),
+        random_budget=(
+            tier.steps * tier.batch_size
+            if proto_cfg.random_match_budget and proto_cfg.random_samples > 0
+            else proto_cfg.random_samples
+        ),
     )
 
 

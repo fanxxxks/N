@@ -254,6 +254,11 @@ class AshareBacktestEngine:
                         raw[idx] = 0.0
                     raw = self._scale_to_budget(raw, held)
                 target_weights = held + self._scale_to_budget(raw, held)
+            # Quantize weights to 1e-12 (same as the reward basket): the
+            # scale-to-budget arithmetic leaves ~1e-16 summation noise
+            # which would fabricate phantom micro-orders that pay the
+            # full minimum commission and break permutation invariance.
+            target_weights = np.round(target_weights, 12)
 
             buy_weights = np.maximum(target_weights - prev_weights, 0.0)
             sell_weights = np.maximum(prev_weights - target_weights, 0.0)

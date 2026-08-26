@@ -630,6 +630,11 @@ def simulate_basket_daily_returns_batch(
                 target = np.where(hold_rows[:, None], hold_target, target)
         else:
             target = hold_target
+        # Quantize weights to 1e-12: the scale-to-budget arithmetic leaves
+        # ~1e-16 summation noise (row-order dependent), which would
+        # otherwise fabricate phantom micro-orders that pay the full
+        # minimum commission and break permutation invariance.
+        target = np.round(target, 12)
 
         buy = np.maximum(target - prev, 0.0)
         sell = np.maximum(prev - target, 0.0)
