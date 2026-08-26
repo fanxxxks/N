@@ -225,6 +225,11 @@ class ProtocolConfig:
     # 0 disables the baseline.
     random_samples: int = 4096
     random_seed: int = 1234
+    # T1-05: when True the baseline receives the trained candidate's exact
+    # evaluation budget (tier.steps * tier.batch_size unique evaluations)
+    # per fold, making the RL-vs-baseline comparison budget-fair;
+    # ``random_samples`` then only applies when this is False.
+    random_match_budget: bool = True
 
 
 def validate_folds(folds: list[FoldConfig]) -> list[FoldConfig]:
@@ -455,6 +460,9 @@ def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
             proto_raw.get("random_samples", defaults.random_samples)
         ),
         random_seed=int(proto_raw.get("random_seed", defaults.random_seed)),
+        random_match_budget=bool(
+            proto_raw.get("random_match_budget", defaults.random_match_budget)
+        ),
     )
     if not cfg.seeds:
         raise ValueError("protocol.seeds must not be empty")
