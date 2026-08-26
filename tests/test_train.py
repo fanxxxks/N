@@ -259,8 +259,18 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
     trainer.train(steps=1, batch_size=2, save_artifacts=False)
     bare = (1, 0, 0, 0)
     combined = (1, 1, add_token, 0)
-    bare_score = trainer._reward_cache[bare]
-    combined_score = trainer._reward_cache[combined]
+    # T2-01: scores live in the semantic cache under their canonical keys.
+    bare_key = trainer.semantic_cache.key_for(bare)
+    combined_key = trainer.semantic_cache.key_for(combined)
+    assert bare_key is not None and combined_key is not None
+    assert bare_key != combined_key
+    bare_score = trainer.semantic_cache.get(bare_key)
+    combined_score = trainer.semantic_cache.get(combined_key)
+    assert bare_score is not None and combined_score is not None
+    # The two forms are numerically equivalent (ADD(x, x) ranks like x) but
+    # carry different complexity bills, so both were evaluated: distinct
+    # semantic classes, two budget units.
+    assert trainer.semantic_cache.budget_used == 2
     # Bare factor: bill 1.0 -> penalty exactly complexity_penalty.
     assert bare_score.train_reward == pytest.approx(0.25)
     assert bare_score.val_reward == pytest.approx(0.15)
@@ -772,33 +782,60 @@ def test_reward_cache_reuses_evaluations_across_steps(
 
     monkeypatch.setattr(Categorical, "sample", fixed_sample)
     trainer.train(steps=2, batch_size=4, save_artifacts=False)
-    # Step 1 evaluates the unique formula once; step 2 hits the cache and
-    # never touches the VM again (invalid formulas are cached too).  The
-    # Direction is scored in the same shared +/- batch, so no late VM
-    # execution is needed after selection.
-    assert calls["n"] == 1
-    # The cache-hit rate reports the cross-step reuse: step 1 starts cold,
-    # step 2 finds every row in the cache.
+    # Step 1 evaluates the unique formula once: one calibration-slice
+    # execution (semantic fingerprint) plus one full execution.  Step 2
+    # hits the cache and never touches the VM again (invalid formulas are
+    # cached too).  The direction is scored in the same shared +/- batch,
+    # so no late VM execution is needed after selection.
+    assert calls["n"] == 2
+    # The unique-semantic-evaluation budget is billed exactly once.
+    assert trainer.history[0]["unique_semantic_evals"] == 1.0
+    assert trainer.history[-1]["unique_semantic_evals"] == 1.0
+    # The cache-hit rate reports the cross-step reuse: step 1 starts cold;
+    # in step 2 the first row of the batch hits the cache and the rest
+    # share its canonical evaluation within the step.
     assert trainer.history[0]["cache_hit_frac"] == pytest.approx(0.0)
-    assert trainer.history[-1]["cache_hit_frac"] == pytest.approx(1.0)
+    assert trainer.history[-1]["cache_hit_frac"] == pytest.approx(0.25)
 
 
-def test_reward_cache_is_bounded_lru(monkeypatch):
+def test_semantic_cache_cap_matches_trainer_bound(
+    populated_db: DataConfig, monkeypatch
+):
+    """The trainer's semantic cache is bounded by the same LRU cap the old
+    token cache used (the LRU eviction behavior itself is covered by
+    tests/test_semantic_cache.py)."""
+
     from ashare_model.train import AshareTrainer
 
-    monkeypatch.setattr(AshareTrainer, "_REWARD_CACHE_CAP", 4)
-    cache: OrderedDict = OrderedDict()
-    monkeypatch.setattr(
-        AshareTrainer, "_reward_cache", cache, raising=False
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
     )
-    trainer = object.__new__(AshareTrainer)
-    for i in range(6):
-        trainer._cache_put((i,), (float(i), None))
-    assert len(cache) == 4
-    assert list(cache.keys()) == [(2,), (3,), (4,), (5,)]
-    # Touching moves the entry to the most-recent end.
-    trainer._cache_touch((2,))
-    assert list(cache.keys()) == [(3,), (4,), (5,), (2,)]
+    pattern = [1, 1, FORMULA_VOCAB.operator_offset, FORMULA_VOCAB.eos_token_id]
+    state = {"pos": -1}
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        return torch.full(
+            (self.logits.shape[0],),
+            pattern[state["pos"] % len(pattern)],
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
+    trainer.train(steps=1, batch_size=1, save_artifacts=False)
+    stats = trainer.semantic_cache.stats()
+    assert stats["cap"] == AshareTrainer._REWARD_CACHE_CAP
+    assert stats["version"] == 1
+    assert stats["window_id"].startswith("train:")
+    assert stats["protocol_version"] == 18
 
 
 def test_duplicate_formulas_share_one_batched_evaluation(
@@ -840,10 +877,11 @@ def test_duplicate_formulas_share_one_batched_evaluation(
 
     monkeypatch.setattr(Categorical, "sample", fixed_sample)
     trainer.train(steps=1, batch_size=4, save_artifacts=False)
-    # Four identical valid formulas: one VM execution, one batched scoring,
+    # Four identical valid formulas: one calibration-slice execution
+    # (semantic fingerprint) plus one full execution, one batched scoring,
     # and the best formula is recorded from the shared evaluation; the
-    # Direction is selected by the same batched evaluation.
-    assert calls["n"] == 1
+    # direction is selected by the same batched evaluation.
+    assert calls["n"] == 2
     assert trainer.best_tokens is not None
     assert trainer.best_tokens[:3] == [1, 1, add_token]
     assert trainer.best_reward > -float("inf")

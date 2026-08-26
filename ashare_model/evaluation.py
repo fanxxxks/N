@@ -116,6 +116,16 @@ default it receives the trained candidate's exact evaluation budget
 and artifacts record ``random_budget_matched`` / ``random_budget``, so
 RL-vs-baseline comparisons are budget-fair.
 
+v18 (T2-01) makes the **unique semantic formula evaluation** the budget
+unit of every searcher: formulas are canonicalized (ADD/MUL child
+ordering, double-NEG/identity/invalid-op elimination, structural hashing),
+degenerate constant-producing formulas are rejected pre-evaluation, and
+numerically equivalent formulas (same rank fingerprint on the fixed
+calibration slice) are evaluated once.  Duplicates never consume budget,
+so the trainer, the random baseline and every later searcher are billed
+identically.  Artifacts record ``unique_semantic_evals`` and the semantic
+cache version.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -164,7 +174,15 @@ from .candidates import (
 )
 from .data_loader import AshareDataLoader
 from .diagnostics import rank_ic_stats
+from .complexity import complexity_bill
+from .ir import FormulaSyntaxError, canonical_ast, canonical_tokens
 from .reward import REWARD_VERSION
+from .semantic_cache import (
+    SEMANTIC_CACHE_VERSION,
+    CalibrationSlice,
+    SemanticCache,
+    make_calibration_execute,
+)
 from .time_contract import FoldTimeContract
 from .train import (
     AshareTrainer,
@@ -175,7 +193,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "17"
+PROTOCOL_VERSION = "18"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -747,18 +765,23 @@ def run_random_search(
 ) -> dict:
     """Uniform random-search baseline over structurally valid formulas.
 
-    Samples ``n_samples`` formulas with the same legality rules the policy
-    samples under, scores each on the training window with the shared
-    reward path (validation reward = median over the same sub-windows the
-    trainer uses), keeps the best by validation reward and evaluates it
-    out-of-sample in its learned direction.  The row is shaped exactly like
-    a trained row so aggregates and the DS/max-t corrections treat both
-    searches identically.
+    Samples formulas with the same legality rules the policy samples
+    under, scores each on the training window with the shared reward path
+    (validation reward = median over the same sub-windows the trainer
+    uses), keeps the best by validation reward and evaluates it
+    out-of-sample in its learned direction.  The row is shaped exactly
+    like a trained row so aggregates and the DS/max-t corrections treat
+    both searches identically.
 
     With ``budget`` (T1-05) the baseline is **budget-matched**: it scores
     exactly ``budget`` unique formulas (duplicates never count), so the
     comparison against a trained candidate that evaluated
-    ``steps x batch_size`` unique formulas is budget-fair.
+    ``steps x batch_size`` unique formulas is budget-fair.  The budget
+    unit is the **unique semantic formula evaluation** (v18, T2-01):
+    degenerate constant-producing formulas are rejected pre-evaluation,
+    canonical duplicates are merged, and numerically equivalent formulas
+    (same calibration fingerprint) are scored once — the exact accounting
+    the trainer's semantic cache applies.
     """
 
     base = {
@@ -768,6 +791,7 @@ def run_random_search(
         "seed": seed,
         "n_samples": int(n_samples),
         "budget": int(budget) if budget is not None else None,
+        "semantic_cache_version": SEMANTIC_CACHE_VERSION,
     }
 
     def failed_row(reason: str, score=None) -> dict:
@@ -843,35 +867,80 @@ def run_random_search(
     )
     selector = CandidateSelector()
 
-    # T1-05 matched budget: score exactly ``budget`` unique formulas
-    # (duplicates never count against the budget, exactly like the
-    # trainer's reward cache).
+    # T1-05 matched budget: score exactly ``budget`` unique semantic
+    # formulas (duplicates never count against the budget, exactly like
+    # the trainer's semantic cache).  Sample with headroom and dedupe
+    # canonically: degenerate formulas are dropped and structurally
+    # identical sequences collapse.
     target_count = int(budget) if budget is not None else int(n_samples)
     if target_count <= 0:
         return failed_row("degenerate window or budget")
     sampled = sample_random_formulas(
-        seed, vocab, model_config.max_formula_len, target_count * 2
+        seed, vocab, model_config.max_formula_len, target_count * 8
     )
     formulas: list[tuple[int, ...]] = []
     seen: set[tuple[int, ...]] = set()
     for key in sampled:
-        if key in seen:
+        try:
+            canonical = canonical_tokens(key, vocab)
+        except FormulaSyntaxError:
+            continue  # structurally invalid: never evaluated
+        if canonical is None:
+            continue  # degenerate (constant-producing): never evaluated
+        ctuple = tuple(canonical)
+        if ctuple in seen:
             continue
-        seen.add(key)
-        formulas.append(key)
+        seen.add(ctuple)
+        formulas.append(ctuple)
         if len(formulas) >= target_count:
             break
+    # T2-01 semantic budget: the cache carries the evaluation context and
+    # dedups numerically equivalent formulas through the calibration
+    # fingerprint; its budget counter is the unique-semantic-evaluation
+    # ledger.
+    cache = SemanticCache(
+        dataset_id=loader.dataset_id,
+        reward_version=REWARD_VERSION,
+        protocol_version=PROTOCOL_VERSION,
+        window_id=f"fold:{fold.train_end}:{fold.test_end}:seed:{seed}",
+        cap=target_count,
+    )
+    fingerprint_execute = make_calibration_execute(
+        vm,
+        factors,
+        universe_mask,
+        industry_codes,
+        CalibrationSlice.of(factors.shape[2]),
+    )
     # Random-search formulas are scored in budget-aware chunks so the
     # float64 signal stack + both-direction copy stay memory-bounded
     # (the shared chunk helper, same budget as the trainer).
     signal_bytes = factors.shape[1] * factors.shape[2] * 8
     chunk = score_chunk_size(signal_bytes)
     scores = []
+    n_semantic_dedups = 0
     for start in range(0, len(formulas), chunk):
         specs: list[CandidateSpec] = []
         signals: list[np.ndarray | None] = []
         formula_valid: list[bool] = []
         for key in formulas[start : start + chunk]:
+            ckey = cache.key_for(key)
+            if ckey is None:
+                continue
+            canonical = canonical_ast(key, vocab)
+            bill = complexity_bill(canonical) if canonical is not None else None
+            fingerprint = cache.fingerprint(key, fingerprint_execute, vocab)
+            if fingerprint is not None:
+                if cache.is_claimed(fingerprint, bill):
+                    # Same semantic class already claimed this run: skip
+                    # the duplicate evaluation entirely.
+                    n_semantic_dedups += 1
+                    continue
+                score = cache.score_by_fingerprint(fingerprint, bill)
+                if score is not None:
+                    n_semantic_dedups += 1
+                    cache.put(ckey, score, fingerprint, bill)
+                    continue
             specs.append(
                 CandidateSpec(
                     candidate_id="random:" + ",".join(str(token) for token in key),
@@ -887,26 +956,37 @@ def run_random_search(
                 continue
             signals.append(signal.detach().cpu().numpy())
             formula_valid.append(True)
+            cache.put(ckey, None, fingerprint, bill)  # claim the semantic class
+            if cache.budget_used >= target_count:
+                break
         if not specs:
             continue
-        scores.extend(
-            scorer.score_many(
-                specs,
-                signals,
-                target,
-                val_windows,
-                blocked_buy=blocked_buy,
-                blocked_sell=blocked_sell,
-                formula_valid=formula_valid,
-                train_signal_range=(
-                    contract.train_signal_start,
-                    validation_start(train_signal_end, model_config),
-                ),
-                universe_mask=train_universe_mask,
-                tie_break_keys=np.asarray(loader.ts_codes),
-                adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
-            )
+        scored = scorer.score_many(
+            specs,
+            signals,
+            target,
+            val_windows,
+            blocked_buy=blocked_buy,
+            blocked_sell=blocked_sell,
+            formula_valid=formula_valid,
+            train_signal_range=(
+                contract.train_signal_start,
+                validation_start(train_signal_end, model_config),
+            ),
+            universe_mask=train_universe_mask,
+            tie_break_keys=np.asarray(loader.ts_codes),
+            adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
         )
+        for key, score in zip(specs, scored):
+            ckey = cache.key_for(key.tokens)
+            if ckey is not None:
+                cache.put(ckey, score, None)
+        scores.extend(scored)
+        if cache.budget_used >= target_count:
+            break
+
+    base["unique_semantic_evals"] = cache.budget_used
+    base["semantic_dedups"] = n_semantic_dedups
 
     selection = selector.select(scores, pareto_objectives=PARETO_OBJECTIVES)
     selected = selection.selected

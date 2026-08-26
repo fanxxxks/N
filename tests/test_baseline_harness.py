@@ -166,6 +166,160 @@ def test_run_matched_baseline_deterministic_in_seed():
     assert first.selected.formula_text == second.selected.formula_text
 
 
+# --- T2-01 semantic budget -------------------------------------------------
+
+
+def _vocab_tokens(*names: str) -> list[int]:
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    vocab = FORMULA_VOCAB
+    return [
+        vocab.feature_offset + vocab.feature_names.index(n) for n in names
+    ]
+
+
+def _op_token(name: str) -> int:
+    from ashare_model.ops import OPS_CONFIG
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    return FORMULA_VOCAB.operator_offset + [
+        cfg[0] for cfg in OPS_CONFIG
+    ].index(name)
+
+
+def _semantic_kwargs(n_stocks=10, n_dates=40):
+    rng = np.random.default_rng(31)
+    target = rng.normal(0.001, 0.01, size=(n_stocks, n_dates))
+    mask = np.ones(target.shape, dtype=bool)
+    cfg = _cfg()
+    rc = _reward()
+    return dict(
+        target=target,
+        universe_mask=mask,
+        backtest_config=cfg,
+        reward_config=rc,
+        val_windows=[(20, 30), (30, 38)],
+        train_signal_range=(0, 20),
+        budget=10,
+        max_formula_len=4,
+        dataset_id="dataset-a",
+        protocol_version=18,
+        window_id="train:0:100",
+    )
+
+
+def test_semantic_budget_skips_degenerate_and_canonical_duplicates(
+    monkeypatch,
+):
+    """The v18 budget unit is the unique semantic formula evaluation:
+    degenerate formulas are never evaluated, commuted forms collapse, and
+    numerically equivalent formulas split only when their complexity bills
+    differ."""
+
+    import ashare_model.baseline_harness as harness_module
+
+    add = _op_token("ADD")
+    sub = _op_token("SUB")
+    ret1 = _vocab_tokens("RET_1")[0]
+    ret5 = _vocab_tokens("RET_5")[0]
+    eos = 102  # FORMULA_VOCAB.eos_token_id
+    # x; ADD(a, b) and its commuted twin; SUB(x, x) (degenerate);
+    # ADD(x, x) — same rank pattern and same bill (1.7) as ADD(a, b)
+    # under this deterministic executor, so it dedups against it.
+    crafted = [
+        (ret1, eos, 0, 0),
+        (ret1, ret5, add, eos),
+        (ret5, ret1, add, eos),  # canonical duplicate of ADD(a, b)
+        (ret1, ret1, sub, eos),  # degenerate: SUB(x, x) == 0
+        (ret1, ret1, add, eos),  # same semantic class as ADD(a, b)
+    ]
+    monkeypatch.setattr(
+        harness_module,
+        "sample_random_formulas",
+        lambda seed, vocab, max_len, n: crafted * (n // len(crafted) + 1),
+    )
+    kwargs = _semantic_kwargs()
+    target = kwargs["target"]
+
+    def execute(tokens):
+        return target + (sum(tokens) % 5) * 1e-4
+
+    result = run_matched_baseline(
+        **kwargs, seed=1, execute=execute, fingerprint_execute=execute
+    )
+    # SUB(x, x) is never evaluated; the commuted ADD is one formula; the
+    # two 1.7-bill ADD forms share one semantic class.
+    assert result.n_evaluated == 2  # x (bill 1.0), ADD class (bill 1.7)
+    assert result.n_semantic_dedups == 1
+    assert result.budget == 10
+
+
+def test_semantic_budget_dedups_equivalent_classes(monkeypatch):
+    """When every proposal shares one semantic class, only the first is
+    evaluated; the rest are deduped without consuming budget."""
+
+    import ashare_model.baseline_harness as harness_module
+
+    add = _op_token("ADD")
+    sub = _op_token("SUB")
+    ret1 = _vocab_tokens("RET_1")[0]
+    ret5 = _vocab_tokens("RET_5")[0]
+    eos = 102
+    # ADD(a, b) and SUB(a, b): distinct canonical forms, equal complexity
+    # bills (both binary arithmetic, 3 nodes), and the same signal under
+    # this deterministic executor — one semantic class.
+    crafted = [
+        (ret1, ret5, add, eos),
+        (ret1, ret5, sub, eos),
+    ]
+    monkeypatch.setattr(
+        harness_module,
+        "sample_random_formulas",
+        lambda seed, vocab, max_len, n: crafted * (n // len(crafted) + 1),
+    )
+    kwargs = _semantic_kwargs()
+    target = kwargs["target"]
+
+    def execute(tokens):
+        return target  # every formula evaluates to the same signal
+
+    result = run_matched_baseline(
+        **kwargs, seed=2, execute=execute, fingerprint_execute=execute
+    )
+    # One semantic class (the constant signal): one evaluation, the other
+    # proposal dedups against it.
+    assert result.n_evaluated == 1
+    assert result.n_semantic_dedups == 1
+
+
+def test_semantic_budget_legacy_mode_unchanged():
+    """Without the semantic context the harness keeps the canonical
+    token-sequence budget (T1-05 behavior, canonicalized)."""
+
+    rng = np.random.default_rng(33)
+    n_stocks, n_dates = 10, 40
+    target = rng.normal(0.001, 0.01, size=(n_stocks, n_dates))
+    mask = np.ones(target.shape, dtype=bool)
+
+    def execute(tokens):
+        return target + rng.normal(0, 0.001, size=target.shape)
+
+    result = run_matched_baseline(
+        target=target,
+        universe_mask=mask,
+        backtest_config=_cfg(),
+        reward_config=_reward(),
+        val_windows=[(20, 30), (30, 38)],
+        train_signal_range=(0, 20),
+        budget=8,
+        seed=3,
+        max_formula_len=4,
+        execute=execute,
+    )
+    assert result.n_evaluated == 8
+    assert result.n_semantic_dedups == 0
+
+
 # --- completion gate: cap never broken --------------------------------------
 
 
