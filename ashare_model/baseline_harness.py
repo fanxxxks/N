@@ -1,4 +1,4 @@
-"""Matched-budget baseline harness (T1-05).
+"""Matched-budget baseline harness (T1-05) and the Phase-2 search core.
 
 The harness answers the phase-1 research-validity questions with the
 shared production measurement path (scorer + engine), not a proxy:
@@ -8,6 +8,11 @@ shared production measurement path (scorer + engine), not a proxy:
   batch_size`` unique formula evaluations — so RL-vs-baseline
   comparisons are budget-fair (the protocol's fixed ``random_samples``
   knob is replaced by the matched budget unless explicitly disabled).
+* :class:`SemanticBudgetEvaluator` is the shared evaluation core of every
+  Phase-2 searcher (random, GP, TPE, RL): proposals are billed in unique
+  semantic formula evaluations (T2-01) and scored through the shared
+  candidate scorer; the best-so-far curve and the Pareto selection are
+  recorded for the admission comparisons (T2-03).
 * :func:`oos_active_ir` reduces a strategy's OOS excess series to its
   annualized active IR — the same quantity the protocol's trial matrix
   uses for the DS/max-t corrections.
@@ -33,12 +38,15 @@ from .candidates import (
     CandidateScorer,
     CandidateSelector,
     CandidateSpec,
+    score_chunk_size,
 )
 from .complexity import complexity_bill
 from .ir import FormulaSyntaxError, canonical_ast, canonical_tokens
-from .semantic_cache import CalibrationSlice, SemanticCache, make_calibration_execute
+from .reward import REWARD_VERSION
+from .semantic_cache import SemanticCache
 from .train import sample_random_formulas
-from .vocab import FORMULA_VOCAB
+from .vm import formula_decode
+from .vocab import FormulaVocab, FORMULA_VOCAB
 
 _ANNUALIZATION = 252
 _CAP = 1e9
@@ -137,7 +145,8 @@ class BaselineHarnessResult:
     number of evaluations actually performed (unique semantic evaluations
     in semantic mode, unique canonical evaluations otherwise);
     ``n_semantic_dedups`` counts formulas that reused a numerically
-    equivalent evaluation without billing.
+    equivalent evaluation without billing; ``best_so_far`` is the
+    ``(cumulative budget, best validation reward)`` curve of the search.
     """
 
     budget: int
@@ -148,6 +157,7 @@ class BaselineHarnessResult:
     reward_oos: dict[str, float] | None = None
     rejections: dict[str, int] | None = None
     n_semantic_dedups: int = 0
+    best_so_far: tuple[tuple[float, float], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -159,7 +169,234 @@ class BaselineHarnessResult:
             "reward_oos": self.reward_oos,
             "rejections": self.rejections,
             "n_scores": len(self.scores),
+            "best_so_far": list(self.best_so_far),
         }
+
+
+class SemanticBudgetEvaluator:
+    """Shared evaluation core of the Phase-2 searchers (T2-02).
+
+    Every searcher (random, GP, TPE) proposes token sequences through
+    :meth:`propose`; the evaluator converts them into evaluated candidates
+    under the unique-semantic-evaluation budget: structurally invalid and
+    degenerate formulas never evaluate, canonical duplicates and
+    numerically equivalent classes (calibration fingerprint + complexity
+    bill) never bill twice, and every full evaluation is scored through
+    the shared candidate scorer in bounded chunks.  The best-so-far curve
+    and the final Pareto selection are recorded for the admission
+    comparisons (T2-03).
+    """
+
+    def __init__(
+        self,
+        *,
+        target: np.ndarray,
+        universe_mask: np.ndarray,
+        backtest_config: BacktestConfig,
+        reward_config: RewardConfig,
+        val_windows: list[tuple[int, int]],
+        train_signal_range: tuple[int, int],
+        budget: int,
+        execute: Callable[[tuple[int, ...]], np.ndarray | None],
+        fingerprint_execute: Callable[[tuple[int, ...]], np.ndarray | None],
+        dataset_id: str | None,
+        protocol_version: int | str,
+        window_id: str,
+        tie_break_keys: np.ndarray | None = None,
+        adv: np.ndarray | None = None,
+        source: str = "search",
+        candidate_prefix: str = "search",
+        chunk: int | None = None,
+        vocab: FormulaVocab | None = None,
+    ):
+        self._target = np.asarray(target, dtype=np.float64)
+        self._universe_mask = np.asarray(universe_mask, dtype=bool)
+        self._val_windows = val_windows
+        self._train_signal_range = train_signal_range
+        self._tie_break_keys = tie_break_keys
+        self._adv = adv
+        self._budget = int(budget)
+        self._execute = execute
+        self._fingerprint_execute = fingerprint_execute
+        self._source = source
+        self._candidate_prefix = candidate_prefix
+        self._vocab = vocab or FORMULA_VOCAB
+        # Default chunk = 1: every evaluated proposal is scored eagerly so
+        # search loops (GP/TPE) can read the score immediately.  Batched
+        # callers pass a larger chunk for memory-bounded score_many calls.
+        self._chunk = int(chunk) if chunk is not None else 1
+        self._scorer = CandidateScorer(backtest_config, reward_config)
+        self._selector = CandidateSelector()
+        self._cache = SemanticCache(
+            dataset_id=dataset_id,
+            reward_version=REWARD_VERSION,
+            protocol_version=int(protocol_version),
+            window_id=window_id,
+            cap=max(int(budget), 1024),
+        )
+        self._pending: list[tuple[CandidateSpec, np.ndarray]] = []
+        self._claimed: set[object] = set()
+        self._claim_sequence: list[int] = []
+        self._scores: list[CandidateScore] = []
+        self._best_so_far: list[tuple[float, float]] = []
+        self._best_reward = -float("inf")
+        self._n_evaluated = 0
+        self._n_invalid = 0
+        self._n_semantic_dedups = 0
+
+    # --- proposal pipeline -------------------------------------------------
+
+    def propose(self, tokens) -> tuple[CandidateScore | None, bool]:
+        """Score one proposed formula under the semantic budget.
+
+        Returns ``(score, consumed_budget)``.  ``score`` is ``None`` when
+        the proposal was not evaluated (structurally invalid, degenerate,
+        or a semantic class already claimed this run) — its fitness is the
+        caller's choice (e.g. the current best).  ``consumed_budget`` is
+        True exactly when a full evaluation happened.  With ``chunk == 1``
+        the score is returned eagerly; with larger chunks it lands at the
+        next :meth:`flush`.
+        """
+
+        ckey = self._cache.key_for(tokens)
+        if ckey is None:
+            return None, False  # invalid or degenerate: never evaluated
+        score = self._cache.get(ckey)
+        if score is not None:
+            return score, False  # canonical duplicate of an evaluation
+        if ckey in self._claimed:
+            return None, False  # same canonical form claimed this run
+        canonical = canonical_ast(tokens, self._vocab)
+        bill = complexity_bill(canonical) if canonical is not None else None
+        fingerprint = self._cache.fingerprint(
+            tokens, self._fingerprint_execute, self._vocab
+        )
+        if fingerprint is not None:
+            if self._cache.is_claimed(fingerprint, bill):
+                self._n_semantic_dedups += 1
+                return None, False
+            score = self._cache.score_by_fingerprint(fingerprint, bill)
+            if score is not None:
+                self._n_semantic_dedups += 1
+                self._cache.put(ckey, score, fingerprint, bill)
+                return score, False
+        spec = CandidateSpec(
+            candidate_id=self._candidate_prefix
+            + ":"
+            + ",".join(str(int(t)) for t in tokens),
+            formula_text=formula_decode(list(tokens), self._vocab),
+            source=self._source,
+            tokens=tuple(int(t) for t in tokens),
+        )
+        signal = self._execute(tokens)
+        self._n_evaluated += 1
+        self._claimed.add(ckey)
+        self._cache.put(ckey, None, fingerprint, bill)  # claim the class
+        self._claim_sequence.append(self._cache.budget_used)
+        if signal is None:
+            self._n_invalid += 1
+            score = self._scorer.score(
+                spec,
+                None,
+                self._target,
+                self._val_windows,
+                formula_valid=False,
+                train_signal_range=self._train_signal_range,
+                universe_mask=self._universe_mask,
+            )
+            self._cache.put(ckey, score, None)
+            self._register(score, x=self._claim_sequence[-1])
+            return score, True
+        self._pending.append((spec, np.asarray(signal, dtype=np.float64)))
+        if len(self._pending) >= self._chunk:
+            self.flush()
+        if not self._pending:
+            # Eager mode (chunk == 1): the score landed in the flush above.
+            return self._scores[-1], True
+        return None, True
+
+    def flush(self) -> None:
+        """Score the buffered pending signals (bounded memory chunks)."""
+
+        if not self._pending:
+            return
+        specs = [spec for spec, _ in self._pending]
+        signals = [signal for _, signal in self._pending]
+        scored = self._scorer.score_many(
+            specs,
+            signals,
+            self._target,
+            self._val_windows,
+            train_signal_range=self._train_signal_range,
+            universe_mask=self._universe_mask,
+            tie_break_keys=self._tie_break_keys,
+            adv=self._adv,
+        )
+        base = len(self._scores)
+        for i, (key, score) in enumerate(zip(specs, scored)):
+            ckey = self._cache.key_for(key.tokens)
+            if ckey is not None:
+                self._cache.put(ckey, score, None)  # real score overwrites
+            self._register(score, x=self._claim_sequence[base + i])
+        self._pending = []
+
+    def _register(self, score: CandidateScore, x: float) -> None:
+        self._scores.append(score)
+        if score.val_reward > self._best_reward:
+            self._best_reward = float(score.val_reward)
+        self._best_so_far.append((float(x), self._best_reward))
+
+    # --- accounting --------------------------------------------------------
+
+    @property
+    def budget(self) -> int:
+        return self._budget
+
+    @property
+    def vocab(self) -> FormulaVocab:
+        return self._vocab
+
+    @property
+    def budget_used(self) -> int:
+        return self._cache.budget_used
+
+    @property
+    def best_reward(self) -> float:
+        return self._best_reward
+
+    def stats(self) -> dict[str, int | str]:
+        return {
+            **self._cache.stats(),
+            "n_evaluated": self._n_evaluated,
+            "n_invalid": self._n_invalid,
+            "n_semantic_dedups": self._n_semantic_dedups,
+        }
+
+    def finish(self) -> BaselineHarnessResult:
+        self.flush()
+        selection = self._selector.select(
+            self._scores,
+            pareto_objectives=(
+                ("active_ir", 1),
+                ("risk_exposure", -1),
+                ("average_turnover", -1),
+                ("capacity_utilization", -1),
+            ),
+        )
+        rejections: dict[str, int] = {}
+        for score in self._scores:
+            for reason in score.rejection_reasons:
+                rejections[reason] = rejections.get(reason, 0) + 1
+        return BaselineHarnessResult(
+            budget=self._budget,
+            n_evaluated=self._n_evaluated,
+            n_invalid=self._n_invalid,
+            scores=tuple(self._scores),
+            selected=selection.selected,
+            rejections=rejections,
+            n_semantic_dedups=self._n_semantic_dedups,
+            best_so_far=tuple(self._best_so_far),
+        )
 
 
 def run_matched_baseline(
@@ -210,17 +447,6 @@ def run_matched_baseline(
         and window_id is not None
         and fingerprint_execute is not None
     )
-    cache: SemanticCache | None = None
-    if semantic_mode:
-        from .reward import REWARD_VERSION
-
-        cache = SemanticCache(
-            dataset_id=dataset_id,
-            reward_version=REWARD_VERSION,
-            protocol_version=int(protocol_version),
-            window_id=window_id,
-            cap=budget,
-        )
 
     # Sample with headroom and dedupe canonically: degenerate formulas are
     # dropped and structurally identical sequences collapse, so the pool
@@ -244,6 +470,36 @@ def run_matched_baseline(
         if len(canonical_forms) >= headroom:
             break
 
+    if semantic_mode:
+        # The semantic budget is enforced by the shared evaluator (the same
+        # core the GP and TPE baselines run on); the chunk keeps the
+        # batched basket simulation memory-bounded for large budgets.
+        signal_bytes = np.asarray(target).shape[0] * np.asarray(target).shape[1] * 8
+        evaluator = SemanticBudgetEvaluator(
+            target=target,
+            universe_mask=universe_mask,
+            backtest_config=backtest_config,
+            reward_config=reward_config,
+            val_windows=val_windows,
+            train_signal_range=train_signal_range,
+            budget=budget,
+            execute=execute,
+            fingerprint_execute=fingerprint_execute,
+            dataset_id=dataset_id,
+            protocol_version=protocol_version,
+            window_id=window_id,
+            tie_break_keys=tie_break_keys,
+            adv=adv,
+            source="matched_baseline",
+            candidate_prefix="baseline",
+            chunk=score_chunk_size(signal_bytes),
+        )
+        for key in canonical_forms:
+            evaluator.propose(key)
+            if evaluator.budget_used >= budget:
+                break
+        return evaluator.finish()
+
     scorer = CandidateScorer(backtest_config, reward_config)
     selector = CandidateSelector()
     specs: list[CandidateSpec] = []
@@ -251,26 +507,7 @@ def run_matched_baseline(
     valid_flags: list[bool] = []
     n_invalid = 0
     n_evaluated = 0
-    n_semantic_dedups = 0
     for key in canonical_forms:
-        if cache is not None:
-            ckey = cache.key_for(key)
-            if ckey is None:
-                continue
-            canonical = canonical_ast(key, vocab)
-            bill = complexity_bill(canonical) if canonical is not None else None
-            fingerprint = cache.fingerprint(key, fingerprint_execute, vocab)
-            if fingerprint is not None:
-                if cache.is_claimed(fingerprint, bill):
-                    # Same semantic class already claimed this run: skip
-                    # the duplicate evaluation entirely.
-                    n_semantic_dedups += 1
-                    continue
-                score = cache.score_by_fingerprint(fingerprint, bill)
-                if score is not None:
-                    n_semantic_dedups += 1
-                    cache.put(ckey, score, fingerprint, bill)
-                    continue
         specs.append(
             CandidateSpec(
                 candidate_id="baseline:" + ",".join(str(t) for t in key),
@@ -288,11 +525,6 @@ def run_matched_baseline(
             signals.append(np.asarray(signal, dtype=np.float64))
             valid_flags.append(True)
         n_evaluated += 1
-        if cache is not None:
-            # Claim the semantic class now: the full evaluation is being
-            # performed, so it consumes one budget unit even though the
-            # real score lands later (the placeholder is overwritten below).
-            cache.put(ckey, None, fingerprint, bill)
         if n_evaluated >= budget:
             break
     scores = scorer.score_many(
@@ -306,11 +538,6 @@ def run_matched_baseline(
         tie_break_keys=tie_break_keys,
         adv=adv,
     )
-    if cache is not None:
-        for key, score in zip(specs, scores):
-            ckey = cache.key_for(key.tokens)
-            if ckey is not None:
-                cache.put(ckey, score, None)
     selection = selector.select(scores, pareto_objectives=(
         ("active_ir", 1),
         ("risk_exposure", -1),
@@ -328,5 +555,4 @@ def run_matched_baseline(
         scores=tuple(scores),
         selected=selection.selected,
         rejections=rejections,
-        n_semantic_dedups=n_semantic_dedups,
     )
