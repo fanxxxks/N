@@ -11,7 +11,7 @@ pre-existing environment blocker: starlette 1.3.1's TestClient requires
 | T2-01 AST canonicalization + semantic cache | 4d81bb5 + merge 737fc29 | 726 | +54 | 0 regressions; 16:43; PROTOCOL_VERSION 17→18 |
 | T2-02 DEAP GP + Optuna TPE baselines | acf8216 + merge 5952217 | 737 | +11 | 0 regressions; 17:57; deap==1.4.4 / optuna==4.9.0 added to optional deps |
 | MTPHead removal | eb317a8 + merge e749fa0 | 737 | ±0 | MODEL_VERSION 1→2; old .pt checkpoints rejected (no multi-task supervision existed) |
-| T2-03 protocol wiring + searcher backends + admission | <commit> + merge | <after> | +<n> | PROTOCOL_VERSION 18→19; gp/tpe rows on by default; admission verdict below |
+| T2-03 protocol wiring + searcher backends + admission | bc2256e + 8474456 + merge a20184a | 749 | +12 | PROTOCOL_VERSION 18→19; gp/tpe rows on by default; verdict: RL NOT admitted, default searcher → gp |
 
 ## T2-01 invariants (asserted by tests)
 
