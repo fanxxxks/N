@@ -9,7 +9,7 @@ pre-existing environment blocker: starlette 1.3.1's TestClient requires
 |---|---|---|---|---|
 | Baseline (main, pre-Phase-2) | 25bc994 | 672 | — | 20:39; webapi excluded; matches Phase-1 closing count |
 | T2-01 AST canonicalization + semantic cache | 4d81bb5 + merge 737fc29 | 726 | +54 | 0 regressions; 16:43; PROTOCOL_VERSION 17→18 |
-| T2-02 DEAP GP + Optuna TPE baselines | <commit> + merge | <after> | +<n> | 0 regressions; deap==1.4.4 / optuna==4.9.0 added to optional deps |
+| T2-02 DEAP GP + Optuna TPE baselines | acf8216 + merge 5952217 | 737 | +11 | 0 regressions; 17:57; deap==1.4.4 / optuna==4.9.0 added to optional deps |
 
 ## T2-01 invariants (asserted by tests)
 
