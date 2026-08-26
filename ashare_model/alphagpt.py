@@ -1,4 +1,11 @@
-"""LoopedTransformer + MTPHead policy model for A-share factor discovery."""
+"""LoopedTransformer policy model for A-share factor discovery.
+
+The model is a single-task policy: one linear head over the formula
+vocabulary plus a scalar critic.  The former multi-task head (MTPHead)
+was removed in MODEL_VERSION 2 — it had no multi-task supervision and
+the trainer discarded its router probabilities, so it was dead
+complexity; the model keeps exactly one head with real training signal.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +15,11 @@ import torch.nn.functional as F
 
 from .ops import OPS_BY_NAME
 from .vocab import FORMULA_VOCAB
+
+# Model architecture generation.  v1 shipped the multi-task head (MTPHead);
+# v2 removed it (no supervision existed).  Recorded in training artifacts so
+# a checkpoint is never silently interpreted under the wrong architecture.
+MODEL_VERSION = 2
 
 
 class RMSNorm(nn.Module):
@@ -43,27 +55,6 @@ class SwiGLU(nn.Module):
         x_glu = self.w(x)
         x, gate = x_glu.chunk(2, dim=-1)
         return self.fc(x * F.silu(gate))
-
-
-class MTPHead(nn.Module):
-    def __init__(self, d_model: int, vocab_size: int, num_tasks: int = 3):
-        super().__init__()
-        self.num_tasks = num_tasks
-        self.task_heads = nn.ModuleList(
-            [nn.Linear(d_model, vocab_size) for _ in range(num_tasks)]
-        )
-        self.task_router = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.ReLU(),
-            nn.Linear(d_model // 2, num_tasks),
-        )
-
-    def forward(self, x: torch.Tensor):
-        task_logits = self.task_router(x)
-        task_probs = F.softmax(task_logits, dim=-1)
-        task_outputs = torch.stack([head(x) for head in self.task_heads], dim=1)
-        weighted = (task_probs.unsqueeze(-1) * task_outputs).sum(dim=1)
-        return weighted, task_probs
 
 
 class LoopedTransformerLayer(nn.Module):
@@ -164,7 +155,7 @@ class AlphaGPTModel(nn.Module):
             dropout=config.dropout,
         )
         self.ln_f = RMSNorm(self.d_model)
-        self.mtp_head = MTPHead(self.d_model, self.vocab_size, num_tasks=3)
+        self.head = nn.Linear(self.d_model, self.vocab_size)
         self.head_critic = nn.Linear(self.d_model, 1)
 
     def forward(self, idx: torch.Tensor):
@@ -177,9 +168,9 @@ class AlphaGPTModel(nn.Module):
         x = self.blocks(x, mask=mask, is_causal=True)
         x = self.ln_f(x)
         last = x[:, -1, :]
-        logits, task_probs = self.mtp_head(last)
+        logits = self.head(last)
         value = self.head_critic(last)
-        return logits, value, task_probs
+        return logits, value
 
 
 def build_action_mask(

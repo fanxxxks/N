@@ -32,7 +32,7 @@ from ashare_data.config import (
 from ashare_data.gates import ProductionGateRunner
 from ashare_data.processor import open_to_open_returns
 
-from .alphagpt import AlphaGPTModel, build_action_mask
+from .alphagpt import MODEL_VERSION, AlphaGPTModel, build_action_mask
 from .candidates import (
     PARETO_OBJECTIVES,
     CandidateScore,
@@ -438,7 +438,7 @@ class AshareTrainer:
             entropies: list[torch.Tensor] = []
 
             for pos in range(max_len):
-                logits, value, _ = self.model(inp)
+                logits, value = self.model(inp)
                 values.append(value.squeeze(-1))
                 mask = build_action_mask(
                     stack_sizes, done, pos, max_len, self.vocab
@@ -805,6 +805,7 @@ class AshareTrainer:
             # machine; ``device`` records where the VM executed.
             "init_seed": self.init_seed,
             "device": str(vm_device),
+            "model_version": MODEL_VERSION,
             # Vocabulary provenance: the formula is always remapped by name
             # on load, so later vocabulary additions cannot silently
             # reinterpret these token ids.
