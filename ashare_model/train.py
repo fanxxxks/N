@@ -42,11 +42,19 @@ from .candidates import (
     SelectionResult,
     score_chunk_size,
 )
+from .complexity import complexity_bill
 from .data_loader import AshareDataLoader
 from .ops import OPS_CONFIG
 from .reward import (
     REWARD_VERSION,
     batched_basket_rewards,
+)
+from .semantic_cache import (
+    SEMANTIC_CACHE_VERSION,
+    CalibrationSlice,
+    SemanticCache,
+    SemanticCacheKey,
+    make_calibration_execute,
 )
 from .time_contract import TrainingTimeContract
 from .vm import StackVM, formula_decode
@@ -223,23 +231,16 @@ class AshareTrainer:
         self._candidate_scores: OrderedDict[tuple[int, ...], CandidateScore] = (
             OrderedDict()
         )
-        self._reward_cache: OrderedDict[tuple[int, ...], CandidateScore] = OrderedDict()
+        # Invalid/degenerate formulas (no canonical form) are rejected
+        # pre-evaluation: they never touch the VM and never consume
+        # evaluation budget.  Cached by token sequence, LRU-bounded, so a
+        # converged policy that keeps sampling them does not re-score.
+        self._invalid_cache: OrderedDict[tuple[int, ...], CandidateScore] = (
+            OrderedDict()
+        )
         # Operators observed across the whole run's executed formulas; the
         # run hard-fails when this stays empty (bare-factor screening).
         self._run_operator_coverage: set[str] = set()
-
-    def _cache_put(
-        self,
-        key: tuple[int, ...],
-        value: CandidateScore,
-    ) -> None:
-        self._reward_cache[key] = value
-        self._reward_cache.move_to_end(key)
-        while len(self._reward_cache) > self._REWARD_CACHE_CAP:
-            self._reward_cache.popitem(last=False)
-
-    def _cache_touch(self, key: tuple[int, ...]) -> None:
-        self._reward_cache.move_to_end(key)
 
     @staticmethod
     def _policy_update_loss(
@@ -387,6 +388,32 @@ class AshareTrainer:
         blocked_buy = blocked_buy[:, :train_end_idx]
         blocked_sell = blocked_sell[:, :train_end_idx]
 
+        # T2-01: the semantic cache is the evaluation-budget ledger.  Its
+        # key carries the full evaluation context (dataset_id, reward and
+        # protocol versions, the training window), so scores are never
+        # reused across datasets or measurement generations, and its budget
+        # counts **unique semantic evaluations** — structurally identical
+        # (canonical AST hash) and numerically equivalent (calibration
+        # fingerprint) formulas never bill twice.  ``evaluation`` imports
+        # this module at module level, so its constant is resolved lazily.
+        from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
+
+        self.semantic_cache = SemanticCache(
+            dataset_id=self.loader.dataset_id,
+            reward_version=REWARD_VERSION,
+            protocol_version=PROTOCOL_VERSION,
+            window_id=self._window_id(contract, val_windows),
+            cap=self._REWARD_CACHE_CAP,
+        )
+        calibration_slice = CalibrationSlice.of(factor_tensor.shape[2])
+        self._calibration_execute = make_calibration_execute(
+            self.vm,
+            factor_tensor,
+            universe_mask[:, :train_end_idx],
+            self.vm.industry_codes,
+            calibration_slice,
+        )
+
         # Chunk the batched reward evaluation so the stacked signal matrix
         # (original stack + batched copy + both-direction copy) stays within
         # a fixed memory budget (~512 MB of float64 signals).
@@ -427,14 +454,29 @@ class AshareTrainer:
             sequences = torch.stack(sampled_tokens, dim=1)
             rewards = torch.zeros(batch_size, device=policy_device)
 
-            # Batched reward evaluation with formula deduplication: a formula
-            # is executed once per step (and reused across steps through the
-            # bounded cache); valid signals are scored in chunks so the
-            # vectorized basket simulation stays memory-bounded.
+            # Batched reward evaluation with semantic deduplication (T2-01):
+            # the budget unit is the **unique semantic formula evaluation**.
+            # Structurally invalid / degenerate formulas are rejected
+            # pre-evaluation (never executed, never billed); canonical
+            # duplicates hit the semantic cache; numerically equivalent
+            # formulas (same calibration fingerprint) reuse the first
+            # evaluation's score without billing.  Valid signals are scored
+            # in chunks so the vectorized basket simulation stays
+            # memory-bounded.
             step_results: dict[tuple[int, ...], CandidateScore] = {}
             pending: list[tuple[CandidateSpec, np.ndarray]] = []
-            seen: set[tuple[int, ...]] = set()
+            # evaluated: list of (token key, canonical cache key,
+            # fingerprint, complexity bill).
+            evaluated: list[
+                tuple[tuple[int, ...], SemanticCacheKey, str | None, float | None]
+            ] = []
+            # canonical_share maps each canonical form to the first token
+            # key that handled it this step: identical sequences and
+            # canonical duplicates (e.g. ADD(a, b) vs ADD(b, a)) share that
+            # row's evaluation — no repeated work, no repeated billing.
+            canonical_share: dict[SemanticCacheKey, tuple[int, ...]] = {}
             cache_hits = 0
+            semantic_dedups = 0
             # Grammar stats are accumulated at execution time, so only
             # formulas the VM actually executed and produced a signal for
             # count toward length/operator coverage (a formula the VM
@@ -442,14 +484,68 @@ class AshareTrainer:
             executed_stats: list[tuple[tuple[int, ...], int, set[str]]] = []
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())
-                if key in self._reward_cache:
-                    self._cache_touch(key)
-                    step_results[key] = self._reward_cache[key]
+                ckey = self.semantic_cache.key_for(key)
+                if ckey is None:
+                    # Structurally invalid or degenerate (constant-
+                    # producing): rejected pre-evaluation, cached by token
+                    # sequence so repeats skip the rejection path.
+                    score = self._invalid_cache.get(key)
+                    if score is None:
+                        spec = CandidateSpec(
+                            candidate_id="rl:" + ",".join(str(t) for t in key),
+                            formula_text=formula_decode(list(key), self.vocab),
+                            source="rl",
+                            tokens=key,
+                        )
+                        score = self.candidate_scorer.score(
+                            spec,
+                            None,
+                            target_ret,
+                            val_windows,
+                            blocked_buy=blocked_buy,
+                            blocked_sell=blocked_sell,
+                            formula_valid=False,
+                            train_signal_range=train_signal_range,
+                            universe_mask=train_universe_mask,
+                        )
+                        self._invalid_cache[key] = score
+                        while len(self._invalid_cache) > self._REWARD_CACHE_CAP:
+                            self._invalid_cache.popitem(last=False)
+                    step_results[key] = score
+                    continue
+                first = canonical_share.get(ckey)
+                if first is not None:
+                    # Same canonical formula already handled this step
+                    # (identical tokens or a commuted form): share its
+                    # evaluation; no new work, no budget.
+                    continue
+                canonical_share[ckey] = key
+                score = self.semantic_cache.get(ckey)
+                if score is not None:
                     cache_hits += 1
+                    step_results[key] = score
                     continue
-                if key in seen:
+                # A new canonical formula: check semantic equivalence on the
+                # calibration slice before paying for a full evaluation.
+                # The semantic class is (fingerprint, complexity bill): two
+                # numerically equivalent formulas with different bills carry
+                # different penalties, so their scores are not
+                # interchangeable.
+                canonical = ir_module.canonical_ast(key, self.vocab)
+                bill = complexity_bill(canonical) if canonical is not None else None
+                fingerprint = self.semantic_cache.fingerprint(
+                    key, self._calibration_execute, self.vocab
+                )
+                score = (
+                    self.semantic_cache.score_by_fingerprint(fingerprint, bill)
+                    if fingerprint is not None
+                    else None
+                )
+                if score is not None:
+                    semantic_dedups += 1
+                    self.semantic_cache.put(ckey, score, fingerprint, bill)
+                    step_results[key] = score
                     continue
-                seen.add(key)
                 spec = CandidateSpec(
                     candidate_id="rl:" + ",".join(str(token) for token in key),
                     formula_text=formula_decode(list(key), self.vocab),
@@ -480,6 +576,7 @@ class AshareTrainer:
                 )
                 signal_np = signal.detach().cpu().numpy()
                 pending.append((spec, signal_np))
+                evaluated.append((key, ckey, fingerprint, bill))
                 # Score as soon as one full chunk is ready: buffering every
                 # unique signal of a step at once costs batch_size x
                 # [stocks, dates] x 4 bytes and exhausts RAM on 16 GB
@@ -506,19 +603,29 @@ class AshareTrainer:
                 blocked_sell,
                 train_signal_range,
             )
+            for key, ckey, fingerprint, bill in evaluated:
+                self.semantic_cache.put(ckey, step_results[key], fingerprint, bill)
 
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())
-                score = step_results[key]
+                score = step_results.get(key)
+                if score is None:
+                    # A row that shared its canonical form's evaluation this
+                    # step resolves through the first key of that form.
+                    ckey = self.semantic_cache.key_for(key)
+                    if ckey is not None:
+                        first = canonical_share.get(ckey)
+                        if first is not None:
+                            score = step_results.get(first)
+                if score is None:
+                    raise RuntimeError(
+                        f"no score recorded for sampled formula {key}"
+                    )
                 # The gradient reads the in-sample reward only: the
                 # validation tail ranks formulas but never teaches the
                 # policy (test_policy_gradient_reward_window_excludes_
                 # validation_tail pins this contract).
                 rewards[i] = score.train_reward
-                # Cache every outcome (invalid and constant formulas too):
-                # the token sequence fully determines it, so repeats can
-                # skip the VM execution as well.
-                self._cache_put(key, score)
                 self._candidate_scores[key] = score
 
             previous_key = (
@@ -572,6 +679,8 @@ class AshareTrainer:
             }
             semantic_unique_frac = len(semantic_forms) / max(batch_size, 1)
             cache_hit_frac = cache_hits / max(batch_size, 1)
+            semantic_dedup_frac = semantic_dedups / max(batch_size, 1)
+            unique_semantic_evals = self.semantic_cache.budget_used
             self._run_operator_coverage |= step_op_coverage
 
             # Actor-critic update: REINFORCE with the learned value as
@@ -605,6 +714,10 @@ class AshareTrainer:
                     "op_coverage": float(len(step_op_coverage)),
                     "semantic_unique_frac": semantic_unique_frac,
                     "cache_hit_frac": cache_hit_frac,
+                    # T2-01 budget ledger: cumulative unique semantic
+                    # evaluations and this step's semantic-dedup rate.
+                    "unique_semantic_evals": float(unique_semantic_evals),
+                    "semantic_dedup_frac": semantic_dedup_frac,
                 }
             )
             pbar.set_postfix(
@@ -615,6 +728,7 @@ class AshareTrainer:
                     "ops": len(step_op_coverage),
                     "sem": f"{semantic_unique_frac:.2f}",
                     "cache": f"{cache_hit_frac:.2f}",
+                    "budget": unique_semantic_evals,
                 }
             )
 
@@ -640,6 +754,8 @@ class AshareTrainer:
             selection_path.parent.mkdir(parents=True, exist_ok=True)
             selection_payload = {
                 "reward_version": REWARD_VERSION,
+                "protocol_version": PROTOCOL_VERSION,
+                "semantic_cache_version": SEMANTIC_CACHE_VERSION,
                 "dataset_id": self.loader.dataset_id,
                 "train_end": contract.train_end,
                 "train_anchor_end_exclusive": contract.train_anchor_end_exclusive,
@@ -699,6 +815,12 @@ class AshareTrainer:
             # Reward provenance: reward values are only comparable within
             # the same scoring implementation generation.
             "reward_version": REWARD_VERSION,
+            # T2-01 provenance: the evaluation-budget ledger generation and
+            # the unique semantic evaluations this run actually performed.
+            "protocol_version": PROTOCOL_VERSION,
+            "semantic_cache_version": SEMANTIC_CACHE_VERSION,
+            "unique_semantic_evals": self.semantic_cache.budget_used,
+            "semantic_cache_stats": self.semantic_cache.stats(),
             # Data provenance: the immutable dataset manifest this formula
             # was selected on (None for pre-T1-01 databases).
             "dataset_id": self.loader.dataset_id,
@@ -719,6 +841,17 @@ class AshareTrainer:
         return TrainingTimeContract.resolve(
             self.loader.dates,
             train_end_date or self.backtest_config.train_end_date,
+        )
+
+    @staticmethod
+    def _window_id(contract, val_windows: list[tuple[int, int]]) -> str:
+        """Deterministic id of the training window: the exact columns the
+        semantic-cache key binds scores to."""
+
+        val = "|".join(f"{a}:{b}" for a, b in val_windows)
+        return (
+            f"train:{contract.train_signal_start}:{contract.train_signal_end}:"
+            f"label:{contract.train_label_end}:val:{val}"
         )
 
     def _sync_best_from_selection(self) -> None:

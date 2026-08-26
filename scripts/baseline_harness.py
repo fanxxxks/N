@@ -1,4 +1,4 @@
-"""Matched-budget baseline harness CLI (T1-05).
+"""Matched-budget baseline harness CLI (T1-05, semantic budget T2-01).
 
 Runs the budget-matched random-search baseline on one fold and reports
 the phase-1 research-validity statistics:
@@ -8,6 +8,10 @@ the phase-1 research-validity statistics:
   the scored candidates (Spearman rho + permutation p-value) — the
   completion gate "the training reward is a stable positive proxy of
   out-of-sample portfolio quality".
+
+The budget is the **unique semantic formula evaluation** (v18): degenerate
+formulas are skipped, canonical duplicates collapse and numerically
+equivalent formulas (same calibration fingerprint) are scored once.
 
 Usage:
     python scripts/baseline_harness.py --config config/ashare_config.yaml \
@@ -45,7 +49,8 @@ from ashare_model.baseline_harness import (
     run_matched_baseline,
 )
 from ashare_model.data_loader import AshareDataLoader
-from ashare_model.evaluation import evaluate_signal, resolve_folds
+from ashare_model.evaluation import PROTOCOL_VERSION, evaluate_signal, resolve_folds
+from ashare_model.semantic_cache import CalibrationSlice, make_calibration_execute
 from ashare_model.train import validation_start, validation_windows
 from ashare_model.vm import StackVM
 from ashare_model.vocab import FORMULA_VOCAB
@@ -135,6 +140,21 @@ def main(argv=None) -> int:
                 return None
             return signal.detach().cpu().numpy()
 
+        # T2-01: the semantic budget counts unique semantic evaluations;
+        # the fingerprint executor runs the VM on the fixed calibration
+        # slice with the masks date-sliced to match.
+        fingerprint_execute = make_calibration_execute(
+            vm,
+            factors,
+            universe_mask,
+            (
+                industry_codes[:, :train_price_end]
+                if industry_codes is not None
+                else None
+            ),
+            CalibrationSlice.of(factors.shape[2]),
+        )
+
         result = run_matched_baseline(
             target=target,
             universe_mask=universe_mask,
@@ -148,6 +168,10 @@ def main(argv=None) -> int:
             max_formula_len=model_config.max_formula_len,
             tie_break_keys=np.asarray(loader.ts_codes),
             adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
+            dataset_id=loader.dataset_id,
+            protocol_version=PROTOCOL_VERSION,
+            window_id=f"fold:{fold.train_end}:{fold.test_end}:seed:{args.seed}",
+            fingerprint_execute=fingerprint_execute,
         )
 
         # OOS active IR for a deterministic, reward-spread-covering sample
