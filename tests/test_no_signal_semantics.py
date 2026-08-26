@@ -253,20 +253,21 @@ def test_basket_force_hold_never_renormalizes_above_cap():
     cfg = _cfg(top_n=2, single_weight_cap=0.4)
     mask = np.ones((3, 8), dtype=bool)
     mask[0, 2:] = False
+    # The exit execution day is the first day whose entry is outside the
+    # universe (T1-04 alignment: signal day 1 executes at day 2).
     blocked_sell = np.zeros((3, 8), dtype=bool)
-    blocked_sell[0, 3] = True  # the exit execution day is sell-blocked
+    blocked_sell[0, 2] = True
     sim = simulate_basket_daily_returns(
         signal, target, cfg, universe_mask=mask, blocked_sell=blocked_sell
     )
-    # Day 2 (exit execution): stock 0 must be reduced but is sell-blocked,
+    # Day 1 (exit execution): stock 0 must be reduced but is sell-blocked,
     # so it is force-held at the cap 0.4; the freed budget (1 - 0.4) is
     # reinvested in the two new names at 0.3 each — the book is exactly
     # [0.4, 0.3, 0.3], never renormalized upward (the old path would have
-    # pushed every name to 0.4/0.4/0.4... above the cap after the second
-    # renormalization).
-    assert sim.turnover[2] == pytest.approx(0.4, abs=1e-12)
-    assert sim.daily_gross_returns[2] == pytest.approx(
-        0.4 * float(target[0, 2]) + 0.3 * float(target[1, 2]) + 0.3 * float(target[2, 2]),
+    # pushed every name above the cap after the second renormalization).
+    assert sim.turnover[1] == pytest.approx(0.4, abs=1e-12)
+    assert sim.daily_gross_returns[1] == pytest.approx(
+        0.4 * float(target[0, 1]) + 0.3 * float(target[1, 1]) + 0.3 * float(target[2, 1]),
         abs=1e-12,
     )
 

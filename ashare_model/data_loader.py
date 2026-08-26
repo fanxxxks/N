@@ -373,6 +373,21 @@ class AshareDataLoader:
         self._tradability_cache = (blocked_buy, blocked_sell)
         return self._tradability_cache
 
+    def dollar_volume(self) -> np.ndarray:
+        """``[stock, date]`` dollar-volume proxy (volume * close, float64).
+
+        The capacity audit (T1-04) consumes this as the ``adv`` argument:
+        a position's value divided by its execution-day dollar volume is
+        its capacity utilization.  Zero-volume cells (suspensions) carry
+        zero and are skipped by the audit.
+        """
+
+        if not self.raw_data_cache:
+            raise ValueError("dollar volume requires loaded raw bars")
+        volume = self.raw_data_cache["volume"].numpy()
+        close = self.raw_data_cache["close"].numpy()
+        return (volume * close).astype(np.float64)
+
 
 def build_loader_from_config(
     project_root: str | Path,

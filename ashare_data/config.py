@@ -149,6 +149,11 @@ class RewardConfig:
     min_activity: float | None = 0.05
     min_sign_stability: float | None = 0.5
     min_val_window_q25: float | None = 0.0
+    # T1-04 capacity gate: a position larger than this fraction of the
+    # execution-day dollar volume is rejected (``capacity_above_maximum``).
+    # Only measurable when the caller supplies dollar-volume data (adv);
+    # None disables the gate.
+    max_capacity_utilization: float | None = 0.25
 
 
 @dataclass
