@@ -694,13 +694,26 @@ def run_fold(
     trainer = _build_trainer(
         data_config, model_config, backtest_config, loader, reward_config
     )
-    tokens = trainer.train(
-        steps=tier.steps,
-        batch_size=tier.batch_size,
-        seed=seed,
-        save_artifacts=False,
-        train_end_date=fold.train_end,
-    )
+    if model_config.searcher == "rl":
+        tokens = trainer.train(
+            steps=tier.steps,
+            batch_size=tier.batch_size,
+            seed=seed,
+            save_artifacts=False,
+            train_end_date=fold.train_end,
+        )
+    else:
+        # T2-03: the production searcher (gp / random per model.searcher)
+        # replaces RL in the protocol's "trained" row; the row contract
+        # (selection, direction, OOS metrics) is unchanged.
+        tokens = trainer.train_search(
+            searcher=model_config.searcher,
+            steps=tier.steps,
+            batch_size=tier.batch_size,
+            seed=seed,
+            save_artifacts=False,
+            train_end_date=fold.train_end,
+        )
     base = {
         "candidate": "trained",
         "fold_train_end": fold.train_end,
@@ -892,8 +905,14 @@ def _search_evaluator(
     budget: int,
     source: str,
     candidate_prefix: str,
+    chunk: int | None = None,
 ) -> SemanticBudgetEvaluator:
-    """Shared semantic-budget evaluator for one search run (v18/v19)."""
+    """Shared semantic-budget evaluator for one search run (v18/v19).
+
+    ``chunk`` defaults to the memory-bounded batch size (random baseline);
+    sequential searchers (GP/TPE) pass ``chunk=1`` so every proposal is
+    scored eagerly.
+    """
 
     return SemanticBudgetEvaluator(
         target=window.target,
@@ -914,7 +933,7 @@ def _search_evaluator(
         blocked_sell=window.blocked_sell,
         source=source,
         candidate_prefix=candidate_prefix,
-        chunk=score_chunk_size(window.signal_bytes),
+        chunk=score_chunk_size(window.signal_bytes) if chunk is None else chunk,
     )
 
 

@@ -230,7 +230,7 @@ def run_gp_baseline(
 
     def fitness_of(ind) -> float:
         tokens = tuple(tree_to_tokens(ind, vocab))
-        score, _ = evaluator.propose(tokens)
+        score = evaluator.score_of(tokens)
         if score is not None:
             return float(score.val_reward)
         return evaluator.best_reward  # neutral fitness for skipped proposals
@@ -239,10 +239,17 @@ def run_gp_baseline(
     stall_generations = 0
     while evaluator.budget_used < evaluator.budget:
         budget_before = evaluator.budget_used
+        # Propose the whole generation, then flush the batched scoring so
+        # every individual's fitness is the real reward (the evaluator
+        # scores in memory-bounded chunks; chunk=1 callers get eager
+        # scores and the flush is a no-op).
         for ind in population:
-            ind.fitness.values = (fitness_of(ind),)
+            evaluator.propose(tuple(tree_to_tokens(ind, vocab)))
             if evaluator.budget_used >= evaluator.budget:
                 break  # never overshoot the budget by more than one
+        evaluator.flush()
+        for ind in population:
+            ind.fitness.values = (fitness_of(ind),)
         # A generation that cannot produce any new evaluation is stalled:
         # the search has converged on the already-evaluated classes.
         if evaluator.budget_used == budget_before:

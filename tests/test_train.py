@@ -918,6 +918,59 @@ def test_train_search_respects_budget_and_backend(
         trainer.train_search(searcher="tpe", steps=1, batch_size=2)
 
 
+def test_window_cap_slices_every_measurement(
+    populated_db: DataConfig,
+):
+    """The admission window cap slices the factor tensor, masks, target
+    and windows consistently: the trainer's measurements stay internally
+    aligned on the capped head slice (all searchers share it)."""
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    full_trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    capped_trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    full = full_trainer.prepare_window("2024-02-01", torch.device("cpu"))
+    n_dates = full.factor_tensor.shape[2]
+    n_stocks = full.factor_tensor.shape[1]
+    cap = (min(n_stocks, 5), min(n_dates, 30))
+    capped = capped_trainer.prepare_window(
+        "2024-02-01", torch.device("cpu"), window_cap=cap
+    )
+    assert capped.factor_tensor.shape == (62, cap[0], cap[1])
+    assert capped.train_universe_mask.shape == (cap[0], cap[1])
+    assert capped.target_ret.shape == (cap[0], cap[1])
+    assert capped.blocked_buy.shape == (cap[0], cap[1])
+    assert capped.train_signal_range[1] <= cap[1]
+    for start, end in capped.val_windows:
+        assert end <= cap[1]
+    # The capped head equals the full window's head slice.
+    assert np.array_equal(
+        capped.target_ret,
+        full.target_ret[: cap[0], : cap[1]],
+    )
+    assert np.array_equal(
+        capped.train_universe_mask,
+        full.train_universe_mask[: cap[0], : cap[1]],
+    )
+    with pytest.raises(ValueError, match="window_cap"):
+        capped_trainer.prepare_window(
+            "2024-02-01", torch.device("cpu"), window_cap=(0, 10)
+        )
+
+
 def test_duplicate_formulas_share_one_batched_evaluation(
     populated_db: DataConfig, monkeypatch
 ):

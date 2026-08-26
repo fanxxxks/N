@@ -78,6 +78,11 @@ class _FakeTrainer:
     def train(self, **kwargs):
         return self._tokens
 
+    def train_search(self, **kwargs):
+        # T2-03: the protocol's "trained" row may come from the production
+        # searcher (gp/random); the fake mirrors the train_search contract.
+        return self._tokens
+
 
 # --- fold resolution and slicing -------------------------------------------
 

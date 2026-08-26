@@ -11,6 +11,7 @@ pre-existing environment blocker: starlette 1.3.1's TestClient requires
 | T2-01 AST canonicalization + semantic cache | 4d81bb5 + merge 737fc29 | 726 | +54 | 0 regressions; 16:43; PROTOCOL_VERSION 17→18 |
 | T2-02 DEAP GP + Optuna TPE baselines | acf8216 + merge 5952217 | 737 | +11 | 0 regressions; 17:57; deap==1.4.4 / optuna==4.9.0 added to optional deps |
 | MTPHead removal | eb317a8 + merge e749fa0 | 737 | ±0 | MODEL_VERSION 1→2; old .pt checkpoints rejected (no multi-task supervision existed) |
+| T2-03 protocol wiring + searcher backends + admission | <commit> + merge | <after> | +<n> | PROTOCOL_VERSION 18→19; gp/tpe rows on by default; admission verdict below |
 
 ## T2-01 invariants (asserted by tests)
 
@@ -92,6 +93,82 @@ rows join the protocol in T2-03, which bumps PROTOCOL_VERSION).
 
 * No persisted artifacts change in T2-02; the evaluator and the search
   modules are additive.
+
+## T2-03 invariants (asserted by tests)
+
+1. **Protocol baseline ladder**: strongly-typed GP and TPE rows join the
+   protocol with the same matched budget per fold (`gp_enabled` /
+   `tpe_enabled`, both on by default); the random row and the new rows
+   all run on the shared `SemanticBudgetEvaluator`; every trained row
+   records its actual `unique_semantic_evals`.  PROTOCOL_VERSION 18 → 19.
+2. **Searcher backends**: `model.searcher` (rl | gp | random) selects the
+   production training backend; `train_search` runs gp/random under the
+   same unique-semantic-evaluation budget and writes the standard
+   artifact (no `.pt` for non-RL: they are not models).
+3. **Independent initializations**: `init_seed` re-initializes the policy
+   weights independently of the sampling seed; the same
+   (init_seed, seed) pair reproduces the identical run
+   (`test_init_seed_controls_independent_initializations`).
+4. **Admission window cap**: `prepare_window(..., window_cap)` slices the
+   factor tensor, masks, target and windows consistently, so every
+   searcher measures the identical capped window (fair by construction).
+5. **Admission rule (pre-registered)**: RL is admitted only if, against
+   *both* random and GP, its median is strictly better on *both* the
+   normalized best-so-far area and the OOS active IR, winning at least
+   4 of 5 seeds on each metric, under identical per-seed budgets (the
+   RL run's actual `unique_semantic_evals`).
+
+## T2-03 measured cost (research-validity evidence)
+
+* One unique evaluation costs ~3.0 s on the full fold-0 window
+  (1630 stocks × 1462 dates, measured with the production reward config)
+  and ~0.2-0.6 s on the capped admission window (300 × 400).  The
+  full-window screening tier would need ~26 h per fold; the admission
+  tier is the documented tractable tier, and the admission comparisons
+  are internal (identical capped window for every searcher).
+
+## T2-03 admission verdict
+
+**RL is NOT admitted; the default searcher flips to ``gp``** (RL stays an
+opt-in experimental backend via ``model.searcher: rl``).
+
+* Tier: 8 steps × 128 batch on the capped admission window
+  (300 stocks × 400 dates of the fold-0 training window); every searcher
+  received exactly the RL run's actual unique-semantic-evaluation budget
+  per seed (656-799 across the 5 seeds); sampling seed 42 fixed;
+  initialization seeds [42, 7, 2024, 1337, 999].
+* Normalized best-so-far area (median over 5 seeds): RL **0.899** vs
+  GP **0.975**, random **0.938**, TPE **0.916** — RL lost all 5 seeds on
+  the area metric against every baseline.
+* OOS active IR (median): RL **-5.41** vs random **-3.88** (2/5 wins),
+  GP **-10.45** (4/5 wins), TPE **-1.05** (0/5 wins) — mixed, and the
+  area deficit alone fails the pre-registered rule.
+* Full per-seed numbers: `experiments/admission_experiment.json`
+  (verdict, metrics, per-seed budgets and selections).
+* The full-window screening tier would cost ~26 h per fold at the
+  measured ~3 s/unique-evaluation (production reward config); the
+  admission comparisons are internal to the capped window, so the cap
+  is fair by construction.
+
+## Version bumps (semantic changes)
+
+| Module | Before | After |
+|---|---|---|
+| ashare_model.evaluation.PROTOCOL_VERSION | 18 | 19 |
+| ModelConfig.searcher | — (new) | "rl" (default decided by the admission verdict) |
+| ProtocolConfig gp_enabled/gp_seed/tpe_enabled/tpe_seed | — (new) | True / 1235 / True / 1236 |
+| AshareTrainer window_cap / train_search | — (new) | measurement override + searcher backend |
+
+## Migration / rejection policies
+
+* Protocol artifacts record PROTOCOL_VERSION 19; v18 artifacts load and
+  are never silently compared against v19 rows.
+* `model.searcher` changes which backend produces
+  `best_ashare_strategy.json`; the artifact records `searcher`, so old
+  RL artifacts remain distinguishable.
+* The admission window cap is a measurement override recorded by the
+  experiment payload; production training is unaffected (cap defaults
+  to None).
 
 ## MTPHead removal
 

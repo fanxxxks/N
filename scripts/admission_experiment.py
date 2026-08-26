@@ -43,20 +43,81 @@ from ashare_logging import export_log_txt, setup_run_logging
 from ashare_model.admission import (
     ADMISSION_BATCH,
     ADMISSION_STEPS,
+    ADMISSION_WINDOW,
     INIT_SEEDS,
     best_so_far_area,
     decide_admission,
 )
-from ashare_model.baseline_harness import oos_active_ir
+from ashare_model.baseline_harness import (
+    SemanticBudgetEvaluator,
+    canonical_form_pool,
+    oos_active_ir,
+)
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.evaluation import (
+    PROTOCOL_VERSION,
     evaluate_formula,
     resolve_folds,
-    run_gp_search,
-    run_random_search,
-    run_tpe_search,
 )
-from ashare_model.train import AshareTrainer
+from ashare_model.gp_search import run_gp_baseline
+from ashare_model.train import AshareTrainer, resolve_device
+from ashare_model.tpe_search import run_tpe_baseline
+
+
+def _build_evaluator(
+    *,
+    trainer: AshareTrainer,
+    loader: AshareDataLoader,
+    backtest_config,
+    reward_config,
+    fold,
+    seed: int,
+    budget: int,
+    source: str,
+    candidate_prefix: str,
+    window_cap: tuple[int, int],
+) -> tuple[SemanticBudgetEvaluator, object]:
+    """One search evaluator over the capped admission window: a fresh
+    semantic-budget ledger per searcher, sharing the trainer's VM and
+    calibration executor bindings."""
+
+    import numpy as np
+
+    vm_device = resolve_device("auto")
+    window = trainer.prepare_window(fold.train_end, vm_device, window_cap)
+    stocks = int(window_cap[0])
+
+    def execute(tokens):
+        signal = trainer.vm.execute(tokens, window.factor_tensor)
+        if signal is None:
+            return None
+        return signal.detach().cpu().numpy()
+
+    evaluator = SemanticBudgetEvaluator(
+        target=window.target_ret,
+        universe_mask=window.train_universe_mask,
+        backtest_config=backtest_config,
+        reward_config=reward_config,
+        val_windows=window.val_windows,
+        train_signal_range=window.train_signal_range,
+        budget=budget,
+        execute=execute,
+        fingerprint_execute=trainer._calibration_execute,
+        dataset_id=loader.dataset_id,
+        protocol_version=PROTOCOL_VERSION,
+        window_id=(
+            f"admission:fold:{fold.train_end}:{fold.test_end}:"
+            f"seed:{seed}:cap:{stocks}x{window.factor_tensor.shape[2]}:{source}"
+        ),
+        tie_break_keys=np.asarray(loader.ts_codes[:stocks]),
+        adv=np.asarray(loader.dollar_volume())[:stocks, : window.factor_tensor.shape[2]],
+        blocked_buy=window.blocked_buy,
+        blocked_sell=window.blocked_sell,
+        source=source,
+        candidate_prefix=candidate_prefix,
+        chunk=window.reward_chunk,
+    )
+    return evaluator, window
 
 
 def main(argv=None) -> int:
@@ -64,6 +125,17 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default=None)
     parser.add_argument("--fold", type=int, default=0)
+    parser.add_argument(
+        "--steps", type=int, default=ADMISSION_STEPS, help="RL training steps"
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=ADMISSION_BATCH, help="RL batch size"
+    )
+    parser.add_argument(
+        "--window",
+        default=f"{ADMISSION_WINDOW[0]},{ADMISSION_WINDOW[1]}",
+        help="window cap 'stocks,dates' (head slice of the fold window)",
+    )
     parser.add_argument(
         "--output",
         default="experiments/admission_experiment.json",
@@ -89,6 +161,8 @@ def main(argv=None) -> int:
         reward_config = make_reward_config(raw)
         proto_cfg = make_protocol_config(raw)
         fold_cfg = proto_cfg.folds[args.fold]
+        stocks_s, dates_s = args.window.split(",")
+        window_cap = (int(stocks_s), int(dates_s))
 
         loader = AshareDataLoader(data_config, model_config)
         loader.load_data()
@@ -111,11 +185,12 @@ def main(argv=None) -> int:
                 init_seed=init_seed,
             )
             tokens = trainer.train(
-                steps=ADMISSION_STEPS,
-                batch_size=ADMISSION_BATCH,
+                steps=args.steps,
+                batch_size=args.batch_size,
                 seed=42,
                 save_artifacts=False,
                 train_end_date=fold.train_end,
+                window_cap=window_cap,
             )
             rl_budget = int(trainer.semantic_cache.budget_used)
             rl_curve = [
@@ -128,29 +203,38 @@ def main(argv=None) -> int:
 
             seed_rows: dict[str, dict] = {}
             for name, runner in (
-                ("random", lambda: run_random_search(
-                    loader, model_config, backtest_config, reward_config, fold,
-                    n_samples=rl_budget, seed=int(proto_cfg.random_seed),
-                    budget=rl_budget,
+                ("random", lambda ev: _run_random(ev, model_config, seed=int(proto_cfg.random_seed))),
+                ("gp", lambda ev: run_gp_baseline(
+                    seed=int(proto_cfg.gp_seed),
+                    evaluator=ev,
+                    max_formula_len=model_config.max_formula_len,
                 )),
-                ("gp", lambda: run_gp_search(
-                    loader, model_config, backtest_config, reward_config, fold,
-                    seed=int(proto_cfg.gp_seed), budget=rl_budget,
-                )),
-                ("tpe", lambda: run_tpe_search(
-                    loader, model_config, backtest_config, reward_config, fold,
-                    seed=int(proto_cfg.tpe_seed), budget=rl_budget,
+                ("tpe", lambda ev: run_tpe_baseline(
+                    seed=int(proto_cfg.tpe_seed),
+                    evaluator=ev,
+                    max_formula_len=model_config.max_formula_len,
                 )),
             ):
-                row = runner()
-                curve = row.get("best_so_far") or []
+                evaluator, _ = _build_evaluator(
+                    trainer=trainer,
+                    loader=loader,
+                    backtest_config=backtest_config,
+                    reward_config=reward_config,
+                    fold=fold,
+                    seed=init_seed,
+                    budget=rl_budget,
+                    source=name,
+                    candidate_prefix=name,
+                    window_cap=window_cap,
+                )
+                result = runner(evaluator)
+                curve = list(result.best_so_far)
                 area = best_so_far_area(curve, rl_budget)
                 baseline_areas[name].append(area)
-                ir = _row_oos_ir(row, loader, fold, backtest_config)
+                ir = _result_oos_ir(result, loader, fold, backtest_config)
                 baseline_irs[name].append(ir)
                 seed_rows[name] = {
-                    "failed": row.get("failed", False),
-                    "budget_used": row.get("unique_semantic_evals"),
+                    "budget_used": result.n_evaluated,
                     "area": area,
                     "oos_ir": ir,
                 }
@@ -185,11 +269,15 @@ def main(argv=None) -> int:
             "fold": args.fold,
             "fold_train_end": fold.train_end,
             "fold_test_end": fold.test_end,
-            "admission_tier": {"steps": ADMISSION_STEPS, "batch_size": ADMISSION_BATCH},
+            "admission_tier": {
+                "steps": args.steps,
+                "batch_size": args.batch_size,
+                "window_cap": list(window_cap),
+            },
             "init_seeds": list(INIT_SEEDS),
             "sampling_seed": 42,
             "dataset_id": loader.dataset_id,
-            "protocol_version": "19",
+            "protocol_version": PROTOCOL_VERSION,
             "seeds": per_seed,
             "metrics": {
                 "rl_areas": rl_areas,
@@ -216,6 +304,21 @@ def main(argv=None) -> int:
         export_log_txt(run_name="admission_experiment")
 
 
+def _run_random(evaluator, model_config, seed: int):
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    for key in canonical_form_pool(
+        seed,
+        FORMULA_VOCAB,
+        model_config.max_formula_len,
+        evaluator.budget,
+    ):
+        evaluator.propose(key)
+        if evaluator.budget_used >= evaluator.budget:
+            break
+    return evaluator.finish()
+
+
 def _oos_ir(tokens, trainer, loader, fold, backtest_config) -> float:
     if tokens is None:
         return float("nan")
@@ -228,14 +331,16 @@ def _oos_ir(tokens, trainer, loader, fold, backtest_config) -> float:
     return oos_active_ir(metrics["daily_returns"], metrics["benchmark_daily_returns"])
 
 
-def _row_oos_ir(row: dict, loader, fold, backtest_config) -> float:
-    if row.get("failed"):
-        return float("nan")
-    tokens = row.get("formula")
-    if not tokens:
+def _result_oos_ir(result, loader, fold, backtest_config) -> float:
+    selected = result.selected
+    if selected is None or selected.tokens is None:
         return float("nan")
     metrics = evaluate_formula(
-        tokens, loader, fold, backtest_config, direction=int(row.get("direction", 1))
+        list(selected.tokens),
+        loader,
+        fold,
+        backtest_config,
+        direction=selected.direction,
     )
     if metrics is None:
         return float("nan")

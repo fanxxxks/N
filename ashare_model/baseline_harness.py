@@ -360,6 +360,16 @@ class SemanticBudgetEvaluator:
             return self._scores[-1], True
         return None, True
 
+    def score_of(self, tokens) -> CandidateScore | None:
+        """Cached score of an evaluated proposal (``None`` when not
+        evaluated).  Lets batched searchers read every proposal's real
+        score after a :meth:`flush`, without re-evaluating."""
+
+        ckey = self._cache.key_for(tokens)
+        if ckey is None:
+            return None
+        return self._cache.get(ckey)
+
     def flush(self) -> None:
         """Score the buffered pending signals (bounded memory chunks)."""
 

@@ -29,11 +29,17 @@ import math
 # starting policy.
 INIT_SEEDS = (42, 7, 2024, 1337, 999)
 
-# Admission tier: smaller than the protocol screening tier so the five
-# seeds × four searchers stay tractable, while every searcher shares the
-# exact same tier and the exact same per-seed budget.
-ADMISSION_STEPS = 40
+# Admission tier: a fraction of the protocol screening tier, run on a
+# fixed window cap (the head slice of the fold's training window) so the
+# five seeds × four searchers stay tractable.  Every searcher measures
+# the exact same capped window with the exact same per-seed budget — the
+# comparison is internal to the admission, so the cap is fair by
+# construction.  The full-window screening tier would cost ~3 s per
+# unique evaluation on this machine (measured), i.e. ~26 h for one
+# screening-tier fold; the cap is the documented tractable tier.
+ADMISSION_STEPS = 8
 ADMISSION_BATCH = 128
+ADMISSION_WINDOW = (300, 400)  # (stocks, dates) head slice of the fold window
 
 # Fraction of seeds RL must win on each metric against each baseline.
 WIN_FRACTION = 0.8

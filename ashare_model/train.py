@@ -305,6 +305,8 @@ class AshareTrainer:
         blocked_buy: np.ndarray | None = None,
         blocked_sell: np.ndarray | None = None,
         train_signal_range: tuple[int, int] | None = None,
+        tie_break_keys: np.ndarray | None = None,
+        adv: np.ndarray | None = None,
     ) -> None:
         """Score one chunk of pending formulas and merge the outcomes."""
 
@@ -320,11 +322,10 @@ class AshareTrainer:
             train_signal_range=train_signal_range,
             universe_mask=universe_mask,
             # Deterministic selection ties: the loader's canonical sorted
-            # code order is the stable key (T1-02).
-            tie_break_keys=np.asarray(self.loader.ts_codes),
-            # Capacity audit (T1-04): dollar volume sliced to the exact
-            # training window like the signals and targets.
-            adv=np.asarray(self.loader.dollar_volume())[:, : target_ret.shape[1]],
+            # code order is the stable key (T1-02); sliced to the measured
+            # window (a capped admission window is a stock slice).
+            tie_break_keys=tie_break_keys,
+            adv=adv,
         )
         for score in scores:
             assert score.tokens is not None
@@ -338,6 +339,7 @@ class AshareTrainer:
         save_artifacts: bool = True,
         train_end_date: str | None = None,
         device: str | None = None,
+        window_cap: tuple[int, int] | None = None,
     ) -> list[int] | None:
         """Run REINFORCE training.
 
@@ -359,7 +361,7 @@ class AshareTrainer:
         max_len = self.model_config.max_formula_len
         vm_device = resolve_device(device)
 
-        window = self._prepare_window(train_end_date, vm_device)
+        window = self.prepare_window(train_end_date, vm_device, window_cap)
         contract = window.contract
         train_end_idx = window.train_end_idx
         val_windows = window.val_windows
@@ -371,6 +373,15 @@ class AshareTrainer:
         blocked_buy = window.blocked_buy
         blocked_sell = window.blocked_sell
         reward_chunk = window.reward_chunk
+        # Selection tie-break keys and the capacity-audit dollar volume are
+        # sliced to the measured window (a capped admission window is a
+        # stock slice of the loader's universe).
+        tie_break_keys = np.asarray(self.loader.ts_codes)[
+            : factor_tensor.shape[1]
+        ]
+        adv = np.asarray(self.loader.dollar_volume())[
+            : factor_tensor.shape[1], : target_ret.shape[1]
+        ]
 
         pbar = tqdm(range(steps))
         for step in pbar:
@@ -543,6 +554,8 @@ class AshareTrainer:
                         blocked_buy,
                         blocked_sell,
                         train_signal_range,
+                        tie_break_keys,
+                        adv,
                     )
                     pending = []
             self._score_pending_chunk(
@@ -554,6 +567,8 @@ class AshareTrainer:
                 blocked_buy,
                 blocked_sell,
                 train_signal_range,
+                tie_break_keys,
+                adv,
             )
             for key, ckey, fingerprint, bill in evaluated:
                 self.semantic_cache.put(ckey, step_results[key], fingerprint, bill)
@@ -828,8 +843,11 @@ class AshareTrainer:
             train_end_date or self.backtest_config.train_end_date,
         )
 
-    def _prepare_window(
-        self, train_end_date: str | None, vm_device: torch.device
+    def prepare_window(
+        self,
+        train_end_date: str | None,
+        vm_device: torch.device,
+        window_cap: tuple[int, int] | None = None,
     ) -> "_TrainWindow":
         """Bind everything the searchers (RL, random, GP) need about the
         training window: the factor tensor, VM masks, target, windows, the
@@ -837,57 +855,81 @@ class AshareTrainer:
 
         Shared by :meth:`train` (RL) and :meth:`train_search` (the
         non-RL backends) so every searcher measures the identical window.
+
+        ``window_cap`` is a measurement override ``(stocks, dates)`` that
+        slices the window head for tractable experiments (the admission
+        tier): every searcher then measures the identical capped window,
+        and the validation windows / signal range are re-derived inside
+        the cap.  The cap is recorded by callers that persist results.
         """
 
         contract = self._training_contract(train_end_date)
         train_end_idx = contract.train_label_end
+        stock_slice = slice(None)
+        if window_cap is not None:
+            stocks, dates = int(window_cap[0]), int(window_cap[1])
+            if stocks <= 0 or dates <= 0:
+                raise ValueError("window_cap must be positive (stocks, dates)")
+            stock_slice = slice(0, stocks)
+            train_end_idx = min(train_end_idx, dates)
+        # The capped window's signal end: labels need t+1/t+2, so the last
+        # two capped columns are labels only.
+        train_signal_end = min(
+            contract.train_signal_end, max(0, train_end_idx - 2)
+        )
         # Hold out the tail of the training window for out-of-sample best
         # formula selection, split into independent sub-windows; the best
         # formula is decided on the *median* validation reward so a single
         # lucky tail stretch cannot win the selection.
-        val_windows = self._validation_windows(contract.train_signal_end)
+        val_windows = self._validation_windows(train_signal_end)
         # The *learning* window is the in-sample head only: the policy
         # gradient scores candidates on columns strictly before the first
         # validation window, so the selection data never doubles as the
         # training signal (val rewards rank formulas; IS rewards teach the
         # policy — two jobs, two windows).
-        val_start = validation_start(contract.train_signal_end, self.model_config)
+        val_start = validation_start(train_signal_end, self.model_config)
         train_signal_range = (contract.train_signal_start, val_start)
-        factor_tensor = self.loader.factor_tensor[:, :, :train_end_idx].to(
-            vm_device
-        )
+        factor_tensor = self.loader.factor_tensor[
+            :, stock_slice, :train_end_idx
+        ].to(vm_device)
         # The VM executes on the compute device; the industry-group tensor
         # for CS_NEUTRALIZE and the PIT eligibility mask for the
         # cross-sectional operators move with the factor stack (the loader
         # always builds the mask in load_data, so there is no fallback).
         industry_codes = getattr(self.loader, "industry_codes", None)
         self.vm.industry_codes = (
-            industry_codes[:, :train_end_idx].to(vm_device)
+            industry_codes[stock_slice, :train_end_idx].to(vm_device)
             if industry_codes is not None
             else None
         )
         universe_mask = self.loader.universe_mask
         self.vm.universe_mask = torch.tensor(
-            universe_mask[:, :train_end_idx],
+            universe_mask[stock_slice, :train_end_idx],
             dtype=torch.bool,
             device=vm_device,
         )
         # The candidate scorer needs the same PIT mask on the numpy side:
         # every quality statistic (rank IC, basket selection, near-constant
         # rejection, direction) is gated to signal-date eligible cells.
-        train_universe_mask = universe_mask[:, :train_end_idx]
+        train_universe_mask = universe_mask[stock_slice, :train_end_idx]
         # Recompute labels only from prices inside the inclusive training
         # anchor. Precomputed global targets at the tail may reference fold-
         # external t+1/t+2 prices and are intentionally never sliced here.
-        train_open = self.loader.raw_data_cache["open"][:, :train_end_idx].numpy()
+        train_open = self.loader.raw_data_cache["open"][
+            stock_slice, :train_end_idx
+        ].numpy()
         target_ret = open_to_open_returns(train_open)
-        target_ret = self.loader.mask_by_universe(target_ret)
+        # Same semantics as loader.mask_by_universe, applied to the capped
+        # window (the loader's mask is the full stock axis): values outside
+        # the PIT eligibility mask become NaN.
+        target_ret = np.asarray(target_ret, dtype=np.float64).copy()
+        target_ret[~np.asarray(train_universe_mask, dtype=bool)] = np.nan
         # Tradability masks (buy/sell blocked per stock and date) align the
         # training basket with the backtest engine's execution rules; both
         # matrices are shared by every formula scored this run.
         blocked_buy, blocked_sell = self.loader.tradability_masks()
-        blocked_buy = blocked_buy[:, :train_end_idx]
-        blocked_sell = blocked_sell[:, :train_end_idx]
+        blocked_buy = blocked_buy[stock_slice, :train_end_idx]
+        blocked_sell = blocked_sell[stock_slice, :train_end_idx]
 
         # T2-01: the semantic cache is the evaluation-budget ledger.  Its
         # key carries the full evaluation context (dataset_id, reward and
@@ -910,7 +952,7 @@ class AshareTrainer:
         self._calibration_execute = make_calibration_execute(
             self.vm,
             factor_tensor,
-            universe_mask[:, :train_end_idx],
+            universe_mask[stock_slice, :train_end_idx],
             self.vm.industry_codes,
             calibration_slice,
         )
@@ -944,6 +986,7 @@ class AshareTrainer:
         train_end_date: str | None = None,
         save_artifacts: bool = True,
         device: str | None = None,
+        window_cap: tuple[int, int] | None = None,
     ) -> list[int] | None:
         """Run a non-RL searcher (``gp`` or ``random``) over the training
         window with the matched unique-semantic-evaluation budget and
@@ -960,7 +1003,7 @@ class AshareTrainer:
         steps = steps or self.model_config.train_steps
         batch_size = batch_size or self.model_config.batch_size
         vm_device = resolve_device(device)
-        window = self._prepare_window(train_end_date, vm_device)
+        window = self.prepare_window(train_end_date, vm_device, window_cap)
         budget = steps * batch_size
 
         # Lazily imported: baseline_harness/gp_search import this module at
