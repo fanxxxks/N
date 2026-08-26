@@ -121,10 +121,18 @@ unit of every searcher: formulas are canonicalized (ADD/MUL child
 ordering, double-NEG/identity/invalid-op elimination, structural hashing),
 degenerate constant-producing formulas are rejected pre-evaluation, and
 numerically equivalent formulas (same rank fingerprint on the fixed
-calibration slice) are evaluated once.  Duplicates never consume budget,
+calibration slice) are scored once.  Duplicates never consume budget,
 so the trainer, the random baseline and every later searcher are billed
 identically.  Artifacts record ``unique_semantic_evals`` and the semantic
 cache version.
+
+v19 (T2-03) completes the baseline ladder: strongly-typed GP (DEAP) and
+TPE (Optuna) join the random-search baseline with the same matched
+budget per fold (``gp_enabled`` / ``tpe_enabled`` config, both on by
+default), all three rows run on the shared semantic-budget evaluator,
+and every trained row records its actual ``unique_semantic_evals``.
+The admission experiment (scripts/admission_experiment.py) uses these
+rows' budget semantics to decide whether RL stays the default searcher.
 
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
@@ -165,6 +173,11 @@ from ashare_data.processor import open_to_open_returns
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .backtest import AshareBacktestEngine, equal_weight_benchmark_returns
+from .baseline_harness import (
+    BaselineHarnessResult,
+    SemanticBudgetEvaluator,
+    canonical_form_pool,
+)
 from .candidates import (
     PARETO_OBJECTIVES,
     CandidateScorer,
@@ -174,26 +187,26 @@ from .candidates import (
 )
 from .data_loader import AshareDataLoader
 from .diagnostics import rank_ic_stats
-from .complexity import complexity_bill
-from .ir import FormulaSyntaxError, canonical_ast, canonical_tokens
+from .gp_search import run_gp_baseline
+from .ir import FormulaSyntaxError, canonical_tokens
 from .reward import REWARD_VERSION
 from .semantic_cache import (
     SEMANTIC_CACHE_VERSION,
     CalibrationSlice,
-    SemanticCache,
     make_calibration_execute,
 )
 from .time_contract import FoldTimeContract
+from .tpe_search import run_tpe_baseline
 from .train import (
     AshareTrainer,
     sample_random_formulas,
     validation_start,
     validation_windows,
 )
-from .vm import StackVM, formula_decode
+from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "18"
+PROTOCOL_VERSION = "19"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -703,6 +716,11 @@ def run_fold(
             "reason": "no eligible formula found",
             "best_rejected": rejected.to_dict() if rejected else None,
         }
+    # T2-03: the trained row records its actual unique-semantic-evaluation
+    # budget (v18 ledger), so baseline comparisons can match it exactly.
+    base["unique_semantic_evals"] = getattr(
+        getattr(trainer, "semantic_cache", None), "budget_used", None
+    )
     # The trainer decides the trade direction on its validation tail
     # (strictly before the test window), so a negative-IC formula is
     # evaluated flipped, matching how it would actually be deployed.
@@ -753,79 +771,42 @@ def run_fold(
     }
 
 
-def run_random_search(
+@dataclass
+class _SearchWindow:
+    """One fold's training-window context shared by every search baseline
+    (random / GP / TPE): the VM bindings, masks, target, windows and the
+    calibration fingerprint executor."""
+
+    contract: FoldTimeContract
+    train_price_end: int
+    train_signal_end: int
+    vocab: object
+    vm: StackVM
+    factors: torch.Tensor
+    universe_mask: np.ndarray
+    target: np.ndarray
+    val_windows: list[tuple[int, int]]
+    train_signal_range: tuple[int, int]
+    blocked_buy: np.ndarray
+    blocked_sell: np.ndarray
+    execute: Callable[[tuple[int, ...]], np.ndarray | None]
+    fingerprint_execute: Callable[[tuple[int, ...]], np.ndarray | None]
+    tie_break_keys: np.ndarray
+    adv: np.ndarray
+    signal_bytes: int
+
+
+def _build_search_window(
     loader: AshareDataLoader,
     model_config: ModelConfig,
-    backtest_config: BacktestConfig,
-    reward_config: RewardConfig | None,
     fold: Fold,
-    n_samples: int,
-    seed: int,
-    budget: int | None = None,
-) -> dict:
-    """Uniform random-search baseline over structurally valid formulas.
+) -> _SearchWindow:
+    """Bind the shared training-window context of a fold (the same slices
+    the trainer uses), including the calibration fingerprint executor."""
 
-    Samples formulas with the same legality rules the policy samples
-    under, scores each on the training window with the shared reward path
-    (validation reward = median over the same sub-windows the trainer
-    uses), keeps the best by validation reward and evaluates it
-    out-of-sample in its learned direction.  The row is shaped exactly
-    like a trained row so aggregates and the DS/max-t corrections treat
-    both searches identically.
-
-    With ``budget`` (T1-05) the baseline is **budget-matched**: it scores
-    exactly ``budget`` unique formulas (duplicates never count), so the
-    comparison against a trained candidate that evaluated
-    ``steps x batch_size`` unique formulas is budget-fair.  The budget
-    unit is the **unique semantic formula evaluation** (v18, T2-01):
-    degenerate constant-producing formulas are rejected pre-evaluation,
-    canonical duplicates are merged, and numerically equivalent formulas
-    (same calibration fingerprint) are scored once — the exact accounting
-    the trainer's semantic cache applies.
-    """
-
-    base = {
-        "candidate": "random_search",
-        "fold_train_end": fold.train_end,
-        "fold_test_end": fold.test_end,
-        "seed": seed,
-        "n_samples": int(n_samples),
-        "budget": int(budget) if budget is not None else None,
-        "semantic_cache_version": SEMANTIC_CACHE_VERSION,
-    }
-
-    def failed_row(reason: str, score=None) -> dict:
-        payload = score.to_dict() if score is not None else {}
-        return {
-            **base,
-            "failed": True,
-            "reason": reason,
-            "formula_text": payload.get("formula_text"),
-            "formula": payload.get("tokens"),
-            "val_reward": payload.get("val_reward"),
-            "val_icir": payload.get("val_icir"),
-            "train_reward": payload.get("train_reward"),
-            "train_icir": payload.get("train_icir"),
-            "complexity_penalty": payload.get("complexity_penalty"),
-            "complexity_cost": payload.get("complexity_cost"),
-            "active_ir": payload.get("active_ir"),
-            "risk_exposure": payload.get("risk_exposure"),
-            "average_turnover": payload.get("average_turnover"),
-            "capacity_utilization": payload.get("capacity_utilization"),
-            "eligible": False,
-            "rejection_reasons": payload.get("rejection_reasons", [reason]),
-            "final_avg_reward": None,
-            "direction": int(payload.get("direction", 1)),
-            "best_rejected": payload or None,
-        }
-
-    reward_cfg = reward_config or RewardConfig()
     contract = fold.contract
     train_price_end = contract.train_label_end
     train_signal_end = contract.train_signal_end
-    if train_signal_end <= 0 or n_samples <= 0:
-        return failed_row("degenerate window or budget")
-
     vocab = FORMULA_VOCAB
     # The VM runs on the compute device exactly like the trainer's loop
     # (CUDA when available); only the sliced windows cross back to numpy
@@ -851,60 +832,28 @@ def run_random_search(
     # signals and targets (no off-by-one with the val windows, which are
     # index ranges inside the same slice).
     train_universe_mask = universe_mask[:, :train_price_end]
-    target = open_to_open_returns(
-        loader.raw_data_cache["open"][:, :train_price_end].numpy()
+    target = loader.mask_by_universe(
+        open_to_open_returns(
+            loader.raw_data_cache["open"][:, :train_price_end].numpy()
+        )
     )
-    target = loader.mask_by_universe(target)
     val_windows = validation_windows(train_signal_end, model_config)
     # Tradability masks shared by every sampled formula, sliced to the
     # training window like the signals (the same path the trainer uses).
     blocked_buy, blocked_sell = loader.tradability_masks()
     blocked_buy = blocked_buy[:, :train_price_end]
     blocked_sell = blocked_sell[:, :train_price_end]
-    scorer = CandidateScorer(
-        backtest_config,
-        reward_cfg,
+    train_signal_range = (
+        contract.train_signal_start,
+        validation_start(train_signal_end, model_config),
     )
-    selector = CandidateSelector()
 
-    # T1-05 matched budget: score exactly ``budget`` unique semantic
-    # formulas (duplicates never count against the budget, exactly like
-    # the trainer's semantic cache).  Sample with headroom and dedupe
-    # canonically: degenerate formulas are dropped and structurally
-    # identical sequences collapse.
-    target_count = int(budget) if budget is not None else int(n_samples)
-    if target_count <= 0:
-        return failed_row("degenerate window or budget")
-    sampled = sample_random_formulas(
-        seed, vocab, model_config.max_formula_len, target_count * 8
-    )
-    formulas: list[tuple[int, ...]] = []
-    seen: set[tuple[int, ...]] = set()
-    for key in sampled:
-        try:
-            canonical = canonical_tokens(key, vocab)
-        except FormulaSyntaxError:
-            continue  # structurally invalid: never evaluated
-        if canonical is None:
-            continue  # degenerate (constant-producing): never evaluated
-        ctuple = tuple(canonical)
-        if ctuple in seen:
-            continue
-        seen.add(ctuple)
-        formulas.append(ctuple)
-        if len(formulas) >= target_count:
-            break
-    # T2-01 semantic budget: the cache carries the evaluation context and
-    # dedups numerically equivalent formulas through the calibration
-    # fingerprint; its budget counter is the unique-semantic-evaluation
-    # ledger.
-    cache = SemanticCache(
-        dataset_id=loader.dataset_id,
-        reward_version=REWARD_VERSION,
-        protocol_version=PROTOCOL_VERSION,
-        window_id=f"fold:{fold.train_end}:{fold.test_end}:seed:{seed}",
-        cap=target_count,
-    )
+    def execute(tokens) -> np.ndarray | None:
+        signal = vm.execute(list(tokens), factors)
+        if signal is None:
+            return None
+        return signal.detach().cpu().numpy()
+
     fingerprint_execute = make_calibration_execute(
         vm,
         factors,
@@ -912,87 +861,108 @@ def run_random_search(
         industry_codes,
         CalibrationSlice.of(factors.shape[2]),
     )
-    # Random-search formulas are scored in budget-aware chunks so the
-    # float64 signal stack + both-direction copy stay memory-bounded
-    # (the shared chunk helper, same budget as the trainer).
-    signal_bytes = factors.shape[1] * factors.shape[2] * 8
-    chunk = score_chunk_size(signal_bytes)
-    scores = []
-    n_semantic_dedups = 0
-    for start in range(0, len(formulas), chunk):
-        specs: list[CandidateSpec] = []
-        signals: list[np.ndarray | None] = []
-        formula_valid: list[bool] = []
-        for key in formulas[start : start + chunk]:
-            ckey = cache.key_for(key)
-            if ckey is None:
-                continue
-            canonical = canonical_ast(key, vocab)
-            bill = complexity_bill(canonical) if canonical is not None else None
-            fingerprint = cache.fingerprint(key, fingerprint_execute, vocab)
-            if fingerprint is not None:
-                if cache.is_claimed(fingerprint, bill):
-                    # Same semantic class already claimed this run: skip
-                    # the duplicate evaluation entirely.
-                    n_semantic_dedups += 1
-                    continue
-                score = cache.score_by_fingerprint(fingerprint, bill)
-                if score is not None:
-                    n_semantic_dedups += 1
-                    cache.put(ckey, score, fingerprint, bill)
-                    continue
-            specs.append(
-                CandidateSpec(
-                    candidate_id="random:" + ",".join(str(token) for token in key),
-                    formula_text=formula_decode(list(key), vocab),
-                    source="random_search",
-                    tokens=key,
-                )
-            )
-            signal = vm.execute(list(key), factors)
-            if signal is None:
-                signals.append(None)
-                formula_valid.append(False)
-                continue
-            signals.append(signal.detach().cpu().numpy())
-            formula_valid.append(True)
-            cache.put(ckey, None, fingerprint, bill)  # claim the semantic class
-            if cache.budget_used >= target_count:
-                break
-        if not specs:
-            continue
-        scored = scorer.score_many(
-            specs,
-            signals,
-            target,
-            val_windows,
-            blocked_buy=blocked_buy,
-            blocked_sell=blocked_sell,
-            formula_valid=formula_valid,
-            train_signal_range=(
-                contract.train_signal_start,
-                validation_start(train_signal_end, model_config),
-            ),
-            universe_mask=train_universe_mask,
-            tie_break_keys=np.asarray(loader.ts_codes),
-            adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
-        )
-        for key, score in zip(specs, scored):
-            ckey = cache.key_for(key.tokens)
-            if ckey is not None:
-                cache.put(ckey, score, None)
-        scores.extend(scored)
-        if cache.budget_used >= target_count:
-            break
+    return _SearchWindow(
+        contract=contract,
+        train_price_end=train_price_end,
+        train_signal_end=train_signal_end,
+        vocab=vocab,
+        vm=vm,
+        factors=factors,
+        universe_mask=train_universe_mask,
+        target=target,
+        val_windows=val_windows,
+        train_signal_range=train_signal_range,
+        blocked_buy=blocked_buy,
+        blocked_sell=blocked_sell,
+        execute=execute,
+        fingerprint_execute=fingerprint_execute,
+        tie_break_keys=np.asarray(loader.ts_codes),
+        adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
+        signal_bytes=factors.shape[1] * factors.shape[2] * 8,
+    )
 
-    base["unique_semantic_evals"] = cache.budget_used
-    base["semantic_dedups"] = n_semantic_dedups
 
-    selection = selector.select(scores, pareto_objectives=PARETO_OBJECTIVES)
-    selected = selection.selected
+def _search_evaluator(
+    window: _SearchWindow,
+    loader: AshareDataLoader,
+    backtest_config: BacktestConfig,
+    reward_config: RewardConfig | None,
+    fold: Fold,
+    seed: int,
+    budget: int,
+    source: str,
+    candidate_prefix: str,
+) -> SemanticBudgetEvaluator:
+    """Shared semantic-budget evaluator for one search run (v18/v19)."""
+
+    return SemanticBudgetEvaluator(
+        target=window.target,
+        universe_mask=window.universe_mask,
+        backtest_config=backtest_config,
+        reward_config=reward_config or RewardConfig(),
+        val_windows=window.val_windows,
+        train_signal_range=window.train_signal_range,
+        budget=budget,
+        execute=window.execute,
+        fingerprint_execute=window.fingerprint_execute,
+        dataset_id=loader.dataset_id,
+        protocol_version=PROTOCOL_VERSION,
+        window_id=f"fold:{fold.train_end}:{fold.test_end}:seed:{seed}",
+        tie_break_keys=window.tie_break_keys,
+        adv=window.adv,
+        blocked_buy=window.blocked_buy,
+        blocked_sell=window.blocked_sell,
+        source=source,
+        candidate_prefix=candidate_prefix,
+        chunk=score_chunk_size(window.signal_bytes),
+    )
+
+
+def _search_failed_row(base: dict, reason: str, score=None) -> dict:
+    """Failure row shaped exactly like a trained row (DS/max-t compatible)."""
+
+    payload = score.to_dict() if score is not None else {}
+    return {
+        **base,
+        "failed": True,
+        "reason": reason,
+        "formula_text": payload.get("formula_text"),
+        "formula": payload.get("tokens"),
+        "val_reward": payload.get("val_reward"),
+        "val_icir": payload.get("val_icir"),
+        "train_reward": payload.get("train_reward"),
+        "train_icir": payload.get("train_icir"),
+        "complexity_penalty": payload.get("complexity_penalty"),
+        "complexity_cost": payload.get("complexity_cost"),
+        "active_ir": payload.get("active_ir"),
+        "risk_exposure": payload.get("risk_exposure"),
+        "average_turnover": payload.get("average_turnover"),
+        "capacity_utilization": payload.get("capacity_utilization"),
+        "eligible": False,
+        "rejection_reasons": payload.get("rejection_reasons", [reason]),
+        "final_avg_reward": None,
+        "direction": int(payload.get("direction", 1)),
+        "best_rejected": payload or None,
+    }
+
+
+def _search_row(
+    base: dict,
+    result: BaselineHarnessResult,
+    loader: AshareDataLoader,
+    fold: Fold,
+    backtest_config: BacktestConfig,
+) -> dict:
+    """Shape one search result into a protocol row (like a trained row)."""
+
+    base["unique_semantic_evals"] = result.n_evaluated
+    base["semantic_dedups"] = result.n_semantic_dedups
+    base["best_so_far"] = list(result.best_so_far)
+    selected = result.selected
     if selected is None or selected.tokens is None:
-        return failed_row("no eligible formula found", selection.best_rejected)
-
+        return _search_failed_row(
+            base, "no eligible formula found", result.scores[-1] if result.scores else None
+        )
     metrics = evaluate_formula(
         list(selected.tokens),
         loader,
@@ -1001,7 +971,7 @@ def run_random_search(
         direction=selected.direction,
     )
     if metrics is None:
-        return failed_row("formula invalid at eval time", selected)
+        return _search_failed_row(base, "formula invalid at eval time", selected)
     return {
         **base,
         "failed": False,
@@ -1023,6 +993,141 @@ def run_random_search(
         "direction": selected.direction,
         **metrics,
     }
+
+
+def run_random_search(
+    loader: AshareDataLoader,
+    model_config: ModelConfig,
+    backtest_config: BacktestConfig,
+    reward_config: RewardConfig | None,
+    fold: Fold,
+    n_samples: int,
+    seed: int,
+    budget: int | None = None,
+) -> dict:
+    """Uniform random-search baseline over structurally valid formulas.
+
+    Samples formulas with the same legality rules the policy samples
+    under, scores each on the training window with the shared reward path
+    (validation reward = median over the same sub-windows the trainer
+    uses), keeps the best by validation reward and evaluates it
+    out-of-sample in its learned direction.  The row is shaped exactly
+    like a trained row so aggregates and the DS/max-t corrections treat
+    both searches identically.
+
+    With ``budget`` (T1-05) the baseline is **budget-matched**: it scores
+    exactly ``budget`` unique semantic formulas (duplicates never count),
+    so the comparison against a trained candidate that evaluated
+    ``steps x batch_size`` unique formulas is budget-fair.  The budget
+    unit is the **unique semantic formula evaluation** (v18, T2-01):
+    degenerate constant-producing formulas are rejected pre-evaluation,
+    canonical duplicates are merged, and numerically equivalent formulas
+    (same calibration fingerprint) are scored once — the exact accounting
+    the trainer's semantic cache applies.
+    """
+
+    base = {
+        "candidate": "random_search",
+        "fold_train_end": fold.train_end,
+        "fold_test_end": fold.test_end,
+        "seed": seed,
+        "n_samples": int(n_samples),
+        "budget": int(budget) if budget is not None else None,
+        "semantic_cache_version": SEMANTIC_CACHE_VERSION,
+    }
+    contract = fold.contract
+    train_signal_end = contract.train_signal_end
+    if train_signal_end <= 0 or n_samples <= 0:
+        return _search_failed_row(base, "degenerate window or budget")
+
+    target_count = int(budget) if budget is not None else int(n_samples)
+    if target_count <= 0:
+        return _search_failed_row(base, "degenerate window or budget")
+    window = _build_search_window(loader, model_config, fold)
+    formulas = canonical_form_pool(
+        seed, window.vocab, model_config.max_formula_len, target_count
+    )
+    evaluator = _search_evaluator(
+        window, loader, backtest_config, reward_config, fold, seed,
+        target_count, "random_search", "random",
+    )
+    for key in formulas:
+        evaluator.propose(key)
+        if evaluator.budget_used >= target_count:
+            break
+    return _search_row(base, evaluator.finish(), loader, fold, backtest_config)
+
+
+def run_gp_search(
+    loader: AshareDataLoader,
+    model_config: ModelConfig,
+    backtest_config: BacktestConfig,
+    reward_config: RewardConfig | None,
+    fold: Fold,
+    seed: int,
+    budget: int,
+) -> dict:
+    """Strongly-typed GP baseline (DEAP, T2-02) under the matched
+    unique-semantic-evaluation budget; row shaped like a trained row."""
+
+    base = {
+        "candidate": "gp_search",
+        "fold_train_end": fold.train_end,
+        "fold_test_end": fold.test_end,
+        "seed": seed,
+        "budget": int(budget),
+        "semantic_cache_version": SEMANTIC_CACHE_VERSION,
+    }
+    if fold.contract.train_signal_end <= 0 or budget <= 0:
+        return _search_failed_row(base, "degenerate window or budget")
+    window = _build_search_window(loader, model_config, fold)
+    evaluator = _search_evaluator(
+        window, loader, backtest_config, reward_config, fold, seed,
+        int(budget), "gp_search", "gp",
+    )
+    result = run_gp_baseline(
+        seed=seed,
+        evaluator=evaluator,
+        max_formula_len=model_config.max_formula_len,
+        vocab=window.vocab,
+    )
+    return _search_row(base, result, loader, fold, backtest_config)
+
+
+def run_tpe_search(
+    loader: AshareDataLoader,
+    model_config: ModelConfig,
+    backtest_config: BacktestConfig,
+    reward_config: RewardConfig | None,
+    fold: Fold,
+    seed: int,
+    budget: int,
+) -> dict:
+    """TPE baseline (Optuna, T2-02) under the matched unique-semantic-
+    evaluation budget; row shaped like a trained row."""
+
+    base = {
+        "candidate": "tpe_search",
+        "fold_train_end": fold.train_end,
+        "fold_test_end": fold.test_end,
+        "seed": seed,
+        "budget": int(budget),
+        "semantic_cache_version": SEMANTIC_CACHE_VERSION,
+    }
+    if fold.contract.train_signal_end <= 0 or budget <= 0:
+        return _search_failed_row(base, "degenerate window or budget")
+    window = _build_search_window(loader, model_config, fold)
+    evaluator = _search_evaluator(
+        window, loader, backtest_config, reward_config, fold, seed,
+        int(budget), "tpe_search", "tpe",
+    )
+    result = run_tpe_baseline(
+        seed=seed,
+        evaluator=evaluator,
+        max_formula_len=model_config.max_formula_len,
+        vocab=window.vocab,
+    )
+    return _search_row(base, result, loader, fold, backtest_config)
 
 
 def aggregate_results(rows: list[dict]) -> dict:
@@ -1508,6 +1613,45 @@ def run_protocol(
                     proto_cfg.random_samples,
                     proto_cfg.random_seed,
                     budget=random_budget,
+                )
+            )
+        # T2-03 baseline ladder: GP (DEAP) and TPE (Optuna) join the
+        # random baseline with the same matched budget per fold.
+        matched_budget = (
+            tier.steps * tier.batch_size
+            if proto_cfg.random_match_budget
+            else proto_cfg.random_samples
+        )
+        if proto_cfg.gp_enabled and matched_budget > 0:
+            logger.info(
+                f"fold {fold.train_end} -> {fold.test_end} gp baseline "
+                f"budget={matched_budget} seed={proto_cfg.gp_seed}"
+            )
+            rows.append(
+                run_gp_search(
+                    loader,
+                    model_config,
+                    backtest_config,
+                    reward_config,
+                    fold,
+                    seed=proto_cfg.gp_seed,
+                    budget=matched_budget,
+                )
+            )
+        if proto_cfg.tpe_enabled and matched_budget > 0:
+            logger.info(
+                f"fold {fold.train_end} -> {fold.test_end} tpe baseline "
+                f"budget={matched_budget} seed={proto_cfg.tpe_seed}"
+            )
+            rows.append(
+                run_tpe_search(
+                    loader,
+                    model_config,
+                    backtest_config,
+                    reward_config,
+                    fold,
+                    seed=proto_cfg.tpe_seed,
+                    budget=matched_budget,
                 )
             )
         for seed in seeds:

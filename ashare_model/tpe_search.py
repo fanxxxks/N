@@ -25,6 +25,8 @@ stream stalls (repeatedly re-proposing already-evaluated classes).
 
 from __future__ import annotations
 
+import math
+
 import torch
 import optuna
 
@@ -111,12 +113,13 @@ def run_tpe_baseline(
         budget_before = evaluator.budget_used
         trial = study.ask()
         score, _ = evaluator.propose(propose(trial))
-        if score is not None:
+        if score is not None and math.isfinite(float(score.val_reward)):
             study.tell(trial, float(score.val_reward))
         else:
             # Skipped proposals (duplicate, degenerate or claimed classes)
-            # get the current best as a neutral value: they neither help
-            # nor hurt the surrogate.
+            # and non-finite rewards get the current best as a neutral
+            # value: they neither help nor hurt the surrogate (Optuna
+            # rejects NaN objectives outright).
             study.tell(trial, evaluator.best_reward)
         if evaluator.budget_used == budget_before:
             stall += 1

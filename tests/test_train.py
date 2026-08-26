@@ -835,7 +835,87 @@ def test_semantic_cache_cap_matches_trainer_bound(
     assert stats["cap"] == AshareTrainer._REWARD_CACHE_CAP
     assert stats["version"] == 1
     assert stats["window_id"].startswith("train:")
-    assert stats["protocol_version"] == 18
+    assert stats["protocol_version"] == 19
+
+
+# --- T2-03: independent initializations and the searcher backends ----------
+
+
+def test_init_seed_controls_independent_initializations(
+    populated_db: DataConfig,
+):
+    """The admission contract: ``init_seed`` re-initializes the policy
+    weights independently of the sampling seed, so >= 5 independent
+    initializations can be drawn; the same (init_seed, sampling seed)
+    pair reproduces the identical run."""
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
+
+    def build(init_seed: int) -> AshareTrainer:
+        return AshareTrainer(
+            populated_db,
+            model_config,
+            BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+            loader,
+            reward_config=_reward_cfg(),
+            init_seed=init_seed,
+        )
+
+    a, b, a_again = build(42), build(43), build(42)
+    wa = {k: v.clone() for k, v in a.model.state_dict().items()}
+    wb = {k: v.clone() for k, v in b.model.state_dict().items()}
+    wa2 = {k: v.clone() for k, v in a_again.model.state_dict().items()}
+    assert any(not torch.equal(wa[k], wb[k]) for k in wa)  # different inits
+    assert all(torch.equal(wa[k], wa2[k]) for k in wa)  # reproducible inits
+
+    a.train(steps=1, batch_size=2, save_artifacts=False, seed=42)
+    a_again.train(steps=1, batch_size=2, save_artifacts=False, seed=42)
+    b.train(steps=1, batch_size=2, save_artifacts=False, seed=42)
+    assert a.history == a_again.history  # same (init_seed, seed) -> same run
+    # A different initialization under the same sampling seed explores
+    # differently (deterministic: weights differ -> sampled formulas differ).
+    assert a.history != b.history
+
+
+def test_train_search_respects_budget_and_backend(
+    populated_db: DataConfig,
+):
+    """The non-RL searcher backends run inside the matched
+    unique-semantic-evaluation budget and leave the standard selection
+    state behind (protocol-row compatible)."""
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
+    for searcher in ("gp", "random"):
+        trainer = AshareTrainer(
+            populated_db,
+            model_config,
+            BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+            loader,
+            reward_config=_reward_cfg(),
+        )
+        tokens = trainer.train_search(
+            searcher=searcher,
+            steps=1,
+            batch_size=2,
+            save_artifacts=False,
+        )
+        assert trainer.semantic_cache.budget_used <= 2, searcher
+        assert trainer.selection_result is not None, searcher
+        if tokens is not None:
+            assert trainer.best_tokens == tokens, searcher
+    with pytest.raises(ValueError, match="gp.*random"):
+        trainer = AshareTrainer(
+            populated_db,
+            model_config,
+            BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+            loader,
+            reward_config=_reward_cfg(),
+        )
+        trainer.train_search(searcher="tpe", steps=1, batch_size=2)
 
 
 def test_duplicate_formulas_share_one_batched_evaluation(

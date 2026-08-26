@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -70,6 +71,26 @@ _OPERATOR_ARITY = torch.zeros(FORMULA_VOCAB.size)
 for _i, (_, _, _arity) in enumerate(OPS_CONFIG):
     _OPERATOR_ARITY[FORMULA_VOCAB.operator_offset + _i] = _arity
 _FEATURE_IDS = torch.arange(FORMULA_VOCAB.feature_offset, FORMULA_VOCAB.operator_offset)
+
+
+@dataclass
+class _TrainWindow:
+    """One training window bound for every searcher (RL, random, GP): the
+    tensors, masks and windows the candidate scorer consumes, plus the
+    semantic-budget cache and the calibration fingerprint executor."""
+
+    contract: "TrainingTimeContract"
+    train_end_idx: int
+    val_windows: list[tuple[int, int]]
+    val_start: int
+    train_signal_range: tuple[int, int]
+    factor_tensor: torch.Tensor
+    vm_device: torch.device
+    train_universe_mask: np.ndarray
+    target_ret: np.ndarray
+    blocked_buy: np.ndarray
+    blocked_sell: np.ndarray
+    reward_chunk: int
 
 
 def _project_root() -> Path:
@@ -338,87 +359,18 @@ class AshareTrainer:
         max_len = self.model_config.max_formula_len
         vm_device = resolve_device(device)
 
-        contract = self._training_contract(train_end_date)
-        train_end_idx = contract.train_label_end
-        # Hold out the tail of the training window for out-of-sample best
-        # formula selection, split into independent sub-windows; the best
-        # formula is decided on the *median* validation reward so a single
-        # lucky tail stretch cannot win the selection.
-        val_windows = self._validation_windows(contract.train_signal_end)
-        # The *learning* window is the in-sample head only: the policy
-        # gradient scores candidates on columns strictly before the first
-        # validation window, so the selection data never doubles as the
-        # training signal (val rewards rank formulas; IS rewards teach the
-        # policy — two jobs, two windows).
-        val_start = validation_start(contract.train_signal_end, self.model_config)
-        train_signal_range = (contract.train_signal_start, val_start)
-        factor_tensor = self.loader.factor_tensor[:, :, :train_end_idx].to(
-            vm_device
-        )
-        # The VM executes on the compute device; the industry-group tensor
-        # for CS_NEUTRALIZE and the PIT eligibility mask for the
-        # cross-sectional operators move with the factor stack (the loader
-        # always builds the mask in load_data, so there is no fallback).
-        industry_codes = getattr(self.loader, "industry_codes", None)
-        self.vm.industry_codes = (
-            industry_codes[:, :train_end_idx].to(vm_device)
-            if industry_codes is not None
-            else None
-        )
-        universe_mask = self.loader.universe_mask
-        self.vm.universe_mask = torch.tensor(
-            universe_mask[:, :train_end_idx],
-            dtype=torch.bool,
-            device=vm_device,
-        )
-        # The candidate scorer needs the same PIT mask on the numpy side:
-        # every quality statistic (rank IC, basket selection, near-constant
-        # rejection, direction) is gated to signal-date eligible cells.
-        train_universe_mask = universe_mask[:, :train_end_idx]
-        # Recompute labels only from prices inside the inclusive training
-        # anchor. Precomputed global targets at the tail may reference fold-
-        # external t+1/t+2 prices and are intentionally never sliced here.
-        train_open = self.loader.raw_data_cache["open"][:, :train_end_idx].numpy()
-        target_ret = open_to_open_returns(train_open)
-        target_ret = self.loader.mask_by_universe(target_ret)
-        # Tradability masks (buy/sell blocked per stock and date) align the
-        # training basket with the backtest engine's execution rules; both
-        # matrices are shared by every formula scored this run.
-        blocked_buy, blocked_sell = self.loader.tradability_masks()
-        blocked_buy = blocked_buy[:, :train_end_idx]
-        blocked_sell = blocked_sell[:, :train_end_idx]
-
-        # T2-01: the semantic cache is the evaluation-budget ledger.  Its
-        # key carries the full evaluation context (dataset_id, reward and
-        # protocol versions, the training window), so scores are never
-        # reused across datasets or measurement generations, and its budget
-        # counts **unique semantic evaluations** — structurally identical
-        # (canonical AST hash) and numerically equivalent (calibration
-        # fingerprint) formulas never bill twice.  ``evaluation`` imports
-        # this module at module level, so its constant is resolved lazily.
-        from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
-
-        self.semantic_cache = SemanticCache(
-            dataset_id=self.loader.dataset_id,
-            reward_version=REWARD_VERSION,
-            protocol_version=PROTOCOL_VERSION,
-            window_id=self._window_id(contract, val_windows),
-            cap=self._REWARD_CACHE_CAP,
-        )
-        calibration_slice = CalibrationSlice.of(factor_tensor.shape[2])
-        self._calibration_execute = make_calibration_execute(
-            self.vm,
-            factor_tensor,
-            universe_mask[:, :train_end_idx],
-            self.vm.industry_codes,
-            calibration_slice,
-        )
-
-        # Chunk the batched reward evaluation so the stacked signal matrix
-        # (original stack + batched copy + both-direction copy) stays within
-        # a fixed memory budget (~512 MB of float64 signals).
-        signal_bytes = factor_tensor.shape[1] * train_end_idx * 8
-        reward_chunk = score_chunk_size(signal_bytes)
+        window = self._prepare_window(train_end_date, vm_device)
+        contract = window.contract
+        train_end_idx = window.train_end_idx
+        val_windows = window.val_windows
+        val_start = window.val_start
+        train_signal_range = window.train_signal_range
+        factor_tensor = window.factor_tensor
+        train_universe_mask = window.train_universe_mask
+        target_ret = window.target_ret
+        blocked_buy = window.blocked_buy
+        blocked_sell = window.blocked_sell
+        reward_chunk = window.reward_chunk
 
         pbar = tqdm(range(steps))
         for step in pbar:
@@ -752,6 +704,8 @@ class AshareTrainer:
         selection_path = self.data_config.data_dir / "training_selection.json"
         if save_artifacts:
             selection_path.parent.mkdir(parents=True, exist_ok=True)
+            from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
+
             selection_payload = {
                 "reward_version": REWARD_VERSION,
                 "protocol_version": PROTOCOL_VERSION,
@@ -794,12 +748,33 @@ class AshareTrainer:
             )
             return self.best_tokens
 
+        return self._write_artifact(
+            contract=contract, vm_device=vm_device, searcher="rl"
+        )
+
+    def _write_artifact(
+        self,
+        *,
+        contract: TrainingTimeContract,
+        vm_device: torch.device,
+        searcher: str = "rl",
+    ) -> list[int] | None:
+        """Write the standard training artifact (selection + strategy JSON +
+        the policy checkpoint for RL runs) for the current selection."""
+
+        selected = self.selection_result.selected
+        if selected is None:
+            return None
+        # ``evaluation`` imports this module at module level; resolve lazily.
+        from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
+
         score_payload = selected.to_dict()
         score_payload.pop("tokens", None)
         output = {
             "formula": self.best_tokens,
             **score_payload,
             "history": self.history,
+            "searcher": searcher,
             # Reproducibility provenance: the policy stays on CPU, so
             # (init_seed, seed) reproduce the same sampled formulas on any
             # machine; ``device`` records where the VM executed.
@@ -832,8 +807,17 @@ class AshareTrainer:
             json.dumps(output, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        torch.save(self.model.state_dict(), self.data_config.data_dir / "ashare_model.pt")
-        logger.success(f"Training complete; best formula saved to {out_path}")
+        if searcher == "rl":
+            # The checkpoint is the RL policy only: the non-RL searchers
+            # are not models, so no .pt is written for them.
+            torch.save(
+                self.model.state_dict(),
+                self.data_config.data_dir / "ashare_model.pt",
+            )
+        logger.success(
+            f"Search complete (searcher={searcher}); "
+            f"best formula saved to {out_path}"
+        )
         return self.best_tokens
 
     def _training_contract(
@@ -842,6 +826,232 @@ class AshareTrainer:
         return TrainingTimeContract.resolve(
             self.loader.dates,
             train_end_date or self.backtest_config.train_end_date,
+        )
+
+    def _prepare_window(
+        self, train_end_date: str | None, vm_device: torch.device
+    ) -> "_TrainWindow":
+        """Bind everything the searchers (RL, random, GP) need about the
+        training window: the factor tensor, VM masks, target, windows, the
+        semantic-budget cache and the calibration fingerprint executor.
+
+        Shared by :meth:`train` (RL) and :meth:`train_search` (the
+        non-RL backends) so every searcher measures the identical window.
+        """
+
+        contract = self._training_contract(train_end_date)
+        train_end_idx = contract.train_label_end
+        # Hold out the tail of the training window for out-of-sample best
+        # formula selection, split into independent sub-windows; the best
+        # formula is decided on the *median* validation reward so a single
+        # lucky tail stretch cannot win the selection.
+        val_windows = self._validation_windows(contract.train_signal_end)
+        # The *learning* window is the in-sample head only: the policy
+        # gradient scores candidates on columns strictly before the first
+        # validation window, so the selection data never doubles as the
+        # training signal (val rewards rank formulas; IS rewards teach the
+        # policy — two jobs, two windows).
+        val_start = validation_start(contract.train_signal_end, self.model_config)
+        train_signal_range = (contract.train_signal_start, val_start)
+        factor_tensor = self.loader.factor_tensor[:, :, :train_end_idx].to(
+            vm_device
+        )
+        # The VM executes on the compute device; the industry-group tensor
+        # for CS_NEUTRALIZE and the PIT eligibility mask for the
+        # cross-sectional operators move with the factor stack (the loader
+        # always builds the mask in load_data, so there is no fallback).
+        industry_codes = getattr(self.loader, "industry_codes", None)
+        self.vm.industry_codes = (
+            industry_codes[:, :train_end_idx].to(vm_device)
+            if industry_codes is not None
+            else None
+        )
+        universe_mask = self.loader.universe_mask
+        self.vm.universe_mask = torch.tensor(
+            universe_mask[:, :train_end_idx],
+            dtype=torch.bool,
+            device=vm_device,
+        )
+        # The candidate scorer needs the same PIT mask on the numpy side:
+        # every quality statistic (rank IC, basket selection, near-constant
+        # rejection, direction) is gated to signal-date eligible cells.
+        train_universe_mask = universe_mask[:, :train_end_idx]
+        # Recompute labels only from prices inside the inclusive training
+        # anchor. Precomputed global targets at the tail may reference fold-
+        # external t+1/t+2 prices and are intentionally never sliced here.
+        train_open = self.loader.raw_data_cache["open"][:, :train_end_idx].numpy()
+        target_ret = open_to_open_returns(train_open)
+        target_ret = self.loader.mask_by_universe(target_ret)
+        # Tradability masks (buy/sell blocked per stock and date) align the
+        # training basket with the backtest engine's execution rules; both
+        # matrices are shared by every formula scored this run.
+        blocked_buy, blocked_sell = self.loader.tradability_masks()
+        blocked_buy = blocked_buy[:, :train_end_idx]
+        blocked_sell = blocked_sell[:, :train_end_idx]
+
+        # T2-01: the semantic cache is the evaluation-budget ledger.  Its
+        # key carries the full evaluation context (dataset_id, reward and
+        # protocol versions, the training window), so scores are never
+        # reused across datasets or measurement generations, and its budget
+        # counts **unique semantic evaluations** — structurally identical
+        # (canonical AST hash) and numerically equivalent (calibration
+        # fingerprint) formulas never bill twice.  ``evaluation`` imports
+        # this module at module level, so its constant is resolved lazily.
+        from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
+
+        self.semantic_cache = SemanticCache(
+            dataset_id=self.loader.dataset_id,
+            reward_version=REWARD_VERSION,
+            protocol_version=PROTOCOL_VERSION,
+            window_id=self._window_id(contract, val_windows),
+            cap=self._REWARD_CACHE_CAP,
+        )
+        calibration_slice = CalibrationSlice.of(factor_tensor.shape[2])
+        self._calibration_execute = make_calibration_execute(
+            self.vm,
+            factor_tensor,
+            universe_mask[:, :train_end_idx],
+            self.vm.industry_codes,
+            calibration_slice,
+        )
+        # Chunk the batched reward evaluation so the stacked signal matrix
+        # (original stack + batched copy + both-direction copy) stays within
+        # a fixed memory budget (~512 MB of float64 signals).
+        signal_bytes = factor_tensor.shape[1] * train_end_idx * 8
+        reward_chunk = score_chunk_size(signal_bytes)
+        return _TrainWindow(
+            contract=contract,
+            train_end_idx=train_end_idx,
+            val_windows=val_windows,
+            val_start=val_start,
+            train_signal_range=train_signal_range,
+            factor_tensor=factor_tensor,
+            vm_device=vm_device,
+            train_universe_mask=train_universe_mask,
+            target_ret=target_ret,
+            blocked_buy=blocked_buy,
+            blocked_sell=blocked_sell,
+            reward_chunk=reward_chunk,
+        )
+
+    def train_search(
+        self,
+        *,
+        searcher: str,
+        steps: int | None = None,
+        batch_size: int | None = None,
+        seed: int = 42,
+        train_end_date: str | None = None,
+        save_artifacts: bool = True,
+        device: str | None = None,
+    ) -> list[int] | None:
+        """Run a non-RL searcher (``gp`` or ``random``) over the training
+        window with the matched unique-semantic-evaluation budget and
+        produce the standard training artifact.
+
+        The searcher is billed through the same semantic cache as RL
+        (``steps x batch_size`` unique semantic evaluations), so the
+        production default can switch backends without changing the
+        budget semantics or the artifact contract.
+        """
+
+        if searcher not in ("gp", "random"):
+            raise ValueError(f"train_search supports 'gp' or 'random', got {searcher!r}")
+        steps = steps or self.model_config.train_steps
+        batch_size = batch_size or self.model_config.batch_size
+        vm_device = resolve_device(device)
+        window = self._prepare_window(train_end_date, vm_device)
+        budget = steps * batch_size
+
+        # Lazily imported: baseline_harness/gp_search import this module at
+        # module level, so the cycle is broken at call time.
+        from .baseline_harness import (  # noqa: PLC0415
+            SemanticBudgetEvaluator,
+            canonical_form_pool,
+        )
+        from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
+        from .gp_search import run_gp_baseline  # noqa: PLC0415
+
+        def execute(tokens) -> np.ndarray | None:
+            signal = self.vm.execute(tokens, window.factor_tensor)
+            if signal is None:
+                return None
+            return signal.detach().cpu().numpy()
+
+        evaluator = SemanticBudgetEvaluator(
+            target=window.target_ret,
+            universe_mask=window.train_universe_mask,
+            backtest_config=self.backtest_config,
+            reward_config=self.reward_config,
+            val_windows=window.val_windows,
+            train_signal_range=window.train_signal_range,
+            budget=budget,
+            execute=execute,
+            fingerprint_execute=self._calibration_execute,
+            dataset_id=self.loader.dataset_id,
+            protocol_version=PROTOCOL_VERSION,
+            window_id=self._window_id(window.contract, window.val_windows),
+            tie_break_keys=np.asarray(self.loader.ts_codes),
+            adv=np.asarray(self.loader.dollar_volume())[:, :window.train_end_idx],
+            blocked_buy=window.blocked_buy,
+            blocked_sell=window.blocked_sell,
+            source=searcher,
+            candidate_prefix=searcher,
+            chunk=window.reward_chunk,
+        )
+        if searcher == "gp":
+            result = run_gp_baseline(
+                seed=seed,
+                evaluator=evaluator,
+                max_formula_len=self.model_config.max_formula_len,
+            )
+        else:
+            for key in canonical_form_pool(
+                seed,
+                self.vocab,
+                self.model_config.max_formula_len,
+                budget,
+            ):
+                evaluator.propose(key)
+                if evaluator.budget_used >= budget:
+                    break
+            result = evaluator.finish()
+
+        selected = result.selected
+        if selected is None:
+            logger.warning(
+                "No eligible formula met every validation gate "
+                f"(searcher={searcher}); no strategy artifact is written."
+            )
+            self._sync_best_from_selection()
+            return None
+        self._candidate_scores = {
+            tuple(score.tokens): score
+            for score in result.scores
+            if score.tokens is not None
+        }
+        self.selection_result = SelectionResult(selected, None, result.scores)
+        self._sync_best_from_selection()
+        self.history = [
+            {
+                "step": float(step),
+                "avg_reward": float(reward),
+                "best_val_reward": float(reward),
+                "unique_semantic_evals": float(budget_used),
+                "searcher": searcher,
+            }
+            for step, (budget_used, reward) in enumerate(result.best_so_far)
+        ]
+        if not save_artifacts:
+            logger.success(
+                f"Search complete (artifacts skipped); searcher={searcher} "
+                f"val_reward={selected.val_reward:.3f} "
+                f"val_icir={selected.val_icir:.3f} "
+                f"formula={selected.formula_text}"
+            )
+            return self.best_tokens
+        return self._write_artifact(
+            contract=window.contract, vm_device=vm_device, searcher=searcher
         )
 
     @staticmethod
@@ -967,12 +1177,22 @@ def main() -> None:
         trainer = AshareTrainer(
             data_config, model_config, backtest_config, loader, reward_config
         )
-        if (
-            trainer.train(
+        if model_config.searcher == "rl":
+            tokens = trainer.train(
                 steps=args.steps, batch_size=args.batch_size, device=args.device
             )
-            is None
-        ):
+        else:
+            # T2-03 searcher backend: the configured default searcher (gp /
+            # random) replaces RL; the budget is the same steps x batch_size
+            # unique semantic evaluations and the artifact contract is
+            # unchanged (RL stays available via model.searcher: rl).
+            tokens = trainer.train_search(
+                searcher=model_config.searcher,
+                steps=args.steps,
+                batch_size=args.batch_size,
+                device=args.device,
+            )
+        if tokens is None:
             # No formula met the validation-quality floor: fail loudly so
             # scripts and CI never mistag a no-artifact run as success.
             raise SystemExit(2)

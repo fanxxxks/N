@@ -88,6 +88,12 @@ protocol:
   random_samples: 4096
   random_seed: 1234
   baseline_signals: [REVERSAL_5, RSQ_60, ILLIQ_20, OVERNIGHT_RET, MOMENTUM_20, ROE, TURNOVER]
+  # T2-03 baseline ladder: strongly-typed GP (DEAP) and TPE (Optuna) join
+  # the random baseline with the same matched budget per fold.
+  gp_enabled: true
+  gp_seed: 1235
+  tpe_enabled: true
+  tpe_seed: 1236
   folds:
     - {train_end: "2020-12-31", test_end: "2021-12-31"}
     - {train_end: "2021-12-31", test_end: "2022-12-31"}

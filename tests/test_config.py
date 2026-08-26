@@ -147,11 +147,28 @@ def test_make_protocol_config_random_search_fields(tmp_path: Path):
     assert proto.screening.steps == 150
     assert proto.random_samples == 4096
     assert proto.random_seed == 1234
+    assert proto.gp_enabled is True
+    assert proto.gp_seed == 1235
+    assert proto.tpe_enabled is True
+    assert proto.tpe_seed == 1236
     overridden = make_protocol_config(
-        {"protocol": {"random_samples": 0, "random_seed": 99}}
+        {
+            "protocol": {
+                "random_samples": 0,
+                "random_seed": 99,
+                "gp_enabled": False,
+                "gp_seed": 7,
+                "tpe_enabled": False,
+                "tpe_seed": 8,
+            }
+        }
     )
     assert overridden.random_samples == 0
     assert overridden.random_seed == 99
+    assert overridden.gp_enabled is False
+    assert overridden.gp_seed == 7
+    assert overridden.tpe_enabled is False
+    assert overridden.tpe_seed == 8
     with pytest.raises(ValueError, match="random_samples"):
         make_protocol_config({"protocol": {"random_samples": -1}})
 

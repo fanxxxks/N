@@ -212,8 +212,12 @@ def run_gp_baseline(
         "select", tools.selTournament, tournsize=tournsize
     )
     toolbox.register("mate", gp.cxOnePoint)
+    toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
     toolbox.register(
-        "mutate", gp.mutUniform, expr=gp.genFull(pset=pset, min_=0, max_=2)
+        "mutate",
+        gp.mutUniform,
+        expr=toolbox.expr_mut,
+        pset=pset,
     )
 
     def fresh_individual() -> "creator.IndividualFormula":

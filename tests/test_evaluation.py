@@ -766,6 +766,7 @@ def test_run_protocol_rows_and_determinism(populated_db: DataConfig, monkeypatch
         folds=[FoldConfig("2024-01-10", "2024-01-25")],
         seeds=[42, 7],
         random_samples=64,
+        random_match_budget=False,
     )
     monkeypatch.setattr(
         evaluation, "_build_trainer", lambda *a, **k: _FakeTrainer([1])
@@ -780,7 +781,8 @@ def test_run_protocol_rows_and_determinism(populated_db: DataConfig, monkeypatch
         "screening",
     )
     rows = result["rows"]
-    assert len(rows) == 11  # 1 benchmark + 7 baselines + 1 random search + 2 seeds
+    # 1 benchmark + 7 baselines + random/gp/tpe searches + 2 trained seeds.
+    assert len(rows) == 13
     trained = [r for r in rows if r["candidate"] == "trained"]
     assert len(trained) == 2
     assert all(r["formula"] == [1] and r["val_reward"] == 1.5 for r in trained)
@@ -788,8 +790,17 @@ def test_run_protocol_rows_and_determinism(populated_db: DataConfig, monkeypatch
     random_rows = [r for r in rows if r["candidate"] == "random_search"]
     assert len(random_rows) == 1
     assert random_rows[0]["n_samples"] == proto.random_samples
+    # T2-03 baseline ladder: GP and TPE rows join with the matched budget.
+    gp_rows = [r for r in rows if r["candidate"] == "gp_search"]
+    tpe_rows = [r for r in rows if r["candidate"] == "tpe_search"]
+    assert len(gp_rows) == 1
+    assert len(tpe_rows) == 1
+    assert gp_rows[0]["budget"] == proto.random_samples
+    assert tpe_rows[0]["budget"] == proto.random_samples
     assert result["aggregates"]["trained"]["n_rows"] == 2
     assert result["aggregates"]["random_search"]["n_rows"] == 1
+    assert result["aggregates"]["gp_search"]["n_rows"] == 1
+    assert result["aggregates"]["tpe_search"]["n_rows"] == 1
     assert result["top_trial"] is not None
     assert result["data_end_date"] == loader.dates[-1]
     assert result["tier"] == "screening"
@@ -888,6 +899,9 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
     assert any(r["candidate"] == "baseline:MOMENTUM_20" for r in payload["rows"])
     assert any(r["candidate"] == "benchmark:equal_weight" for r in payload["rows"])
     assert any(r["candidate"] == "random_search" for r in payload["rows"])
+    # T2-03 baseline ladder rows run in the CLI protocol too.
+    assert any(r["candidate"] == "gp_search" for r in payload["rows"])
+    assert any(r["candidate"] == "tpe_search" for r in payload["rows"])
     # The protocol must never clobber the working strategy artifacts.
     assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
 
