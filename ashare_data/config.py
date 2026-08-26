@@ -97,9 +97,10 @@ class RewardConfig:
 
     Semantic changes to the reward implementation bump
     ``ashare_model.reward.REWARD_VERSION``; these values only tune the
-    current version (v11: no-signal basket contract + deterministic
-    tie-breaks; scoring quantity unchanged: direction-adjusted rank-ICIR
-    minus the annualized mean of exact daily execution costs).
+    current version (v12: robust HAC-shrunk ICIR + hard signal-quality
+    gates + AST complexity billing; scoring quantity unchanged:
+    direction-adjusted rank-ICIR minus the annualized mean of exact daily
+    execution costs).
     """
 
     reward_clip_low: float = -1.0
@@ -109,11 +110,15 @@ class RewardConfig:
     bad_reward: float = -2.0
     # Multiplier on exact annualized daily execution costs (1.0 = honest cost).
     cost_weight: float = 1.0
-    # Subtracted from the reward of formulas without any operator (bare
-    # single-factor copies), nudging the policy towards combinations.  Kept
-    # small: the v3 value (0.2) pushed every admissible signal below the
-    # validation floor and made the floor unreachable in practice.
+    # Complexity billing (T1-03): the reward pays
+    # ``complexity_penalty * complexity_bill(ast)`` where the bill combines
+    # AST node count, depth, longest operator window and operation cost
+    # (bare single-factor copies bill exactly 1.0, keeping the historical
+    # bare-factor nudge identical).
     complexity_penalty: float = 0.02
+    # Hard complexity ceiling: formulas whose complexity bill exceeds this
+    # are rejected outright (``complexity_above_maximum``).
+    max_complexity: float = 25.0
     # Cost-adjusted validation floor: training saves no artifact unless the
     # best validation reward reaches it (0.0 = at least zero net signal).
     min_val_reward: float = 0.0
@@ -126,6 +131,24 @@ class RewardConfig:
     min_val_icir: float = 0.05
     # Minimum finite cross-section per date for a rank-IC observation.
     ic_min_stocks: int = 10
+    # Robust IC statistics (T1-03): the ICIR used in rewards and gates is
+    # shrunk by the effective sample size under autocorrelation
+    # (Newey-West HAC, ``ic_hac_max_lags`` lags; None = Andrews rule).
+    ic_hac_max_lags: int | None = 10
+    # Block bootstrap of the mean IC (deterministic seed): the sign-
+    # stability probability and CI recorded in quality summaries.
+    ic_boot_n: int = 500
+    ic_boot_block: int = 5
+    # Hard quality gates (T1-03, ``None`` disables a gate).  The defaults
+    # reject the degenerate classes — all-zero (activity), two-valid-day
+    # (valid-IC days) and extremely sparse (effective stocks vs
+    # ``ic_min_stocks``) signals — while passing healthy cross-sections.
+    min_valid_ic_days: int | None = 8
+    min_effective_stocks: int | None = None  # None -> ic_min_stocks
+    min_coverage: float | None = 0.2
+    min_activity: float | None = 0.05
+    min_sign_stability: float | None = 0.5
+    min_val_window_q25: float | None = 0.0
 
 
 @dataclass

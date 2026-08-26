@@ -161,7 +161,19 @@ def test_training_smoke(tmp_path):
         loader,
         # The smoke fixture's returns are noise: the production validation
         # floor is relaxed so the smoke test exercises artifact saving.
-        reward_config=RewardConfig(min_val_reward=-1e9, min_val_icir=-1e9),
+        # The T1-03 hard quality gates are relaxed the same way (the
+        # 3-stock fixture is below the production thresholds by design).
+        reward_config=RewardConfig(
+            min_val_reward=-1e9,
+            min_val_icir=-1e9,
+            ic_min_stocks=2,
+            min_valid_ic_days=2,
+            min_effective_stocks=2,
+            min_coverage=0.0,
+            min_activity=0.0,
+            min_sign_stability=0.0,
+            min_val_window_q25=-1e9,
+        ),
     )
     tokens = trainer.train(steps=1, batch_size=4)
     assert tokens is not None

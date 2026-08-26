@@ -14,6 +14,15 @@ never be compared silently.
 
 Version history
 ---------------
+* v12: the IC term of every reward path is the **robust ICIR** — the naive
+  mean/std ratio shrunk by the effective sample size under autocorrelation
+  (Newey-West HAC variance, ``ic_hac_max_lags``), so serial-correlated IC
+  series are discounted (T1-03).  Complexity is billed from the AST
+  (``complexity_penalty * complexity_bill`` combining node count, depth,
+  longest operator window and operation cost) for every formula, not only
+  bare factors, and formulas whose bill exceeds ``max_complexity`` are
+  rejected.  Rewards/artifacts recorded with earlier versions are not
+  comparable.
 * v11: the basket weight construction aligns with the T1-02 no-signal
   contract: a selectable cross-section without dispersion (fewer than two
   distinct values) is never rebalanced (previous basket held, zero
@@ -113,7 +122,7 @@ import numpy as np
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
 
-REWARD_VERSION = "11"
+REWARD_VERSION = "12"
 
 _ANNUALIZATION = 252
 
@@ -241,6 +250,26 @@ def icir_from_series(ic: np.ndarray) -> np.ndarray:
         std = np.sqrt(np.clip(var, 0.0, None))
         icir = mean / (std + 1e-9)
     return np.where(n >= 2, icir, 0.0)
+
+
+def _robust_icir_batch(ic: np.ndarray, max_lags: int | None) -> np.ndarray:
+    """Effective-n shrunk (HAC) ICIR per row (T1-03); degenerate rows 0.0.
+
+    A perfectly stable IC series has an unbounded ratio; the reward path
+    caps it at a large finite value so artifacts and the eligibility
+    checks never see a non-finite ICIR (the reward itself saturates the
+    clip band either way).
+    """
+
+    from .signal_quality import robust_icir
+
+    ic = np.asarray(ic, dtype=np.float64)
+    if ic.ndim == 1:
+        ic = ic[None]
+    out = np.asarray(
+        [robust_icir(row, max_lags) for row in ic], dtype=np.float64
+    )
+    return np.nan_to_num(out, nan=0.0, posinf=1e9, neginf=-1e9)
 
 
 @dataclass(frozen=True)
@@ -611,13 +640,14 @@ def formula_reward(
     if signal_range is None:
         signal_range = (0, max(signal.shape[1] - 2, 0))
     start, end = signal_range
-    ic = icir_from_series(
+    ic = _robust_icir_batch(
         rank_ic_series(
             signal[None, :, start:end],
             target_ret[:, start:end],
             reward_cfg.ic_min_stocks,
             universe_mask=universe_mask[:, start:end],
-        )
+        ),
+        reward_cfg.ic_hac_max_lags,
     )[0]
     simulation = simulate_basket_daily_returns(
         signal,
@@ -685,13 +715,14 @@ def batched_basket_rewards(
     if train_signal_range is None:
         train_signal_range = (0, max(signals.shape[2] - 2, 0))
     train_start, train_end = train_signal_range
-    icir = icir_from_series(
+    icir = _robust_icir_batch(
         rank_ic_series(
             signals[:, :, train_start:train_end],
             target_ret[:, train_start:train_end],
             reward_cfg.ic_min_stocks,
             universe_mask=universe_mask[:, train_start:train_end],
-        )
+        ),
+        reward_cfg.ic_hac_max_lags,
     )
     simulation = simulate_basket_daily_returns_batch(
         signals,
@@ -717,13 +748,14 @@ def batched_basket_rewards(
         per_window = []
         per_window_icir = []
         for start, end in val_windows:
-            win_icir = icir_from_series(
+            win_icir = _robust_icir_batch(
                 rank_ic_series(
                     signals[:, :, start:end],
                     target_ret[:, start:end],
                     reward_cfg.ic_min_stocks,
                     universe_mask=universe_mask[:, start:end],
-                )
+                ),
+                reward_cfg.ic_hac_max_lags,
             )
             win_simulation = simulate_basket_daily_returns_batch(
                 signals,
