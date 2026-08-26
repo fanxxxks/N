@@ -74,6 +74,10 @@ class CandidateScore:
     complexity_penalty: float
     eligible: bool
     rejection_reasons: tuple[str, ...]
+    # T1-03: the AST complexity bill this candidate was charged (>= 1.0;
+    # exactly 1.0 for bare factors).  Recorded in artifacts so the billing
+    # is auditable; ``complexity_penalty`` = penalty_rate * complexity_cost.
+    complexity_cost: float = 0.0
 
     @property
     def deterministic_key(self) -> str:
@@ -96,6 +100,7 @@ class CandidateScore:
             "train_reward": finite_or_none(self.train_reward),
             "train_icir": finite_or_none(self.train_icir),
             "complexity_penalty": self.complexity_penalty,
+            "complexity_cost": self.complexity_cost,
             "eligible": self.eligible,
             "rejection_reasons": list(self.rejection_reasons),
         }
@@ -134,6 +139,7 @@ class CandidateScore:
             complexity_penalty=number(payload.get("complexity_penalty", 0.0)),
             eligible=bool(payload.get("eligible", not reasons)),
             rejection_reasons=reasons,
+            complexity_cost=number(payload.get("complexity_cost", 0.0)),
         )
 
 
@@ -206,26 +212,50 @@ class CandidateScorer:
         self.reward_function = reward_function
 
     def complexity_penalty(self, spec: CandidateSpec) -> float:
-        """Penalty for bare single-factor formulas (no operator anywhere).
+        """Penalty for formula complexity: ``rate * complexity_bill(ast)``.
 
         The AST is the single source of truth: the bytecode is decoded once
-        and the penalty applies exactly when the AST is a bare
-        :class:`~ashare_model.ir.Feature` — EOS and padding tokens never
-        count as operators.
+        and the bill combines node count, depth, longest operator window
+        and operation cost (T1-03; bare single-factor copies bill exactly
+        1.0, preserving the historical bare-factor nudge).  Invalid
+        bytecode bills as a bare factor — the formula is rejected anyway.
         """
 
-        from .ir import FormulaSyntaxError, decode, operator_names
+        return float(self.reward_config.complexity_penalty) * self.complexity_cost(
+            spec
+        )
+
+    def complexity_cost(self, spec: CandidateSpec) -> float:
+        """The AST complexity bill of ``spec`` (>= 1.0, auditable)."""
+
+        from .complexity import complexity_bill
+        from .ir import FormulaSyntaxError, decode
 
         tokens = spec.tokens or ()
         if not tokens:
-            return float(self.reward_config.complexity_penalty)
+            return 1.0
         try:
             ast = decode(tokens)
         except FormulaSyntaxError:
-            return float(self.reward_config.complexity_penalty)
-        if operator_names(ast):
-            return 0.0
-        return float(self.reward_config.complexity_penalty)
+            return 1.0
+        return complexity_bill(ast)
+
+    def _quality_gates(self) -> "SignalQualityGates":
+        from .signal_quality import SignalQualityGates
+
+        cfg = self.reward_config
+        return SignalQualityGates(
+            min_valid_ic_days=cfg.min_valid_ic_days,
+            min_effective_stocks=(
+                cfg.min_effective_stocks
+                if cfg.min_effective_stocks is not None
+                else cfg.ic_min_stocks
+            ),
+            min_coverage=cfg.min_coverage,
+            min_activity=cfg.min_activity,
+            min_sign_stability=cfg.min_sign_stability,
+            min_val_window_q25=cfg.min_val_window_q25,
+        )
 
     def score(
         self,
@@ -371,6 +401,22 @@ class CandidateScorer:
                     "reward function returned no validation rewards "
                     "despite non-empty val_windows"
                 )
+            # T1-03 hard quality gates: one summary per oriented candidate
+            # (chosen direction below), consumed by the eligibility check.
+            from .signal_quality import evaluate_quality_gates, summarize_signal_quality_batch
+
+            summaries = summarize_signal_quality_batch(
+                oriented,
+                target,
+                val_windows,
+                train_signal_range,
+                universe_mask=universe_mask,
+                ic_min_stocks=self.reward_config.ic_min_stocks,
+                max_lags=self.reward_config.ic_hac_max_lags,
+                n_boot=self.reward_config.ic_boot_n,
+                block_size=self.reward_config.ic_boot_block,
+            )
+            gates = self._quality_gates()
             for batch_index, result_index in enumerate(batch_indices):
                 spec = specs[result_index]
                 plus = batch_index * 2
@@ -386,6 +432,7 @@ class CandidateScorer:
                 )
                 chosen = plus if direction == 1 else minus
                 penalty = self.complexity_penalty(spec)
+                cost = self.complexity_cost(spec)
                 score = CandidateScore(
                     tokens=spec.tokens,
                     candidate_id=spec.candidate_id,
@@ -397,15 +444,33 @@ class CandidateScorer:
                     train_reward=float(rewards[chosen]) - penalty,
                     train_icir=float(icir[chosen]),
                     complexity_penalty=penalty,
+                    complexity_cost=cost,
                     eligible=False,
                     rejection_reasons=(),
                 )
+                gate_ok, gate_reasons = evaluate_quality_gates(
+                    summaries[chosen], gates
+                )
+                if not gate_ok:
+                    score = replace(
+                        score,
+                        eligible=False,
+                        rejection_reasons=gate_reasons,
+                    )
+                if cost > float(self.reward_config.max_complexity):
+                    score = replace(
+                        score,
+                        eligible=False,
+                        rejection_reasons=(
+                            score.rejection_reasons + ("complexity_above_maximum",)
+                        ),
+                    )
                 results[result_index] = self._apply_eligibility(score)
 
         return [score for score in results if score is not None]
 
     def _apply_eligibility(self, score: CandidateScore) -> CandidateScore:
-        reasons: list[str] = []
+        reasons: list[str] = list(score.rejection_reasons)
         if not math.isfinite(score.val_reward):
             reasons.append("val_reward_not_finite")
         if not math.isfinite(score.val_icir):
@@ -441,6 +506,7 @@ class CandidateScorer:
             train_reward=float(training_reward),
             train_icir=math.nan,
             complexity_penalty=self.complexity_penalty(spec),
+            complexity_cost=self.complexity_cost(spec),
             eligible=False,
             rejection_reasons=(reason,),
         )

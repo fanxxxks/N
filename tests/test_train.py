@@ -41,7 +41,20 @@ def test_resolve_device_rejects_unknown_values():
 def _reward_cfg(**kwargs):
     # The 3-stock fixtures fall below the production ic_min_stocks; the
     # floors are relaxed so the fixtures exercise the training loop itself.
-    defaults = dict(ic_min_stocks=3, min_val_reward=-1e9, min_val_icir=-1e9)
+    # The T1-03 hard quality gates are relaxed the same way: the fixtures'
+    # tiny windows and 3-stock cross-sections are below the production
+    # thresholds by design.
+    defaults = dict(
+        ic_min_stocks=3,
+        min_val_reward=-1e9,
+        min_val_icir=-1e9,
+        min_valid_ic_days=2,
+        min_effective_stocks=2,
+        min_coverage=0.0,
+        min_activity=0.0,
+        min_sign_stability=0.0,
+        min_val_window_q25=-1e9,
+    )
     defaults.update(kwargs)
     return RewardConfig(**defaults)
 
@@ -180,8 +193,10 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
     monkeypatch.setattr(Categorical, "sample", fixed_sample)
     tokens = trainer.train(steps=1, batch_size=1)
     assert tokens is not None
+    # The validation reward clips at the ceiling minus the AST complexity
+    # bill of the forced operator formula (0.02 * 1.7 for RET_1 RET_1 ADD).
     assert trainer.best_reward == pytest.approx(
-        trainer.reward_config.reward_clip_high, abs=1e-6
+        trainer.reward_config.reward_clip_high - 0.02 * 1.7, abs=1e-6
     )
     assert "value_loss" in trainer.history[0]
     assert "entropy" in trainer.history[0]
@@ -190,9 +205,11 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
 def test_bare_factor_penalty_applied_but_operator_formula_not(
     tmp_path, populated_db: DataConfig, monkeypatch
 ):
-    """A bare single-feature formula pays complexity_penalty on both the
-    gradient reward and the validation selection; an operator-bearing
-    formula does not."""
+    """T1-03 complexity billing: a bare single-feature formula bills
+    exactly ``complexity_penalty`` (bill 1.0); an operator-bearing formula
+    bills ``complexity_penalty * complexity_bill(ast)`` (RET_1 RET_1 ADD
+    bills 1.7), so the bare factor is cheaper than the operator formula —
+    the reverse of the pre-v12 flat nudge."""
 
     import ashare_model.train as train_module
 
@@ -240,19 +257,23 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
     combined = (1, 1, add_token, 0)
     bare_score = trainer._reward_cache[bare]
     combined_score = trainer._reward_cache[combined]
+    # Bare factor: bill 1.0 -> penalty exactly complexity_penalty.
     assert bare_score.train_reward == pytest.approx(0.25)
     assert bare_score.val_reward == pytest.approx(0.15)
     assert bare_score.train_icir == pytest.approx(0.45)
     assert bare_score.val_icir == pytest.approx(0.35)
-    assert combined_score.train_reward == pytest.approx(0.5)
-    assert combined_score.val_reward == pytest.approx(0.4)
+    # Operator formula: bill 1.7 -> penalty 0.25 * 1.7 = 0.425.
+    assert combined_score.complexity_cost == pytest.approx(1.7)
+    assert combined_score.complexity_penalty == pytest.approx(0.25 * 1.7)
+    assert combined_score.train_reward == pytest.approx(0.5 - 0.25 * 1.7)
+    assert combined_score.val_reward == pytest.approx(0.4 - 0.25 * 1.7)
     assert combined_score.train_icir == pytest.approx(0.45)
     assert combined_score.val_icir == pytest.approx(0.35)
-    # The selection prefers the unpenalized operator formula.
-    assert trainer.best_tokens == list(combined)
-    assert trainer.best_val_reward == pytest.approx(0.4)
+    # The selection prefers the cheaper bare factor under the new billing.
+    assert trainer.best_tokens == list(bare)
+    assert trainer.best_val_reward == pytest.approx(0.15)
     assert trainer.best_val_icir == pytest.approx(0.35)
-    assert trainer.best_train_reward == pytest.approx(0.5)
+    assert trainer.best_train_reward == pytest.approx(0.25)
     assert trainer.best_train_icir == pytest.approx(0.45)
 
 
@@ -960,7 +981,9 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
     assert trainer.best_val_reward == -float("inf")
     rejected = trainer.selection_result.best_rejected
     assert rejected is not None
-    assert rejected.val_reward == pytest.approx(0.8)
+    # The operator formula pays its AST complexity bill
+    # (0.02 * 1.7 for RET_1 RET_1 ADD) on top of the reported 0.8.
+    assert rejected.val_reward == pytest.approx(0.8 - 0.02 * 1.7)
     assert rejected.val_icir == pytest.approx(0.01)
     assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
 

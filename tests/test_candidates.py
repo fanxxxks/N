@@ -142,11 +142,20 @@ def test_eligibility_accepts_equal_thresholds_and_rejects_nonfinite():
             min_val_reward=0.1,
             min_val_icir=0.3,
             ic_min_stocks=2,
+            # The 4x6 fixture window is far below the production hard-gate
+            # thresholds; relax them so this test exercises the
+            # thresholds, not the T1-03 quality gates.
+            min_valid_ic_days=2,
+            min_effective_stocks=2,
+            min_coverage=0.0,
+            min_activity=0.0,
+            min_sign_stability=0.0,
+            min_val_window_q25=-1e9,
         ),
         reward_function=threshold_reward,
     )
     signal = np.arange(24, dtype=float).reshape(4, 6)
-    target = np.zeros_like(signal)
+    target = np.random.default_rng(0).normal(0.001, 0.01, size=signal.shape)
     score = scorer.score(
         _spec("edge"),
         signal,
@@ -166,7 +175,16 @@ def test_eligibility_accepts_equal_thresholds_and_rejects_nonfinite():
 
     scorer = CandidateScorer(
         _bt(),
-        RewardConfig(complexity_penalty=0.0, ic_min_stocks=2),
+        RewardConfig(
+            complexity_penalty=0.0,
+            ic_min_stocks=2,
+            min_valid_ic_days=2,
+            min_effective_stocks=2,
+            min_coverage=0.0,
+            min_activity=0.0,
+            min_sign_stability=0.0,
+            min_val_window_q25=-1e9,
+        ),
         reward_function=nonfinite_reward,
     )
     score = scorer.score(

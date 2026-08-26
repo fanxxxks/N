@@ -94,6 +94,14 @@ dispersion-less cross-sections are never rebalanced, and selection ties
 resolve by stable stock identifiers — so every protocol measurement is
 invariant under stock-row permutation.
 
+v15 consumes the T1-03 robust measurement contract: candidate scoring
+applies the hard signal-quality gates (valid-IC days, effective stock
+count vs ``ic_min_stocks``, coverage, activity, sign stability,
+validation-window lower quartile), the reward's IC term is the
+effective-n shrunk (HAC) ICIR, and complexity is billed from the AST with
+a hard ``max_complexity`` ceiling — degenerate and pathological formulas
+are rejected before any OOS row is produced.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -152,7 +160,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "14"
+PROTOCOL_VERSION = "15"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (

@@ -558,26 +558,37 @@ def test_batched_rewards_match_scalar_rewards():
             )
             assert rewards[i] == pytest.approx(ref_r, rel=1e-9, abs=1e-10)
             assert val_rewards[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-10)
-        # The exposed raw ICIR must match the scalar ICIR decomposition.
-        ref_icir = icir_from_series(
-            rank_ic_series(
-                signals[:, :, : n_dates - 2],
-                target[:, : n_dates - 2],
-                reward_cfg.ic_min_stocks,
-                universe_mask=np.ones(target[:, : n_dates - 2].shape, dtype=bool),
-            )
+        # The exposed raw ICIR must match the scalar decomposition (v12:
+        # the robust, effective-n shrunk ICIR).
+        from ashare_model.signal_quality import robust_icir
+
+        ref_icir = np.asarray(
+            [
+                robust_icir(row, reward_cfg.ic_hac_max_lags)
+                for row in rank_ic_series(
+                    signals[:, :, : n_dates - 2],
+                    target[:, : n_dates - 2],
+                    reward_cfg.ic_min_stocks,
+                    universe_mask=np.ones(
+                        target[:, : n_dates - 2].shape, dtype=bool
+                    ),
+                )
+            ]
         )
         assert icir == pytest.approx(ref_icir, rel=1e-9, abs=1e-10)
-        ref_val_icir = icir_from_series(
-            rank_ic_series(
-                signals[:, :, val_windows[0][0] : val_windows[0][1]],
-                target[:, val_windows[0][0] : val_windows[0][1]],
-                reward_cfg.ic_min_stocks,
-                universe_mask=np.ones(
-                    target[:, val_windows[0][0] : val_windows[0][1]].shape,
-                    dtype=bool,
-                ),
-            )
+        ref_val_icir = np.asarray(
+            [
+                robust_icir(row, reward_cfg.ic_hac_max_lags)
+                for row in rank_ic_series(
+                    signals[:, :, val_windows[0][0] : val_windows[0][1]],
+                    target[:, val_windows[0][0] : val_windows[0][1]],
+                    reward_cfg.ic_min_stocks,
+                    universe_mask=np.ones(
+                        target[:, val_windows[0][0] : val_windows[0][1]].shape,
+                        dtype=bool,
+                    ),
+                )
+            ]
         )
         assert val_icir == pytest.approx(ref_val_icir, rel=1e-9, abs=1e-10)
 
@@ -928,14 +939,17 @@ def test_masked_scalar_and_batched_rewards_agree():
         )
         assert rewards[i] == pytest.approx(ref_r, rel=1e-9, abs=1e-10)
         assert val_rewards[i] == pytest.approx(ref_v, rel=1e-9, abs=1e-10)
-        ref_icir = icir_from_series(
+        from ashare_model.signal_quality import robust_icir
+
+        ref_icir = robust_icir(
             rank_ic_series(
                 signals[i][None, :, : n_dates - 2],
                 target[:, : n_dates - 2],
                 reward_cfg.ic_min_stocks,
                 universe_mask=mask[:, : n_dates - 2],
-            )
-        )[0]
+            )[0],
+            reward_cfg.ic_hac_max_lags,
+        )
         assert icir[i] == pytest.approx(ref_icir, rel=1e-9, abs=1e-10)
         ref_df, ref_tf = simulate_basket_daily_returns(
             signals[i], target, cfg, universe_mask=mask
@@ -975,14 +989,17 @@ def test_mask_slices_align_exactly_without_off_by_one():
         signal, target, cfg, reward_cfg, signal_range=window, universe_mask=mask
     )
     assert val_rewards[0] == pytest.approx(ref_window, rel=1e-9, abs=1e-10)
-    ref_val_icir = icir_from_series(
+    from ashare_model.signal_quality import robust_icir
+
+    ref_val_icir = robust_icir(
         rank_ic_series(
             signal[None, :, window[0] : window[1]],
             target[:, window[0] : window[1]],
             reward_cfg.ic_min_stocks,
             universe_mask=mask[:, window[0] : window[1]],
-        )
-    )[0]
+        )[0],
+        reward_cfg.ic_hac_max_lags,
+    )
     assert val_icir[0] == pytest.approx(ref_val_icir, rel=1e-9, abs=1e-10)
     # The window itself straddles the flip: -1 before, +0.2 at/after.
     window_ic = rank_ic_series(signal[None], target, min_stocks=3, universe_mask=mask)[0]
