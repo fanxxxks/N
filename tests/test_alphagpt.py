@@ -4,10 +4,10 @@ import torch
 
 from ashare_data.config import ModelConfig
 from ashare_model.alphagpt import (
+    MODEL_VERSION,
     AlphaGPTModel,
     LoopedTransformer,
     LoopedTransformerLayer,
-    MTPHead,
     QKNorm,
     RMSNorm,
     SwiGLU,
@@ -38,14 +38,6 @@ def test_swiglu():
     assert out.shape == (2, 3, 8)
 
 
-def test_mtp_head():
-    head = MTPHead(8, FORMULA_VOCAB.size)
-    out, probs = head(torch.randn(2, 8))
-    assert out.shape == (2, FORMULA_VOCAB.size)
-    assert probs.shape == (2, 3)
-    assert torch.allclose(probs.sum(dim=-1), torch.ones(2))
-
-
 def test_looped_transformer_forward():
     layer = LoopedTransformerLayer(8, 2, 16, num_loops=2)
     out = layer(torch.randn(2, 4, 8), is_causal=True)
@@ -57,10 +49,20 @@ def test_looped_transformer_forward():
 def test_alphagpt_model_forward():
     model = AlphaGPTModel(ModelConfig(d_model=32, nhead=4, num_layers=1))
     idx = torch.tensor([[1, 2, 3], [2, 3, 4]])
-    logits, value, probs = model(idx)
+    logits, value = model(idx)
     assert logits.shape == (2, FORMULA_VOCAB.size)
     assert value.shape == (2, 1)
-    assert probs.shape == (2, 3)
+
+
+def test_model_version_is_pinned():
+    # v2 removed the MTPHead: no multi-task supervision existed and the
+    # trainer discarded its router probabilities.  Bumping the version is
+    # the migration contract for old checkpoints.
+    assert MODEL_VERSION == 2
+    model = AlphaGPTModel(ModelConfig(d_model=32, nhead=4, num_layers=1))
+    state = model.state_dict()
+    assert not any("mtp_head" in name for name in state)
+    assert "head.weight" in state and "head.bias" in state
 
 
 def test_build_action_mask_done_padding():

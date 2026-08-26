@@ -10,6 +10,7 @@ pre-existing environment blocker: starlette 1.3.1's TestClient requires
 | Baseline (main, pre-Phase-2) | 25bc994 | 672 | — | 20:39; webapi excluded; matches Phase-1 closing count |
 | T2-01 AST canonicalization + semantic cache | 4d81bb5 + merge 737fc29 | 726 | +54 | 0 regressions; 16:43; PROTOCOL_VERSION 17→18 |
 | T2-02 DEAP GP + Optuna TPE baselines | acf8216 + merge 5952217 | 737 | +11 | 0 regressions; 17:57; deap==1.4.4 / optuna==4.9.0 added to optional deps |
+| MTPHead removal | <commit> + merge | <after> | +<n> | MODEL_VERSION 1→2; old .pt checkpoints rejected (no multi-task supervision existed) |
 
 ## T2-01 invariants (asserted by tests)
 
@@ -91,6 +92,21 @@ rows join the protocol in T2-03, which bumps PROTOCOL_VERSION).
 
 * No persisted artifacts change in T2-02; the evaluator and the search
   modules are additive.
+
+## MTPHead removal
+
+* The multi-task head had no multi-task supervision anywhere in the
+  training pipeline and the trainer discarded its router probabilities
+  (``logits, value, _ = model(inp)``) — dead complexity kept alive only
+  by its name.  Removed: the policy is a single linear head + critic.
+* **Version bump**: ``MODEL_VERSION`` 1 → 2 (new constant in
+  ``ashare_model/alphagpt.py``, recorded in training artifacts).
+* **Migration / rejection**: ``data/ashare_model.pt`` checkpoints from
+  v1 carry ``mtp_head.*`` state keys and are **rejected** (no loader
+  exists for them; nothing in the repo restores checkpoints into the
+  model — the formal artifact is ``best_ashare_strategy.json``, which is
+  unaffected).  Re-training is the only migration path, matching the
+  "no old-artifact compatibility" policy for architecture changes.
 
 ## Version bumps (semantic changes)
 
