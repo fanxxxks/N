@@ -9,6 +9,7 @@ pre-existing environment blocker: starlette 1.3.1's TestClient requires
 |---|---|---|---|---|
 | Baseline (main, pre-Phase-2) | 25bc994 | 672 | — | 20:39; webapi excluded; matches Phase-1 closing count |
 | T2-01 AST canonicalization + semantic cache | 4d81bb5 + merge 737fc29 | 726 | +54 | 0 regressions; 16:43; PROTOCOL_VERSION 17→18 |
+| T2-02 DEAP GP + Optuna TPE baselines | <commit> + merge | <after> | +<n> | 0 regressions; deap==1.4.4 / optuna==4.9.0 added to optional deps |
 
 ## T2-01 invariants (asserted by tests)
 
@@ -46,6 +47,50 @@ pre-existing environment blocker: starlette 1.3.1's TestClient requires
   semantic-evaluation budget vs random/GP/TPE, best-so-far area + OOS
   active IR) and records the decision here.  T2-01 only establishes the
   ledger every searcher is billed on.
+
+## T2-02 invariants (asserted by tests)
+
+1. **Mature frameworks, not hand-rolled engines**: strongly-typed GP uses
+   DEAP's official GP module (typed primitive set, half-and-half
+   generation, one-point crossover, uniform mutation, tournament
+   selection); TPE uses Optuna's ``TPESampler``.  The repo code only maps
+   trees/tokens to the formula grammar and binds evaluation to the shared
+   budget (`tests/test_gp_search.py`, `tests/test_tpe_search.py`).
+2. **One budget ledger for every searcher**: `SemanticBudgetEvaluator`
+   (shared by random / GP / TPE) bills unique semantic formula evaluations
+   only; the GP and the random baseline never double-bill the same class.
+3. **Search space parity**: GP trees are capped so every proposal fits the
+   policy's ``max_formula_len``; TPE proposes through the same
+   ``build_action_mask`` legality rules the policy samples under, so no
+   trial is wasted on invalid sequences.
+4. **Determinism**: both baselines are deterministic in ``seed``
+   (same seed -> identical best-so-far curve and selection).
+5. **Best-so-far curves**: both baselines record ``(cumulative budget,
+   best validation reward)`` with a monotone curve, for the T2-03
+   admission-area comparison.
+6. The protocol's own random-search row keeps its inline v18 loop; it is
+   moved onto the shared evaluator together with the GP/TPE protocol rows
+   in T2-03 (one wiring PR, one bump).
+
+## T2-02 dependencies
+
+* `requirements-optional.in` gains `deap` and `optuna` (exact pins
+  `deap==1.4.4`, `optuna==4.9.0` in `requirements-optional.txt`);
+  `requirements.lock` re-frozen (adds alembic/colorlog/greenlet/Mako/
+  moocore/platformdirs/SQLAlchemy as Optuna/DEAP transitive deps).
+* The optional-deps file is the Phase-2 research tier; `requirements.txt`
+  (the production install) is unchanged — the search baselines are
+  research tooling, not production dependencies.
+
+## Version bumps (semantic changes)
+
+None in T2-02: the protocol's candidate pool is unchanged (the GP/TPE
+rows join the protocol in T2-03, which bumps PROTOCOL_VERSION).
+
+## Migration / rejection policies
+
+* No persisted artifacts change in T2-02; the evaluator and the search
+  modules are additive.
 
 ## Version bumps (semantic changes)
 
