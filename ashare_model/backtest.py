@@ -489,6 +489,9 @@ def main() -> None:
             "formula": tokens,
             "formula_text": formula_decode(tokens, FORMULA_VOCAB),
             "direction": direction,
+            # Data provenance: the immutable dataset manifest the backtest
+            # ran on (None for pre-T1-01 databases).
+            "dataset_id": loader.dataset_id,
             "metrics": result.metrics,
             "dates": result.dates,
             "equity_curve": result.equity_curve,

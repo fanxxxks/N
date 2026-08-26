@@ -12,6 +12,7 @@ from ashare_data.capital_flow import build_capital_frames, build_industry_member
 from ashare_data.config import DataConfig, ModelConfig, make_data_config
 from ashare_data.db import AshareDB, sql_quoted_list
 from ashare_data.fundamentals import build_pit_frames
+from ashare_data.manifest import resolve_dataset_id
 from ashare_data.processor import (
     encode_industry_frame,
     is_valid_a_share_code,
@@ -54,6 +55,7 @@ class AshareDataLoader:
         self.bars: pd.DataFrame | None = None
         self.ts_codes: list[str] = []
         self.dates: list[str] = []
+        self.dataset_id: str | None = None
         self.factor_tensor: torch.Tensor | None = None
         self.industry_codes: torch.Tensor | None = None
         self.raw_data_cache: dict[str, torch.Tensor] = {}
@@ -299,6 +301,14 @@ class AshareDataLoader:
         open_tensor = self.raw_data_cache["open"]
         target = self.mask_by_universe(open_to_open_returns(open_tensor.numpy()))
         self.target_ret = torch.tensor(target, dtype=torch.float32)
+        # Bind this load to the immutable dataset manifest (None when the
+        # database predates T1-01 manifests; artifact consumers treat None
+        # as legacy, never as a match for any id).
+        try:
+            with AshareDB(self.config.duckdb_path, read_only=True) as db:
+                self.dataset_id = resolve_dataset_id(db, self.config)
+        except Exception:  # noqa: BLE001 - manifest tables may not exist.
+            self.dataset_id = None
         return self
 
     def mask_by_universe(
