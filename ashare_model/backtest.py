@@ -8,7 +8,11 @@ from typing import Any
 import numpy as np
 
 from ashare_data.config import BacktestConfig
-from ashare_data.processor import open_to_open_returns, tradability_blocked
+from ashare_data.processor import (
+    has_cross_sectional_dispersion,
+    open_to_open_returns,
+    tradability_blocked,
+)
 from ashare_data.schemas import BacktestResult
 from ashare_execution import (
     ExecutionCostModel,
@@ -172,7 +176,7 @@ class AshareBacktestEngine:
             # selection itself.
             eligible = universe_mask[:, t] & universe_mask[:, entry_day]
             exit_day = t + 2
-            selected = self._select_top_n(
+            selected, selectable_values = self._select_top_n(
                 signal,
                 entry_day,
                 open_,
@@ -185,33 +189,71 @@ class AshareBacktestEngine:
                 eligible=eligible,
             )
             target_weights = np.zeros(n_stocks, dtype=np.float64)
-            weight = 1.0 / max(self.config.top_n, 1)
-            for idx in selected:
-                target_weights[idx] = min(weight, self.config.single_weight_cap)
-            total = target_weights.sum()
-            if total > 0:
-                target_weights /= total
 
-            # Positions that must be sold need to be tradable on the sell side.
-            sell_required = np.where(prev_weights > target_weights)[0]
-            sell_blocked = self._blocked_mask(
-                entry_day,
-                open_,
-                high,
-                low,
-                pre_close,
-                volume,
-                ts_codes,
-                side="sell",
-            )
-            for idx in sell_required:
-                if sell_blocked[idx]:
-                    # A limit-down position cannot be sold; keep it and let
-                    # the remaining weights contract so cash stays consistent.
-                    target_weights[idx] = prev_weights[idx]
+            # No-signal semantics (T1-02): a selectable cross-section
+            # without dispersion (fewer than two distinct values) carries
+            # no ranking information — the book is held as-is with zero
+            # turnover and zero cost, never arbitrarily rebalanced.  The
+            # one exception is the mask-exit contract: positions that lost
+            # universe eligibility are still liquidated through the
+            # ordinary sell path (force-held when sell-blocked), because a
+            # member leaving the pool must never linger silently.
+            if selectable_values and not has_cross_sectional_dispersion(
+                selectable_values
+            ):
+                target_weights = prev_weights.copy()
+                liquidate = (prev_weights > 0.0) & ~eligible
+                if liquidate.any():
+                    target_weights[liquidate] = 0.0
+                    sell_blocked = self._blocked_mask(
+                        entry_day,
+                        open_,
+                        high,
+                        low,
+                        pre_close,
+                        volume,
+                        ts_codes,
+                        side="sell",
+                    )
+                    force_hold = liquidate & sell_blocked
+                    target_weights[force_hold] = prev_weights[force_hold]
+            else:
+                weight = min(
+                    1.0 / max(self.config.top_n, 1),
+                    self.config.single_weight_cap,
+                )
+                raw = np.zeros(n_stocks, dtype=np.float64)
+                for idx in selected:
+                    raw[idx] = weight
 
-            if target_weights.sum() > 0:
-                target_weights /= target_weights.sum()
+                # Positions that must be reduced need to be tradable on the
+                # sell side; a sell-blocked reduction is force-held at its
+                # previous weight (the sell is deferred, never dropped).
+                sell_blocked = self._blocked_mask(
+                    entry_day,
+                    open_,
+                    high,
+                    low,
+                    pre_close,
+                    volume,
+                    ts_codes,
+                    side="sell",
+                )
+                held = np.zeros(n_stocks, dtype=np.float64)
+                for _ in range(n_stocks + 1):
+                    tentative = held + raw
+                    new_holds = (
+                        sell_blocked
+                        & (prev_weights > tentative)
+                        & (held == 0.0)
+                    )
+                    if not new_holds.any():
+                        break
+                    for idx in np.where(new_holds)[0]:
+                        held[idx] = prev_weights[idx]
+                        raw[idx] = 0.0
+                    raw = self._scale_to_budget(raw, held)
+                target_weights = held + self._scale_to_budget(raw, held)
 
             buy_weights = np.maximum(target_weights - prev_weights, 0.0)
             sell_weights = np.maximum(prev_weights - target_weights, 0.0)
@@ -284,7 +326,7 @@ class AshareBacktestEngine:
         side: str,
         eligible: np.ndarray,
         st_mask: np.ndarray | None = None,
-    ) -> list[int]:
+    ) -> tuple[list[int], list[float]]:
         """Top-n indices of the current signal column.
 
         ``eligible`` is the mandatory per-stock bool eligibility vector for
@@ -293,9 +335,14 @@ class AshareBacktestEngine:
         their signal value, so a position can never be newly opened in a
         stock outside the universe.  ``st_mask`` optionally marks the
         stocks that are ST as of the exact execution date (same-day paper
-        trading only); the historical engine leaves it None.  Executed
-        only when the column is finite and not blocked by the execution-day
-        tradability mask.
+        trading only); the historical engine leaves it None.
+
+        Ties resolve by ``ts_code`` (a stable identifier, not the row
+        index), so the selected set is invariant under stock-row
+        permutation.  Returns ``(indices, selectable_values)``: the top-n
+        indices and the signal values of every selectable stock (the
+        caller's no-signal dispersion check consumes the full selectable
+        cross-section, not just the top-n).
         """
 
         blocked = self._blocked_mask(
@@ -314,8 +361,28 @@ class AshareBacktestEngine:
             for i in range(len(signal))
             if eligible[i] and not blocked[i] and np.isfinite(signal[i])
         ]
-        valid.sort(key=lambda x: x[1], reverse=True)
-        return [i for i, _ in valid[: self.config.top_n]]
+        selectable_values = [value for _, value in valid]
+        # Primary key: signal value descending; secondary key: ts_code, so
+        # exact ties never depend on the physical row order.
+        valid.sort(key=lambda item: (-item[1], ts_codes[item[0]]))
+        return [i for i, _ in valid[: self.config.top_n]], selectable_values
+
+    @staticmethod
+    def _scale_to_budget(raw: np.ndarray, held: np.ndarray) -> np.ndarray:
+        """Scale fresh buys down to the cash budget left by force-held
+        positions — the no-renormalization contract (T1-02).
+
+        The book is never renormalized upward: per-name weights stay at
+        ``min(1/top_n, cap)`` (or below), and when force-held positions
+        consume the budget the fresh portion shrinks instead, so the total
+        invested weight never exceeds 1 (no leverage, cash remainder).
+        """
+
+        budget = max(1.0 - float(held.sum()), 0.0)
+        raw_sum = float(raw.sum())
+        if raw_sum <= 0.0 or raw_sum <= budget:
+            return raw
+        return raw * (budget / raw_sum)
 
     @staticmethod
     def _blocked_mask(

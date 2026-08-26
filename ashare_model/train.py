@@ -296,6 +296,9 @@ class AshareTrainer:
             blocked_sell=blocked_sell,
             train_signal_range=train_signal_range,
             universe_mask=universe_mask,
+            # Deterministic selection ties: the loader's canonical sorted
+            # code order is the stable key (T1-02).
+            tie_break_keys=np.asarray(self.loader.ts_codes),
         )
         for score in scores:
             assert score.tokens is not None

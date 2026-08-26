@@ -239,6 +239,7 @@ class CandidateScorer:
         blocked_sell: np.ndarray | None = None,
         formula_valid: bool = True,
         train_signal_range: tuple[int, int] | None = None,
+        tie_break_keys: np.ndarray | None = None,
     ) -> CandidateScore:
         return self.score_many(
             [spec],
@@ -250,6 +251,7 @@ class CandidateScorer:
             blocked_sell=blocked_sell,
             formula_valid=[formula_valid],
             train_signal_range=train_signal_range,
+            tie_break_keys=tie_break_keys,
         )[0]
 
     def score_many(
@@ -264,6 +266,7 @@ class CandidateScorer:
         blocked_sell: np.ndarray | None = None,
         formula_valid: Sequence[bool] | None = None,
         train_signal_range: tuple[int, int] | None = None,
+        tie_break_keys: np.ndarray | None = None,
     ) -> list[CandidateScore]:
         """Score a batch of candidates under one PIT eligibility mask.
 
@@ -275,6 +278,11 @@ class CandidateScorer:
         direction tie-break — so a future member's extreme finite values
         can neither move a score nor flip a direction or rejection reason
         before its join day.
+
+        ``tie_break_keys`` (per-stock stable identifiers, e.g. ``ts_codes``)
+        are forwarded to the basket simulation so exact selection ties
+        resolve deterministically and scores are invariant under stock-row
+        permutation (T1-02).
 
         ``train_signal_range`` is the caller's *learning* window (the
         primary scoring pass): the trainer passes the in-sample window
@@ -353,6 +361,7 @@ class CandidateScorer:
                 blocked_sell=blocked_sell,
                 train_signal_range=train_signal_range,
                 universe_mask=universe_mask,
+                tie_break_keys=tie_break_keys,
             )
             if val_rewards is None or val_icir is None:
                 # A reward function that drops the validation results is a

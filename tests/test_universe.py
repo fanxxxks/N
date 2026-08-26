@@ -932,7 +932,7 @@ def test_sentinel_future_member_changes_nothing_before_join(tmp_path):
     engine_full = AshareBacktestEngine(bt_cfg)
     engine_minus = AshareBacktestEngine(bt_cfg)
     t = join_day - 2
-    sel_full = engine_full._select_top_n(
+    sel_full, _ = engine_full._select_top_n(
         raw_signal_full[:, t], t + 1,
         full.raw_data_cache["open"].numpy(),
         full.raw_data_cache["high"].numpy(),
@@ -942,7 +942,7 @@ def test_sentinel_future_member_changes_nothing_before_join(tmp_path):
         full.ts_codes, "buy",
         eligible=full.universe_mask[:, t] & full.universe_mask[:, t + 1],
     )
-    sel_minus = engine_minus._select_top_n(
+    sel_minus, _ = engine_minus._select_top_n(
         raw_signal_minus[:, t], t + 1,
         minus.raw_data_cache["open"].numpy(),
         minus.raw_data_cache["high"].numpy(),

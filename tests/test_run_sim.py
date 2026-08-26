@@ -73,6 +73,7 @@ def _make_runner(
     memberships: list[dict] | None = None,
     stocks: list[dict] | None = None,
     today: str | None = None,
+    single_weight_cap: float = 0.5,
 ) -> tuple[SimulationRunner, list[str]]:
     """A runner over ``n_dates`` synthetic bars with all paths under tmp_path."""
 
@@ -107,7 +108,7 @@ def _make_runner(
     sim_config = SimConfig(
         initial_capital=100000.0,
         max_positions=position_count,
-        single_weight_cap=0.5,
+        single_weight_cap=single_weight_cap,
         state_path=tmp_path / "state.json",
         orders_dir=tmp_path / "orders",
         trades_dir=tmp_path / "trades",
@@ -120,7 +121,7 @@ def _make_runner(
         BacktestConfig(
             initial_capital=sim_config.initial_capital,
             top_n=position_count,
-            single_weight_cap=sim_config.single_weight_cap,
+            single_weight_cap=single_weight_cap,
             train_end_date="2024-01-20",
         ),
         sim_config,
@@ -406,10 +407,15 @@ def test_sim_universe_exit_sells_position(tmp_path: Path):
     runner, _ = _make_runner(
         tmp_path, n_dates=n_dates, top_n=1, max_positions=1,
         ts_codes=codes, bars=bars, memberships=memberships,
+        # A non-binding cap keeps the whole-lot book free of daily drift
+        # churn: this test exercises the exit-sell path, not the cap.
+        single_weight_cap=1.0,
     )
     runner.run()
 
-    first = _orders_for(runner, dates[1])
+    # Signal day 0 is an all-zero cross-section (no dispersion): the book
+    # holds, so the first buyable day is the second signal day (T1-02).
+    first = _orders_for(runner, dates[2])
     assert any(
         o["ts_code"] == exiter and o["side"] == "buy" and o["status"] == "filled"
         for o in first
@@ -455,6 +461,8 @@ def test_sim_limit_down_blocks_exit_sell_and_keeps_position(tmp_path: Path):
     runner, _ = _make_runner(
         tmp_path, n_dates=n_dates, top_n=1, max_positions=1,
         ts_codes=codes, bars=bars, memberships=memberships,
+        # Non-binding cap: this test exercises the limit-down exit path.
+        single_weight_cap=1.0,
     )
     runner.run()
 
@@ -626,3 +634,47 @@ def test_sim_top_n_matches_backtest_engine_per_signal_date(tmp_path: Path):
             delta = trade["quantity"] if trade["side"] == "buy" else -trade["quantity"]
             held[trade["ts_code"]] = held.get(trade["ts_code"], 0) + delta
         assert {c for c, q in held.items() if q > 0} == set(snapshot["ts_codes"])
+
+
+def test_sim_equal_weights_enforces_single_weight_cap():
+    # T1-02: per-name weight is min(1/top_n, cap) and the remainder stays
+    # in cash — the paper-trading sim must never renormalize above the cap.
+    weights = SimulationRunner._equal_weights(
+        [0, 1], 4, top_n=5, single_weight_cap=0.1
+    )
+    assert weights.tolist() == [0.1, 0.1, 0.0, 0.0]
+    assert weights.sum() == pytest.approx(0.2)
+    # With a non-binding cap the weight is exactly 1/top_n.
+    weights = SimulationRunner._equal_weights(
+        [0, 1], 4, top_n=2, single_weight_cap=1.0
+    )
+    assert weights.tolist() == [0.5, 0.5, 0.0, 0.0]
+    assert SimulationRunner._equal_weights([], 3, top_n=2, single_weight_cap=0.1).sum() == 0.0
+
+
+def test_sim_buy_orders_respect_single_weight_cap(tmp_path: Path):
+    # Integration: with max_positions=5 and cap=0.1, a buy order's notional
+    # is bounded by ~cap * equity (whole-lot flooring only shrinks it).  The
+    # old 1/len(selected) weighting (0.33 for 3 names) would blow the cap.
+    codes = ["000001.SZ", "600000.SH", "300001.SZ"]
+    n_dates = 12
+    dates, _, default_bars = make_bars(n_dates, codes)
+    # Distinct, stable signal ranking across stocks (linear price paths).
+    a = [10.0 + 0.30 * i for i in range(n_dates)]
+    b = [10.0 + 0.20 * i for i in range(n_dates)]
+    c = [10.0 + 0.10 * i for i in range(n_dates)]
+    bars = _replace_stock_bars(default_bars, "000001.SZ", a)
+    bars = _replace_stock_bars(bars, "600000.SH", b)
+    bars = _replace_stock_bars(bars, "300001.SZ", c)
+    runner, _ = _make_runner(
+        tmp_path, n_dates=n_dates, top_n=5, max_positions=5,
+        ts_codes=codes, bars=bars,
+    )
+    runner.run()
+    cap = runner.sim_config.single_weight_cap
+    equity_ceiling = runner.sim_config.initial_capital * 1.10
+    for date in dates[1:]:
+        for order in _orders_for(runner, date):
+            if order["side"] == "buy":
+                assert order["quantity"] * order["price"] <= cap * equity_ceiling
+                assert order["quantity"] * order["price"] > 0

@@ -97,8 +97,9 @@ class RewardConfig:
 
     Semantic changes to the reward implementation bump
     ``ashare_model.reward.REWARD_VERSION``; these values only tune the
-    current version (v6: direction-adjusted rank-ICIR minus the annualized
-    mean of exact daily execution costs).
+    current version (v11: no-signal basket contract + deterministic
+    tie-breaks; scoring quantity unchanged: direction-adjusted rank-ICIR
+    minus the annualized mean of exact daily execution costs).
     """
 
     reward_clip_low: float = -1.0

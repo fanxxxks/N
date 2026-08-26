@@ -87,6 +87,13 @@ database are rejected explicitly (:class:`DatasetIdMismatch`) instead of
 being silently mixed into the DS/max-t correction pool.  Legacy artifacts
 without a dataset_id are accepted as pre-T1-01 (recorded as ``null``).
 
+v14 consumes the T1-02 no-signal weight contract from the shared engine:
+under-filled days keep cash (no upward renormalization, so
+``single_weight_cap`` is a hard ceiling on every OOS measurement),
+dispersion-less cross-sections are never rebalanced, and selection ties
+resolve by stable stock identifiers — so every protocol measurement is
+invariant under stock-row permutation.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -145,7 +152,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "13"
+PROTOCOL_VERSION = "14"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -555,6 +562,7 @@ def baseline_candidates(
             validation_start(train_signal_end, model_cfg),
         ),
         universe_mask=loader.universe_mask[:, :train_price_end],
+        tie_break_keys=np.asarray(loader.ts_codes),
     )
     # The selector is invoked even though the protocol reports every bare
     # factor; this keeps ranking/eligibility behavior on the same code path.
@@ -828,6 +836,7 @@ def run_random_search(
                     validation_start(train_signal_end, model_config),
                 ),
                 universe_mask=train_universe_mask,
+                tie_break_keys=np.asarray(loader.ts_codes),
             )
         )
 
