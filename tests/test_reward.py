@@ -832,24 +832,27 @@ def test_basket_exit_is_sold_through_cost_path_or_force_held():
     assert sim.daily_cost_fractions[exit_day] > sim.daily_cost_fractions[1]
     assert sim.turnover[exit_day] == pytest.approx(2.0)
     # When the execution day is sell-blocked the position is force-held:
-    # the sell is deferred (smaller turnover and cost at the exit day), not
-    # dropped from the book.
+    # the sell is deferred and consumes the budget, so nothing else can be
+    # bought either — zero turnover, zero cost (T1-02 no-renormalization:
+    # the book is [1.0, 0, 0], never renormalized to 0.5/0.5).
     blocked_sell = np.zeros((n_stocks, n_dates), dtype=bool)
     blocked_sell[0, exit_day + 1] = True
     held = simulate_basket_daily_returns(
         signal, target, cfg, universe_mask=mask, blocked_sell=blocked_sell
     )
-    assert held.turnover[exit_day] == pytest.approx(1.0)
+    assert held.turnover[exit_day] == pytest.approx(0.0, abs=1e-15)
+    assert held.daily_cost_fractions[exit_day] == pytest.approx(0.0, abs=1e-15)
     assert held.daily_cost_fractions[exit_day] < sim.daily_cost_fractions[exit_day]
 
 
-def test_basket_underfilled_renormalizes_like_backtest_engine():
+def test_basket_underfilled_keeps_cash_like_backtest_engine():
     cfg = _cfg(top_n=3, single_weight_cap=1.0, commission_rate=0.0,
                min_commission=0.0, stamp_tax_rate=0.0, transfer_fee_rate=0.0,
                slippage_rate=0.0)
     n_stocks, n_dates = 4, 6
-    # Only two eligible stocks: fewer than top_n=3.  Both are selected and
-    # the weights renormalize to 0.5/0.5, exactly like the engine.
+    # Only two eligible stocks: fewer than top_n=3.  Both are selected at
+    # min(1/3, 1.0) each and the remainder stays in cash — the weights are
+    # never renormalized upward (T1-02).
     signal = np.tile(np.array([4.0, 3.0, 2.0, 1.0])[:, None], (1, n_dates))
     target = np.zeros((n_stocks, n_dates))
     target[0, 0] = 0.01
@@ -858,8 +861,9 @@ def test_basket_underfilled_renormalizes_like_backtest_engine():
     mask[2:] = False
     sim = simulate_basket_daily_returns(signal, target, cfg, universe_mask=mask)
     assert sim.daily_net_returns[0] == pytest.approx(
-        0.5 * 0.01 + 0.5 * 0.02, abs=1e-12
+        (1.0 / 3.0) * 0.01 + (1.0 / 3.0) * 0.02, abs=1e-12
     )
+    assert sim.turnover[0] == pytest.approx(2.0 / 3.0, abs=1e-12)
     # Engine parity: same universe mask, same per-day turnover path.
     ts_codes = [f"{i:06d}.SZ" for i in range(n_stocks)]
     dates = [f"202401{i:02d}" for i in range(n_dates)]

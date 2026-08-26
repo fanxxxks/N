@@ -125,18 +125,25 @@ def test_initial_capital_from_config():
 
 
 def test_run_excludes_high_signal_outside_pit_universe():
+    # A stock outside the universe never enters the selection, whatever its
+    # signal; with two selectable stocks (a dispersed cross-section) the
+    # higher of the two wins.  A single-selectable day would be a
+    # dispersion-less cross-section and hold instead (T1-02).
     dates = ["20240102", "20240103", "20240104"]
-    codes = ["000001.SZ", "600000.SH"]
-    factors = np.array([[100.0, 100.0, 100.0], [1.0, 1.0, 1.0]])
+    codes = ["000001.SZ", "600000.SH", "300001.SZ"]
+    factors = np.array(
+        [[100.0, 100.0, 100.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]
+    )
     raw = {
-        "open": np.ones((2, 3)),
-        "high": np.full((2, 3), 1.1),
-        "low": np.full((2, 3), 0.9),
-        "pre_close": np.ones((2, 3)),
-        "volume": np.ones((2, 3)),
+        "open": np.ones((3, 3)),
+        "high": np.full((3, 3), 1.1),
+        "low": np.full((3, 3), 0.9),
+        "pre_close": np.ones((3, 3)),
+        "volume": np.ones((3, 3)),
     }
     universe_mask = np.array(
-        [[False, False, True], [True, True, True]], dtype=bool
+        [[False, False, True], [True, True, True], [True, True, True]],
+        dtype=bool,
     )
     result = AshareBacktestEngine(BacktestConfig(top_n=1)).run(
         factors,
@@ -145,7 +152,7 @@ def test_run_excludes_high_signal_outside_pit_universe():
         dates,
         universe_mask=universe_mask,
     )
-    assert result.positions[0]["ts_codes"] == ["600000.SH"]
+    assert result.positions[0]["ts_codes"] == ["300001.SZ"]
 
 
 # --- PIT universe mask in execution -----------------------------------------
@@ -335,25 +342,27 @@ def test_engine_survives_busted_book_end_to_end():
     # End-to-end reproduction of the original crash: the exit open gaps to
     # ~0, the gross day is a -100% return and costs push the net day below
     # -100%, so the compounded equity goes negative.  The metrics must stay
-    # finite instead of crashing on complex annualization.
-    codes = ["000001.SZ"]
+    # finite instead of crashing on complex annualization.  Two stocks with
+    # a dispersed cross-section so the engine actually trades (a degenerate
+    # single-stock market would hold under the T1-02 no-signal contract).
+    codes = ["000001.SZ", "600000.SH"]
     dates = ["20240102", "20240103", "20240104", "20240105"]
-    open_ = np.array([[10.0, 10.0, 1e-9, 1e-9]])
+    open_ = np.array([[10.0, 10.0, 1e-9, 1e-9], [10.0, 10.0, 10.0, 10.0]])
     raw = {
         "open": open_,
         "high": open_.copy(),
         "low": open_.copy(),
         "pre_close": open_.copy(),
-        "volume": np.ones((1, 4)),
+        "volume": np.ones((2, 4)),
     }
     result = AshareBacktestEngine(
         BacktestConfig(top_n=1, single_weight_cap=1.0)
     ).run(
-        np.ones((1, 4)),
+        np.array([[2.0, 2.0, 2.0, 2.0], [1.0, 1.0, 1.0, 1.0]]),
         raw,
         codes,
         dates,
-        universe_mask=np.ones((1, 4), dtype=bool),
+        universe_mask=np.ones((2, 4), dtype=bool),
     )
     assert all(np.isfinite(value) for value in result.metrics.values())
     assert result.metrics["total_return"] == -1.0

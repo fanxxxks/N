@@ -36,7 +36,7 @@ from ashare_data.config import (
 )
 from ashare_data.io_utils import atomic_write_json
 from ashare_data.schemas import SimOrder
-from ashare_data.processor import open_to_open_returns
+from ashare_data.processor import has_cross_sectional_dispersion, open_to_open_returns
 from ashare_data.gates import ProductionGateRunner
 from ashare_execution import validate_execution_config
 
@@ -266,7 +266,7 @@ class SimulationRunner:
             # date, exactly like the backtest engine): ineligible stocks
             # can never generate new buy orders.
             eligible = universe_mask[:, signal_idx] & universe_mask[:, exec_idx]
-            selected = engine._select_top_n(
+            selected, selectable_values = engine._select_top_n(
                 signals[:, signal_idx],
                 exec_idx,
                 raw["open"],
@@ -279,15 +279,55 @@ class SimulationRunner:
                 eligible=eligible,
                 st_mask=st_mask,
             )
-            target_weights = self._equal_weights(selected, len(ts_codes))
-            orders = self._make_orders(
-                target_weights,
-                selected,
-                ts_codes,
-                exec_idx,
-                exec_date,
-                raw,
-            )
+            # No-signal semantics (T1-02): a selectable cross-section
+            # without dispersion carries no ranking information — the
+            # portfolio is held as-is (no signal-driven orders), never
+            # churned.  Positions that lost universe eligibility are still
+            # liquidated through the ordinary exit path (the mask-exit
+            # contract); the remaining book is kept at its current weights.
+            if selectable_values and not has_cross_sectional_dispersion(
+                selectable_values
+            ):
+                held_names = []
+                hold_weights = np.zeros(len(ts_codes), dtype=np.float64)
+                equity = self.portfolio.cash
+                for code, pos in self.portfolio.positions.items():
+                    if code not in ts_codes:
+                        equity += pos.quantity * pos.last_price
+                        continue
+                    i = ts_codes.index(code)
+                    equity += pos.quantity * raw["close"][i, exec_idx - 1]
+                    if eligible[i]:
+                        held_names.append(i)
+                        hold_weights[i] = (
+                            pos.quantity * raw["close"][i, exec_idx - 1]
+                        )
+                if equity > 0:
+                    hold_weights /= equity
+                orders = self._make_orders(
+                    hold_weights,
+                    held_names,
+                    ts_codes,
+                    exec_idx,
+                    exec_date,
+                    raw,
+                )
+            else:
+                target_weights = self._equal_weights(
+                    selected,
+                    len(ts_codes),
+                    top_n=self.sim_config.max_positions
+                    or self.backtest_config.top_n,
+                    single_weight_cap=self.backtest_config.single_weight_cap,
+                )
+                orders = self._make_orders(
+                    target_weights,
+                    selected,
+                    ts_codes,
+                    exec_idx,
+                    exec_date,
+                    raw,
+                )
 
             bars = self.loader.bars
             trades = self.broker.execute_orders(
@@ -427,11 +467,25 @@ class SimulationRunner:
         return sells + buys
 
     @staticmethod
-    def _equal_weights(selected: list[int], n_stocks: int) -> np.ndarray:
+    def _equal_weights(
+        selected: list[int],
+        n_stocks: int,
+        *,
+        top_n: int,
+        single_weight_cap: float,
+    ) -> np.ndarray:
+        """Target weights of the selected names, engine-aligned (T1-02).
+
+        Each selected name gets ``min(1/top_n, single_weight_cap)`` and the
+        weights are never renormalized upward: an under-filled day keeps
+        the remainder in cash, and the cap is a hard per-name ceiling —
+        exactly the backtest engine's weight construction.
+        """
+
         weights = np.zeros(n_stocks, dtype=np.float64)
         if not selected:
             return weights
-        weight = 1.0 / len(selected)
+        weight = min(1.0 / max(top_n, 1), float(single_weight_cap))
         for i in selected:
             weights[i] = weight
         return weights

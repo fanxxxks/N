@@ -5,6 +5,27 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+
+def has_cross_sectional_dispersion(
+    values: np.ndarray, min_distinct: int = 2
+) -> bool:
+    """Whether a signal cross-section carries enough dispersion to trade on.
+
+    The no-signal contract (T1-02): a selectable cross-section with fewer
+    than ``min_distinct`` distinct values (e.g. an all-neutral day of exact
+    zeros) carries no ranking information, so the engine, the reward
+    basket and the paper-trading sim must **not rebalance** on it — any
+    selection would be arbitrary.  Non-finite values never count as
+    distinct; ``values`` is expected to be the already-filtered selectable
+    set (finite, eligible, buyable).
+    """
+
+    values = np.asarray(values, dtype=np.float64)
+    finite = values[np.isfinite(values)]
+    if finite.size < 2:
+        return False
+    return int(np.unique(finite).size) >= int(min_distinct)
+
 # Shanghai main board / STAR market (incl. CDR) code prefixes.
 _SH_PREFIXES = {"600", "601", "603", "605", "688", "689"}
 # Shenzhen main board / SME-merged / ChiNext code prefixes.

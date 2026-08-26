@@ -72,9 +72,13 @@ def test_manifest_is_content_addressed_and_stable(populated_db):
     with AshareDB(populated_db.duckdb_path, read_only=True) as db:
         first = _manifest(db, populated_db)
         second = _manifest(db, populated_db)
-    assert first == second
+    # Content-addressing contract: id, root, hashes and metadata are
+    # stable; only the created_at timestamp may differ across builds.
     assert first.dataset_id == second.dataset_id
     assert first.merkle_root == second.merkle_root
+    assert first.tables == second.tables
+    assert first.source_versions == second.source_versions
+    assert first.manifest_version == second.manifest_version
 
 
 def test_manifest_identical_content_ignores_insertion_order(tmp_path):

@@ -14,6 +14,16 @@ never be compared silently.
 
 Version history
 ---------------
+* v11: the basket weight construction aligns with the T1-02 no-signal
+  contract: a selectable cross-section without dispersion (fewer than two
+  distinct values) is never rebalanced (previous basket held, zero
+  turnover, zero cost); under-filled days keep the remainder in cash —
+  weights are never renormalized upward; force-held (sell-blocked)
+  positions consume the budget and fresh buys scale down to it, so
+  ``single_weight_cap`` is a hard per-name ceiling on every path; exact
+  selection ties resolve by the new ``tie_break_keys`` (stable per-stock
+  identifiers), making the basket invariant under stock-row permutation.
+  Rewards/artifacts recorded with earlier versions are not comparable.
 * v10: the policy gradient is isolated from the validation tail.  The
   trainer's primary scoring window (``train_signal_range``) is now the
   in-sample head that ends where the validation tail begins, instead of
@@ -103,7 +113,7 @@ import numpy as np
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
 
-REWARD_VERSION = "10"
+REWARD_VERSION = "11"
 
 _ANNUALIZATION = 252
 
@@ -284,18 +294,24 @@ def simulate_basket_daily_returns(
     signal_range: tuple[int, int] | None = None,
     *,
     universe_mask: np.ndarray,
+    tie_break_keys: np.ndarray | None = None,
 ) -> BasketSimulation:
     """Exact daily top-n basket path, restarted from cash at range start.
 
     Mirrors the backtest engine's target-weight construction (position
-    weight ``min(1/top_n, single_weight_cap)``, renormalized) and charges
-    the same trading-cost model.  Non-finite target cells contribute a zero
-    return; days with fewer than ``top_n`` finite signals contribute a zero
-    return and keep the previous basket.  ``blocked_buy`` / ``blocked_sell``
-    carry the engine's tradability masks (``[stock, date]`` bool);
-    ``universe_mask`` is the mandatory ``[stock, date]`` bool PIT eligibility
-    mask consumed at the signal date; see
-    :func:`simulate_basket_daily_returns_batch` for their semantics.
+    weight ``min(1/top_n, single_weight_cap)``, **never renormalized
+    upward**: under-filled days keep cash and force-held positions consume
+    the budget, so ``single_weight_cap`` is a hard per-name ceiling) and
+    charges the same trading-cost model.  A selectable cross-section
+    without dispersion (fewer than two distinct values) triggers no
+    rebalance at all: the previous basket is held with zero turnover and
+    zero cost.  ``blocked_buy`` / ``blocked_sell`` carry the engine's
+    tradability masks (``[stock, date]`` bool); ``universe_mask`` is the
+    mandatory ``[stock, date]`` bool PIT eligibility mask consumed at the
+    signal date; ``tie_break_keys`` (per-stock stable identifiers, e.g.
+    ``ts_codes``) resolve exact selection ties deterministically so the
+    path is invariant under stock-row permutation.  See
+    :func:`simulate_basket_daily_returns_batch` for the full semantics.
     """
 
     batch = simulate_basket_daily_returns_batch(
@@ -306,6 +322,7 @@ def simulate_basket_daily_returns(
         blocked_sell=blocked_sell,
         signal_range=signal_range,
         universe_mask=universe_mask,
+        tie_break_keys=tie_break_keys,
     )
     return BasketSimulation(
         daily_gross_returns=batch.daily_gross_returns[0],
@@ -313,6 +330,34 @@ def simulate_basket_daily_returns(
         daily_net_returns=batch.daily_net_returns[0],
         turnover=batch.turnover[0],
     )
+
+
+def _batch_scale_to_budget(
+    raw: np.ndarray, held: np.ndarray
+) -> np.ndarray:
+    """Scale fresh buys down to the cash budget left by force-held
+    positions (the no-renormalization contract, T1-02).  ``raw``/``held``
+    are ``[batch, stocks]``; per-name weights only shrink, never grow."""
+
+    budget = np.maximum(1.0 - held.sum(axis=1, keepdims=True), 0.0)
+    raw_sum = raw.sum(axis=1, keepdims=True)
+    scale = np.minimum(1.0, budget / np.maximum(raw_sum, 1e-12))
+    return raw * scale
+
+
+def _batch_distinct_count(masked: np.ndarray) -> np.ndarray:
+    """Number of distinct finite values per row of ``masked`` (NaN cells
+    sort last and never count).  Vectorized distinct-count for the
+    dispersion gate."""
+
+    sorted_vals = np.sort(masked, axis=1)
+    with np.errstate(invalid="ignore"):
+        diff = np.diff(sorted_vals, axis=1)
+        transitions = np.count_nonzero(
+            np.isfinite(diff) & (diff > 0), axis=1
+        )
+    first_finite = np.isfinite(sorted_vals[:, 0]).astype(np.int64)
+    return first_finite + transitions
 
 
 def simulate_basket_daily_returns_batch(
@@ -324,29 +369,37 @@ def simulate_basket_daily_returns_batch(
     signal_range: tuple[int, int] | None = None,
     *,
     universe_mask: np.ndarray,
+    tie_break_keys: np.ndarray | None = None,
 ) -> BatchBasketSimulation:
     """Batched exact basket simulation over an explicit signal range.
 
     ``signals`` is ``[B, stocks, price_dates]``. By default only
     ``range(price_dates - 2)`` is executable; an explicit half-open
     ``signal_range`` is used for independently restarted validation windows.
-    Per date the
-    top-n finite signals are selected (a tie between exactly equal values
-    may resolve to a different equally valued set than the scalar path),
-    weights renormalize to ``1/top_n`` each, invalid days earn zero and
-    keep the previous basket, and both baskets share one trading-cost
-    model. The returned gross, cost, net and turnover arrays make the exact
-    daily cost path auditable.
+    Weight-construction contract (T1-02, shared with the backtest engine):
+
+    * per-date top-n selection over the selectable set (signal-date PIT
+      eligible, entry-day buyable, finite);
+    * a selectable cross-section with fewer than two distinct values is
+      **not rebalanced**: the previous basket is held with zero turnover
+      and zero cost (an all-neutral day never churns the book);
+    * every selected name gets ``min(1/top_n, single_weight_cap)`` and the
+      weights are **never renormalized upward** — under-filled days keep
+      the remainder in cash, and force-held (sell-blocked) positions
+      consume the budget, so no path can ever push a name above
+      ``single_weight_cap`` or the book above full investment;
+    * exact selection ties resolve by ``tie_break_keys`` (per-stock stable
+      identifiers), so the path is invariant under stock-row permutation.
 
     ``blocked_buy`` / ``blocked_sell`` (``[stocks, dates]`` bool, both
     optional) align the simulation with the backtest engine's execution
     rules: buy-blocked stocks (suspended or opening at a one-word limit-up)
     are excluded from the top-n selection, and sell-blocked positions
-    (suspended or opening at a one-word limit-down) are force-held with the
-    remaining weights renormalized, so the reward can never credit a trade
-    the engine could not have made.  Selection at signal day ``t`` executes
-    at the ``t+1`` open, so the tradability masks are consumed at column
-    ``t+1`` — the same execution-day alignment as the engine.
+    (suspended or opening at a one-word limit-down) are force-held with
+    the remaining weights scaled to the freed budget, exactly like the
+    backtest engine.  Selection at signal day ``t`` executes at the
+    ``t+1`` open, so the tradability masks are consumed at column ``t+1``
+    — the same execution-day alignment as the engine.
 
     ``universe_mask`` (``[stocks, dates]`` bool, mandatory) is the PIT
     eligibility mask consumed at the **signal date**: only
@@ -355,9 +408,7 @@ def simulate_basket_daily_returns_batch(
     stock that exits the member pool has its target weight go to zero
     through the ordinary sell path (counted at full cost, or force-held
     when the execution day is sell-blocked) — the mask never makes an
-    existing position vanish silently.  When fewer than ``top_n`` cells are
-    selectable the selected set is renormalized, the same under-filled
-    semantics as the backtest engine.
+    existing position vanish silently.
     """
 
     signals = np.asarray(signals, dtype=np.float64)
@@ -410,18 +461,27 @@ def simulate_basket_daily_returns_batch(
             f"universe_mask shape {universe_mask.shape} does not match "
             f"({n_stocks}, {n_dates})"
         )
+    if tie_break_keys is not None:
+        tie_break_keys = np.asarray(tie_break_keys)
+        if tie_break_keys.shape != (n_stocks,):
+            raise ValueError(
+                f"tie_break_keys shape {tie_break_keys.shape} does not match "
+                f"({n_stocks},)"
+            )
 
     top_n = min(int(cfg.top_n), n_stocks)
     if top_n <= 0:
         return empty_result()
 
     weight = min(1.0 / top_n, float(cfg.single_weight_cap))
-    b_idx = np.arange(b)[:, None]
     prev = np.zeros((b, n_stocks))
     capital = np.full(b, float(cfg.initial_capital), dtype=np.float64)
     cost_model = ExecutionCostModel.from_config(cfg)
     # Non-finite target cells contribute zero; cleaned once outside the loop.
     target_clean = np.where(np.isfinite(target_ret), target_ret, 0.0)
+    keys_tiled = (
+        np.tile(tie_break_keys, (b, 1)) if tie_break_keys is not None else None
+    )
 
     for output_col, t in enumerate(range(signal_start, signal_end)):
         # Selection uses the signal column t but executes at the t+1 open
@@ -434,34 +494,67 @@ def simulate_basket_daily_returns_batch(
         if blocked_buy is not None:
             finite &= ~blocked_buy[None, :, exec_col]
         finite &= universe_mask[None, :, t]
-        fill = np.where(finite, column, -np.inf)
-        top_idx = np.argpartition(fill, kth=-top_n, axis=1)[:, -top_n:]  # [B, top_n]
-        fresh = np.zeros((b, n_stocks))
-        selected_is_finite = np.take_along_axis(finite, top_idx, axis=1)
-        fresh[b_idx, top_idx] = selected_is_finite * weight
-        totals = fresh.sum(axis=1, keepdims=True)
-        fresh = np.divide(
-            fresh,
-            totals,
-            out=np.zeros_like(fresh),
-            where=totals > 0,
-        )
 
-        target = fresh
-        if blocked_sell is not None:
-            # A position that must be reduced but cannot be sold at the
-            # execution open (suspended or one-word limit-down) is held:
-            # the remaining weights renormalize so cash stays consistent,
-            # exactly like the engine.
-            hold = blocked_sell[None, :, exec_col] & (target < prev)
-            target = np.where(hold, prev, target)
-        totals = target.sum(axis=1, keepdims=True)
-        target = np.divide(
-            target,
-            totals,
-            out=np.zeros_like(target),
-            where=totals > 0,
-        )
+        # No-signal semantics: a selectable cross-section without
+        # dispersion is not signal-rebalanced (previous basket held, zero
+        # turnover, zero cost).  The mask-exit contract still applies:
+        # positions that lost universe eligibility are liquidated through
+        # the ordinary sell path (force-held when sell-blocked), exactly
+        # like the engine.
+        masked = np.where(finite, column, np.nan)
+        selectable_count = finite.sum(axis=1)
+        has_dispersion = _batch_distinct_count(masked) >= 2
+        hold_rows = (selectable_count > 0) & ~has_dispersion
+        hold_target = prev
+        if hold_rows.any():
+            ineligible = ~(
+                universe_mask[None, :, t] & universe_mask[None, :, exec_col]
+            )
+            liquidate = ineligible & (prev > 0.0)
+            hold_target = np.where(liquidate, 0.0, prev)
+            if blocked_sell is not None:
+                force_hold = liquidate & blocked_sell[None, :, exec_col]
+                hold_target = np.where(force_hold, prev, hold_target)
+
+        if not hold_rows.all():
+            if tie_break_keys is not None:
+                # Deterministic top-n by (value desc, key asc): excluded
+                # cells carry -inf in the rank key and sort first, so they
+                # can never displace a selectable value.
+                rank_key = np.where(finite, -column, -np.inf)
+                top_idx = np.empty((b, top_n), dtype=np.int64)
+                for i in range(b):
+                    top_idx[i] = np.lexsort((keys_tiled[i], rank_key[i]))[-top_n:]
+            else:
+                fill = np.where(finite, column, -np.inf)
+                top_idx = np.argpartition(fill, kth=-top_n, axis=1)[:, -top_n:]
+            fresh = np.zeros((b, n_stocks))
+            selected_is_finite = np.take_along_axis(finite, top_idx, axis=1)
+            fresh[np.arange(b)[:, None], top_idx] = selected_is_finite * weight
+
+            # Force-held reductions (sell-blocked) keep their previous
+            # weight and consume the budget; fresh buys scale down, never
+            # up.
+            held = np.zeros((b, n_stocks))
+            raw = fresh
+            if blocked_sell is not None:
+                sell_blocked = blocked_sell[None, :, exec_col]
+                for _ in range(n_stocks + 1):
+                    tentative = held + raw
+                    new_holds = sell_blocked & (prev > tentative) & (held == 0.0)
+                    if not new_holds.any():
+                        break
+                    held = np.where(new_holds, prev, held)
+                    raw = np.where(new_holds, 0.0, raw)
+                    raw = _batch_scale_to_budget(raw, held)
+            target = held + _batch_scale_to_budget(raw, held)
+            if hold_rows.any():
+                # Held rows keep the hold-branch target (previous basket
+                # with universe-exit liquidations); traded rows use the
+                # freshly constructed target.
+                target = np.where(hold_rows[:, None], hold_target, target)
+        else:
+            target = hold_target
 
         buy = np.maximum(target - prev, 0.0)
         sell = np.maximum(prev - target, 0.0)
@@ -493,15 +586,18 @@ def formula_reward(
     signal_range: tuple[int, int] | None = None,
     *,
     universe_mask: np.ndarray,
+    tie_break_keys: np.ndarray | None = None,
 ) -> float:
-    """Scalar v7 reward: clipped ICIR minus exact annualized daily cost.
+    """Scalar v11 reward: clipped ICIR minus exact annualized daily cost.
 
     Reference path for the batched implementation: the IC is computed over
     the full window and the cost drag over the simulated basket's average
     daily turnover.  ``blocked_buy`` / ``blocked_sell`` are the engine's
     tradability masks (see :func:`simulate_basket_daily_returns_batch`);
     ``universe_mask`` is the mandatory ``[stock, date]`` PIT eligibility
-    mask used at the signal date by both the IC and the basket.
+    mask used at the signal date by both the IC and the basket;
+    ``tie_break_keys`` resolve exact selection ties deterministically
+    (T1-02).
     """
 
     signal = np.asarray(signal, dtype=np.float64)
@@ -531,6 +627,7 @@ def formula_reward(
         blocked_sell,
         signal_range,
         universe_mask=universe_mask,
+        tie_break_keys=tie_break_keys,
     )
     annualized_cost = (
         float(simulation.daily_cost_fractions.mean()) * _ANNUALIZATION
@@ -552,6 +649,7 @@ def batched_basket_rewards(
     train_signal_range: tuple[int, int] | None = None,
     *,
     universe_mask: np.ndarray,
+    tie_break_keys: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray | None]:
     """v7 rewards for a batch: ICIR minus exact annualized daily costs, with
     raw ICIR values exposed for the trainer's signal-quality gate.
@@ -603,6 +701,7 @@ def batched_basket_rewards(
         blocked_sell,
         train_signal_range,
         universe_mask=universe_mask,
+        tie_break_keys=tie_break_keys,
     )
     mean_cost = (
         simulation.daily_cost_fractions.mean(axis=1)
@@ -634,6 +733,7 @@ def batched_basket_rewards(
                 blocked_sell,
                 (start, end),
                 universe_mask=universe_mask,
+                tie_break_keys=tie_break_keys,
             )
             win_mean_cost = (
                 win_simulation.daily_cost_fractions.mean(axis=1)
