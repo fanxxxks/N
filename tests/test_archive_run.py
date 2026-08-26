@@ -400,3 +400,35 @@ def test_data_end_date_reads_duckdb_path_from_config(repo):
     run_dir = next((repo / "experiments").iterdir())
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["data_end_date"] == "20240802"
+
+
+def test_archive_records_dataset_identity(repo):
+    """T1-01: an archived run binds to the immutable dataset manifest."""
+    from ashare_data.config import make_data_config
+    from ashare_data.manifest import build_dataset_manifest, save_manifest
+    from ashare_data.config import load_config
+
+    raw = load_config(repo / "config" / "ashare_config.yaml", project_root=repo)
+    data_config = make_data_config(raw, repo)
+    with AshareDB(data_config.duckdb_path) as db:
+        manifest = build_dataset_manifest(db, data_config, source_versions={"test": "1"})
+        save_manifest(db, data_config, manifest)
+    r = run_archive(
+        repo, "--mode", "manual", "--config", "config.yaml", "--name", "dataset"
+    )
+    assert r.returncode == 0, r.stderr
+    run_dir = next((repo / "experiments").iterdir())
+    archived = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert archived["dataset"] == {
+        "dataset_id": manifest.dataset_id,
+        "manifest_version": "1",
+    }
+
+
+def test_archive_without_manifest_records_legacy_none(repo):
+    """T1-01: a database without a manifest archives as explicit legacy."""
+    r = run_archive(repo, "--mode", "manual", "--config", "config.yaml", "--name", "legacy")
+    assert r.returncode == 0, r.stderr
+    run_dir = next((repo / "experiments").iterdir())
+    archived = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert archived["dataset"] is None

@@ -209,6 +209,46 @@ def data_end_date(root, config_path):
         return None
 
 
+def dataset_identity(root, config_path):
+    """Best-effort: the immutable dataset manifest identity of the local DB.
+
+    Returns ``{"dataset_id": ..., "manifest_version": ...}`` or ``None`` for
+    databases that predate T1-01 manifests (the explicit legacy marker).
+    """
+    try:
+        import sys as _sys
+
+        for candidate in (str(Path(root)), str(DEFAULT_ROOT)):
+            if candidate not in _sys.path:
+                _sys.path.insert(0, candidate)
+        from ashare_data.config import load_config
+        from ashare_data.db import AshareDB
+        from ashare_data.manifest import latest_manifest, resolve_dataset_id
+
+        cfg = load_config(config_path, project_root=root) if config_path else None
+        db_path = root / "data" / "ashare.duckdb"
+        if cfg:
+            from ashare_data.config import make_data_config
+
+            data_config = make_data_config(cfg, Path(root))
+            db_path = data_config.duckdb_path
+        else:
+            data_config = None
+        if not db_path.exists():
+            return None
+        with AshareDB(db_path, read_only=True) as db:
+            dataset_id = resolve_dataset_id(db, data_config)
+            if dataset_id is None:
+                return None
+            manifest = latest_manifest(db, data_config)
+            return {
+                "dataset_id": dataset_id,
+                "manifest_version": manifest.manifest_version if manifest else None,
+            }
+    except Exception:
+        return None
+
+
 def pick_run_dir(root, date_str, slug):
     """experiments/<date>_<slug>, with _2/_3 suffix on collision."""
     experiments = root / "experiments"
@@ -391,6 +431,7 @@ def main(argv=None):
         "model": None,
         "protocol": None,
         "data_end_date": None,
+        "dataset": None,
         "files": [],
     }
     files = []
@@ -410,6 +451,9 @@ def main(argv=None):
         record("config.yaml", config_path, config_path.stat().st_size)
         manifest["config"] = {"source": config_path.name, "sha256": sha256_file(config_path)}
         manifest["data_end_date"] = data_end_date(root, config_path)
+        # Immutable dataset identity the run was measured on (None = the
+        # database predates T1-01 manifests; recorded explicitly as legacy).
+        manifest["dataset"] = dataset_identity(root, config_path)
         # Snapshot the *effective* config (baseline + runtime overrides) so
         # the archived run stays reproducible even after web-UI config edits.
         effective = load_effective_config(config_path, root)
@@ -498,6 +542,56 @@ def main(argv=None):
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
     record("manifest.json", manifest_path, manifest_path.stat().st_size)
+
+    # Additive, opt-in MLflow channel: the archive above is the primary
+    # record; tracking is best-effort and never fatal (the outcome is a
+    # value, see ashare_model.experiment_tracking).
+    try:
+        import sys as _sys
+
+        for candidate in (str(Path(root)), str(DEFAULT_ROOT)):
+            if candidate not in _sys.path:
+                _sys.path.insert(0, candidate)
+        from ashare_model.experiment_tracking import log_run
+
+        params = {}
+        formula_block = manifest.get("formula") or {}
+        protocol_block = manifest.get("protocol") or {}
+        dataset_block = manifest.get("dataset") or {}
+        if formula_block.get("reward_version") is not None:
+            params["reward_version"] = formula_block["reward_version"]
+        for key in ("protocol_version", "tier", "steps", "batch_size", "random_samples"):
+            if protocol_block.get(key) is not None:
+                params[key] = protocol_block[key]
+        if dataset_block.get("dataset_id") is not None:
+            params["dataset_id"] = dataset_block["dataset_id"]
+        summary = {}
+        summary_path = run_dir / "metrics_summary.json"
+        if summary_path.exists():
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        metrics = {}
+        for key in ("sharpe", "sortino", "icir", "total_return", "max_drawdown"):
+            value = summary.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                metrics[key] = float(value)
+        outcome = log_run(
+            experiment_name=f"alphagpt/{args.mode}",
+            params=params,
+            metrics=metrics,
+            tags={
+                "git_commit": commit_sha or "unknown",
+                "git_dirty": str(dirty),
+                "run_id": manifest["run_id"],
+            },
+            artifacts=[str(manifest_path)],
+        )
+        print(
+            "mlflow: tracked=%s reason=%s%s"
+            % (outcome.tracked, outcome.reason,
+               f" run_id={outcome.run_id}" if outcome.run_id else "")
+        )
+    except Exception as exc:  # noqa: BLE001 - tracking must never break archiving
+        print("mlflow: skipped (%s: %s)" % (type(exc).__name__, exc))
 
     rel = run_dir.relative_to(root).as_posix()
     print("archived: %s" % rel)

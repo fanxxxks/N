@@ -19,5 +19,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-optional.txt
 
+      - name: Verify dependency consistency
+        run: python -m pip check
+
+      - name: Verify lock files are in sync
+        run: python scripts/freeze_lock.py --check
+
       - name: Run tests
         run: python -m pytest -q tests

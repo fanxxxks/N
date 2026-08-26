@@ -29,6 +29,7 @@ from .config import (
     make_sim_config,
 )
 from .db import AshareDB, sql_quoted_list
+from .manifest import build_dataset_manifest, save_manifest
 from .processor import is_valid_a_share_code, normalize_daily_bars
 from .universe import member_bar_coverage
 from ashare_logging import export_log_txt, setup_run_logging
@@ -36,6 +37,18 @@ from ashare_logging import export_log_txt, setup_run_logging
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _source_versions() -> dict[str, str]:
+    """Tool versions that produced the sync (metadata, never hashed)."""
+
+    from importlib.metadata import version
+
+    return {
+        "akshare": version("akshare"),
+        "duckdb": version("duckdb"),
+        "sync_tool": "ashare_data.sync:1",
+    }
 
 
 def _load_data_config(config_path: str | Path | None) -> DataConfig:
@@ -339,6 +352,16 @@ def sync_all(
             f"codes = {len(universe)} codes (snapshot symbols: "
             f"{len(all_constituents)})"
         )
+        # The immutable dataset manifest: content-addressed dataset_id over
+        # per-partition hashes, persisted for experiment binding.
+        manifest = build_dataset_manifest(
+            db, config, source_versions=_source_versions()
+        )
+        save_manifest(db, config, manifest)
+        logger.success(
+            f"Dataset manifest recorded: {manifest.dataset_id} "
+            f"({manifest.total_rows} rows across {len(manifest.tables)} tables)"
+        )
         return {
             "calendar_days": len(dates),
             "stocks": len(stocks_df),
@@ -349,6 +372,7 @@ def sync_all(
             "failures": failures,
             "purged_rows": purged,
             "purged_parquet": purged_parquet,
+            "dataset_id": manifest.dataset_id,
             **fundamental_stats,
             **capital_stats,
         }

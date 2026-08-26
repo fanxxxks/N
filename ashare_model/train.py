@@ -632,6 +632,7 @@ class AshareTrainer:
             selection_path.parent.mkdir(parents=True, exist_ok=True)
             selection_payload = {
                 "reward_version": REWARD_VERSION,
+                "dataset_id": self.loader.dataset_id,
                 "train_end": contract.train_end,
                 "train_anchor_end_exclusive": contract.train_anchor_end_exclusive,
                 "train_signal_start": contract.train_signal_start,
@@ -690,6 +691,9 @@ class AshareTrainer:
             # Reward provenance: reward values are only comparable within
             # the same scoring implementation generation.
             "reward_version": REWARD_VERSION,
+            # Data provenance: the immutable dataset manifest this formula
+            # was selected on (None for pre-T1-01 databases).
+            "dataset_id": self.loader.dataset_id,
         }
         out_path = self.data_config.data_dir / "best_ashare_strategy.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)

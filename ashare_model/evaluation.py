@@ -79,6 +79,14 @@ stocks the engine could not buy on the entry day (suspension / one-word
 limit-up opens); the benchmark row carries neutral placeholders.  The
 primary ``ic_mean`` / ``icir`` semantics are unchanged.
 
+v13 binds every artifact to the immutable dataset manifest (T1-01):
+``dataset_id`` (the content-addressed Merkle root over partition hashes,
+see :mod:`ashare_data.manifest`) is recorded in the artifact, and trial
+rows loaded from prior artifacts whose dataset_id differs from the current
+database are rejected explicitly (:class:`DatasetIdMismatch`) instead of
+being silently mixed into the DS/max-t correction pool.  Legacy artifacts
+without a dataset_id are accepted as pre-T1-01 (recorded as ``null``).
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -113,6 +121,7 @@ from ashare_data.config import (
     validate_baseline_signals,
 )
 from ashare_data.gates import ProductionGateRunner
+from ashare_data.manifest import DatasetIdMismatch, check_dataset_id
 from ashare_data.processor import open_to_open_returns
 from ashare_logging import export_log_txt, setup_run_logging
 
@@ -136,7 +145,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "12"
+PROTOCOL_VERSION = "13"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -1216,6 +1225,7 @@ def build_result(
     extra_trial_rows: list[dict] | None = None,
     max_t_perms: int = 5000,
     universe_policy: dict | None = None,
+    dataset_id: str | None = None,
 ) -> dict:
     """Assemble the protocol artifact (schema contract, see module docstring).
 
@@ -1223,7 +1233,9 @@ def build_result(
     (e.g. screening runs whose OOS trials must count towards the DS/max-t
     multiplicity correction); they join the correction pool but are never
     merged into this run's own rows.  ``universe_policy`` records the PIT
-    universe policy fields that produced the rows.
+    universe policy fields that produced the rows.  ``dataset_id`` binds
+    the artifact to the immutable dataset manifest the rows were measured
+    on (``None`` for legacy databases, recorded as ``null``).
     """
 
     trial_pool = list(rows) + list(extra_trial_rows or [])
@@ -1231,6 +1243,7 @@ def build_result(
         {
             "protocol_version": PROTOCOL_VERSION,
             "reward_version": REWARD_VERSION,
+            "dataset_id": dataset_id,
             "frequency": proto_cfg.frequency,
             "horizon": proto_cfg.horizon,
             "tier": tier_name,
@@ -1346,11 +1359,21 @@ def run_protocol(
         extra_trial_rows=extra_trial_rows,
         max_t_perms=max_t_perms,
         universe_policy=universe_policy_payload(loader),
+        dataset_id=loader.dataset_id,
     )
 
 
-def load_trial_rows(paths: str | None) -> list[dict]:
-    """Trial rows from prior protocol artifacts (comma-separated paths)."""
+def load_trial_rows(
+    paths: str | None, expected_dataset_id: str | None = None
+) -> list[dict]:
+    """Trial rows from prior protocol artifacts (comma-separated paths).
+
+    ``expected_dataset_id`` binds the loaded rows to the current database:
+    an artifact whose recorded dataset_id differs is rejected with
+    :class:`DatasetIdMismatch` (explicit rejection instead of silently
+    mixing measurements from different data).  Artifacts without a
+    dataset_id are pre-T1-01 legacy and pass as-is.
+    """
 
     rows: list[dict] = []
     if not paths:
@@ -1360,6 +1383,7 @@ def load_trial_rows(paths: str | None) -> list[dict]:
         if not path:
             continue
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        check_dataset_id(payload.get("dataset_id"), expected_dataset_id)
         rows.extend(payload.get("rows", []))
     return rows
 
@@ -1423,7 +1447,7 @@ def main(argv=None) -> int:
 
         loader = AshareDataLoader(data_config, model_config)
         loader.load_data()
-        extra_trials = load_trial_rows(args.trials)
+        extra_trials = load_trial_rows(args.trials, loader.dataset_id)
 
         if args.selfcheck:
             rows = selfcheck_rows(loader, proto_cfg, backtest_config)
@@ -1435,6 +1459,8 @@ def main(argv=None) -> int:
                 data_end_date=loader.dates[-1],
                 extra_trial_rows=extra_trials,
                 max_t_perms=args.max_t_perms,
+                universe_policy=universe_policy_payload(loader),
+                dataset_id=loader.dataset_id,
             )
         else:
             fold_indices = list(range(args.folds)) if args.folds else None
