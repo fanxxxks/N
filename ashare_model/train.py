@@ -34,6 +34,7 @@ from ashare_data.processor import open_to_open_returns
 
 from .alphagpt import AlphaGPTModel, build_action_mask
 from .candidates import (
+    PARETO_OBJECTIVES,
     CandidateScore,
     CandidateScorer,
     CandidateSelector,
@@ -299,6 +300,9 @@ class AshareTrainer:
             # Deterministic selection ties: the loader's canonical sorted
             # code order is the stable key (T1-02).
             tie_break_keys=np.asarray(self.loader.ts_codes),
+            # Capacity audit (T1-04): dollar volume sliced to the exact
+            # training window like the signals and targets.
+            adv=np.asarray(self.loader.dollar_volume())[:, : target_ret.shape[1]],
         )
         for score in scores:
             assert score.tokens is not None
@@ -523,7 +527,8 @@ class AshareTrainer:
                 else None
             )
             self.selection_result = self.candidate_selector.select(
-                self._candidate_scores.values()
+                self._candidate_scores.values(),
+                pareto_objectives=PARETO_OBJECTIVES,
             )
             self._sync_best_from_selection()
             selected = self.selection_result.selected

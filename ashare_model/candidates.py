@@ -18,6 +18,15 @@ from .reward import batched_basket_rewards
 _SCORE_CHUNK_BUDGET_BYTES = 512 * (1 << 20)
 _SCORE_CHUNK_SIGNALS_MULTIPLIER = 4
 
+# T1-04 primary portfolio objectives for constrained/Pareto selection:
+# active IR maximized; risk exposure, turnover and capacity minimized.
+PARETO_OBJECTIVES = (
+    ("active_ir", 1),
+    ("risk_exposure", -1),
+    ("average_turnover", -1),
+    ("capacity_utilization", -1),
+)
+
 
 def score_chunk_size(signal_bytes: int) -> int:
     """Formulas per scoring chunk under the ~512 MB float64 budget.
@@ -78,6 +87,14 @@ class CandidateScore:
     # exactly 1.0 for bare factors).  Recorded in artifacts so the billing
     # is auditable; ``complexity_penalty`` = penalty_rate * complexity_cost.
     complexity_cost: float = 0.0
+    # T1-04 portfolio objectives (validation-window medians, the
+    # selection quantities): annualized active IR, annualized risk
+    # exposure (vol), average turnover and capacity utilization.  Zero
+    # when the reward function did not report objectives.
+    active_ir: float = 0.0
+    risk_exposure: float = 0.0
+    average_turnover: float = 0.0
+    capacity_utilization: float = 0.0
 
     @property
     def deterministic_key(self) -> str:
@@ -101,6 +118,10 @@ class CandidateScore:
             "train_icir": finite_or_none(self.train_icir),
             "complexity_penalty": self.complexity_penalty,
             "complexity_cost": self.complexity_cost,
+            "active_ir": finite_or_none(self.active_ir),
+            "risk_exposure": finite_or_none(self.risk_exposure),
+            "average_turnover": finite_or_none(self.average_turnover),
+            "capacity_utilization": finite_or_none(self.capacity_utilization),
             "eligible": self.eligible,
             "rejection_reasons": list(self.rejection_reasons),
         }
@@ -140,6 +161,10 @@ class CandidateScore:
             eligible=bool(payload.get("eligible", not reasons)),
             rejection_reasons=reasons,
             complexity_cost=number(payload.get("complexity_cost", 0.0)),
+            active_ir=number(payload.get("active_ir", 0.0)),
+            risk_exposure=number(payload.get("risk_exposure", 0.0)),
+            average_turnover=number(payload.get("average_turnover", 0.0)),
+            capacity_utilization=number(payload.get("capacity_utilization", 0.0)),
         )
 
 
@@ -168,7 +193,15 @@ class SelectionResult:
 
 
 class CandidateSelector:
-    """Eligibility-first deterministic candidate selector."""
+    """Eligibility-first deterministic candidate selector.
+
+    With ``pareto_objectives`` (T1-04) the eligible candidates are ranked
+    by non-dominated fronts on the primary portfolio objectives (active
+    IR maximize, risk exposure / turnover / capacity minimize) with IC as
+    the deterministic tie-break, instead of the fragile scalar sort — the
+    constrained/Pareto selection the phase-1 contract prefers.  Without
+    it the legacy scalar ordering applies unchanged.
+    """
 
     @staticmethod
     def _metric(value: float) -> float:
@@ -184,15 +217,36 @@ class CandidateSelector:
             score.deterministic_key,
         )
 
-    def select(self, scores: Iterable[CandidateScore]) -> SelectionResult:
-        candidates = tuple(scores)
-        eligible = sorted((s for s in candidates if s.eligible), key=self._sort_key)
-        rejected = sorted((s for s in candidates if not s.eligible), key=self._sort_key)
-        return SelectionResult(
-            selected=eligible[0] if eligible else None,
-            best_rejected=rejected[0] if rejected else None,
-            candidates=candidates,
+    @staticmethod
+    def _pareto_tie_key(score: CandidateScore) -> tuple[float, float, float, str]:
+        # IC is the auxiliary tie-break inside the first Pareto front.
+        return (
+            -CandidateSelector._metric(score.active_ir),
+            -CandidateSelector._metric(score.val_icir),
+            -CandidateSelector._metric(score.val_reward),
+            score.deterministic_key,
         )
+
+    def select(
+        self,
+        scores: Iterable[CandidateScore],
+        pareto_objectives: Sequence[tuple[str, int]] | None = None,
+    ) -> SelectionResult:
+        candidates = tuple(scores)
+        eligible = [s for s in candidates if s.eligible]
+        rejected = sorted(
+            (s for s in candidates if not s.eligible), key=self._sort_key
+        )
+        if not eligible:
+            return SelectionResult(None, rejected[0] if rejected else None, candidates)
+        if not pareto_objectives:
+            selected = sorted(eligible, key=self._sort_key)[0]
+        else:
+            from .pareto import nondominated_fronts
+
+            fronts = nondominated_fronts(eligible, pareto_objectives)
+            selected = sorted(fronts[0], key=self._pareto_tie_key)[0]
+        return SelectionResult(selected, rejected[0] if rejected else None, candidates)
 
 
 class CandidateScorer:
@@ -270,6 +324,7 @@ class CandidateScorer:
         formula_valid: bool = True,
         train_signal_range: tuple[int, int] | None = None,
         tie_break_keys: np.ndarray | None = None,
+        adv: np.ndarray | None = None,
     ) -> CandidateScore:
         return self.score_many(
             [spec],
@@ -282,6 +337,7 @@ class CandidateScorer:
             formula_valid=[formula_valid],
             train_signal_range=train_signal_range,
             tie_break_keys=tie_break_keys,
+            adv=adv,
         )[0]
 
     def score_many(
@@ -297,6 +353,7 @@ class CandidateScorer:
         formula_valid: Sequence[bool] | None = None,
         train_signal_range: tuple[int, int] | None = None,
         tie_break_keys: np.ndarray | None = None,
+        adv: np.ndarray | None = None,
     ) -> list[CandidateScore]:
         """Score a batch of candidates under one PIT eligibility mask.
 
@@ -312,7 +369,9 @@ class CandidateScorer:
         ``tie_break_keys`` (per-stock stable identifiers, e.g. ``ts_codes``)
         are forwarded to the basket simulation so exact selection ties
         resolve deterministically and scores are invariant under stock-row
-        permutation (T1-02).
+        permutation (T1-02).  ``adv`` (``[stock, date]`` dollar volume)
+        enables the capacity audit and the ``capacity_above_maximum`` gate
+        (T1-04).
 
         ``train_signal_range`` is the caller's *learning* window (the
         primary scoring pass): the trainer passes the in-sample window
@@ -381,7 +440,7 @@ class CandidateScorer:
             oriented = np.empty((raw.shape[0] * 2, *raw.shape[1:]), dtype=np.float64)
             oriented[0::2] = raw
             oriented[1::2] = -raw
-            rewards, val_rewards, icir, val_icir = self.reward_function(
+            reward_out = self.reward_function(
                 oriented,
                 target,
                 self.backtest_config,
@@ -392,7 +451,14 @@ class CandidateScorer:
                 train_signal_range=train_signal_range,
                 universe_mask=universe_mask,
                 tie_break_keys=tie_break_keys,
+                adv=adv,
             )
+            rewards, val_rewards, icir, val_icir = reward_out[:4]
+            # T1-04 portfolio objectives ([B, 8]: train active_ir /
+            # exposure / turnover / capacity, then validation-window
+            # medians).  Reward functions that predate v13 return 4
+            # elements; their candidates carry zero objectives.
+            objectives = reward_out[4] if len(reward_out) >= 5 else None
             if val_rewards is None or val_icir is None:
                 # A reward function that drops the validation results is a
                 # programming error, not a candidate outcome — never let
@@ -433,6 +499,13 @@ class CandidateScorer:
                 chosen = plus if direction == 1 else minus
                 penalty = self.complexity_penalty(spec)
                 cost = self.complexity_cost(spec)
+                if objectives is not None:
+                    # Validation-window median objectives (selection
+                    # quantities); capacity is 0 when unmeasured (no adv).
+                    capacity = float(objectives[chosen, 7])
+                    capacity = capacity if math.isfinite(capacity) else 0.0
+                else:
+                    capacity = 0.0
                 score = CandidateScore(
                     tokens=spec.tokens,
                     candidate_id=spec.candidate_id,
@@ -447,6 +520,22 @@ class CandidateScorer:
                     complexity_cost=cost,
                     eligible=False,
                     rejection_reasons=(),
+                    active_ir=(
+                        float(objectives[chosen, 4])
+                        if objectives is not None
+                        else 0.0
+                    ),
+                    risk_exposure=(
+                        float(objectives[chosen, 5])
+                        if objectives is not None
+                        else 0.0
+                    ),
+                    average_turnover=(
+                        float(objectives[chosen, 6])
+                        if objectives is not None
+                        else 0.0
+                    ),
+                    capacity_utilization=capacity,
                 )
                 gate_ok, gate_reasons = evaluate_quality_gates(
                     summaries[chosen], gates
@@ -463,6 +552,20 @@ class CandidateScorer:
                         eligible=False,
                         rejection_reasons=(
                             score.rejection_reasons + ("complexity_above_maximum",)
+                        ),
+                    )
+                max_capacity = self.reward_config.max_capacity_utilization
+                if (
+                    max_capacity is not None
+                    and objectives is not None
+                    and math.isfinite(capacity)
+                    and capacity > float(max_capacity)
+                ):
+                    score = replace(
+                        score,
+                        eligible=False,
+                        rejection_reasons=(
+                            score.rejection_reasons + ("capacity_above_maximum",)
                         ),
                     )
                 results[result_index] = self._apply_eligibility(score)

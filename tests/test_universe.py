@@ -869,7 +869,9 @@ def test_sentinel_future_member_changes_nothing_before_join(tmp_path):
         if left is None:
             assert right is None
         else:
-            assert np.allclose(left, right)
+            # v13 returns portfolio objectives with NaN capacity columns
+            # (no adv provided): NaN must compare equal to NaN.
+            assert np.allclose(left, right, equal_nan=True)
 
     # --- random-search best candidate -------------------------------------
     formulas = sample_random_formulas(seed=7, vocab=FORMULA_VOCAB, max_len=6, n=8)

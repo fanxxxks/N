@@ -292,8 +292,9 @@ def test_formula_reward_is_icir_minus_continuous_cost():
 
 def test_reward_penalizes_churn_continuously():
     # The cost drag is exactly cost_weight * annualized turnover cost: with
-    # cost_weight 1 vs 0 the reward difference equals the proportional cost,
-    # inside the clip band (no threshold jumps).
+    # cost_weight 1 vs 0 the reward difference equals the proportional cost
+    # (the active-IR term is identical in both, so the difference isolates
+    # the cost decomposition).
     cfg = _cfg()
     n_stocks, n_dates = 6, 12
     rng = np.random.default_rng(11)
@@ -308,9 +309,18 @@ def test_reward_penalizes_churn_continuously():
     for signal in (static, churn):
         simulation = simulate_basket_daily_returns(signal, target, cfg, universe_mask=np.ones(signal.shape, dtype=bool))
         expected_cost = simulation.daily_cost_fractions.mean() * 252
-        r_free = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=0.0), universe_mask=np.ones(signal.shape, dtype=bool))
-        r_honest = formula_reward(signal, target, cfg, _reward_cfg(cost_weight=1.0), universe_mask=np.ones(signal.shape, dtype=bool))
-        assert -1.0 < r_honest < 1.0  # inside the band: the diff is exact
+        # A wide clip band keeps the raw decomposition visible: the active
+        # IR of these signals would saturate the default +/-1 band.
+        r_free = formula_reward(
+            signal, target, cfg,
+            _reward_cfg(cost_weight=0.0, reward_clip_low=-10.0, reward_clip_high=10.0),
+            universe_mask=np.ones(signal.shape, dtype=bool),
+        )
+        r_honest = formula_reward(
+            signal, target, cfg,
+            _reward_cfg(cost_weight=1.0, reward_clip_low=-10.0, reward_clip_high=10.0),
+            universe_mask=np.ones(signal.shape, dtype=bool),
+        )
         assert r_free - r_honest == pytest.approx(expected_cost, abs=1e-12)
 
 
@@ -539,7 +549,7 @@ def test_batched_rewards_match_scalar_rewards():
         n_dates = int(rng.integers(10, 60))
         signals, target = _random_batch(rng, b, n_stocks, n_dates)
         val_windows = [(n_dates // 2, n_dates - 2)]
-        rewards, val_rewards, icir, val_icir = batched_basket_rewards(
+        rewards, val_rewards, icir, val_icir, _objectives = batched_basket_rewards(
             signals, target, cfg, reward_cfg, val_windows,
             universe_mask=np.ones(target.shape, dtype=bool),
         )
@@ -603,7 +613,7 @@ def test_val_reward_is_median_over_windows():
     # Aligned in window 1, inverted in window 2, noise in window 3.
     aligned = np.stack([target, -target, rng.normal(size=target.shape)])
     windows = [(0, 9), (9, 18), (18, 28)]
-    rewards, val_rewards, _, val_icir = batched_basket_rewards(
+    rewards, val_rewards, _, val_icir, _objectives = batched_basket_rewards(
         aligned, target, cfg, reward_cfg, windows,
         universe_mask=np.ones(target.shape, dtype=bool),
     )
@@ -640,7 +650,7 @@ def test_val_reward_is_median_over_windows():
 def test_batched_rewards_without_val_windows_returns_none():
     rng = np.random.default_rng(10)
     signals, target = _random_batch(rng, 3, 8, 25)
-    rewards, val_rewards, icir, val_icir = batched_basket_rewards(
+    rewards, val_rewards, icir, val_icir, _objectives = batched_basket_rewards(
         signals, target, _cfg(), _reward_cfg(),
         universe_mask=np.ones(target.shape, dtype=bool),
     )
@@ -829,8 +839,10 @@ def test_basket_exit_is_sold_through_cost_path_or_force_held():
     n_stocks, n_dates = 3, 8
     exit_day = 3
     # Stock 0 is the top signal every day but exits the member pool on
-    # ``exit_day``: its target weight must go to zero through the ordinary
-    # sell path (paying the sell leg), never silently.
+    # ``exit_day``: with the T1-04 entry-day alignment its last buyable
+    # signal day is ``exit_day - 1`` (the entry at ``exit_day`` is already
+    # outside the universe), so the sell happens at that execution — the
+    # ordinary sell path (paying the sell leg), never silently.
     signal = np.tile(np.array([9.0, 2.0, 1.0])[:, None], (1, n_dates))
     target = np.zeros((n_stocks, n_dates))
     mask = np.ones((n_stocks, n_dates), dtype=bool)
@@ -840,20 +852,23 @@ def test_basket_exit_is_sold_through_cost_path_or_force_held():
     # on top of the buy leg (a silently vanished position would pay none).
     assert sim.daily_cost_fractions[0] > 0
     assert sim.daily_cost_fractions[1] == pytest.approx(0.0, abs=1e-15)
-    assert sim.daily_cost_fractions[exit_day] > sim.daily_cost_fractions[1]
-    assert sim.turnover[exit_day] == pytest.approx(2.0)
-    # When the execution day is sell-blocked the position is force-held:
-    # the sell is deferred and consumes the budget, so nothing else can be
-    # bought either — zero turnover, zero cost (T1-02 no-renormalization:
-    # the book is [1.0, 0, 0], never renormalized to 0.5/0.5).
+    assert sim.daily_cost_fractions[exit_day - 1] > sim.daily_cost_fractions[1]
+    assert sim.turnover[exit_day - 1] == pytest.approx(2.0)
+    # When the exit execution day is sell-blocked the position is
+    # force-held: the sell is deferred and consumes the budget, so nothing
+    # else can be bought either — zero turnover, zero cost (T1-02
+    # no-renormalization: the book is [1.0, 0, 0], never 0.5/0.5).
     blocked_sell = np.zeros((n_stocks, n_dates), dtype=bool)
-    blocked_sell[0, exit_day + 1] = True
+    blocked_sell[0, exit_day] = True  # the exit execution day itself
     held = simulate_basket_daily_returns(
         signal, target, cfg, universe_mask=mask, blocked_sell=blocked_sell
     )
-    assert held.turnover[exit_day] == pytest.approx(0.0, abs=1e-15)
-    assert held.daily_cost_fractions[exit_day] == pytest.approx(0.0, abs=1e-15)
-    assert held.daily_cost_fractions[exit_day] < sim.daily_cost_fractions[exit_day]
+    assert held.turnover[exit_day - 1] == pytest.approx(0.0, abs=1e-15)
+    assert held.daily_cost_fractions[exit_day - 1] == pytest.approx(0.0, abs=1e-15)
+    assert (
+        held.daily_cost_fractions[exit_day - 1]
+        < sim.daily_cost_fractions[exit_day - 1]
+    )
 
 
 def test_basket_underfilled_keeps_cash_like_backtest_engine():
@@ -921,7 +936,7 @@ def test_masked_scalar_and_batched_rewards_agree():
     signals, target = _random_batch(rng, 3, n_stocks, n_dates, nan_frac=0.05)
     mask = _universe_mask(n_stocks, n_dates, join_day=join_day)
     windows = [(8, 16)]
-    rewards, val_rewards, icir, val_icir = batched_basket_rewards(
+    rewards, val_rewards, icir, val_icir, _objectives = batched_basket_rewards(
         signals, target, cfg, reward_cfg, windows, universe_mask=mask
     )
     df, tf = simulate_basket_daily_returns_batch(
@@ -982,7 +997,7 @@ def test_mask_slices_align_exactly_without_off_by_one():
     cfg = _cfg(top_n=2, single_weight_cap=1.0)
     reward_cfg = _reward_cfg()
     window = (join_day - 3, join_day + 3)
-    rewards, val_rewards, _, val_icir = batched_basket_rewards(
+    rewards, val_rewards, _, val_icir, _objectives = batched_basket_rewards(
         signal[None], target, cfg, reward_cfg, [window], universe_mask=mask
     )
     ref_window = formula_reward(

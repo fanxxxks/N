@@ -102,6 +102,14 @@ effective-n shrunk (HAC) ICIR, and complexity is billed from the AST with
 a hard ``max_complexity`` ceiling — degenerate and pathological formulas
 are rejected before any OOS row is produced.
 
+v16 consumes the T1-04 alignment and selection contract: the reward
+basket selects on signal-date AND entry-date PIT eligibility exactly like
+the engine; every scored row records the portfolio objectives (active IR,
+risk exposure, average turnover, capacity utilization) and the capacity
+gate (``capacity_above_maximum``) rejects illiquid positions; best-
+formula selection uses constrained/Pareto ranking on those objectives
+with IC as the auxiliary tie-break, instead of the fragile scalar.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -142,6 +150,7 @@ from ashare_logging import export_log_txt, setup_run_logging
 
 from .backtest import AshareBacktestEngine, equal_weight_benchmark_returns
 from .candidates import (
+    PARETO_OBJECTIVES,
     CandidateScorer,
     CandidateSelector,
     CandidateSpec,
@@ -160,7 +169,7 @@ from .train import (
 from .vm import StackVM, formula_decode
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "15"
+PROTOCOL_VERSION = "16"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -571,10 +580,11 @@ def baseline_candidates(
         ),
         universe_mask=loader.universe_mask[:, :train_price_end],
         tie_break_keys=np.asarray(loader.ts_codes),
+        adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
     )
     # The selector is invoked even though the protocol reports every bare
     # factor; this keeps ranking/eligibility behavior on the same code path.
-    CandidateSelector().select(scores)
+    CandidateSelector().select(scores, pareto_objectives=PARETO_OBJECTIVES)
     rows: list[dict] = []
     for name, idx, score in zip(proto_cfg.baseline_signals, indices, scores):
         direction = score.direction
@@ -594,6 +604,11 @@ def baseline_candidates(
                 "train_reward": score.train_reward,
                 "train_icir": score.train_icir,
                 "complexity_penalty": score.complexity_penalty,
+                "complexity_cost": score.complexity_cost,
+                "active_ir": score.active_ir,
+                "risk_exposure": score.risk_exposure,
+                "average_turnover": score.average_turnover,
+                "capacity_utilization": score.capacity_utilization,
                 "eligible": score.eligible,
                 "rejection_reasons": list(score.rejection_reasons),
                 "final_avg_reward": None,
@@ -687,6 +702,21 @@ def run_fold(
         "train_icir": (
             float(selected.train_icir) if selected is not None else None
         ),
+        "complexity_cost": (
+            float(selected.complexity_cost) if selected is not None else None
+        ),
+        "active_ir": (
+            float(selected.active_ir) if selected is not None else None
+        ),
+        "risk_exposure": (
+            float(selected.risk_exposure) if selected is not None else None
+        ),
+        "average_turnover": (
+            float(selected.average_turnover) if selected is not None else None
+        ),
+        "capacity_utilization": (
+            float(selected.capacity_utilization) if selected is not None else None
+        ),
         "eligible": bool(selected.eligible) if selected is not None else True,
         "rejection_reasons": (
             list(selected.rejection_reasons) if selected is not None else []
@@ -740,6 +770,11 @@ def run_random_search(
             "train_reward": payload.get("train_reward"),
             "train_icir": payload.get("train_icir"),
             "complexity_penalty": payload.get("complexity_penalty"),
+            "complexity_cost": payload.get("complexity_cost"),
+            "active_ir": payload.get("active_ir"),
+            "risk_exposure": payload.get("risk_exposure"),
+            "average_turnover": payload.get("average_turnover"),
+            "capacity_utilization": payload.get("capacity_utilization"),
             "eligible": False,
             "rejection_reasons": payload.get("rejection_reasons", [reason]),
             "final_avg_reward": None,
@@ -845,10 +880,11 @@ def run_random_search(
                 ),
                 universe_mask=train_universe_mask,
                 tie_break_keys=np.asarray(loader.ts_codes),
+                adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
             )
         )
 
-    selection = selector.select(scores)
+    selection = selector.select(scores, pareto_objectives=PARETO_OBJECTIVES)
     selected = selection.selected
     if selected is None or selected.tokens is None:
         return failed_row("no eligible formula found", selection.best_rejected)
@@ -872,6 +908,11 @@ def run_random_search(
         "train_reward": selected.train_reward,
         "train_icir": selected.train_icir,
         "complexity_penalty": selected.complexity_penalty,
+        "complexity_cost": selected.complexity_cost,
+        "active_ir": selected.active_ir,
+        "risk_exposure": selected.risk_exposure,
+        "average_turnover": selected.average_turnover,
+        "capacity_utilization": selected.capacity_utilization,
         "eligible": selected.eligible,
         "rejection_reasons": list(selected.rejection_reasons),
         "final_avg_reward": None,

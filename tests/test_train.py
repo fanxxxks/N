@@ -156,7 +156,11 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
     trainer = AshareTrainer(
         populated_db,
         model_config,
-        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        # Fully invested top-2 book (cap 1.0): with the v13 active-IR
+        # reward, the default 0.05 cap would leave 90% cash and the
+        # benchmark comparison would measure the cash drag, not the
+        # signal.
+        BacktestConfig(top_n=2, single_weight_cap=1.0, train_end_date="2024-02-01"),
         loader,
         reward_config=reward_config,
     )
