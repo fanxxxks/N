@@ -10,7 +10,8 @@
 |---|---|---|---|---|
 | Baseline (main, pre-P1) | 2eaba93 | 921 | — | Phase-0 收尾计数（`logs/pytest_phase0_final.log`），本次基线复跑 913（webapi 排除）+ 8（webapi）= 921，`logs/pytest_p1_baseline.log` |
 | P1-02 fee matrix | `9a3a74f` | 932 | +11 | 资金×持仓数×换手率费用矩阵（FEE_MATRIX_VERSION 1，`tests/test_cost_matrix.py`） |
-| P1-03 bare-factor fixed backtest | `TBD` | 938 | +6 | 七裸因子仅固定回测（BARE_FACTOR_BACKTEST_VERSION 1，`tests/test_bare_factor_backtest.py`） |
+| P1-03 bare-factor fixed backtest | `af6f0e2` | 938 | +6 | 七裸因子仅固定回测（BARE_FACTOR_BACKTEST_VERSION 1，`tests/test_bare_factor_backtest.py`） |
+| P1-04/05 searcher bench | `TBD` | 951 | +13 | 四搜索器成本测量 + 300×400 一折一种子小预算 smoke（SEARCHER_BENCH_VERSION 1，`tests/test_searcher_bench.py`；train_search 契约扩展 tpe；语义缓存共享修复） |
 | P1-03 bare-factor fixed backtest |  |  |  | 七裸因子仅固定回测（BARE_FACTOR_BACKTEST_VERSION 1） |
 | P1-04/05 searcher bench |  |  |  | 四搜索器成本测量 + 300×400 一折一种子小预算 smoke（SEARCHER_BENCH_VERSION 1；train_search 契约扩展 tpe） |
 | P1-01 selfcheck run |  |  |  | 真实数据 selfcheck：DSR 不显著、max-t 不显著 |
@@ -58,17 +59,27 @@
 - 预算单位 = **唯一语义公式评价**（T2-01 语义缓存口径，与协议一致）。
 - 四个搜索器（gp / tpe / random / rl）在**同一 300×400 裁剪窗口**
   （`prepare_window` 的 `window_cap=(300,400)`，fold 0 训练窗头部）、同一 nominal
-  budget、同一 seed 下各自完整跑完；RL 以 `steps=4, batch=budget/4` 折算
-  （budget ≥ 16 且可被 4 整除）。
+  budget、同一 seed 下各自完整跑完；非 RL 搜索器 `(steps=budget, batch=1)`，
+  RL 以 `(steps=4, batch=budget/4)` 折算（budget ≥ 16 且可被 4 整除）。
 - 每行记录：`unique_semantic_evals`（实际）、`wall_seconds`、
-  `wall_per_1000_evals`（= wall/evals×1000）、`peak_rss_mb`（轮询采样，stdlib：
-  POSIX `resource.ru_maxrss` / Windows `ctypes GetProcessMemoryInfo`）、
-  `completed`、`selected_val_reward`、`n_invalid`、`n_semantic_dedups`。
+  `wall_per_1000_evals`（= wall/evals×1000）、`peak_rss_mb`（20ms 轮询采样，
+  stdlib：POSIX `resource.ru_maxrss` / Windows `ctypes GetProcessMemoryInfo`，
+  零新依赖）、`completed`、`selected_val_reward`。墙钟含每个搜索器都支付的
+  相同 `prepare_window` 成本（横向公平）；峰值 RSS 为进程级轮询最大值，
+  后跑搜索器继承先前分配（保守偏高，仅做进程内相对比较）。
+- 崩溃不丢失：搜索器异常记入行（`completed=false` + 错误文本），绝不抛出。
 - `train_search` 契约扩展：接受 `"tpe"`（TPE 与 gp/random 同走
   `SemanticBudgetEvaluator` 预算记账）。既有测试
   `test_train_search_respects_budget_and_backend` 中"tpe 被拒绝"的断言随之更新：
-  旧断言编码的是"功能缺失"这一状态而非语义保证；新断言验证 tpe 同样在预算内运行
-  并留下选择状态，验证强度不降低（白名单：需求变更 + 契约先行）。
+  旧断言编码的是"功能缺失"这一状态而非语义保证；新断言验证 tpe 同样在预算内
+  运行并留下选择状态，验证强度不降低（白名单：需求变更 + 契约先行）。
+- **测量修复（T2-03 遗留）**：`SemanticBudgetEvaluator` 原本自建内部语义缓存，
+  `train_search` 走 gp/tpe/random 时 `trainer.semantic_cache.budget_used` 恒为 0，
+  协议 trained 行的 `unique_semantic_evals` 记录为 0。修复：evaluator 接受外部
+  `cache` 参数，`train_search` 传入 trainer 的语义缓存——现在每个后端都把预算
+  记在同一本账上（RL 本来如此），trained 行的真实评价数恢复记录
+  （`test_train_search_bills_the_trainers_semantic_cache` 回归钉死；无 schema
+  变化，PROTOCOL_VERSION 不变）。
 - 产物：`data/searcher_bench.json`（版本、溯源、逐搜索器行）。
 
 ### P1-01 selfcheck 空转验收（无新代码）
@@ -89,6 +100,7 @@ TBD
 | ashare_model.bare_factor_backtest | — (new) | BARE_FACTOR_BACKTEST_VERSION 1 |
 | ashare_model.searcher_bench | — (new) | SEARCHER_BENCH_VERSION 1 |
 | AshareTrainer.train_search | 接受 gp/random | + tpe（预算语义不变，无产物 schema 变化） |
+| SemanticBudgetEvaluator | 内部自建语义缓存 | + `cache` 参数（train_search 共享 trainer 缓存，修复 trained 行 unique_semantic_evals=0 的记账） |
 | PROTOCOL_VERSION / REWARD_VERSION | 20 / 13 | 不变 |
 
 ## 5. 迁移 / 拒绝策略

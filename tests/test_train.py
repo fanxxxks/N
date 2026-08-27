@@ -886,14 +886,16 @@ def test_init_seed_controls_independent_initializations(
 def test_train_search_respects_budget_and_backend(
     populated_db: DataConfig,
 ):
-    """The non-RL searcher backends run inside the matched
-    unique-semantic-evaluation budget and leave the standard selection
-    state behind (protocol-row compatible)."""
+    """The non-RL searcher backends (gp / tpe / random) run inside the
+    matched unique-semantic-evaluation budget and leave the standard
+    selection state behind (protocol-row compatible).  TPE joined the
+    shared backend in P1-04 (contract: every searcher measured under the
+    same budget; see docs/phase5_measurement_log.md §2)."""
 
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
-    for searcher in ("gp", "random"):
+    for searcher in ("gp", "tpe", "random"):
         trainer = AshareTrainer(
             populated_db,
             model_config,
@@ -911,7 +913,7 @@ def test_train_search_respects_budget_and_backend(
         assert trainer.selection_result is not None, searcher
         if tokens is not None:
             assert trainer.best_tokens == tokens, searcher
-    with pytest.raises(ValueError, match="gp.*random"):
+    with pytest.raises(ValueError, match="gp.*tpe.*random"):
         trainer = AshareTrainer(
             populated_db,
             model_config,
@@ -919,7 +921,7 @@ def test_train_search_respects_budget_and_backend(
             loader,
             reward_config=_reward_cfg(),
         )
-        trainer.train_search(searcher="tpe", steps=1, batch_size=2)
+        trainer.train_search(searcher="unknown", steps=1, batch_size=2)
 
 
 def test_window_cap_slices_every_measurement(
