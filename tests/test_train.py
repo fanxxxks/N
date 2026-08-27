@@ -977,6 +977,93 @@ def test_window_cap_slices_every_measurement(
         )
 
 
+def _populated_db_n_stocks(tmp_path: Path, n: int = 6) -> DataConfig:
+    """A populated DB with ``n`` stocks (more than any test cap), so a
+    capped window is a real stock slice of the loader's universe."""
+    from conftest import make_bars
+
+    data_config = DataConfig(
+        data_dir=tmp_path,
+        duckdb_path=tmp_path / "ashare.duckdb",
+        parquet_dir=tmp_path / "parquet",
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
+        min_listed_sessions=1,
+    )
+    dates, ts_codes, bars = make_bars(
+        ts_codes=[f"00000{i}.SZ" for i in range(n)]
+    )
+    data_config.data_dir.mkdir(parents=True, exist_ok=True)
+    data_config.parquet_dir.mkdir(parents=True, exist_ok=True)
+    from ashare_data.db import AshareDB
+
+    with AshareDB(data_config.duckdb_path) as db:
+        db.create_schema(data_config)
+        db.upsert_daily(bars.to_dict("records"), data_config)
+        db.upsert_stocks(
+            [
+                {
+                    "ts_code": c,
+                    "name": c,
+                    "industry": None,
+                    "list_date": "20200101",
+                    "is_st": False,
+                }
+                for c in ts_codes
+            ],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": d, "is_open": True} for d in dates],
+            data_config,
+        )
+        db.upsert_constituents(
+            [
+                {
+                    "index_code": "000300.SH",
+                    "ts_code": c,
+                    "in_date": f"2020010{i + 1}",
+                    "out_date": "99991231",
+                }
+                for i, c in enumerate(ts_codes)
+            ],
+            data_config,
+        )
+    return data_config
+
+
+def test_train_search_capped_window_slices_tie_breaks_and_adv(tmp_path):
+    """A capped window is a stock slice of the universe: train_search's
+    selection tie-break keys and capacity dollar volume must be sliced to
+    the cap like train() does (P1-04 exposed the full-width bug on the
+    300x400 bench window)."""
+
+    data_config = _populated_db_n_stocks(tmp_path, n=6)
+    loader = AshareDataLoader(data_config, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        data_config,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    # Without the slice fix the evaluator would raise
+    # "tie_break_keys shape (6,) does not match (3,)" on the first flush.
+    tokens = trainer.train_search(
+        searcher="gp",
+        steps=1,
+        batch_size=2,
+        save_artifacts=False,
+        window_cap=(3, 30),
+    )
+    assert trainer.selection_result is not None
+    assert tokens is None or isinstance(tokens, list)
+
+
 def test_duplicate_formulas_share_one_batched_evaluation(
     populated_db: DataConfig, monkeypatch
 ):

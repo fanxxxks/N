@@ -1036,8 +1036,16 @@ class AshareTrainer:
             dataset_id=self.loader.dataset_id,
             protocol_version=PROTOCOL_VERSION,
             window_id=self._window_id(window.contract, window.val_windows),
-            tie_break_keys=np.asarray(self.loader.ts_codes),
-            adv=np.asarray(self.loader.dollar_volume())[:, :window.train_end_idx],
+            # Selection tie-break keys and the capacity-audit dollar volume
+            # are sliced to the measured window (a capped admission window
+            # is a stock slice of the loader's universe) — the same slice
+            # train() applies, so every searcher sees the same shapes.
+            tie_break_keys=np.asarray(self.loader.ts_codes)[
+                : window.factor_tensor.shape[1]
+            ],
+            adv=np.asarray(self.loader.dollar_volume())[
+                : window.factor_tensor.shape[1], : window.train_end_idx
+            ],
             blocked_buy=window.blocked_buy,
             blocked_sell=window.blocked_sell,
             source=searcher,
