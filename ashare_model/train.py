@@ -988,9 +988,9 @@ class AshareTrainer:
         device: str | None = None,
         window_cap: tuple[int, int] | None = None,
     ) -> list[int] | None:
-        """Run a non-RL searcher (``gp`` or ``random``) over the training
-        window with the matched unique-semantic-evaluation budget and
-        produce the standard training artifact.
+        """Run a non-RL searcher (``gp``, ``tpe`` or ``random``) over the
+        training window with the matched unique-semantic-evaluation budget
+        and produce the standard training artifact.
 
         The searcher is billed through the same semantic cache as RL
         (``steps x batch_size`` unique semantic evaluations), so the
@@ -998,8 +998,10 @@ class AshareTrainer:
         budget semantics or the artifact contract.
         """
 
-        if searcher not in ("gp", "random"):
-            raise ValueError(f"train_search supports 'gp' or 'random', got {searcher!r}")
+        if searcher not in ("gp", "tpe", "random"):
+            raise ValueError(
+                f"train_search supports 'gp', 'tpe' or 'random', got {searcher!r}"
+            )
         steps = steps or self.model_config.train_steps
         batch_size = batch_size or self.model_config.batch_size
         vm_device = resolve_device(device)
@@ -1034,16 +1036,37 @@ class AshareTrainer:
             dataset_id=self.loader.dataset_id,
             protocol_version=PROTOCOL_VERSION,
             window_id=self._window_id(window.contract, window.val_windows),
-            tie_break_keys=np.asarray(self.loader.ts_codes),
-            adv=np.asarray(self.loader.dollar_volume())[:, :window.train_end_idx],
+            # Selection tie-break keys and the capacity-audit dollar volume
+            # are sliced to the measured window (a capped admission window
+            # is a stock slice of the loader's universe) — the same slice
+            # train() applies, so every searcher sees the same shapes.
+            tie_break_keys=np.asarray(self.loader.ts_codes)[
+                : window.factor_tensor.shape[1]
+            ],
+            adv=np.asarray(self.loader.dollar_volume())[
+                : window.factor_tensor.shape[1], : window.train_end_idx
+            ],
             blocked_buy=window.blocked_buy,
             blocked_sell=window.blocked_sell,
             source=searcher,
             candidate_prefix=searcher,
             chunk=window.reward_chunk,
+            # The evaluator bills the trainer's own semantic cache, so
+            # ``trainer.semantic_cache.budget_used`` is the true unique-
+            # semantic-evaluation ledger for every searcher backend (the
+            # protocol's trained rows record exactly this number).
+            cache=self.semantic_cache,
         )
         if searcher == "gp":
             result = run_gp_baseline(
+                seed=seed,
+                evaluator=evaluator,
+                max_formula_len=self.model_config.max_formula_len,
+            )
+        elif searcher == "tpe":
+            from .tpe_search import run_tpe_baseline  # noqa: PLC0415
+
+            result = run_tpe_baseline(
                 seed=seed,
                 evaluator=evaluator,
                 max_formula_len=self.model_config.max_formula_len,

@@ -245,6 +245,7 @@ class SemanticBudgetEvaluator:
         candidate_prefix: str = "search",
         chunk: int | None = None,
         vocab: FormulaVocab | None = None,
+        cache: SemanticCache | None = None,
     ):
         self._target = np.asarray(target, dtype=np.float64)
         self._universe_mask = np.asarray(universe_mask, dtype=bool)
@@ -270,7 +271,7 @@ class SemanticBudgetEvaluator:
         self._chunk = int(chunk) if chunk is not None else 1
         self._scorer = CandidateScorer(backtest_config, reward_config)
         self._selector = CandidateSelector()
-        self._cache = SemanticCache(
+        self._cache = cache if cache is not None else SemanticCache(
             dataset_id=dataset_id,
             reward_version=REWARD_VERSION,
             protocol_version=int(protocol_version),
