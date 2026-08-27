@@ -11,11 +11,11 @@
 | Baseline (main, pre-P1) | 2eaba93 | 921 | — | Phase-0 收尾计数（`logs/pytest_phase0_final.log`），本次基线复跑 913（webapi 排除）+ 8（webapi）= 921，`logs/pytest_p1_baseline.log` |
 | P1-02 fee matrix | `9a3a74f` | 932 | +11 | 资金×持仓数×换手率费用矩阵（FEE_MATRIX_VERSION 1，`tests/test_cost_matrix.py`） |
 | P1-03 bare-factor fixed backtest | `af6f0e2` | 938 | +6 | 七裸因子仅固定回测（BARE_FACTOR_BACKTEST_VERSION 1，`tests/test_bare_factor_backtest.py`） |
-| P1-04/05 searcher bench | `TBD` | 951 | +13 | 四搜索器成本测量 + 300×400 一折一种子小预算 smoke（SEARCHER_BENCH_VERSION 1，`tests/test_searcher_bench.py`；train_search 契约扩展 tpe；语义缓存共享修复） |
-| P1-03 bare-factor fixed backtest |  |  |  | 七裸因子仅固定回测（BARE_FACTOR_BACKTEST_VERSION 1） |
-| P1-04/05 searcher bench |  |  |  | 四搜索器成本测量 + 300×400 一折一种子小预算 smoke（SEARCHER_BENCH_VERSION 1；train_search 契约扩展 tpe） |
-| P1-01 selfcheck run |  |  |  | 真实数据 selfcheck：DSR 不显著、max-t 不显著 |
-| P1 runs + docs |  |  |  | 全部测量运行与验收证据 |
+| P1-04/05 searcher bench | `ed9465e` | 951 | +13 | 四搜索器成本测量 + 300×400 一折一种子小预算 smoke（SEARCHER_BENCH_VERSION 1，`tests/test_searcher_bench.py`；train_search 契约扩展 tpe；语义缓存共享修复） |
+| fix(capped window) | `e9c2750` | 953 | +2 | train_search 裁剪窗下 tie_break_keys/adv 切片（300×400 实测暴露，`test_train_search_capped_window_slices_tie_breaks_and_adv`） |
+| fix(bench failed rows) | `d813810` | 954 | +1 | 失败行记录真实墙钟/JSON 安全值（`test_benchmark_failed_row_is_recorded_not_dropped`） |
+| P1-01 selfcheck run | 运行（无代码） | — | — | 真实数据 v20 selfcheck：DSR=0.000、max-t p=1.0000，passed=True |
+| P1 runs + docs | `TBD` |  |  | 全部测量运行、README、phase5 日志与验收证据 |
 
 ## 1. 提交前后不变量
 
@@ -88,9 +88,91 @@
   裁决必须 **DSR < 0.95 且 max-t p > 0.05（不显著）**。
 - 产物：`data/selfcheck_result.json`。
 
-## 3. 关键测量（运行结果，验证后回填）
+## 3. 关键测量（运行结果）
 
-TBD
+数据：`dataset_id b927074a45…`（11,003,350 行 / 8 表，同 Phase-0）；机器：
+Windows / Python 3.13 / torch 2.11.0+cu128 / venv `D:\minequant\.venv`。
+
+### 3.1 P1-02 费用矩阵（`data/fee_matrix.json`，FEE_MATRIX_VERSION 1）
+
+默认费用口径：佣金万 2.5（最低 5 元/笔）、印花税卖出 0.05%、过户费 0.001%、
+滑点 0.05%。预注册成本预算 1.5%/年；换手 T = 每持仓每年完整买卖回合数。
+
+| 资金 | 默认换手（T=6，约两月调仓）下 capacity（最大可负担持仓数） | 年化拖累 | 备注 |
+|---|---|---|---|
+| 10 万 | **5 只** | 1.212% | 单笔名义 2 万 → 佣金地板生效 |
+| 20 万 | **15 只** | 1.362% | |
+| 50 万 | **30 只** | 1.272% | |
+
+各资金完整 capacity 表（预算 1.5%）：10 万 {T=1:50, T=2:50, T=4:20, T=6:5,
+T=12:0, T=26:0}；20 万 {1:50, 2:50, 4:30, 6:15, 12:0, 26:0}；50 万
+{1:50, 2:50, 4:50, 6:30, 12:0, 26:0}。
+
+**至少一种成本可接受的持有/调仓结构**（60 个可行单元中的代表，`drag_pct ≤ 1.5`）：
+- 10 万：5 只 × T=6 → 1.212%/年；10 只 × T=4 → 1.008%/年；50 只 × T=1 → 0.652%/年。
+- 20 万：15 只 × T=6 → 1.356%/年；30 只 × T=4 → 1.204%/年。
+- 50 万：30 只 × T=6 → 1.266%/年；50 只 × T=4 → 1.008%/年。
+
+诊断要点：单笔名义 ≥ 2 万时佣金地板（5 元）不再主导；T≥12（月度）时任何
+≥5 只的持仓组合都超 1.5% 预算——**换手是成本的第一变量**。
+
+### 3.2 P1-03 七裸因子固定回测（`data/bare_factor_backtest.json`，v1）
+
+窗口 2015-01-05..2026-08-21（1630 只 × 2828 日），top_n=30，`search:"none"`，
+方向按训练窗（2023-12-31 前）rank-IC 符号固定推断：
+
+| 因子 | direction | 总收益 | Sharpe | 最大回撤 | 平均换手 |
+|---|---|---|---|---|---|
+| REVERSAL_5 | +1 | -100.0% | -1.20 | 100% | 0.95 |
+| RSQ_60 | +1 | +2.6% | -0.06 | 66% | 0.17 |
+| ILLIQ_20 | +1 | -100.0% | -1.26 | 100% | 0.16 |
+| OVERNIGHT_RET | +1 | -100.0% | -2.03 | 100% | 1.69 |
+| MOMENTUM_20 | -1 | -100.0% | -0.13 | 100% | 0.54 |
+| ROE | +1 | -29.9% | -0.18 | 73% | 0.02 |
+| TURNOVER | -1 | -100.0% | -2.28 | 100% | 0.50 |
+
+结论（仅测量，不宣称 Alpha）：固定 top_n=30 下 7 个裸因子净成本后 5 个归零、
+ROE 大幅亏损、RSQ_60 仅勉强打平——**裸因子不加搜索/不加合成没有可用收益**，
+与"本阶段不宣称发现 Alpha"的约束一致。
+
+### 3.3 P1-05 小预算 smoke（`data/searcher_bench_smoke.json`，v1）
+
+300×400 裁剪窗口（fold 0 训练窗头部）、一折一种子（seed 42）、nominal budget
+128，四搜索器**全部完成**（P1-05 验收 ✓）：
+
+| searcher | 实际 unique evals | wall (s) | per-1000 evals (s) | 峰值 RSS (MB) | completed |
+|---|---|---|---|---|---|
+| gp | 74（停滞规则提前收敛） | 34.6 | 467.8 | 2261 | **True** |
+| tpe | 128 | 70.9 | 553.6 | 2357 | **True** |
+| random | 104（语义去重） | 39.0 | 375.0 | 2553 | **True** |
+| rl | 103（语义去重） | 40.3 | 391.1 | 2536 | **True** |
+
+### 3.4 P1-04 每 1000 唯一语义评价的时间与内存（`data/searcher_bench.json`，v1）
+
+同 3.3 窗口/种子，budget 1000，device=cuda（auto）：
+
+| searcher | 实际 unique evals | wall (s) | per-1000 evals (s) | 峰值 RSS (MB) | completed |
+|---|---|---|---|---|---|
+| gp | 74（停滞规则提前收敛） | 28.1 | 379.5 | 3386 | **True** |
+| tpe | 1000 | 594.7 | **594.7** | 3513 | **True** |
+| random | 648（池耗尽/语义去重） | 213.3 | **329.1** | 3610 | **True** |
+| rl | 746（语义去重） | 266.4 | **357.1** | 4410 | **True** |
+
+要点：TPE 单次评价最贵（≈0.59 s/评价），random 最便宜（≈0.33 s）；GP 在
+pop=40 下约 2 代后陷入已评价语义类的停滞（stall 规则正常收敛，74/1000）；
+峰值 RSS 为进程级轮询最大值（后跑搜索器继承先前分配），4 个搜索器同进程
+合计 ~4.4 GB。全部 four 在相同 nominal budget 下正常完成（P1-05 验收 ✓）。
+
+### 3.5 P1-01 selfcheck 空转验收（`data/selfcheck_result.json`）
+
+5 折纯噪声候选（seed 1234），v20 拼接试验矩阵路径：
+
+| 裁决 | 值 | 要求 | 结果 |
+|---|---|---|---|
+| Deflated Sharpe（DSR） | **0.000**（n_trials=1，best sr=-1.256） | < 0.95（不显著） | ✓ |
+| max-t | observed=**-43.548**，p=**1.0000** | p > 0.05（不显著） | ✓ |
+
+`selfcheck passed=True`；trial ledger 追加记录（hash 链校验通过）。
 
 ## 4. 版本变更（语义变更才 bump）
 
@@ -113,9 +195,16 @@ TBD
 - 旧 selfcheck 产物（protocol v2，`experiments/20260816_selfcheck/`）仅为历史
   存档，不参与本阶段裁决。
 
-## 6. 验收证据（验证后回填）
+## 6. 验收证据
 
-1. 10万 / 20万 / 50万资金分别适合多少持仓（费用矩阵 capacity）。
-2. 至少一种成本可接受的持有/调仓结构（feasible_structures 实例）。
-3. 四搜索器在相同小预算下全部完成（smoke 行 `completed=true`）。
-4. 不宣称发现 Alpha：本阶段无任何显著性/超额收益结论。
+1. **10万 / 20万 / 50万资金分别适合多少持仓**：费用矩阵 `capacity`（预算
+   1.5%/年、T=6 默认调仓）：**5 / 15 / 30 只**（完整表见 §3.1）。
+2. **至少一种成本可接受的持有/调仓结构**：60 个可行单元，例如
+   10万×5只×T=6（1.212%/年）、20万×15只×T=6（1.356%/年）、
+   50万×30只×T=6（1.266%/年）——结构选择 = 持仓数 × 调仓频率（换手），
+   月度调仓（T=12）在全部资金档位都不可接受。
+3. **四搜索器在相同小预算下全部完成**：smoke（budget 128，300×400，一折
+   一种子）gp/tpe/random/rl 全部 `completed=true`（§3.3）。
+4. **不宣称发现 Alpha**：selfcheck 空转验收通过（§3.5，噪声 DSR/max-t 均
+   不显著）；七裸因子固定回测净成本后无可用收益（§3.2）；本阶段全部产物为
+   费用/成本/时间/内存测量，无任何显著性或超额收益结论。
