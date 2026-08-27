@@ -13,8 +13,13 @@
 
 ## 安装
 
+基础依赖固定为 **CPU 版 torch**：干净环境与 CI 都只消费 CPU wheel，
+不绑定任何 CUDA 构建：
+
 ```bash
 python -m pip install -r requirements.txt
+# 测试/研究可选依赖（pytest、scipy、deap、optuna 等）：
+python -m pip install -r requirements-optional.txt
 ```
 
 复制 `config/.env.example` 为 `config/.env` 并按需填写。
@@ -22,13 +27,16 @@ python -m pip install -r requirements.txt
 ### 可选：启用 NVIDIA GPU 加速
 
 训练/协议入口默认 `--device auto`（有 CUDA 用 CUDA，否则 CPU，CI 无需 GPU）。
-有 NVIDIA 显卡时可用 CUDA 版 torch 替代 CPU 版（训练窗口因子张量约 650MB，
+有 NVIDIA 显卡时用 CUDA 版 torch 替换 CPU 版（训练窗口因子张量约 650MB，
 6GB 显存即可运行）：
 
 ```bash
-python -m pip install "torch==2.11.0+cu128" --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -r requirements-cuda.txt   # 仅替换 torch 为 CUDA wheel
 python -m ashare_model.train --device auto   # 或显式 --device cuda / cpu
 ```
+
+`requirements-cuda.txt` 的 torch 基版本必须与基础文件一致（CI 的
+`scripts/freeze_lock.py --check` 会核对这一不变量）。
 
 **默认规模与实测节奏**（6GB 显存 / 16GB RAM，torch 2.11.0+cu128，Windows）：
 默认 `model.batch_size: 256`、`model.train_steps: 150`（与协议 screening 档一致）。
