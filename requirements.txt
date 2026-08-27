@@ -7,6 +7,7 @@ torch==2.11.0+cpu
 numpy==2.5.2
 pandas==3.0.5
 cvxpy==1.6.5
+deap==1.4.4
 akshare==1.18.91
 duckdb==1.5.5
 pyarrow==24.0.0

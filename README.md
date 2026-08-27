@@ -1,6 +1,6 @@
 # AlphaGPT 纯 A 股多因子模拟盘
 
-将原 AlphaGPT 从 Solana meme 链上因子系统改造为纯 A 股横截面多因子量化研究与模拟盘工具。保留 Transformer 可解释因子公式生成、StackVM 解释执行和回测评分训练；数据使用 AkShare，本地 DuckDB/Parquet 存储，Streamlit 看板。
+将原 AlphaGPT 从 Solana meme 链上因子系统改造为纯 A 股横截面多因子量化研究与模拟盘工具。保留可解释因子公式搜索（默认强类型 **GP** 搜索器，Transformer/RL 仅为实验选项）、StackVM 解释执行和回测评分训练；数据使用 AkShare，本地 DuckDB/Parquet 存储，Streamlit 看板。
 
 ## 目录结构
 
@@ -55,7 +55,7 @@ dropout 跨设备一致），因此同一 `(init_seed, seed)` 在任何机器上
 ```bash
 python -m ashare_data.sync
 python -m ashare_model.diagnostics   # 因子质量报告（覆盖率/IC/相关性 → data/factor_report.json）
-python -m ashare_model.train
+python -m ashare_model.train        # 默认 GP 搜索器（model.searcher: gp；RL/random 为实验/基线选项）
 python -m ashare_model.backtest
 python -m ashare_model.evaluation --tier screening  # 测量协议（见下）
 python -m ashare_trading.run_sim

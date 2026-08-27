@@ -89,12 +89,14 @@ class ModelConfig:
     collapse_warn_fraction: float = 0.95
     collapse_warn_steps: int = 10
     feature_names: list[str] | None = None
-    # Default formula searcher (T2-03 admission decision): "rl" (REINFORCE
-    # policy), "gp" (strongly-typed GP, DEAP) or "random" (uniform
-    # mask-legal search) — all billed in unique semantic evaluations.  The
-    # admission experiment decides whether RL keeps this default; if it
-    # fails, the default flips to "gp" and RL stays an opt-in experiment.
-    searcher: str = "rl"
+    # Default formula searcher (T2-03 admission verdict: RL was NOT admitted
+    # — best-so-far area 0.899 vs GP 0.975 / random 0.938 / TPE 0.916 median
+    # under identical unique-semantic-evaluation budgets across 5 independent
+    # seeds).  "gp" (strongly-typed GP, DEAP) is the production default;
+    # "rl" (REINFORCE policy) stays an experimental opt-in and "random" a
+    # uniform mask-legal baseline — all billed in unique semantic
+    # evaluations.  YAML may override this default via model.searcher.
+    searcher: str = "gp"
 
 
 @dataclass

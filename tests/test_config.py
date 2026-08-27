@@ -144,10 +144,14 @@ def test_make_model_config_v3_training_fields(tmp_path: Path):
 
 def test_make_model_config_searcher_validated(tmp_path: Path):
     cfg = make_model_config({})
-    assert cfg.searcher == "rl"  # code-level fallback (experimental path)
+    # P0-01: the code-level fallback is the production default (gp per the
+    # T2-03 admission verdict); it must never silently fall back to the
+    # rejected RL path when YAML omits model.searcher.
+    assert cfg.searcher == "gp"
     with pytest.raises(ValueError, match="searcher"):
         make_model_config({"model": {"searcher": "grid"}})
     assert make_model_config({"model": {"searcher": "gp"}}).searcher == "gp"
+    assert make_model_config({"model": {"searcher": "rl"}}).searcher == "rl"
 
 
 def test_production_default_searcher_is_gp():
