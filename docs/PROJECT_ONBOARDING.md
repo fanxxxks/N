@@ -1339,6 +1339,12 @@ client 只读取 <code>body.detail</code>；许多 service 错误以 <code>{ok:f
 
 这些不是实现 bug，而是已知研究假设；产物必须记录并在结论中披露。证据见 [README.md](../README.md#L329)。
 
+**P2 已落实**（`docs/p2_data_tier_contract.md`）：以上近似按数据可信度分层——
+月粒度成员/日线属于 Tier A（晋级默认唯一准入）；财报季末近似与两融属于 Tier B
+（晋级需单独对照）；当前行业快照/ST 近似/北向占位属于 Tier C（仅研究展示、永不
+晋级）。任意公式经 `formula_data_tier_report` 追溯其数据等级，协议产物 v21 起
+逐行记录；`fundamental_pit` 表范围治理见 P2-01（`scripts/check_fundamental_scope.py`）。
+
 #### R-22 当前 STOP 文件与旧 sim state 容易造成误操作
 
 直接 run_sim 不带 resume/reset 会先因已有 history 退出；带 resume 会清 STOP 并在旧状态上使用当前策略。UI 启动同样倾向自动 resume。
