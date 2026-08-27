@@ -23,6 +23,7 @@ class SimBroker:
         backtest_config,
         *,
         st_codes: set[str] | None = None,
+        lot_size: int = 100,
     ) -> list[SimTrade]:
         """Execute orders for one trading day at the day's open price.
 
@@ -31,6 +32,16 @@ class SimBroker:
         ``st_codes`` — the stocks whose current ``stocks.is_st`` snapshot
         is valid as of ``date``, i.e. same-day execution only; historical
         replay passes None so current names never rewrite the past.
+
+        ``lot_size`` is the whole-lot size in shares.  ``lot_size <= 0``
+        switches to the golden-spec continuous-share mode (T3-02): shares
+        fill at the requested quantity without whole-lot flooring and
+        without the cash-affordability cap — the vectorized engine's
+        funding convention, where target weights are fully invested and
+        fees are charged against returns.  This mode exists so the
+        authoritative matcher can be run lot-free against the research
+        engine; the paper-trading default (100) keeps real cash
+        accounting.
         """
 
         if not orders:
@@ -111,12 +122,18 @@ class SimBroker:
                     order.status = "skipped"
                     order.reason = "limit_up"
                     continue
-                shares = self._affordable_shares(
-                    portfolio.cash,
-                    price,
-                    order.quantity,
-                    cost_model,
-                )
+                if lot_size > 0:
+                    shares = self._affordable_shares(
+                        portfolio.cash,
+                        price,
+                        order.quantity,
+                        cost_model,
+                        lot_size=lot_size,
+                    )
+                else:
+                    # Golden-spec continuous mode: engine-aligned funding,
+                    # no cash cap (fees are charged against returns).
+                    shares = max(float(order.quantity), 0.0)
                 if shares <= 0:
                     order.status = "skipped"
                     order.reason = "insufficient_cash"
@@ -183,10 +200,14 @@ class SimBroker:
         self,
         cash: float,
         price: float,
-        requested: int,
+        requested: float,
         cost_model: ExecutionCostModel,
+        *,
+        lot_size: int = 100,
     ) -> int:
-        return cost_model.affordable_shares(cash, price, requested, lot_size=100)
+        if lot_size <= 0:
+            raise ValueError("_affordable_shares requires lot_size > 0")
+        return cost_model.affordable_shares(cash, price, requested, lot_size=lot_size)
 
     def _make_trade(
         self,

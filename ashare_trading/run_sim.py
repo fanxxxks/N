@@ -48,6 +48,7 @@ from ashare_model.vm import StackVM, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
 
 from .matching import SimBroker
+from .orders import build_orders, target_shares_from_weights
 from .portfolio import SimulationPortfolio
 from .signals import clear_stop_signal, stop_requested
 from ashare_logging import export_log_txt, setup_run_logging
@@ -408,63 +409,23 @@ class SimulationRunner:
             else:
                 equity += pos.quantity * pos.last_price
 
-        target_shares: dict[int, int] = {}
-        for i in selected:
-            weight = target_weights[i]
-            price = open_prices[i]
-            if price > 0:
-                # Buys must be whole lots of 100 shares (A-share rule).
-                target_shares[i] = (
-                    int(equity * weight / price) // 100
-                ) * 100
-
-        counter = 0
-
-        def _order(side: str, code: str, quantity: int, price: float) -> SimOrder:
-            nonlocal counter
-            order = SimOrder(
-                order_id=f"{exec_date}-{code}-{side}-{counter}",
-                ts_code=code,
-                trade_date=exec_date,
-                side=side,
-                quantity=quantity,
-                price=float(price),
-            )
-            counter += 1
-            return order
-
-        sells: list[SimOrder] = []
-        buys: list[SimOrder] = []
-        for i in selected:
-            code = ts_codes[i]
-            pos = self.portfolio.positions.get(code)
-            current = pos.quantity if pos else 0
-            target = target_shares.get(i, 0)
-            delta = target - current
-            if delta == 0:
-                continue
-            if delta > 0:
-                # Whole-lot buys only; skip sub-lot adjustments.
-                buy_qty = (delta // 100) * 100
-                if buy_qty <= 0:
-                    continue
-                buys.append(_order("buy", code, buy_qty, open_prices[i]))
-            else:
-                sells.append(_order("sell", code, abs(delta), open_prices[i]))
-
-        selected_codes = {ts_codes[i] for i in selected}
-        for code, pos in self.portfolio.positions.items():
-            if code in selected_codes or code not in ts_codes:
-                continue
-            i = ts_codes.index(code)
-            # Full-position sell target: the execution day is already T+1
-            # relative to any previous-day buy, and the broker still caps
-            # the fill by the T+1-available quantity.
-            sells.append(_order("sell", code, pos.quantity, open_prices[i]))
-
-        # Sells execute first so their proceeds fund the day's buys
-        # (A-share sell proceeds are immediately reusable for buying).
-        return sells + buys
+        # T3-02: one shared weight->order rule (whole-lot buys, sells
+        # first, full-exit sells) with the paper-trading lot size.
+        target_shares = target_shares_from_weights(
+            target_weights, equity, open_prices, lot_size=100
+        )
+        current_quantities = {
+            code: pos.quantity for code, pos in self.portfolio.positions.items()
+        }
+        return build_orders(
+            exec_date,
+            ts_codes,
+            open_prices,
+            target_shares,
+            selected,
+            current_quantities,
+            lot_size=100,
+        )
 
     @staticmethod
     def _equal_weights(

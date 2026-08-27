@@ -71,20 +71,26 @@ class AshareBacktestEngine:
         universe_mask: np.ndarray,
         benchmark_returns: list[float] | None = None,
         signal_range: range | tuple[int, int] | None = None,
+        execution_delay: int = 1,
     ) -> BacktestResult:
         """Execute the daily top-n strategy over the signal columns.
 
         ``universe_mask`` is the mandatory ``[stock, date]`` bool PIT
         eligibility mask: a position can only be newly opened in a stock
         eligible on the signal date **and** on the entry date
-        (``universe_mask[:, t] & universe_mask[:, t + 1]``), the default
-        equal-weight benchmark averages only those cells (and requires a
-        valid target), and a day without any eligible stock earns zero for
-        both the strategy (flat book) and the benchmark.  Existing
-        positions of a stock that exits the universe are sold through the
-        ordinary sell path — the mask never erases them silently.  A mask
-        whose shape does not match the signal raises ``ValueError``; there
-        is no unconstrained execution path.
+        (``universe_mask[:, t] & universe_mask[:, t + execution_delay]``),
+        the default equal-weight benchmark averages only those cells (and
+        requires a valid target), and a day without any eligible stock
+        earns zero for both the strategy (flat book) and the benchmark.
+        Existing positions of a stock that exits the universe are sold
+        through the ordinary sell path — the mask never erases them
+        silently.  A mask whose shape does not match the signal raises
+        ``ValueError``; there is no unconstrained execution path.
+
+        ``execution_delay`` is the number of trading days between the
+        signal date and the entry open (1 = next-open execution, the
+        historical contract; the golden execution spec stresses 2 =
+        one-day-delayed execution with the same parity guarantees).
 
         Limit detection always uses board rates (main board 10%,
         ChiNext / STAR 20%): the engine replays history, there is no dated
@@ -99,6 +105,9 @@ class AshareBacktestEngine:
         universe_mask = np.asarray(universe_mask, dtype=bool)
         if universe_mask.shape != factors.shape:
             raise ValueError("universe_mask shape does not match factors")
+        delay = int(execution_delay)
+        if delay < 1:
+            raise ValueError("execution_delay must be >= 1")
 
         open_ = np.nan_to_num(
             np.asarray(raw_cache["open"], dtype=np.float64),
@@ -139,13 +148,16 @@ class AshareBacktestEngine:
 
         n_stocks, n_dates = factors.shape
         if signal_range is None:
-            signal_indices = list(range(max(n_dates - 2, 0)))
+            signal_indices = list(range(max(n_dates - (delay + 1), 0)))
         elif isinstance(signal_range, range):
             signal_indices = list(signal_range)
         else:
             signal_indices = list(range(int(signal_range[0]), int(signal_range[1])))
-        if any(t < 0 or t + 2 >= n_dates for t in signal_indices):
-            raise ValueError("signal_range includes a signal without a complete t+2 exit")
+        if any(t < 0 or t + delay + 1 >= n_dates for t in signal_indices):
+            raise ValueError(
+                "signal_range includes a signal without a complete "
+                f"t+{delay + 1} exit"
+            )
         if signal_indices and signal_indices != list(
             range(signal_indices[0], signal_indices[-1] + 1)
         ):
@@ -165,17 +177,18 @@ class AshareBacktestEngine:
         daily_returns: list[float] = []
         turnover_list: list[float] = []
         positions: list[dict[str, Any]] = []
+        target_weights_list: list[np.ndarray] = []
 
         for t in signal_indices:
-            entry_day = t + 1
+            entry_day = t + delay
             signal = factors[:, t]
             # Signal-date and entry-date eligibility together define the
             # selectable set: a stock must be a member when the signal is
             # observed and still be a member when the buy executes at the
-            # t+1 open.  Non-finite signal cells are excluded inside the
-            # selection itself.
+            # t+delay open.  Non-finite signal cells are excluded inside
+            # the selection itself.
             eligible = universe_mask[:, t] & universe_mask[:, entry_day]
-            exit_day = t + 2
+            exit_day = t + delay + 1
             selected, selectable_values = self._select_top_n(
                 signal,
                 entry_day,
@@ -269,7 +282,10 @@ class AshareBacktestEngine:
                     buy_weights, sell_weights, capital
                 )
             )
-            gross_ret = float(np.dot(target_weights, target_ret[:, t]))
+            # target_ret[:, j] spans the open-to-open period (j+1, j+2),
+            # which is exactly [entry_day, exit_day] with
+            # entry_day = t + execution_delay.
+            gross_ret = float(np.dot(target_weights, target_ret[:, entry_day - 1]))
             net_ret = gross_ret - cost_fraction
             daily_returns.append(net_ret)
             turnover_list.append(turnover)
@@ -287,6 +303,7 @@ class AshareBacktestEngine:
                     ],
                 }
             )
+            target_weights_list.append(target_weights.copy())
             prev_weights = target_weights
 
         equity = self._equity_curve(daily_returns)
@@ -300,10 +317,10 @@ class AshareBacktestEngine:
         return BacktestResult(
             equity_curve=[float(x) for x in equity],
             # Initial equity is marked at the first entry; subsequent points
-            # are marked at each t+2 exit, exactly one date per equity point.
+            # are marked at each t+delay+1 exit, exactly one date per equity point.
             dates=(
-                [dates[signal_indices[0] + 1]]
-                + [dates[t + 2] for t in signal_indices]
+                [dates[signal_indices[0] + delay]]
+                + [dates[t + delay + 1] for t in signal_indices]
                 if signal_indices
                 else dates[:1]
             ),
@@ -312,6 +329,7 @@ class AshareBacktestEngine:
             benchmark_equity=benchmark_equity,
             metrics=metrics,
             positions=positions,
+            target_weights=target_weights_list,
         )
 
     @staticmethod

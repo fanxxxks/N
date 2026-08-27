@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
+
 
 @dataclass
 class BacktestResult:
@@ -16,6 +18,11 @@ class BacktestResult:
     metrics: dict[str, float] = field(default_factory=dict)
     positions: list[dict[str, Any]] = field(default_factory=list)
     trades: list[dict[str, Any]] = field(default_factory=list)
+    # T3-02: exact per-signal-period target weight vectors (never rounded
+    # to the 6-decimal positions record).  The golden execution spec
+    # replays these through the whole-lot matcher; None for legacy
+    # producers that did not record them.
+    target_weights: list[np.ndarray] | None = None
 
 
 @dataclass
@@ -24,7 +31,7 @@ class SimOrder:
     ts_code: str
     trade_date: str
     side: str
-    quantity: int
+    quantity: float
     price: float
     status: str = "pending"
     reason: str = ""
@@ -37,7 +44,7 @@ class SimTrade:
     ts_code: str
     trade_date: str
     side: str
-    quantity: int
+    quantity: float
     price: float
     amount: float
     commission: float

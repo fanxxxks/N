@@ -309,6 +309,14 @@ class PortfolioOptimizer:
             "qp_positions": int(np.count_nonzero(weights > 0.0)),
         }
         post_processed = False
+        # Solver-noise cleanup: OSQP's default tolerance is 1e-5, so
+        # entries below that floor are numerical noise, not positions.
+        # Zeroing them first keeps phantom micro-orders (and their
+        # minimum commissions) out of every downstream execution path.
+        noise = np.abs(weights) < 1e-5
+        if noise.any():
+            weights[noise] = 0.0
+            post_processed = True
         min_trade_dropped: list[int] = []
         if c.min_trade_amount is not None:
             below = (np.abs(delta) * float(capital) < c.min_trade_amount) & (
