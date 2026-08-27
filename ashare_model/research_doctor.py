@@ -57,6 +57,7 @@ from ashare_data.io_utils import read_json_safe
 from ashare_data.manifest import latest_manifest
 
 from .alphagpt import MODEL_VERSION
+from .artifact_versions import classify_artifact
 from .evaluation import PROTOCOL_VERSION
 from .reward import REWARD_VERSION
 
@@ -363,6 +364,10 @@ def gather_artifacts(data_dir: Path) -> list[dict[str, Any]]:
                 "exists": True,
                 "legacy": bool(payload.get(LEGACY_FIELD)),
                 "legacy_reasons": list(payload.get(LEGACY_REASON_FIELD) or []),
+                # Pure version classification (P0-04): an old artifact that
+                # is not stamped is visible as classified-legacy here while
+                # the conflict rules still reject it (no stamp = error).
+                "classification": classify_artifact(name, payload),
                 "fields": {key: payload.get(key) for key in _ARTIFACT_FIELDS[name]},
             }
         )

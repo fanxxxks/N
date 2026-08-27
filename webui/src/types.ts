@@ -40,6 +40,9 @@ export interface StrategyData {
   full_window_icir?: number
   best_reward?: number
   history?: TrainHistoryPoint[]
+  /** P0-04: legacy artifacts (old reward/protocol generation) are flagged. */
+  legacy?: boolean
+  legacy_reason?: string[]
 }
 
 export interface SimPosition {
