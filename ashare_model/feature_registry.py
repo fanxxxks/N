@@ -98,6 +98,16 @@ def _pit_level_of(name: str, family: str) -> PitLevel:
     return PitLevel.PIT_DAILY
 
 
+def pit_level_of(name: str) -> PitLevel:
+    """Public PIT level (weakest data source) of one vocabulary feature.
+
+    The single resolution path for tier mapping (P2): ``data_tier`` derives
+    the A/B/C credibility tier from this level.
+    """
+
+    return _pit_level_of(name, _family_of(name))
+
+
 def _zscore_per_date(tensor: np.ndarray, eligible: np.ndarray) -> np.ndarray:
     """Per-date cross-sectional z-score of every feature over eligible
     cells; non-eligible cells become 0 (the neutral convention)."""

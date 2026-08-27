@@ -203,6 +203,21 @@ def operator_names(ir: FormulaIR) -> set[str]:
     return found
 
 
+def feature_names(ir: FormulaIR) -> set[str]:
+    """Distinct feature names referenced anywhere in the AST.
+
+    The traceability hook for data-credibility tiering (P2): a formula's
+    features are resolved here once, then each feature maps to its tier.
+    """
+
+    if isinstance(ir, Feature):
+        return {ir.name}
+    found: set[str] = set()
+    for child in _children(ir):
+        found |= feature_names(child)
+    return found
+
+
 def _children(ir: FormulaIR) -> tuple[FormulaIR, ...]:
     if isinstance(ir, Unary):
         return (ir.operand,)
