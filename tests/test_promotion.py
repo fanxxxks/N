@@ -111,10 +111,10 @@ def _passing_stress():
 
 
 def _paper_registry(tmp_path, formula="RET_1", sessions=120, start="2026-02-01",
-                    end="2026-06-30"):
+                    end="2026-06-30", token=None):
     registry = PaperWindowRegistry(tmp_path / "paper.json")
     registry.register(
-        formula_hash=formula_hash([1], formula),
+        formula_hash=formula_hash([token] if token is not None else [1], formula),
         start=start,
         end=end,
         sessions=sessions,
@@ -506,3 +506,114 @@ def test_cli_promotion_refuses_legacy_artifact_without_dataset(
         "dataset_id" in r
         for r in verdict["gates"]["data_formula_p0"]["reasons"]
     )
+
+
+# --- P2-03 / P2-04: data-credibility-tier gate --------------------------------
+
+
+def _tok(name: str) -> int:
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    return FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index(name)
+
+
+def _tier_artifact(feature_name: str):
+    """A strong artifact whose champion formula is the bare given factor."""
+    artifact = _strong_artifact()
+    for row in artifact["rows"]:
+        row["formula_text"] = feature_name
+        row["formula"] = [_tok(feature_name)]
+    artifact["top_trial"]["formula_text"] = feature_name
+    return artifact
+
+
+def test_data_tier_gate_rejects_tier_b_by_default(tmp_path):
+    """P2-03: Champion candidates default to Tier A only; a Tier B formula
+    (e.g. ROE) is refused and the reason names the violating feature."""
+    artifact = _tier_artifact("ROE")
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path, formula="ROE", token=_tok("ROE")),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["data_tier"]
+    assert not gate["passed"]
+    assert any("ROE" in r and "B" in r for r in gate["reasons"])
+    assert verdict["data_tier_policy"]["allowed_tiers"] == ["A"]
+    assert verdict["data_tier_policy"]["formula_data_tier"]["max_tier"] == "B"
+
+
+def test_data_tier_gate_passes_tier_a_formula(tmp_path):
+    verdict = _verdict(
+        _strong_artifact(),  # champion formula = RET_1 (Tier A)
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    assert verdict["gates"]["data_tier"]["passed"] is True
+    assert verdict["promoted"] is True
+
+
+def test_data_tier_gate_tier_b_requires_separate_comparison(tmp_path):
+    """P2-03: Tier B is promotable only through an explicit separate
+    comparison (allowed_data_tiers=(A, B)); the policy is recorded."""
+    artifact = _tier_artifact("ROE")
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path, formula="ROE", token=_tok("ROE")),
+        stress=_passing_stress(),
+        allowed_data_tiers=("A", "B"),
+    )
+    assert verdict["gates"]["data_tier"]["passed"] is True
+    assert verdict["data_tier_policy"]["allowed_tiers"] == ["A", "B"]
+    assert verdict["promoted"] is True
+
+
+def test_data_tier_gate_never_accepts_tier_c(tmp_path):
+    """P2-04: Tier C (industry snapshot / placeholder) never enters
+    promotion results, even under the explicit Tier B comparison."""
+    artifact = _tier_artifact("INDUSTRY_MOMENTUM")
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(
+            tmp_path, formula="INDUSTRY_MOMENTUM", token=_tok("INDUSTRY_MOMENTUM")
+        ),
+        stress=_passing_stress(),
+        allowed_data_tiers=("A", "B"),
+    )
+    gate = verdict["gates"]["data_tier"]
+    assert not gate["passed"]
+    assert any("tier C" in r for r in gate["reasons"])
+    assert verdict["promoted"] is False
+
+
+def test_data_tier_gate_rejects_untraceable_formula(tmp_path):
+    artifact = _strong_artifact()
+    for row in artifact["rows"]:
+        row["formula_text"] = "equal_weight"
+        row["formula"] = None
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path, formula="equal_weight"),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["data_tier"]
+    assert not gate["passed"]
+    assert any("no traceable formula" in r for r in gate["reasons"])
+
+
+def test_data_tier_policy_rejects_c_and_unknown_tiers():
+    artifact = _strong_artifact()
+    with pytest.raises(ValueError, match="research-display only"):
+        _verdict(artifact, allowed_data_tiers=("C",))
+    with pytest.raises(ValueError, match="unknown"):
+        _verdict(artifact, allowed_data_tiers=("X",))
