@@ -211,9 +211,14 @@ def test_cli_purge_writes_audit_artifact(tmp_path: Path):
     db = AshareDB(cfg.duckdb_path)
     db.create_schema(cfg)
     db.upsert_stocks(
-        [{"ts_code": "000001.SZ", "name": "a", "list_date": None},
-         {"ts_code": "900935.SH", "name": "b", "list_date": None}],
+        [{"ts_code": "000001.SZ", "name": "a", "list_date": None}],
         cfg,
+    )
+    # Simulate a legacy B-share row: the upsert validator already rejects
+    # it, so legacy data is inserted directly (as in pre-P2-01 databases).
+    db.execute(
+        "INSERT INTO stocks (ts_code, name, list_date, is_st) "
+        "VALUES ('900935.SH', 'b', '19950727', FALSE)"
     )
     db.upsert_fundamentals(
         [
@@ -261,6 +266,9 @@ def test_cli_purge_writes_audit_artifact(tmp_path: Path):
     assert payload["scope"]["out_of_scope_rows"] == 1
     assert payload["purge"]["removed_rows"] == 1
     assert payload["purge"]["rows_after"] == 1
+    assert payload["stocks_purge"] == {
+        "removed_rows": 1, "rows_before": 2, "rows_after": 1,
+    }
     with AshareDB(cfg.duckdb_path) as check:
         remaining = {
             str(r[0])
@@ -268,4 +276,11 @@ def test_cli_purge_writes_audit_artifact(tmp_path: Path):
                 f"SELECT DISTINCT ts_code FROM {cfg.fundamentals_table}"
             ).itertuples(index=False)
         }
+        stocks = {
+            str(r[0])
+            for r in check.query(
+                f"SELECT DISTINCT ts_code FROM {cfg.stocks_table}"
+            ).itertuples(index=False)
+        }
     assert remaining == {"000001.SZ"}
+    assert stocks == {"000001.SZ"}

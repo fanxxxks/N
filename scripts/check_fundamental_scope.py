@@ -91,6 +91,21 @@ def main() -> int:
 
         if args.purge:
             result = purge_out_of_scope_fundamentals(db, data_config)
+            # The stocks table is the persisted stock scope: legacy
+            # non-A-share rows (B-shares) are deleted, never kept.
+            stocks_before = int(
+                db.query(
+                    f"SELECT count(*) AS n FROM {data_config.stocks_table}"
+                )["n"].iloc[0]
+            )
+            stocks_removed = 0
+            for code in invalid_stocks:
+                db.execute(
+                    f"DELETE FROM {data_config.stocks_table} WHERE ts_code = ?",
+                    [code],
+                )
+                stocks_removed += 1
+            stocks_after = stocks_before - stocks_removed
             payload = {
                 "scope": {
                     "total_rows": stats["total_rows"],
@@ -100,13 +115,20 @@ def main() -> int:
                     "scope_codes_count": scope_count,
                 },
                 "purge": result,
+                "stocks_purge": {
+                    "removed_rows": stocks_removed,
+                    "rows_before": stocks_before,
+                    "rows_after": stocks_after,
+                },
             }
             out_path = _ROOT / args.output
             out_path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_json(out_path, payload)
             print(
-                f"purged {result['removed_rows']} rows "
-                f"({result['rows_before']} -> {result['rows_after']}); "
+                f"purged {result['removed_rows']} fundamental rows "
+                f"({result['rows_before']} -> {result['rows_after']}) and "
+                f"{stocks_removed} invalid stocks rows "
+                f"({stocks_before} -> {stocks_after}); "
                 f"audit written to {out_path}"
             )
         return 0
