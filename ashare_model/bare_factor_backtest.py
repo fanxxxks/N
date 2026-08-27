@@ -22,7 +22,6 @@ import argparse
 import json
 from pathlib import Path
 
-import numpy as np
 from loguru import logger
 
 from ashare_data.config import (
