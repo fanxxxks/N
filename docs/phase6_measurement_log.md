@@ -9,7 +9,7 @@
 
 | Stage | Commit | Tests passed | Δ | Notes |
 |---|---|---|---|---|
-| Baseline (main, pre-P2) | `600ba0e` | **941** | — | `logs/pytest_p2_baseline.log`（本阶段基线复跑，webapi 排除） |
+| Baseline (main, pre-P2) | `600ba0e` | **941** | — | 本阶段基线复跑（webapi 排除，计数见 §1） |
 | docs: P2 contract | `bf2454b` | — | — | 契约先行（Tier A/B/C 定义、时间规则、门禁、迁移策略） |
 | test: data-tier contract (red) | `c59b3d8` | — | — | `tests/test_data_tier.py` |
 | feat: data-tier core | `a659ff5` | — | — | `ashare_model/data_tier.py`（DATA_TIER_VERSION 1）、`ir.feature_names`、`feature_registry.pit_level_of` |
