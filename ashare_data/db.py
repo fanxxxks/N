@@ -170,10 +170,23 @@ class AshareDB:
         by ``scripts/import_pit_universe.py`` is silently erased.  A
         backfilled ``list_date`` is preserved whenever the snapshot carries
         none; a non-null snapshot value wins for currently listed stocks.
+        Non-A-share codes (B-shares, index symbols) are rejected on upsert
+        (P2-01): the stocks table is the persisted stock scope and must
+        never accumulate instruments the pipeline cannot trade.
         """
         if not rows:
             return
         import pandas as pd
+
+        from .processor import is_valid_a_share_code
+
+        rows = [
+            row
+            for row in rows
+            if is_valid_a_share_code(str(row.get("ts_code") or ""))
+        ]
+        if not rows:
+            return
 
         columns = ["ts_code", "name", "industry", "list_date", "is_st"]
         df = pd.DataFrame(rows).reindex(columns=columns)
