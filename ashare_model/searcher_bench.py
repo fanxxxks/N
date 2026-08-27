@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import math
 import sys
 import threading
 import time
@@ -250,17 +251,19 @@ def benchmark_searchers(
         error: str | None = None
         wall = 0.0
         peak = None
+        started = time.perf_counter()
         try:
-            started = time.perf_counter()
             _, peak = measure_peak_rss(run)
-            wall = time.perf_counter() - started
         except Exception as exc:  # a failed row is a measurement too
             error = f"{type(exc).__name__}: {exc}"
             logger.error("searcher {} failed: {}", searcher, error)
-        evals = int(getattr(trainer, "semantic_cache", None).budget_used or 0)
+        wall = time.perf_counter() - started
+        cache = getattr(trainer, "semantic_cache", None)
+        evals = int(cache.budget_used) if cache is not None else 0
         best = getattr(trainer, "best_val_reward", None)
         if best is None:
             best = getattr(trainer, "best_reward", None)
+        completed = error is None
         rows[searcher] = {
             "searcher": searcher,
             "budget": budget,
@@ -269,12 +272,12 @@ def benchmark_searchers(
             "unique_semantic_evals": evals,
             "wall_seconds": wall,
             "wall_per_1000_evals": (
-                wall / evals * 1000.0 if evals > 0 else None
+                wall / evals * 1000.0 if completed and evals > 0 else None
             ),
             "peak_rss_mb": peak,
-            "completed": error is None,
+            "completed": completed,
             "selected_val_reward": (
-                float(best) if best is not None else None
+                float(best) if best is not None and math.isfinite(best) else None
             ),
             "error": error,
         }

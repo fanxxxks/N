@@ -159,6 +159,43 @@ def test_benchmark_records_provenance(populated_db: DataConfig):
     assert prov["max_formula_len"] == 4
 
 
+def test_benchmark_failed_row_is_recorded_not_dropped(
+    populated_db: DataConfig, monkeypatch
+):
+    """A crashing searcher yields a row (completed=False, error text,
+    real wall time, None reward and per-1000) — never a raise and never
+    a silent gap."""
+    from ashare_model.train import AshareTrainer
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("bench boom")
+
+    monkeypatch.setattr(AshareTrainer, "train", boom)
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
+    payload = benchmark_searchers(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        _reward_cfg(),
+        loader,
+        searchers=("rl",),
+        budget=16,
+        seed=42,
+        train_end_date="2024-02-01",
+        window_cap=(3, 30),
+        device="cpu",
+    )
+    row = payload["rows"]["rl"]
+    assert row["completed"] is False
+    assert "bench boom" in row["error"]
+    assert row["wall_seconds"] > 0.0  # the failed attempt is still timed
+    assert row["wall_per_1000_evals"] is None  # only meaningful on success
+    assert row["selected_val_reward"] is None  # never a non-finite JSON value
+    json.dumps(payload)  # must stay JSON-serializable
+
+
 def test_train_search_bills_the_trainers_semantic_cache(populated_db: DataConfig):
     """P1-04 measurement fix: the evaluator shares the trainer's semantic
     cache, so ``trainer.semantic_cache.budget_used`` is the real unique-
