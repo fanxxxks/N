@@ -1,0 +1,508 @@
+"""T4-01 contract tests: Champion/Challenger promotion gates.
+
+A challenger is promoted only when all five gates pass at once: data &
+formula P0, statistical significance, excess-return & risk constraints,
+cost/capacity stress, and at least one complete future paper-trading
+observation window.  These tests pin the contract before the
+implementation exists — every gate failure is a *reason*, and the
+verdict records the thresholds used.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from ashare_data.config import (
+    BacktestConfig,
+    FoldConfig,
+    ProtocolConfig,
+    TierConfig,
+)
+from ashare_model import evaluation
+from ashare_model.evaluation import PROTOCOL_VERSION, build_result
+from ashare_model.promotion import (
+    PaperWindowRegistry,
+    evaluate_challenger,
+    formula_hash,
+    stress_champion,
+)
+from ashare_model.regime import RegimeRegistry, declare_dev_regime
+
+from test_evaluation import _loader  # noqa: F401
+from test_stitched_oos import _row
+
+
+def _strong_rows():
+    """A clearly strong stitched candidate: 2 folds x 250 sessions."""
+    rng = np.random.default_rng(7)
+    rows = []
+    for train_end, test_end in [
+        ("2026-01-01", "2026-06-30"),
+        ("2026-06-30", "2026-12-31"),
+    ]:
+        daily = [0.004 + x for x in rng.normal(0.0, 0.001, 250)]
+        rows.append(
+            _row(
+                "challenger",
+                42,
+                train_end,
+                test_end,
+                daily=daily,
+                formula_text="RET_1",
+                eligible=True,
+                rejection_reasons=[],
+                direction=1,
+                formula=[1],
+                average_turnover=0.05,
+                capacity_utilization=0.05,
+            )
+        )
+    return rows
+
+
+def _strong_artifact(regime=None, **kwargs):
+    rows = _strong_rows()
+    proto = ProtocolConfig(
+        folds=[
+            FoldConfig("2026-01-01", "2026-06-30"),
+            FoldConfig("2026-06-30", "2026-12-31"),
+        ],
+        seeds=[42],
+        baseline_signals=[],
+        random_samples=0,
+    )
+    return build_result(
+        proto, "confirmation", TierConfig(50, 256), rows,
+        data_end_date="2026-12-31",
+        dataset_id="ds-current",
+        regime=regime,
+        **kwargs,
+    )
+
+
+def _future_regime(tmp_path):
+    # Everything through 2026-01-01 is dev; the challenger's folds and the
+    # paper window run after it (future data) — a valid final evaluation.
+    return RegimeRegistry(
+        tmp_path / "registry.json", declare_dev_regime("2026-01-01")
+    )
+
+
+def _passing_stress():
+    return {
+        "grid": [
+            {
+                "cost_multiplier": c,
+                "capital_multiplier": k,
+                "n_days": 500,
+                "sharpe": 2.0,
+                "max_drawdown": 0.05,
+                "excess_return": 0.20,
+                "annual_return": 0.30,
+            }
+            for c in (0.5, 1.0, 2.0)
+            for k in (0.1, 1.0, 10.0)
+        ],
+        "n_cells": 9,
+    }
+
+
+def _paper_registry(tmp_path, formula="RET_1", sessions=120, start="2026-02-01",
+                    end="2026-06-30"):
+    registry = PaperWindowRegistry(tmp_path / "paper.json")
+    registry.register(
+        formula_hash=formula_hash([1], formula),
+        start=start,
+        end=end,
+        sessions=sessions,
+        config_sha256="cfg-1",
+        equity_path="data/sim_trades/",
+    )
+    return registry
+
+
+def _verdict(artifact, **kwargs):
+    return evaluate_challenger(artifact, **kwargs)
+
+
+def test_all_gates_pass_promotes(tmp_path):
+    artifact = _strong_artifact()
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    assert verdict["promoted"] is True
+    assert all(g["passed"] for g in verdict["gates"].values())
+    assert verdict["challenger"]["candidate"] == "challenger"
+    assert verdict["challenger"]["formula_hash"] == formula_hash([1], "RET_1")
+    assert verdict["thresholds"]["dsr_min"] == 0.95
+
+
+def test_g1_rejects_old_protocol_version(tmp_path):
+    artifact = _strong_artifact()
+    artifact["protocol_version"] = "19"
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["data_formula_p0"]
+    assert not gate["passed"]
+    assert any("protocol_version 19" in r for r in gate["reasons"])
+
+
+def test_g1_rejects_dataset_mismatch(tmp_path):
+    artifact = _strong_artifact()
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-other",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    assert not verdict["gates"]["data_formula_p0"]["passed"]
+
+
+def test_g1_rejects_missing_regime(tmp_path):
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=RegimeRegistry(tmp_path / "missing.json"),  # nothing declared
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    assert not verdict["gates"]["data_formula_p0"]["passed"]
+
+
+def test_g1_rejects_dev_data_final_evaluation(tmp_path):
+    # The regime declares dev through 2030: the challenger's folds are dev.
+    regime = RegimeRegistry(
+        tmp_path / "registry.json", declare_dev_regime("2030-12-31")
+    )
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=regime,
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    assert not verdict["gates"]["data_formula_p0"]["passed"]
+    assert any("dev/validation" in r for r in
+               verdict["gates"]["data_formula_p0"]["reasons"])
+
+
+def test_g1_rejects_ineligible_formula(tmp_path):
+    artifact = _strong_artifact()
+    for row in artifact["rows"]:
+        row["eligible"] = False
+        row["rejection_reasons"] = ["insufficient valid IC days"]
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    assert not verdict["gates"]["data_formula_p0"]["passed"]
+    assert any("eligibility" in r for r in
+               verdict["gates"]["data_formula_p0"]["reasons"])
+
+
+def test_g2_rejects_insignificant_dsr(tmp_path):
+    artifact = _strong_artifact()
+    artifact["dsr"]["dsr"] = 0.50
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["significance"]
+    assert not gate["passed"]
+    assert any("dsr" in r for r in gate["reasons"])
+
+
+def test_g2_rejects_insignificant_max_t(tmp_path):
+    artifact = _strong_artifact()
+    artifact["max_t"]["significant_95"] = False
+    artifact["max_t"]["p_value"] = 0.42
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["significance"]
+    assert not gate["passed"]
+    assert any("max-t" in r for r in gate["reasons"])
+
+
+def test_g3_rejects_drawdown_breach(tmp_path):
+    artifact = _strong_artifact()
+    artifact["top_trial"]["max_drawdown"] = 0.60
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["excess_and_risk"]
+    assert not gate["passed"]
+    assert any("drawdown" in r for r in gate["reasons"])
+
+
+def test_g3_rejects_negative_excess(tmp_path):
+    artifact = _strong_artifact()
+    artifact["top_trial"]["excess_return"] = -0.05
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    assert not verdict["gates"]["excess_and_risk"]["passed"]
+
+
+def test_g4_requires_stress_result(tmp_path):
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=None,
+    )
+    gate = verdict["gates"]["cost_capacity_stress"]
+    assert not gate["passed"]
+    assert any("stress" in r for r in gate["reasons"])
+
+
+def test_g4_rejects_stressed_cell_breach(tmp_path):
+    stress = _passing_stress()
+    stress["grid"][6]["max_drawdown"] = 0.75  # the 2x-cost cell blows up
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=stress,
+    )
+    gate = verdict["gates"]["cost_capacity_stress"]
+    assert not gate["passed"]
+    assert any("cost x2.0" in r for r in gate["reasons"])
+
+
+def test_g5_requires_completed_paper_window(tmp_path):
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=PaperWindowRegistry(tmp_path / "empty.json"),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["paper_window"]
+    assert not gate["passed"]
+    assert any("paper window" in r for r in gate["reasons"])
+
+
+def test_g5_rejects_short_window(tmp_path):
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path, sessions=10),
+        stress=_passing_stress(),
+    )
+    assert not verdict["gates"]["paper_window"]["passed"]
+
+
+def test_g5_rejects_unfinished_window(tmp_path):
+    registry = PaperWindowRegistry(tmp_path / "paper.json")
+    registry.register(
+        formula_hash=formula_hash([1], "RET_1"),
+        start="2026-02-01",
+        end="2999-01-01",  # still running
+        sessions=120,
+    )
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=registry,
+        stress=_passing_stress(),
+    )
+    assert not verdict["gates"]["paper_window"]["passed"]
+
+
+def test_g5_rejects_window_on_dev_data(tmp_path):
+    # Window inside the dev period (before the declared cutoff): it is
+    # not a *future* observation, so it cannot be the final evidence.
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(
+            tmp_path, start="2025-01-01", end="2025-06-30"
+        ),
+        stress=_passing_stress(),
+    )
+    assert not verdict["gates"]["paper_window"]["passed"]
+
+
+def test_paper_registry_roundtrip(tmp_path):
+    registry = _paper_registry(tmp_path)
+    reloaded = PaperWindowRegistry(tmp_path / "paper.json")
+    windows = reloaded.windows()
+    assert len(windows) == 1
+    assert windows[0].sessions == 120
+    assert reloaded.completed(formula_hash([1], "RET_1"), 60) is not None
+    assert reloaded.completed(formula_hash([2], "OTHER"), 60) is None
+
+
+def test_stress_champion_grid_on_synthetic_data(populated_db):
+    loader = _loader(populated_db)
+    fold_cfgs = [FoldConfig("2024-01-10", "2024-01-25")]
+    stress = stress_champion(
+        loader,
+        fold_cfgs,
+        tokens=[1],
+        direction=1,
+        bt_cfg=BacktestConfig(),
+        cost_multipliers=(0.5, 1.0, 2.0),
+        capital_multipliers=(0.1, 1.0, 10.0),
+    )
+    assert stress["n_cells"] == 9
+    for cell in stress["grid"]:
+        assert cell["n_days"] >= 1
+        assert cell["sharpe"] is not None
+    # The 1x1 cell reproduces the plain evaluation path.
+    fold = evaluation.resolve_folds(fold_cfgs, loader.dates)[0]
+    plain = evaluation.evaluate_formula([1], loader, fold, BacktestConfig())
+    one_one = next(
+        c for c in stress["grid"]
+        if c["cost_multiplier"] == 1.0 and c["capital_multiplier"] == 1.0
+    )
+    assert one_one["total_return"] == pytest.approx(plain["total_return"], abs=1e-9)
+
+
+def test_cli_register_paper_window(tmp_path):
+    import subprocess
+    import sys
+
+    paper_path = tmp_path / "paper.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "ashare_model.promotion",
+            "--register-paper",
+            "2026-02-01",
+            "2026-06-30",
+            "120",
+            "data/sim_trades/",
+            "--formula-hash",
+            "abc123",
+            "--paper",
+            str(paper_path),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    assert result.returncode == 0, result.stderr
+    registry = PaperWindowRegistry(paper_path)
+    assert registry.completed("abc123", 60) is not None
+
+
+def test_cli_promotion_refuses_legacy_artifact_without_dataset(
+    tmp_path, populated_db
+):
+    """End-to-end promotion CLI: an artifact without a dataset_id is
+    refused at the P0 gate (legacy measurements cannot be promoted)."""
+    import json as _json
+    import subprocess
+    import sys
+
+    import yaml
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "data_dir": str(populated_db.data_dir),
+                "duckdb_path": str(populated_db.duckdb_path),
+                "parquet_dir": str(populated_db.parquet_dir),
+                "index_codes": ["000300.SH"],
+                "min_listed_sessions": 1,
+                "model": {"max_formula_len": 6},
+                "protocol": {
+                    "folds": [
+                        {"train_end": "2024-01-10", "test_end": "2024-01-25"}
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    loader = _loader(populated_db)
+    rows = _strong_rows()[:1]
+    rows[0]["fold_train_end"] = "2024-01-10"
+    rows[0]["fold_test_end"] = "2024-01-25"
+    artifact = build_result(
+        ProtocolConfig(
+            folds=[FoldConfig("2024-01-10", "2024-01-25")],
+            seeds=[42],
+            baseline_signals=[],
+            random_samples=0,
+        ),
+        "confirmation",
+        TierConfig(50, 256),
+        rows,
+        data_end_date="2024-01-25",
+        # dataset_id deliberately absent: legacy measurement.
+    )
+    artifact_path = tmp_path / "artifact.json"
+    artifact_path.write_text(
+        _json.dumps(artifact, ensure_ascii=False), encoding="utf-8"
+    )
+    verdict_path = tmp_path / "verdict.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "ashare_model.promotion",
+            "--artifact",
+            str(artifact_path),
+            "--config",
+            str(cfg_path),
+            "--output",
+            str(verdict_path),
+            "--regime",
+            str(tmp_path / "holdout_registry.json"),
+            "--paper",
+            str(tmp_path / "paper.json"),
+            "--min-eligible",
+            "3",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    assert result.returncode == 1  # refused, not promoted
+    verdict = _json.loads(verdict_path.read_text(encoding="utf-8"))
+    assert verdict["promoted"] is False
+    assert any(
+        "dataset_id" in r
+        for r in verdict["gates"]["data_formula_p0"]["reasons"]
+    )

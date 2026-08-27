@@ -546,6 +546,8 @@ def test_top_trial_ignores_val_reward(monkeypatch):
             "sharpe": 1.0,
             "val_reward": -2.0,
             "failed": False,
+            "daily_returns": [0.001, 0.001, 0.001],
+            "benchmark_daily_returns": [0.0, 0.0, 0.0],
         },
         {
             "candidate": "B",
@@ -554,6 +556,8 @@ def test_top_trial_ignores_val_reward(monkeypatch):
             "sharpe": 0.5,
             "val_reward": 4.9,
             "failed": False,
+            "daily_returns": [-0.001, -0.001, -0.001],
+            "benchmark_daily_returns": [0.0, 0.0, 0.0],
         },
     ]
     assert top_trial(rows)["candidate"] == "A"
@@ -893,6 +897,10 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
             str(out_path),
             "--min-eligible",
             "3",
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+            "--regime",
+            str(tmp_path / "holdout_registry.json"),
         ]
     )
     assert rc == 0
@@ -901,6 +909,8 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
     assert payload["tier"] == "screening"
     assert payload["steps"] == 1 and payload["batch_size"] == 256
     assert payload["seeds"] == [42]
+    assert payload["ledger"]["tainted"] is False
+    assert payload["ledger"]["n_trials"] >= 1
     assert any(r["candidate"] == "baseline:MOMENTUM_20" for r in payload["rows"])
     assert any(r["candidate"] == "benchmark:equal_weight" for r in payload["rows"])
     assert any(r["candidate"] == "random_search" for r in payload["rows"])
@@ -1128,6 +1138,10 @@ def test_cli_confirmation_smoke(tmp_path, populated_db: DataConfig):
             str(out_path),
             "--min-eligible",
             "3",
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+            "--regime",
+            str(tmp_path / "holdout_registry.json"),
         ]
     )
     assert rc == 0
@@ -1170,6 +1184,10 @@ def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
             str(out_path),
             "--min-eligible",
             "3",
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+            "--regime",
+            str(tmp_path / "holdout_registry.json"),
         ]
     )
     assert rc == 0
