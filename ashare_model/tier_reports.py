@@ -83,8 +83,8 @@ def _train_one(loader, tensor, data_config, model_config, backtest_config,
     """One formula-generator training run on the given factor tensor.
 
     Mirrors ``scripts/ablate_families.py._train_one``: same trainer path,
-    artifacts disabled.  Returns ``(best_reward, best_formula_text,
-    best_tokens)``.
+    artifacts disabled.  Returns the trainer (whose ``selection_result``
+    carries every scored candidate for the tier-confinement selection).
     """
 
     import torch
@@ -101,7 +101,30 @@ def _train_one(loader, tensor, data_config, model_config, backtest_config,
         seed=seed,
         save_artifacts=False,
     )
-    return float(trainer.best_reward), trainer.best_formula, trainer.best_tokens
+    return trainer
+
+
+def best_confined_candidate(selection_result, allowed_features: set[str]):
+    """The best eligible candidate whose tokens reference only allowed
+    features (tier confinement, contract §6).
+
+    Returns the :class:`~ashare_model.candidates.CandidateScore` or
+    ``None`` when no eligible confined candidate exists (fall back to the
+    generator's global best, recorded with ``confined=false``).
+    """
+
+    from .data_tier import formula_feature_names
+
+    best = None
+    for score in selection_result.candidates:
+        if score.tokens is None or not score.eligible:
+            continue
+        names = formula_feature_names(score.tokens)
+        if names is None or not set(names) <= allowed_features:
+            continue
+        if best is None or score.val_reward > best.val_reward:
+            best = score
+    return best
 
 
 def run_tier_ablation(
@@ -118,7 +141,11 @@ def run_tier_ablation(
 
     Returns one run per plan entry with the best reward / formula and the
     formula's data-tier trace; the delta is measured against the all-tier
-    baseline so the report is self-contained.
+    baseline so the report is self-contained.  Excluded-tier features are
+    neutralized (family-ablation method); each run additionally reports
+    the best **confined** candidate (tokens within the tier set) with
+    ``confined=true``, falling back to the global best with
+    ``confined=false`` only when none exists.
     """
 
     from .factors import ablate_factors
@@ -129,15 +156,28 @@ def run_tier_ablation(
     for entry in build_tier_ablation_plan():
         excluded = entry["excluded_features"]
         tensor = ablate_factors(full, excluded) if excluded else full
-        reward, formula_text, tokens = _train_one(
+        trainer = _train_one(
             loader, tensor, data_config, model_config, backtest_config,
             steps, batch_size, seed,
         )
+        allowed = set(tier_set_features(tuple(entry["included_tiers"])))
+        confined = best_confined_candidate(trainer.selection_result, allowed)
+        if confined is not None:
+            reward = float(confined.val_reward)
+            formula_text = confined.formula_text
+            tokens = confined.tokens
+            confined_flag = True
+        else:
+            reward = float(trainer.best_reward)
+            formula_text = trainer.best_formula
+            tokens = trainer.best_tokens
+            confined_flag = False
         if baseline_reward is None:
             baseline_reward = reward
         runs[entry["label"]] = {
             "included_tiers": entry["included_tiers"],
             "excluded_features": excluded,
+            "confined": confined_flag,
             "best_reward": reward,
             "best_formula": formula_text,
             "formula_data_tier": formula_data_tier_report(tokens=tokens),

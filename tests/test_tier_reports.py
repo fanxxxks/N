@@ -9,17 +9,40 @@ versioned (``TIER_REPORT_VERSION``).
 from __future__ import annotations
 
 from ashare_data.config import DataConfig, ModelConfig
+from ashare_model.candidates import CandidateScore, SelectionResult
 from ashare_model.data_tier import DataTier, feature_tier, tier_features
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.tier_reports import (
     TIER_REPORT_VERSION,
     TIER_SETS,
     assemble_tier_report,
+    best_confined_candidate,
     build_tier_ablation_plan,
     run_tier_diagnostics,
     tier_set_features,
 )
-from ashare_model.vocab import FEATURE_NAMES
+from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
+
+
+def _tok(name: str) -> int:
+    return FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index(name)
+
+
+def _candidate(tokens, val_reward: float, *, eligible: bool) -> CandidateScore:
+    return CandidateScore(
+        tokens=tuple(tokens),
+        candidate_id=str(val_reward),
+        formula_text="f",
+        source="test",
+        direction=1,
+        val_reward=val_reward,
+        val_icir=0.1,
+        train_reward=val_reward,
+        train_icir=0.1,
+        complexity_penalty=0.0,
+        eligible=eligible,
+        rejection_reasons=() if eligible else ("gate",),
+    )
 
 
 def test_tier_report_version_is_pinned():
@@ -69,6 +92,7 @@ def test_assemble_tier_report_payload_is_versioned_and_complete():
     }
     ablation = {
         "all": {
+            "confined": True,
             "best_reward": 0.5,
             "best_formula": "RET_1",
             "formula_data_tier": {
@@ -79,6 +103,7 @@ def test_assemble_tier_report_payload_is_versioned_and_complete():
             },
         },
         "AB": {
+            "confined": True,
             "best_reward": 0.4,
             "best_formula": "ROE",
             "formula_data_tier": {
@@ -89,6 +114,7 @@ def test_assemble_tier_report_payload_is_versioned_and_complete():
             },
         },
         "A": {
+            "confined": True,
             "best_reward": 0.3,
             "best_formula": "TURNOVER",
             "formula_data_tier": {
@@ -118,6 +144,35 @@ def test_assemble_tier_report_payload_is_versioned_and_complete():
     for run in payload["ablation"]["runs"].values():
         assert "formula_data_tier" in run
         assert run["formula_data_tier"]["data_tier_version"] >= 1
+        assert "confined" in run
+
+
+def test_best_confined_candidate_filters_by_tier():
+    """Contract §6: each ablation run reports the best eligible candidate
+    whose tokens reference only the tier set's features."""
+    ret_1 = [_tok("RET_1")]
+    roe = [_tok("ROE")]
+    both = [_tok("RET_1"), _tok("ROE"), FORMULA_VOCAB.operator_offset]
+    selection = SelectionResult(
+        selected=None,
+        best_rejected=None,
+        candidates=(
+            _candidate(ret_1, 0.5, eligible=True),
+            _candidate(roe, 0.9, eligible=True),          # out of tier set
+            _candidate(ret_1, 1.0, eligible=False),       # ineligible
+            _candidate(both, 0.7, eligible=True),         # mixed tiers
+            _candidate([999999], 0.8, eligible=True),     # undecodable
+        ),
+    )
+    tier_a = {n for n in FEATURE_NAMES if feature_tier(n) is DataTier.A}
+    best = best_confined_candidate(selection, tier_a)
+    assert best is not None
+    assert best.val_reward == 0.5  # the only eligible Tier-A-only candidate
+    assert tuple(best.tokens) == tuple(ret_1)
+
+    # No confined candidate -> None (caller falls back with confined=false).
+    assert best_confined_candidate(selection, {"RET_5"}) is None
+    assert best_confined_candidate(selection, set()) is None
 
 
 def test_run_tier_diagnostics_per_set(populated_db: DataConfig):

@@ -309,6 +309,7 @@ def _print_report(report: dict[str, object]) -> None:
         {
             "factor": r["name"],
             "family": r["family"],
+            "tier": r.get("data_tier", ""),
             "coverage": r["coverage"],
             "ic_mean": r["ic_mean"],
             "|ic|": r["ic_abs_mean"],
@@ -317,6 +318,8 @@ def _print_report(report: dict[str, object]) -> None:
         for r in report["per_feature"]
     ]
     print(pd.DataFrame(rows).to_string(index=False))
+    if report.get("tier_summary"):
+        print("\nData-tier summary:", report["tier_summary"])
     print("\nWithin-family mean |corr|:")
     for fam, value in report["correlations"]["within_family"].items():
         print(f"  {fam:16s} {value:.3f}")

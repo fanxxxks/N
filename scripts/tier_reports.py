@@ -111,10 +111,14 @@ def main() -> None:
             baseline = ablation["all"]["best_reward"]
             for label in ("AB", "A"):
                 run = ablation[label]
+                tier = (
+                    run["formula_data_tier"]["max_tier"]
+                    if run["formula_data_tier"] else None
+                )
                 print(
                     f"  ablation[{label}]: reward={run['best_reward']:8.3f} "
                     f"delta={run['delta_vs_baseline']:+8.3f} "
-                    f"tier={run['formula_data_tier']['max_tier'] if run['formula_data_tier'] else None}"
+                    f"confined={run['confined']} tier={tier}"
                 )
     finally:
         export_log_txt(run_name="tier_reports")
