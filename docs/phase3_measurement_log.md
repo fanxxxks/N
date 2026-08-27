@@ -9,7 +9,7 @@ pre-existing environment blocker: starlette 1.3.1's TestClient requires
 |---|---|---|---|---|
 | Baseline (main, post-Phase-2) | 9fe4b06 | 749 | — | Phase-2 closing count |
 | T3-01 constrained portfolio optimizer | 7a80241 + merge 88d0793 | 791 | +42 | 0 regressions; cvxpy==1.6.5 added to the production spec + frozen locks |
-| T3-02 golden parity (unified execution spec) | TBD + merge | 818 | +27 | 0 regressions; EXECUTION_SPEC_VERSION 1 |
+| T3-02 golden parity (unified execution spec) | e9f8afc + merge b71415e | 818 | +27 | 0 regressions; EXECUTION_SPEC_VERSION 1 |
 
 ## T3-01 invariants (asserted by tests)
 
