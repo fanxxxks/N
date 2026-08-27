@@ -224,6 +224,9 @@ def test_cli_purge_writes_audit_artifact(tmp_path: Path):
         ],
         cfg,
     )
+    # Release the file lock: DuckDB allows one writer connection, and the
+    # subprocess below opens the same database read-write.
+    db.close()
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         yaml.safe_dump(
