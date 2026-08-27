@@ -58,6 +58,9 @@ python -m ashare_model.diagnostics   # 因子质量报告（覆盖率/IC/相关�
 python -m ashare_model.train        # 默认 GP 搜索器（model.searcher: gp；RL/random 为实验/基线选项）
 python -m ashare_model.backtest
 python -m ashare_model.evaluation --tier screening  # 测量协议（见下）
+python -m ashare_model.cost_matrix                 # 资金×持仓数×换手率费用矩阵（P1-02）
+python -m ashare_model.bare_factor_backtest        # 七裸因子固定回测（P1-03，不做搜索）
+python -m ashare_model.searcher_bench --budget 128 # 四搜索器成本测量/小预算 smoke（P1-04/05）
 python -m ashare_trading.run_sim
 python scripts/analyze_sim.py               # 模拟盘费用拖累/毛盈亏/现金核对
 streamlit run dashboard/app.py
@@ -130,6 +133,37 @@ python scripts/archive_run.py --mode protocol --commit # 结果归档进 experim
   （周频 / 多周期目标留待后续阶段）。
 - `batch_size` 不要低于 256：advantage 归一化（`rewards.std()`）在更小批次下有
   退化风险。
+
+### 低成本测量与成本诊断（P1）
+
+纯成本/容量诊断，**不宣称发现 Alpha**；全部产物只回答"多少钱能拿多少持仓、
+成本拖累多大、搜索器花多少时间与内存"：
+
+```bash
+python -m ashare_model.cost_matrix            # -> data/fee_matrix.json
+python -m ashare_model.bare_factor_backtest   # -> data/bare_factor_backtest.json
+python -m ashare_model.searcher_bench --budget 1000 --fold 0 --window-cap 300x400 \
+    --seed 42                                 # -> data/searcher_bench.json
+python -m ashare_model.evaluation --selfcheck # 空转验收：噪声 DSR/max-t 必须不显著
+```
+
+- **费用矩阵（P1-02）**：按全项目唯一费用口径（`backtest` 段的佣金/最低佣金/
+  印花税/过户费/滑点），对资金×持仓数×年换手（每个持仓每年完整买卖回合数）
+  计算年化费用拖累（元与 %）；预注册成本预算线 `budget_pct`（默认 1.5%/年），
+  `capacity` = 网格中拖累不超预算的最大持仓数，`recommended` = 默认换手（T=6，
+  约两月一次调仓）下的 capacity 单元，`feasible_structures` = 全部可接受结构。
+  最低佣金地板按**每笔**生效（单笔名义 < 2 万元时地板主导成本）。
+- **七裸因子固定回测（P1-03）**：对 `protocol.baseline_signals` 的七个裸因子
+  只做**固定回测**（无任何搜索器/采样/试错）：因子列直接进回测引擎，方向按
+  训练窗 rank-IC 固定推断，逐因子记录净收益/Sharpe/Sortino/最大回撤/换手/IC。
+- **搜索器成本测量（P1-04）与小预算 smoke（P1-05）**：GP/TPE/Random/RL 在
+  **同一 300×400 裁剪窗口**（fold 0 训练窗头部，`prepare_window` 的
+  `window_cap`）、同一 nominal budget、同一 seed 下各自完整跑完；每行记录实际
+  `unique_semantic_evals`（T2-01 语义预算口径）、墙钟时间与**每 1000 次唯一
+  语义评价**的时间、峰值 RSS（stdlib：POSIX `resource` / Windows `ctypes`，
+  零新依赖）、`completed`。RL 以 `steps=4, batch=budget/4` 折算（budget ≥ 16
+  且可被 4 整除）。`train_search` 接受 `"tpe"` 作为与 gp/random 同预算记账的
+  后端。
 
 ### 模拟盘的启动 / 续跑 / 重置
 
