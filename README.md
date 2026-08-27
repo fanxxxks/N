@@ -68,7 +68,7 @@ python scripts/ablate_families.py --steps 50 --batch-size 256   # 逐族消融�
 验证集奖励相对基线的变化（`data/ablation_results.json`）；奖励掉的多的族就是
 "真正在出力"的族，掉得少的族可以安全精简。
 
-### 测量协议（walk-forward 评价）
+### 测量协议（nested walk-forward 评价，T4-01）
 
 在改动奖励语义之前，先固定"怎么证明公式变好"的测量协议；协议裁决与 RL reward
 完全解耦，所以不同 `reward_version` 代的产物仍然可比：
@@ -83,9 +83,22 @@ python -m ashare_model.evaluation --tier confirmation \
 python scripts/archive_run.py --mode protocol --commit # 结果归档进 experiments/
 ```
 
+- **数据区间（T4-01）**：2021–2026 历史被反复查看，一律视为**开发/验证数据**，
+  不再称为最终 holdout。下一次真正的最终检验只能使用**未来新增数据**或
+  **严格锁定的未查看切片**（`python -m ashare_model.regime --registry
+  data/holdout_registry.json --dev-cutoff 2026-12-31 [--lock START END]`）；
+  协议运行前会检查 `--regime` 注册表，任何触及锁定切片的折直接拒绝。
 - **折**：`protocol.folds` 按**绝对日期**锚定（默认 5 个日历年测试窗 2021–2025），
   数据持续增长不会移动折边界；每折训练至 `train_end`，在 `(train_end, test_end]`
-  上做 OOS 打分。
+  上做 OOS 打分。这是**嵌套 walk-forward**：内层在训练窗内调公式/奖励/超参数，
+  外层每个 (折, 种子) 只做一次算法评估。
+- **拼接（T4-01）**：外层 OOS 收益按 **(算法, seed)** 拼接成一条连续序列后，
+  再计算 Sharpe / Deflated Sharpe / max-t / top-trial——一个 trial = 一个
+  (算法, seed) 拼接序列，而不是某一折的一行。失败折记录在 `failed_folds`，
+  不贡献收益、绝不静默丢弃。
+- **试验台账（T4-01）**：每次协议运行自动把**每一个** trial（含失败与崩溃的）
+  追加写入 `--ledger`（默认 `data/experiment_ledger.jsonl`，hash 链防篡改）；
+  运行结束时仍有未关闭 trial 则产物标记 `ledger.tainted=true`，绝不假装干净。
 - **种子**：`protocol.seeds` 每折多种子独立训练（默认 3 个），聚合报中位数 ± IQR
   （reward 有 clip，均值不可信）。
 - **基线**：`protocol.baseline_signals` 按因子诊断 ICIR 选取（默认
@@ -95,12 +108,18 @@ python scripts/archive_run.py --mode protocol --commit # 结果归档进 experim
   rank-IC / ICIR；**不用** `best_reward` / `fast_basket_reward` 裁决，训练侧
   `val_reward` 只归档、不参与排序。
 - **多重检验**：Deflated Sharpe（Bailey & López de Prado 2014，含偏度/峰度修正）
-  与中心化学生化 max-t 块自助法（White 现实检验风格）共享同一试验矩阵——每个
-  非失败候选行是一个试验（excess 逐日收益）；DSR > 0.95 / max-t p ≤ 0.05 才
-  判显著。此前跑批的试错用 `--trials` 并入校正。
+  与中心化学生化 max-t 块自助法（White 现实检验风格）共享同一**拼接试验矩阵**；
+  DSR > 0.95 / max-t p ≤ 0.05 才判显著。此前跑批的试错用 `--trials` 并入校正
+  （旧产物按同一拼接规则并入）。
+- **晋级门禁（T4-01）**：Champion/Challenger 必须五道门禁同时通过
+  （`python -m ashare_model.promotion --artifact data/protocol_result.json
+  --config config/ashare_config.yaml`）：数据与公式 P0 门禁、统计显著性、
+  超额收益与风险约束、成本/容量压力测试（0.5x/1x/2x 成本 × 0.1x/1x/10x 资本），
+  以及至少一个完整的未来纸面交易观察窗口（`data/paper_windows.json`）。
 - 产物 `data/protocol_result.json` 记录 `protocol_version` / `reward_version` /
-  `frequency` / `horizon` 与逐折逐种子原始行（含逐日收益序列，便于下钻）；
-  `frequency` / `horizon` 目前只是记录字段（周频 / 多周期目标留待后续阶段）。
+  `frequency` / `horizon`、`ledger`、`data_regime` 与逐折逐种子原始行 + `stitched`
+  拼接块（含逐日收益序列，便于下钻）；`frequency` / `horizon` 目前只是记录字段
+  （周频 / 多周期目标留待后续阶段）。
 - `batch_size` 不要低于 256：advantage 归一化（`rewards.std()`）在更小批次下有
   退化风险。
 

@@ -134,6 +134,25 @@ and every trained row records its actual ``unique_semantic_evals``.
 The admission experiment (scripts/admission_experiment.py) uses these
 rows' budget semantics to decide whether RL stays the default searcher.
 
+v20 (T4-01) re-establishes the valid-experiment protocol.  The 2021-2026
+history has been viewed repeatedly, so it is **development/validation
+data** (see :mod:`ashare_model.regime`); the protocol is now a **nested
+walk-forward**: the inner loop tunes formula / reward / hyperparameters
+inside each fold's training window, the outer loop performs exactly one
+algorithm evaluation per (fold, seed), and adjudication consumes the
+**stitched** outer OOS returns — one trial = one (candidate, seed)
+concatenated series (``stitch_oos_series``), and Sharpe / Deflated
+Sharpe / max-t / top-trial all operate on that stitched matrix
+(``stitched`` artifact block).  Every trial is automatically recorded in
+the append-only experiment ledger (:mod:`ashare_model.ledger`) — failed
+and crashed trials included; a run with never-closed trials is tainted,
+never silently clean.  Protocol runs refuse folds that touch a strictly
+locked holdout slice (:class:`ashare_model.regime.HoldoutViolation`),
+and the artifact records the data regime in force.  Prior artifacts
+remain readable: their raw rows stitch under the same rule when loaded
+with ``--trials``, and the per-fold row-level ``aggregates`` are kept
+for drill-down.
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -189,6 +208,8 @@ from .data_loader import AshareDataLoader
 from .diagnostics import rank_ic_stats
 from .gp_search import run_gp_baseline
 from .ir import FormulaSyntaxError, canonical_tokens
+from .ledger import ExperimentLedger
+from .regime import RegimeRegistry
 from .reward import REWARD_VERSION
 from .semantic_cache import (
     SEMANTIC_CACHE_VERSION,
@@ -206,7 +227,7 @@ from .train import (
 from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "19"
+PROTOCOL_VERSION = "20"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -1188,20 +1209,174 @@ def aggregate_results(rows: list[dict]) -> dict:
     return out
 
 
-def top_trial(rows: list[dict]) -> dict | None:
-    """Highest-OOS-Sharpe trial.  Deliberately ignores ``val_reward``:
-    adjudication is reward-version-independent by construction."""
+# --- stitched OOS trial matrix (T4-01, v20) ----------------------------------
+#
+# One trial = one (candidate, seed) stitched outer-OOS series.  The raw
+# rows are the per-fold outer evaluations of the nested walk-forward;
+# stitching concatenates their daily return series in chronological fold
+# order **before** any statistic is computed, so Sharpe / DSR / max-t
+# measure the algorithm's full OOS path, not a per-fold average of paths.
+# A failed fold is recorded (``failed_folds``) and contributes no
+# returns; a (candidate, seed) with no succeeded fold produces no trial.
 
-    scored = [
-        r
-        for r in rows
-        if not r.get("failed")
-        and r.get("sharpe") is not None
-        and math.isfinite(float(r["sharpe"]))
-    ]
-    if not scored:
-        return None
-    return max(scored, key=lambda r: float(r["sharpe"]))
+
+def _algorithm_of(candidate: str) -> str:
+    """Algorithm family of a row's candidate name (``baseline:X`` -> ``baseline``)."""
+
+    return str(candidate).split(":", 1)[0]
+
+
+def stitch_oos_series(rows: list[dict]) -> list[dict]:
+    """Stitch the outer OOS returns of every (candidate, seed) across folds.
+
+    Returns JSON-friendly trial dicts: concatenated daily / benchmark /
+    excess series in chronological fold order, per-segment provenance,
+    recorded failed folds, and fold-level portfolio statistics aggregated
+    over the succeeded segments (mean turnover, max capacity utilization).
+    Two succeeded rows for the same (candidate, seed, fold) raise
+    ``ValueError``: a fold measured twice is an integrity error, not a
+    stitchable observation.
+    """
+
+    groups: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for row in rows:
+        key = (row.get("candidate"), row.get("seed"))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    trials: list[dict] = []
+    for key in order:
+        candidate, seed = key
+        group = groups[key]
+        succeeded = [
+            r for r in group
+            if not r.get("failed") and r.get("daily_returns")
+        ]
+        if not succeeded:
+            continue
+        failed = [r for r in group if r.get("failed")]
+
+        def _fold_key(row: dict) -> tuple[str, str]:
+            return (
+                str(row.get("fold_train_end") or ""),
+                str(row.get("fold_test_end") or ""),
+            )
+
+        seen: set[tuple[str, str]] = set()
+        segments: list[dict] = []
+        for row in sorted(succeeded, key=_fold_key):
+            fk = _fold_key(row)
+            if fk in seen:
+                raise ValueError(
+                    f"duplicate fold row for candidate={candidate} "
+                    f"seed={seed} fold={fk}"
+                )
+            seen.add(fk)
+            segments.append(row)
+
+        daily: list[float] = []
+        bench: list[float] = []
+        for row in segments:
+            d = [float(x) for x in row["daily_returns"]]
+            b = row.get("benchmark_daily_returns")
+            b = [float(x) for x in b] if b and len(b) == len(d) else [0.0] * len(d)
+            daily.extend(d)
+            bench.extend(b)
+        excess = [a - b for a, b in zip(daily, bench)]
+        turnovers = [
+            float(r["average_turnover"])
+            for r in segments
+            if r.get("average_turnover") is not None
+        ]
+        caps = [
+            float(r["capacity_utilization"])
+            for r in segments
+            if r.get("capacity_utilization") is not None
+        ]
+        last = segments[-1]
+        trials.append(
+            {
+                "candidate": candidate,
+                "seed": seed,
+                "algorithm": _algorithm_of(candidate),
+                "segments": [
+                    {
+                        "fold_train_end": r.get("fold_train_end"),
+                        "fold_test_end": r.get("fold_test_end"),
+                        "n_dates": r.get("n_dates"),
+                    }
+                    for r in segments
+                ],
+                "failed_folds": [
+                    {
+                        "fold_train_end": r.get("fold_train_end"),
+                        "fold_test_end": r.get("fold_test_end"),
+                    }
+                    for r in failed
+                ],
+                "n_days": len(daily),
+                "daily_returns": daily,
+                "benchmark_daily_returns": bench,
+                "excess_returns": excess,
+                "formula_text": last.get("formula_text"),
+                "fold_test_end": last.get("fold_test_end"),
+                "average_turnover_mean": (
+                    float(sum(turnovers) / len(turnovers)) if turnovers else None
+                ),
+                "capacity_utilization_max": float(max(caps)) if caps else None,
+            }
+        )
+    return trials
+
+
+def stitched_metrics(trial: dict) -> dict:
+    """Full-engine metrics on one stitched trial's concatenated series."""
+
+    daily = [float(x) for x in trial.get("daily_returns") or []]
+    if not daily:
+        return {"n_days": 0}
+    equity = AshareBacktestEngine._equity_curve(daily)
+    m = AshareBacktestEngine._metrics(daily, equity)
+    bench = [float(x) for x in trial.get("benchmark_daily_returns") or []]
+    bench_total = 0.0
+    if bench:
+        bench_equity = AshareBacktestEngine._equity_curve(bench)
+        bench_total = float(max(bench_equity[-1] - 1.0, -1.0))
+    total = float(m.get("total_return", 0.0))
+    excess = (1.0 + total) / (1.0 + bench_total) - 1.0 if bench_total > -1.0 else 0.0
+    return {
+        "n_days": len(daily),
+        "total_return": total,
+        "annual_return": float(m.get("annual_return", 0.0)),
+        "sharpe": float(m.get("sharpe", 0.0)),
+        "sortino": float(m.get("sortino", 0.0)),
+        "max_drawdown": float(m.get("max_drawdown", 0.0)),
+        "calmar": float(m.get("calmar", 0.0)),
+        "benchmark_return": bench_total,
+        "excess_return": excess,
+    }
+
+
+def top_trial(rows: list[dict]) -> dict | None:
+    """Highest-OOS-Sharpe **stitched** trial (v20).
+
+    Deliberately ignores ``val_reward``: adjudication is
+    reward-version-independent by construction.  Rows without daily
+    return series produce no trial.
+    """
+
+    best: dict | None = None
+    for trial in stitch_oos_series(rows):
+        metrics = stitched_metrics(trial)
+        if metrics["n_days"] < 2:
+            continue
+        candidate = {**trial, **metrics}
+        if best is None or candidate["sharpe"] > best["sharpe"]:
+            best = candidate
+    return best
 
 
 # --- multiple-testing corrections (Bailey & Lopez de Prado 2014) ------------
@@ -1295,21 +1470,6 @@ def deflated_sharpe(sr_best, n_trials, t, skew, kurt) -> float:
     return psr(sr_best, expected_max_sr(n_trials, t, skew, kurt), t, skew, kurt)
 
 
-def excess_series(row: dict) -> np.ndarray | None:
-    """Raw OOS excess (strategy - benchmark) daily returns of a trial row."""
-
-    if row.get("failed") or not row.get("daily_returns"):
-        return None
-    strat = np.asarray(row["daily_returns"], dtype=np.float64)
-    bench = np.asarray(
-        row.get("benchmark_daily_returns") or np.zeros_like(strat),
-        dtype=np.float64,
-    )
-    if bench.shape != strat.shape:
-        bench = np.zeros_like(strat)
-    return strat - bench
-
-
 def _trial_stats(excess: np.ndarray) -> tuple[float, float, float, int]:
     t = excess.size
     mean = float(excess.mean())
@@ -1322,67 +1482,83 @@ def _trial_stats(excess: np.ndarray) -> tuple[float, float, float, int]:
     return sr, skew, kurt, t
 
 
-def dsr_from_rows(rows: list[dict]) -> dict | None:
-    """Deflated Sharpe of the best trial in the row pool."""
+def _stitched_pool(
+    rows: list[dict], extra_trial_rows: list[dict] | None = None
+) -> list[tuple[dict, np.ndarray]]:
+    """The v20 trial matrix: (stitched trial, excess array) pairs.
 
-    trials: list[dict] = []
-    for row in rows:
-        excess = excess_series(row)
-        if excess is None or excess.size < 2:
-            continue
+    This run's rows and the extra rows from prior artifacts are stitched
+    **separately** — a prior run's ``trained`` trial is a different trial
+    from this run's, so they must never share a series.
+    """
+
+    pool: list[tuple[dict, np.ndarray]] = []
+    for trial in stitch_oos_series(rows) + stitch_oos_series(extra_trial_rows or []):
+        excess = np.asarray(trial["excess_returns"], dtype=np.float64)
+        if excess.size >= 2:
+            pool.append((trial, excess))
+    return pool
+
+
+def _dsr_from_pool(pool: list[tuple[dict, np.ndarray]]) -> dict | None:
+    """Deflated Sharpe of the best stitched trial in the pool."""
+
+    stats = []
+    for trial, excess in pool:
         sr, skew, kurt, t = _trial_stats(excess)
-        trials.append(
-            {
-                "row": row,
-                "sr": sr,
-                "skew": skew,
-                "kurt": kurt,
-                "t": t,
-            }
-        )
-    if not trials:
+        stats.append((trial, sr, skew, kurt, t))
+    if not stats:
         return None
-    best = max(trials, key=lambda x: x["sr"])
-    if len(trials) == 1:
+    best_trial, sr, skew, kurt, t = max(stats, key=lambda x: x[1])
+    if len(stats) == 1:
         # No multiplicity: the corrected benchmark collapses to SR = 0.
-        dsr = psr(best["sr"], 0.0, best["t"], best["skew"], best["kurt"])
+        dsr = psr(sr, 0.0, t, skew, kurt)
     else:
-        dsr = deflated_sharpe(
-            best["sr"], len(trials), best["t"], best["skew"], best["kurt"]
-        )
+        dsr = deflated_sharpe(sr, len(stats), t, skew, kurt)
     return {
         "dsr": dsr,
-        "n_trials": len(trials),
-        "sr_best": best["sr"],
-        "t_best": best["t"],
-        "skew_best": best["skew"],
-        "kurt_best": best["kurt"],
-        "best_candidate": best["row"].get("candidate"),
-        "best_fold_test_end": best["row"].get("fold_test_end"),
-        "best_seed": best["row"].get("seed"),
+        "n_trials": len(stats),
+        "sr_best": sr,
+        "t_best": t,
+        "skew_best": skew,
+        "kurt_best": kurt,
+        "best_candidate": best_trial.get("candidate"),
+        "best_fold_test_end": best_trial.get("fold_test_end"),
+        "best_seed": best_trial.get("seed"),
     }
 
 
-def max_t_from_rows(
-    rows: list[dict], n_perms: int = 5000, seed: int = 0, block_size: int = 10
+def dsr_from_rows(
+    rows: list[dict], extra_trial_rows: list[dict] | None = None
 ) -> dict | None:
-    """Studentized max-t block bootstrap (White-style reality check).
+    """Deflated Sharpe over the **stitched** trial matrix (v20).
+
+    One trial = one (candidate, seed) stitched outer-OOS series;
+    ``extra_trial_rows`` are raw rows of prior artifacts, stitched
+    separately and joined to the multiplicity pool.
+    """
+
+    return _dsr_from_pool(_stitched_pool(rows, extra_trial_rows))
+
+
+def _max_t_from_pool(
+    pool: list[tuple[dict, np.ndarray]],
+    n_perms: int = 5000,
+    seed: int = 0,
+    block_size: int = 10,
+) -> dict | None:
+    """Studentized max-t block bootstrap (White-style reality check) over
+    the stitched trial matrix.
 
     Each trial's excess series is recentered to the zero-mean null; per
     permutation, circular blocks of ``block_size`` days are resampled per
     trial, the bootstrapped mean is studentized by the observed per-trial
     standard deviation, and the max over trials forms the null distribution
-    of the max t-statistic.  Shares the exact trial matrix with
-    :func:`dsr_from_rows`.  (Plain sign-flipping is not used: for a max
+    of the max t-statistic.  (Plain sign-flipping is not used: for a max
     statistic it can never fall below p = 0.5 by construction.)
     """
 
-    series: list[np.ndarray] = []
-    for row in rows:
-        excess = excess_series(row)
-        if excess is None or excess.size < 2:
-            continue
-        series.append(excess)
+    series = [excess for _, excess in pool]
     if not series:
         return None
 
@@ -1430,6 +1606,23 @@ def max_t_from_rows(
         "seed": seed,
         "significant_95": bool(p_value <= 0.05),
     }
+
+
+def max_t_from_rows(
+    rows: list[dict],
+    n_perms: int = 5000,
+    seed: int = 0,
+    block_size: int = 10,
+    extra_trial_rows: list[dict] | None = None,
+) -> dict | None:
+    """Studentized max-t over the **stitched** trial matrix (v20)."""
+
+    return _max_t_from_pool(
+        _stitched_pool(rows, extra_trial_rows),
+        n_perms=n_perms,
+        seed=seed,
+        block_size=block_size,
+    )
 
 
 def selfcheck_rows(
@@ -1502,6 +1695,41 @@ def universe_policy_payload(loader: AshareDataLoader) -> dict | None:
     }
 
 
+def _regime_payload(regime, proto_cfg: ProtocolConfig) -> dict | None:
+    """The data regime in force for the artifact (record-only): the dev
+    cutoff, the policy, the locked slice (if any) and each fold's window
+    classification."""
+
+    if regime is None or regime.regime is None:
+        return None
+    r = regime.regime
+    locked = r.locked_slice
+    return {
+        "declared_at": r.declared_at,
+        "dev_cutoff": r.dev_cutoff,
+        "policy": r.policy,
+        "locked_slice": (
+            {
+                "start": locked.start,
+                "end": locked.end,
+                "dataset_id": locked.dataset_id,
+                "locked_at": locked.locked_at,
+                "note": locked.note,
+            }
+            if locked is not None
+            else None
+        ),
+        "folds": [
+            {
+                "train_end": f.train_end,
+                "test_end": f.test_end,
+                "kind": regime.classify_window(f.train_end, f.test_end),
+            }
+            for f in proto_cfg.folds
+        ],
+    }
+
+
 def build_result(
     proto_cfg: ProtocolConfig,
     tier_name: str,
@@ -1514,21 +1742,32 @@ def build_result(
     dataset_id: str | None = None,
     random_budget_matched: bool | None = None,
     random_budget: int | None = None,
+    ledger: dict | None = None,
+    regime=None,
 ) -> dict:
     """Assemble the protocol artifact (schema contract, see module docstring).
 
+    v20: the artifact's adjudication (``top_trial`` / ``dsr`` / ``max_t``)
+    consumes the **stitched** trial matrix (one trial = one (candidate,
+    seed) series); the raw per-fold rows stay in ``rows`` for drill-down,
+    the stitched trials live in the ``stitched`` block, and ``ledger`` /
+    ``data_regime`` record the trial-ledger and data-regime provenance of
+    the run (``None`` when absent).
+
     ``extra_trial_rows`` are trial rows from earlier protocol artifacts
     (e.g. screening runs whose OOS trials must count towards the DS/max-t
-    multiplicity correction); they join the correction pool but are never
-    merged into this run's own rows.  ``universe_policy`` records the PIT
-    universe policy fields that produced the rows.  ``dataset_id`` binds
-    the artifact to the immutable dataset manifest the rows were measured
-    on (``None`` for legacy databases, recorded as ``null``).
-    ``random_budget_matched`` / ``random_budget`` record the T1-05
-    baseline budget actually used.
+    multiplicity correction); they are stitched separately — a prior run's
+    trial is never merged into this run's series — and join the correction
+    pool.  ``universe_policy`` records the PIT universe policy fields that
+    produced the rows.  ``dataset_id`` binds the artifact to the immutable
+    dataset manifest the rows were measured on (``None`` for legacy
+    databases, recorded as ``null``).  ``random_budget_matched`` /
+    ``random_budget`` record the T1-05 baseline budget actually used.
     """
 
-    trial_pool = list(rows) + list(extra_trial_rows or [])
+    stitched = stitch_oos_series(rows)
+    for trial in stitched:
+        trial.update(stitched_metrics(trial))
     return _sanitize(
         {
             "protocol_version": PROTOCOL_VERSION,
@@ -1551,15 +1790,51 @@ def build_result(
             "baseline_signals": list(proto_cfg.baseline_signals),
             "data_end_date": data_end_date,
             "universe_policy": universe_policy,
+            "data_regime": _regime_payload(regime, proto_cfg),
+            "ledger": ledger,
             "n_candidates": len(rows),
             "rows": rows,
             "aggregates": aggregate_results(rows),
+            "stitched": {
+                "n_trials": len(stitched),
+                "trials": stitched,
+            },
             "top_trial": top_trial(rows),
-            "dsr": dsr_from_rows(trial_pool),
-            "max_t": max_t_from_rows(trial_pool, n_perms=max_t_perms),
-            "dsr_extra_trials": len(extra_trial_rows or []),
+            "dsr": dsr_from_rows(rows, extra_trial_rows=extra_trial_rows),
+            "max_t": max_t_from_rows(
+                rows, n_perms=max_t_perms, extra_trial_rows=extra_trial_rows
+            ),
+            "dsr_extra_trials": len(stitch_oos_series(extra_trial_rows or [])),
         }
     )
+
+
+def _run_recorded(ledger, fn, *, algorithm: str, candidate: str, seed=None,
+                  fold_train_end=None, fold_test_end=None):
+    """Run ``fn`` inside one ledger trial (T4-01).
+
+    The trial opens as ``running`` before the work and closes as
+    ``succeeded`` or ``failed`` on both paths, so a crashed trial is
+    recorded, never silently dropped.  The returned row(s) carry the
+    ``trial_id`` back into the artifact.  Without a ledger the call runs
+    unrecorded (legacy callers).
+    """
+
+    if ledger is None:
+        return fn()
+    with ledger.trial(
+        algorithm=algorithm,
+        candidate=candidate,
+        seed=seed,
+        fold_train_end=fold_train_end,
+        fold_test_end=fold_test_end,
+    ) as trial_id:
+        result = fn()
+    rows = result if isinstance(result, list) else [result]
+    for row in rows:
+        if isinstance(row, dict):
+            row["trial_id"] = trial_id
+    return result
 
 
 def run_protocol(
@@ -1574,9 +1849,18 @@ def run_protocol(
     seeds: list[int] | None = None,
     extra_trial_rows: list[dict] | None = None,
     max_t_perms: int = 5000,
+    ledger=None,
+    regime=None,
 ) -> dict:
     """Run the full protocol: baselines + one trained candidate per
-    (fold, seed), all scored by the shared engine path."""
+    (fold, seed), all scored by the shared engine path.
+
+    T4-01 wiring: ``regime`` is checked before the first trial (a fold
+    touching a strictly locked holdout slice raises
+    :class:`~ashare_model.regime.HoldoutViolation`), and ``ledger``
+    records every trial automatically.  The benchmark row is a reference
+    curve, not a trial, and is never recorded.
+    """
 
     if tier_name not in ("screening", "confirmation"):
         raise ValueError(f"unknown tier: {tier_name}")
@@ -1593,19 +1877,28 @@ def run_protocol(
     else:
         fold_cfgs = proto_cfg.folds
     seeds = proto_cfg.seeds if seeds is None else list(seeds)
+    if regime is not None:
+        regime.assert_folds_clear(fold_cfgs, dataset_id=loader.dataset_id)
 
     folds = resolve_folds(fold_cfgs, loader.dates)
     rows: list[dict] = []
     for fold in folds:
         rows.append(benchmark_row(loader, fold))
         rows.extend(
-            baseline_candidates(
-                loader,
-                proto_cfg,
-                fold,
-                backtest_config,
-                model_config,
-                reward_config,
+            _run_recorded(
+                ledger,
+                lambda: baseline_candidates(
+                    loader,
+                    proto_cfg,
+                    fold,
+                    backtest_config,
+                    model_config,
+                    reward_config,
+                ),
+                algorithm="baseline",
+                candidate="baseline",
+                fold_train_end=fold.train_end,
+                fold_test_end=fold.test_end,
             )
         )
         if proto_cfg.random_samples > 0:
@@ -1623,15 +1916,23 @@ def run_protocol(
                 f"seed={proto_cfg.random_seed}"
             )
             rows.append(
-                run_random_search(
-                    loader,
-                    model_config,
-                    backtest_config,
-                    reward_config,
-                    fold,
-                    proto_cfg.random_samples,
-                    proto_cfg.random_seed,
-                    budget=random_budget,
+                _run_recorded(
+                    ledger,
+                    lambda: run_random_search(
+                        loader,
+                        model_config,
+                        backtest_config,
+                        reward_config,
+                        fold,
+                        proto_cfg.random_samples,
+                        proto_cfg.random_seed,
+                        budget=random_budget,
+                    ),
+                    algorithm="random_search",
+                    candidate="random_search",
+                    seed=proto_cfg.random_seed,
+                    fold_train_end=fold.train_end,
+                    fold_test_end=fold.test_end,
                 )
             )
         # T2-03 baseline ladder: GP (DEAP) and TPE (Optuna) join the
@@ -1647,14 +1948,22 @@ def run_protocol(
                 f"budget={matched_budget} seed={proto_cfg.gp_seed}"
             )
             rows.append(
-                run_gp_search(
-                    loader,
-                    model_config,
-                    backtest_config,
-                    reward_config,
-                    fold,
+                _run_recorded(
+                    ledger,
+                    lambda: run_gp_search(
+                        loader,
+                        model_config,
+                        backtest_config,
+                        reward_config,
+                        fold,
+                        seed=proto_cfg.gp_seed,
+                        budget=matched_budget,
+                    ),
+                    algorithm="gp_search",
+                    candidate="gp_search",
                     seed=proto_cfg.gp_seed,
-                    budget=matched_budget,
+                    fold_train_end=fold.train_end,
+                    fold_test_end=fold.test_end,
                 )
             )
         if proto_cfg.tpe_enabled and matched_budget > 0:
@@ -1663,14 +1972,22 @@ def run_protocol(
                 f"budget={matched_budget} seed={proto_cfg.tpe_seed}"
             )
             rows.append(
-                run_tpe_search(
-                    loader,
-                    model_config,
-                    backtest_config,
-                    reward_config,
-                    fold,
+                _run_recorded(
+                    ledger,
+                    lambda: run_tpe_search(
+                        loader,
+                        model_config,
+                        backtest_config,
+                        reward_config,
+                        fold,
+                        seed=proto_cfg.tpe_seed,
+                        budget=matched_budget,
+                    ),
+                    algorithm="tpe_search",
+                    candidate="tpe_search",
                     seed=proto_cfg.tpe_seed,
-                    budget=matched_budget,
+                    fold_train_end=fold.train_end,
+                    fold_test_end=fold.test_end,
                 )
             )
         for seed in seeds:
@@ -1679,17 +1996,34 @@ def run_protocol(
                 f"tier={tier_name} steps={tier.steps} batch={tier.batch_size}"
             )
             rows.append(
-                run_fold(
-                    loader,
-                    data_config,
-                    model_config,
-                    backtest_config,
-                    reward_config,
-                    tier,
-                    fold,
-                    seed,
+                _run_recorded(
+                    ledger,
+                    lambda: run_fold(
+                        loader,
+                        data_config,
+                        model_config,
+                        backtest_config,
+                        reward_config,
+                        tier,
+                        fold,
+                        seed,
+                    ),
+                    algorithm="trained",
+                    candidate="trained",
+                    seed=seed,
+                    fold_train_end=fold.train_end,
+                    fold_test_end=fold.test_end,
                 )
             )
+    ledger_payload = None
+    if ledger is not None:
+        open_trials = ledger.finalize()
+        ledger_payload = {
+            "path": str(ledger.path),
+            "run_id": ledger.run_id,
+            "tainted": bool(open_trials),
+            "n_trials": len(list(ledger.trials_for())),
+        }
     return build_result(
         proto_cfg,
         tier_name,
@@ -1708,6 +2042,8 @@ def run_protocol(
             if proto_cfg.random_match_budget and proto_cfg.random_samples > 0
             else proto_cfg.random_samples
         ),
+        ledger=ledger_payload,
+        regime=regime,
     )
 
 
@@ -1765,6 +2101,18 @@ def main(argv=None) -> int:
         "rows join the DS/max-t multiplicity correction",
     )
     parser.add_argument(
+        "--ledger",
+        default="data/experiment_ledger.jsonl",
+        help="append-only trial ledger path (T4-01; every trial is recorded "
+        "automatically, failed trials included)",
+    )
+    parser.add_argument(
+        "--regime",
+        default="data/holdout_registry.json",
+        help="data-regime registry path (T4-01; folds touching a locked "
+        "holdout slice are refused before the first trial)",
+    )
+    parser.add_argument(
         "--no-random-search",
         action="store_true",
         help="skip the random-search baseline (protocol.random_samples=0)",
@@ -1796,9 +2144,36 @@ def main(argv=None) -> int:
         loader = AshareDataLoader(data_config, model_config)
         loader.load_data()
         extra_trials = load_trial_rows(args.trials, loader.dataset_id)
+        ledger = ExperimentLedger(root / args.ledger)
+        regime = RegimeRegistry(root / args.regime)
 
         if args.selfcheck:
-            rows = selfcheck_rows(loader, proto_cfg, backtest_config)
+            # Noise measurement is a measurement too: it must not touch a
+            # locked holdout slice.
+            regime.assert_folds_clear(proto_cfg.folds, dataset_id=loader.dataset_id)
+            rows: list[dict] = []
+            for fold_cfg in proto_cfg.folds:
+                rows.append(
+                    _run_recorded(
+                        ledger,
+                        lambda fold_cfg=fold_cfg: selfcheck_rows(
+                            loader,
+                            ProtocolConfig(folds=[fold_cfg]),
+                            backtest_config,
+                        )[0],
+                        algorithm="selfcheck",
+                        candidate="selfcheck:noise",
+                        fold_train_end=fold_cfg.train_end,
+                        fold_test_end=fold_cfg.test_end,
+                    )
+                )
+            open_trials = ledger.finalize()
+            ledger_payload = {
+                "path": str(ledger.path),
+                "run_id": ledger.run_id,
+                "tainted": bool(open_trials),
+                "n_trials": len(list(ledger.trials_for())),
+            }
             result = build_result(
                 proto_cfg,
                 "selfcheck",
@@ -1809,6 +2184,8 @@ def main(argv=None) -> int:
                 max_t_perms=args.max_t_perms,
                 universe_policy=universe_policy_payload(loader),
                 dataset_id=loader.dataset_id,
+                ledger=ledger_payload,
+                regime=regime,
             )
         else:
             fold_indices = list(range(args.folds)) if args.folds else None
@@ -1827,6 +2204,8 @@ def main(argv=None) -> int:
                 seeds=seeds,
                 extra_trial_rows=extra_trials,
                 max_t_perms=args.max_t_perms,
+                ledger=ledger,
+                regime=regime,
             )
         out_path = root / args.output
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1835,6 +2214,11 @@ def main(argv=None) -> int:
         )
         logger.success(f"Protocol result written to {out_path}")
         print(json.dumps(result["aggregates"], ensure_ascii=False, indent=2))
+        stitched = result.get("stitched") or {}
+        print(
+            f"stitched trials: {stitched.get('n_trials', 0)} "
+            f"(one per (candidate, seed), across all folds)"
+        )
         if result["top_trial"]:
             top = result["top_trial"]
             print(

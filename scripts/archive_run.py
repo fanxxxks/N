@@ -518,6 +518,15 @@ def main(argv=None):
                 "dsr": data.get("dsr"),
                 "max_t": data.get("max_t"),
                 "top_candidate": (data.get("top_trial") or {}).get("candidate"),
+                # T4-01: the stitched trial matrix, the trial ledger and the
+                # data regime in force (v20 artifacts).
+                "n_stitched_trials": (data.get("stitched") or {}).get("n_trials"),
+                "ledger": data.get("ledger"),
+                "data_regime": {
+                    k: v
+                    for k, v in (data.get("data_regime") or {}).items()
+                    if k != "folds"
+                },
             }
 
     if model_path:

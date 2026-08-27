@@ -78,13 +78,17 @@ reward:
   min_val_icir: 0.05
   ic_min_stocks: 10
 
-# Evaluation protocol: walk-forward folds anchored to absolute dates, multi
-# seed, IS/OOS metrics; adjudication is reward-independent (backtest-engine
+# Evaluation protocol: nested walk-forward folds anchored to absolute dates,
+# multi seed, IS/OOS metrics; adjudication is reward-independent (backtest-engine
 # metrics + rank IC) and corrected for candidate multiplicity (Deflated
-# Sharpe + max-t).  Signals are traded in their learned direction.  A
-# uniform random-search baseline (protocol.random_samples formulas, one
-# best per fold) separates "the RL search is ineffective" from "the reward
-# is uninformative".  frequency/horizon are record-only for now.
+# Sharpe + max-t) over the **stitched** (candidate, seed) OOS matrix (T4-01).
+# Signals are traded in their learned direction.  A uniform random-search
+# baseline (protocol.random_samples formulas, one best per fold) separates
+# "the RL search is ineffective" from "the reward is uninformative".
+# T4-01: every trial is auto-recorded in data/experiment_ledger.jsonl, and
+# data/ holdout_registry.json (ashare_model.regime) marks 2021-2026 as
+# dev/validation data with an optional strictly locked final slice.
+# frequency/horizon are record-only for now.
 # batch_size must stay >= 256: below that the advantage normalization
 # (rewards.std) risks degenerating.
 protocol:

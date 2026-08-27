@@ -10,6 +10,7 @@ from torch.distributions import Categorical
 from ashare_data.config import BacktestConfig, DataConfig, ModelConfig, RewardConfig
 from ashare_data.processor import open_to_open_returns
 from ashare_model.data_loader import AshareDataLoader
+from ashare_model.evaluation import PROTOCOL_VERSION as EVALUATION_PROTOCOL_VERSION
 from ashare_model.reward import REWARD_VERSION
 from ashare_model.train import (
     AshareTrainer,
@@ -835,7 +836,10 @@ def test_semantic_cache_cap_matches_trainer_bound(
     assert stats["cap"] == AshareTrainer._REWARD_CACHE_CAP
     assert stats["version"] == 1
     assert stats["window_id"].startswith("train:")
-    assert stats["protocol_version"] == 19
+    # The cache records the measurement protocol version it was built
+    # under (bumped 19 -> 20 by T4-01); keep the coupling assertion in
+    # sync with the protocol instead of hardcoding a stale number.
+    assert stats["protocol_version"] == int(EVALUATION_PROTOCOL_VERSION)
 
 
 # --- T2-03: independent initializations and the searcher backends ----------
