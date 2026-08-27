@@ -165,6 +165,42 @@ python -m ashare_model.evaluation --selfcheck # 空转验收：噪声 DSR/max-t 
   且可被 4 整除）。`train_search` 接受 `"tpe"` 作为与 gp/random 同预算记账的
   后端。
 
+### 免费数据可信度分层（P2）
+
+全部数据来自免费 AkShare 端点；按**最弱数据源**把每个特征划入三档可信等级
+（契约：`docs/p2_data_tier_contract.md`）：
+
+- **Tier A**（价格/成交量/换手/上市日/可靠历史成员）：交易所日线与 PIT 成员
+  区间，收盘即确定、次日可用——Champion 候选的**默认唯一准入档**；
+- **Tier B**（融资融券、保守发布日期基本面）：两融日度 feed 与按法定披露
+  季末对齐的 PIT 财报——需要**单独对照**（`--allow-tier-b`）才可晋级；
+- **Tier C**（当前行业快照、历史 ST 近似、占位数据）：**仅研究展示，永不
+  进入晋级结果**。
+
+```bash
+python -m ashare_model.diagnostics --tiers A        # -> data/factor_report.json（A 档）
+python scripts/tier_reports.py --steps 50 --batch-size 256  # -> data/tier_report.json
+python -m ashare_model.promotion --artifact ...     # 默认 Tier A；--allow-tier-b 单独对照
+python scripts/check_fundamental_scope.py --purge   # 基本面表范围审计/清理 -> data/fundamental_scope.json
+```
+
+- **公式可追溯（P2-02）**：每个携带公式的产物（因子报告、feature registry、
+  候选评分、策略产物、协议产物 v21）记录 `data_tier`（`max_tier`/`tiers_used`/
+  `data_tier_version`）+ 各档可用时间规则；`formula_data_tier_report(tokens)`
+  把任意公式追溯回其依赖的数据等级。
+- **晋级门禁（P2-03/P2-04）**：`evaluate_challenger` 新增第六道 `data_tier`
+  门，默认只允许 Tier A 特征；Tier B 通过显式 `allowed_data_tiers=("A","B")`
+  做**单独对照**（裁决记录 policy）；Tier C 在策略层直接被拒（`ValueError`）。
+- **基本面表范围（P2-01）**：`fundamental_pit` 只保存合法 A 股代码且属于
+  持久化股票范围（stocks ∪ PIT 成分 ∪ 日线缓存）的行；全市场批量财报在
+  `sync_fundamentals` 落库前按同步 universe 过滤，`upsert_stocks` 拒绝
+  非 A 股代码，历史脏数据（北交所外 117,287 行 / 7 个 B 股行）由
+  `check_fundamental_scope.py --purge` 清理并记录前后计数。
+- **分层诊断与消融（P2-05）**：`scripts/tier_reports.py` 对 A / A+B / 全部
+  三个层级集合分别输出诊断（coverage/rank-IC/相关矩阵）与消融
+  （同 seed/steps/batch 训练，`all`=基线、`AB`=剔除 C、`A`=剔除 B+C），
+  每个消融公式携带数据等级追溯。
+
 ### 模拟盘的启动 / 续跑 / 重置
 
 `run_sim` 的每个交易日是一个事务：订单/成交流水、资金曲线与 `last_exec_date`
