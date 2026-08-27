@@ -9,7 +9,8 @@
 | Stage | Commit | Tests passed | Δ | Notes |
 |---|---|---|---|---|
 | Baseline (main, pre-P1) | 2eaba93 | 921 | — | Phase-0 收尾计数（`logs/pytest_phase0_final.log`），本次基线复跑 913（webapi 排除）+ 8（webapi）= 921，`logs/pytest_p1_baseline.log` |
-| P1-02 fee matrix | `TBD` | 932 | +11 | 资金×持仓数×换手率费用矩阵（FEE_MATRIX_VERSION 1，`tests/test_cost_matrix.py`） |
+| P1-02 fee matrix | `9a3a74f` | 932 | +11 | 资金×持仓数×换手率费用矩阵（FEE_MATRIX_VERSION 1，`tests/test_cost_matrix.py`） |
+| P1-03 bare-factor fixed backtest | `TBD` | 938 | +6 | 七裸因子仅固定回测（BARE_FACTOR_BACKTEST_VERSION 1，`tests/test_bare_factor_backtest.py`） |
 | P1-03 bare-factor fixed backtest |  |  |  | 七裸因子仅固定回测（BARE_FACTOR_BACKTEST_VERSION 1） |
 | P1-04/05 searcher bench |  |  |  | 四搜索器成本测量 + 300×400 一折一种子小预算 smoke（SEARCHER_BENCH_VERSION 1；train_search 契约扩展 tpe） |
 | P1-01 selfcheck run |  |  |  | 真实数据 selfcheck：DSR 不显著、max-t 不显著 |
