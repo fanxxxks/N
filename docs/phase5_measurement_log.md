@@ -15,14 +15,11 @@
 | fix(capped window) | `e9c2750` | 953 | +2 | train_search 裁剪窗下 tie_break_keys/adv 切片（300×400 实测暴露，`test_train_search_capped_window_slices_tie_breaks_and_adv`） |
 | fix(bench failed rows) | `d813810` | 954 | +1 | 失败行记录真实墙钟/JSON 安全值（`test_benchmark_failed_row_is_recorded_not_dropped`） |
 | P1-01 selfcheck run | 运行（无代码） | — | — | 真实数据 v20 selfcheck：DSR=0.000、max-t p=1.0000，passed=True |
-| P1 runs + docs | `TBD` | 954 → **949** | — | 全部测量运行、README、phase5 日志与验收证据；最终全量复跑 949 passed（含 28 个新增测试，0 回归，`logs/pytest_p1_final.log`） |
-
-> 注：`TBD` 哈希在合并回 main 后回填。行中 "954" 为各提交的累计测试数估计，
-> 最终以全量复跑 **949 passed** 为准（921 基线 + 28 新增，0 回归）。
+| P1 runs + docs | `ba71abb`（合并） | **949** | — | 全部测量运行、README、phase5 日志与验收证据；最终全量复跑 949 passed（含 28 个新增测试，0 回归，`logs/pytest_p1_final.log`） |
 
 ## 1. 提交前后不变量
 
-| 不变量 | 改动前（main @ 2eaba93） | 改动后（branch @ 合并前 HEAD） | 验证方式 |
+| 不变量 | 改动前（main @ 2eaba93） | 改动后（main @ ba71abb） | 验证方式 |
 |---|---|---|---|
 | 全量 Python 测试 | 921 passed（Phase-0 记录；本次基线复跑确认） | **949 passed, 0 failed**（+28 新增，0 回归） | `pytest -q tests`（`logs/pytest_p1_final.log`） |
 | 语义版本 | PROTOCOL_VERSION 20 / REWARD_VERSION 13 / EXECUTION_SPEC_VERSION 1 | 不变（本阶段仅新增测量模块版本） | `grep` 各版本常量 |
