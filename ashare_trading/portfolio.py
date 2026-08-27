@@ -14,8 +14,8 @@ from ashare_data.io_utils import atomic_write_json, read_json_safe
 class PositionState:
     ts_code: str
     name: str
-    quantity: int
-    available_quantity: int
+    quantity: float
+    available_quantity: float
     avg_cost: float
     last_price: float
     last_date: str
@@ -92,7 +92,7 @@ class SimulationPortfolio:
         # Atomic write: a crash mid-save can never leave a truncated state.
         atomic_write_json(self.state_path, payload)
 
-    def add_buy(self, ts_code: str, name: str, quantity: int, price: float, date: str) -> None:
+    def add_buy(self, ts_code: str, name: str, quantity: float, price: float, date: str) -> None:
         cost = quantity * price
         self.cash -= cost
         pos = self.positions.get(ts_code)
@@ -115,7 +115,7 @@ class SimulationPortfolio:
             pos.last_date = date
         self.trade_count += 1
 
-    def add_sell(self, ts_code: str, quantity: int, price: float, date: str) -> None:
+    def add_sell(self, ts_code: str, quantity: float, price: float, date: str) -> None:
         pos = self.positions.get(ts_code)
         if pos is None:
             return

@@ -500,10 +500,23 @@ def test_beta_exposure_reported_after_projection():
     assert isinstance(sol.diagnostics["post_beta_exposure"], float)
 
 
+def test_solver_noise_weights_zeroed():
+    # The QP optimum puts zero weight on name 2; OSQP's default 1e-5
+    # tolerance can return ~1e-6 noise there, which must never survive as
+    # a phantom position (it would pay the minimum commission in every
+    # downstream execution path).
+    sol = _optimizer(single_weight_cap=0.5).solve(
+        _alpha(3, base=1.0, step=-0.1), np.zeros(3)
+    )
+    assert sol.weights[2] == 0.0
+
+
 def test_diagnostics_report_turnover_and_positions():
     prev = np.full(4, 0.25)
     sol = _optimizer(single_weight_cap=0.5).solve(_alpha(), prev)
-    assert sol.diagnostics["turnover"] == pytest.approx(
+    # post_turnover is the executed turnover (after the projection and
+    # the solver-noise cleanup); turnover is the QP-level value.
+    assert sol.diagnostics["post_turnover"] == pytest.approx(
         float(np.abs(sol.weights - prev).sum()), abs=1e-9
     )
     assert sol.diagnostics["positions"] == int(np.count_nonzero(sol.weights > 0))
