@@ -271,6 +271,25 @@ def test_loader_exposes_dataset_id_when_absent(populated_db):
     assert loader.dataset_id is None  # no manifest saved yet
 
 
+def test_manifest_cli_persists_dataset_id(populated_db, monkeypatch):
+    """``python -m ashare_data.manifest`` is the migration entry for
+    pre-T1-01 databases: it builds and persists the manifest so the
+    current data gets a non-empty dataset_id (P0-03 acceptance)."""
+
+    import ashare_data.config as config_module
+    from ashare_data import manifest as manifest_module
+
+    monkeypatch.setattr(config_module, "load_config", lambda *a, **k: {})
+    monkeypatch.setattr(config_module, "make_data_config", lambda raw, root: populated_db)
+    rc = manifest_module.main([])
+    assert rc == 0
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        assert resolve_dataset_id(db, populated_db) is not None
+        manifest = latest_manifest(db, populated_db)
+        assert manifest is not None
+        assert manifest.dataset_id == resolve_dataset_id(db, populated_db)
+
+
 def test_partition_fingerprint_rejects_unknown_table(populated_db):
     with AshareDB(populated_db.duckdb_path, read_only=True) as db:
         with pytest.raises(ValueError):

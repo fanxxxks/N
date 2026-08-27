@@ -44,6 +44,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import duckdb
@@ -591,3 +592,44 @@ def check_dataset_id(payload_dataset_id: Any, expected: str | None) -> None:
             f"artifact dataset_id {payload_dataset_id!r} does not match the "
             f"current database {expected!r}"
         )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI: build and persist the dataset manifest of the local database.
+
+    Pre-T1-01 databases have no ``dataset_manifest`` table, so
+    :func:`resolve_dataset_id` degrades to ``None`` and every formal run
+    records ``dataset_id: null``.  This entry builds the manifest from the
+    database content (read-only queries) and persists it (one row per
+    distinct dataset_id), so the current data becomes identifiable:
+
+        python -m ashare_data.manifest
+    """
+
+    import argparse
+
+    from .config import load_config, make_data_config
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--config", default=None, help="path to ashare_config.yaml")
+    args = parser.parse_args(argv)
+
+    root = Path(__file__).resolve().parents[1]
+    raw = load_config(args.config, project_root=root)
+    config = make_data_config(raw, root)
+    with AshareDB(config.duckdb_path) as db:
+        manifest = build_dataset_manifest(
+            db, config, source_versions={"manifest_cli": MANIFEST_VERSION}
+        )
+        save_manifest(db, config, manifest)
+    print(f"dataset_id {manifest.dataset_id}")
+    print(
+        f"manifest v{manifest.manifest_version} persisted at "
+        f"{manifest.created_at} ({manifest.total_rows} rows across "
+        f"{len(manifest.tables)} tables)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
