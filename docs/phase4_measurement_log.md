@@ -8,7 +8,7 @@ pre-existing environment blocker: starlette 1.3.1's TestClient requires
 | Stage | Commit | Tests passed | Δ | Notes |
 |---|---|---|---|---|
 | Baseline (main, post-Phase-3) | b71415e | 818 | — | Phase-3 closing count |
-| T4-01 experiment ledger + stitched OOS protocol | (feat commit) + merge | 887 | +69 | 0 regressions; PROTOCOL_VERSION 19 → 20; +17 ledger / +14 regime / +18 stitched / +20 promotion tests |
+| T4-01 experiment ledger + stitched OOS protocol | b7bdf38 + merge 803d5e6 | 887 | +69 | 0 regressions; PROTOCOL_VERSION 19 → 20; +17 ledger / +14 regime / +18 stitched / +20 promotion tests |
 
 ## What changed (Phase-4 rules)
 
