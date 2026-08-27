@@ -82,8 +82,9 @@ C = `INDUSTRY_MOMENTUM` + `IND_REL_*` + `NORTHBOUND_CHG`。
 - 消融：基线 = all；`ablate_C`（剔除 C → A+B）、`ablate_BC`（剔除 B+C → A）；同 seed/steps/batch，
   记录 best_reward、best_formula，且**每个 best_formula 携带其数据等级追溯**（验收：任意公式可追溯到数据等级）。
 - 剔除语义：与家族消融同法（`ablate_factors` 把被剔除特征信号置中性，特征仍在采样词表内）。
-  因此每个 run 报告其**预算内最佳、token 级特征全部属于该层级集合**的合格候选（`confined=true`）；
-  若不存在（理论上不出现：裸 Tier A 因子始终可采样），退回生成器全局最佳并如实追溯（`confined=false`）。
+  每个 run 报告的公式为**管线选中候选**（与家族消融同一选择路径）；当选中的 token 级特征
+  越出层级集合时，改报该集合内**预算内最佳 eligible 候选**（两者都记 `confined=true`）；
+  仅当集合内不存在任何合格候选时才退回全局选择并如实追溯（`confined=false`）。
 - 产物：`data/tier_report.json`（版本、三集合诊断、消融结果、公式追溯、confined 标记）。
 
 ## 7. 迁移 / 拒绝策略

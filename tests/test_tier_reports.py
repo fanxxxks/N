@@ -148,8 +148,8 @@ def test_assemble_tier_report_payload_is_versioned_and_complete():
 
 
 def test_best_confined_candidate_filters_by_tier():
-    """Contract §6: each ablation run reports the best eligible candidate
-    whose tokens reference only the tier set's features."""
+    """Contract §6: the fallback candidate is the best eligible one whose
+    tokens reference only the tier set's features."""
     ret_1 = [_tok("RET_1")]
     roe = [_tok("ROE")]
     both = [_tok("RET_1"), _tok("ROE"), FORMULA_VOCAB.operator_offset]
@@ -173,6 +173,21 @@ def test_best_confined_candidate_filters_by_tier():
     # No confined candidate -> None (caller falls back with confined=false).
     assert best_confined_candidate(selection, {"RET_5"}) is None
     assert best_confined_candidate(selection, set()) is None
+
+
+def test_confined_selection_prefers_the_pipeline_selection():
+    """Contract §6: the reported formula is the pipeline's selected
+    candidate when it stays inside the tier set; the best confined
+    candidate only replaces an out-of-set selection."""
+    from ashare_model.tier_reports import _candidate_within_tier
+
+    tier_a = {n for n in FEATURE_NAMES if feature_tier(n) is DataTier.A}
+    in_set = _candidate([_tok("RET_1")], 0.5, eligible=True)
+    out_set = _candidate([_tok("ROE")], 0.9, eligible=True)
+    assert _candidate_within_tier(in_set, tier_a) is True
+    assert _candidate_within_tier(out_set, tier_a) is False
+    assert _candidate_within_tier(None, tier_a) is False
+    assert _candidate_within_tier(_candidate(None, 0.0, eligible=True), tier_a) is False
 
 
 def test_run_tier_diagnostics_per_set(populated_db: DataConfig):

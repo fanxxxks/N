@@ -127,6 +127,17 @@ def best_confined_candidate(selection_result, allowed_features: set[str]):
     return best
 
 
+def _candidate_within_tier(score, allowed_features: set[str]) -> bool:
+    """Whether a candidate's tokens reference only allowed features."""
+
+    from .data_tier import formula_feature_names
+
+    if score is None or score.tokens is None:
+        return False
+    names = formula_feature_names(score.tokens)
+    return names is not None and set(names) <= allowed_features
+
+
 def run_tier_ablation(
     loader,
     data_config,
@@ -142,10 +153,11 @@ def run_tier_ablation(
     Returns one run per plan entry with the best reward / formula and the
     formula's data-tier trace; the delta is measured against the all-tier
     baseline so the report is self-contained.  Excluded-tier features are
-    neutralized (family-ablation method); each run additionally reports
-    the best **confined** candidate (tokens within the tier set) with
-    ``confined=true``, falling back to the global best with
-    ``confined=false`` only when none exists.
+    neutralized (family-ablation method).  The reported formula is the
+    pipeline's **selected** candidate when its tokens stay inside the tier
+    set; otherwise the best eligible confined candidate (``confined``
+    stays ``true`` in both cases), falling back to the global selection
+    with ``confined=false`` only when no confined candidate exists.
     """
 
     from .factors import ablate_factors
@@ -161,11 +173,17 @@ def run_tier_ablation(
             steps, batch_size, seed,
         )
         allowed = set(tier_set_features(tuple(entry["included_tiers"])))
-        confined = best_confined_candidate(trainer.selection_result, allowed)
-        if confined is not None:
-            reward = float(confined.val_reward)
-            formula_text = confined.formula_text
-            tokens = confined.tokens
+        selected = trainer.selection_result.selected
+        if _candidate_within_tier(selected, allowed):
+            confined_candidate = selected
+        else:
+            confined_candidate = best_confined_candidate(
+                trainer.selection_result, allowed
+            )
+        if confined_candidate is not None:
+            reward = float(confined_candidate.val_reward)
+            formula_text = confined_candidate.formula_text
+            tokens = confined_candidate.tokens
             confined_flag = True
         else:
             reward = float(trainer.best_reward)
