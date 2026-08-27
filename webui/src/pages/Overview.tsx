@@ -105,9 +105,16 @@ export default function Overview() {
             title="最优因子公式"
             loading={loading}
             extra={
-              valReward != null ? (
-                <Tag color="green">验证集奖励 {valReward.toFixed(3)}</Tag>
-              ) : null
+              <>
+                {strategy?.legacy ? (
+                  <Tooltip title={(strategy.legacy_reason ?? []).join('；') || '旧代产物，仅存档参考'}>
+                    <Tag color="orange">LEGACY</Tag>
+                  </Tooltip>
+                ) : null}
+                {valReward != null ? (
+                  <Tag color="green">验证集奖励 {valReward.toFixed(3)}</Tag>
+                ) : null}
+              </>
             }
           >
             {strategy?.formula_text ? (

@@ -16,14 +16,45 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # P0-06: the base files pin the CPU torch wheel (requirements.txt
+      # carries the PyTorch CPU index directive), so CI never installs or
+      # resolves a CUDA build.
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-optional.txt
 
       - name: Verify dependency consistency
         run: python -m pip check
 
+      # Also verifies the P0-06 split: generated torch pins are the CPU
+      # wheel of the installed base version and requirements-cuda.txt
+      # stays aligned with the base torch version.
       - name: Verify lock files are in sync
         run: python scripts/freeze_lock.py --check
 
       - name: Run tests
         run: python -m pytest -q tests
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      # npm ci fails on any lockfile drift: the committed
+      # package-lock.json is the web dependency contract.
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Verify web dependency tree
+        run: npm ls --depth=0
+
+      - name: Build production bundle
+        run: npm run build

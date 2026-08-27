@@ -10,6 +10,11 @@ pandas
 # Portfolio layer (T3-01): constrained portfolio QP on CVXPY/OSQP
 cvxpy
 
+# Default formula searcher (T2-03 admission verdict): strongly-typed GP via
+# DEAP's official GP module is the production default searcher, so DEAP is
+# a base dependency; TPE (Optuna) stays optional (protocol baseline ladder).
+deap
+
 akshare
 duckdb
 pyarrow

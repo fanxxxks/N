@@ -524,6 +524,17 @@ def main() -> None:
         if not formula_file.exists():
             raise SystemExit(f"Formula file not found: {formula_file}")
         payload = json.loads(formula_file.read_text(encoding="utf-8"))
+        from .artifact_versions import classify_strategy
+
+        verdict = classify_strategy(payload)
+        if verdict["legacy"]:
+            logger.warning(
+                "LEGACY strategy artifact: {} — {}; this backtest is "
+                "archival only and is not champion evidence; retrain under "
+                "the current generation before drawing conclusions",
+                formula_file,
+                "; ".join(verdict["reasons"]),
+            )
         tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
 
         import torch

@@ -1,4 +1,4 @@
-"""Dependency lock generator (T1-01).
+"""Dependency lock generator (T1-01, CPU/CUDA split P0-06).
 
 The repo uses the spec/lock convention instead of lower-bound-only
 requirements:
@@ -8,6 +8,11 @@ requirements:
 * ``requirements.txt`` / ``requirements-optional.txt`` — exact pins of the
   spec packages, generated from the *installed* environment (this is what
   CI installs, so CI is reproducible).
+* ``requirements-cuda.txt`` — hand-maintained GPU replacement for the
+  torch pin (P0-06): the base files always carry the **CPU** torch wheel,
+  so a clean environment and CI never depend on a CUDA wheel; machines
+  with an NVIDIA GPU replace torch via this file.  ``--check`` verifies
+  its torch base version stays aligned with ``requirements.txt``.
 * ``requirements.lock`` — the full frozen environment (every installed
   distribution, generated via ``importlib.metadata``; equivalent to a
   ``pip freeze`` snapshot).  Developer machines reproduce the working
@@ -25,6 +30,13 @@ CI installs exactly those pins, so the check passes there).  The full
 packages included); ``--check-full`` additionally verifies it and is meant
 for the machine that generated it.  Regeneration is deterministic: pins
 come from ``importlib.metadata`` of the current interpreter.
+
+Torch normalization (P0-06): the installed torch on a GPU machine carries
+a CUDA local version (e.g. ``2.11.0+cu128``), but the base pin file must
+stay CPU-only, so the generated torch pin is always the CPU wheel of the
+same base version (``<base>+cpu``) and the file carries the PyTorch CPU
+index directive required to resolve it.  GPU machines replace the torch
+pin through ``requirements-cuda.txt``.
 """
 
 from __future__ import annotations
@@ -44,6 +56,15 @@ SPEC_FILES = {
 }
 LOCK_FILE = "requirements.lock"
 
+# P0-06 CPU/CUDA split: the base pin files always carry the CPU torch
+# wheel (clean environments and CI consume the base files); machines with
+# an NVIDIA GPU replace the torch pin through ``requirements-cuda.txt``.
+# The generated requirements.txt therefore carries the PyTorch CPU index
+# directive (PyPI does not host ``+cpu`` local-version wheels).
+_TORCH_CPU_SUFFIX = "+cpu"
+_TORCH_CPU_INDEX = "--extra-index-url https://download.pytorch.org/whl/cpu"
+CUDA_FILE = "requirements-cuda.txt"
+
 
 def _spec_packages(spec_path: Path) -> list[str]:
     """Plain package names from a spec file (comments/blank lines skipped)."""
@@ -60,14 +81,71 @@ def _spec_packages(spec_path: Path) -> list[str]:
 
 
 def _pin(package: str) -> str:
-    return f"{package}=={importlib.metadata.version(package)}"
+    version = importlib.metadata.version(package)
+    if package == "torch":
+        # P0-06: never mirror a local CUDA torch (e.g. 2.11.0+cu128) into
+        # the CPU base pin; pin the CPU wheel of the same base version so
+        # the base files stay CUDA-free by construction.
+        version = version.split("+", 1)[0] + _TORCH_CPU_SUFFIX
+    return f"{package}=={version}"
 
 
 def _generated_text(spec_path: Path) -> str:
+    packages = _spec_packages(spec_path)
     lines = [HEADER]
-    for package in _spec_packages(spec_path):
+    if "torch" in packages:
+        lines.append(
+            "# CPU-base torch wheel (P0-06): the base files never depend on a\n"
+            "# CUDA wheel; GPU machines replace torch via requirements-cuda.txt."
+        )
+        lines.append(_TORCH_CPU_INDEX)
+    for package in packages:
         lines.append(_pin(package))
     return "\n".join(lines) + "\n"
+
+
+def _torch_base_version(pin_line: str) -> str | None:
+    """Base version of a ``torch==X.Y.Z+local`` pin line, or ``None``."""
+
+    match = re.match(r"^torch==([0-9][^+]*)\+", pin_line)
+    return match.group(1) if match else None
+
+
+def _verify_cuda_file(root: Path, base_pin: str) -> list[str]:
+    """Cross-check the hand-maintained CUDA replacement pin file.
+
+    ``requirements-cuda.txt`` is machine-specific by design (it replaces
+    the CPU torch pin with the CUDA wheel), so it is not regenerated here;
+    ``--check`` only verifies it stays coherent with the base file: the
+    torch base version must match and the pin must be a CUDA wheel.
+    """
+
+    failures = []
+    path = root / CUDA_FILE
+    if not path.exists():
+        failures.append(f"{CUDA_FILE} is missing")
+        return failures
+    base_version = _torch_base_version(base_pin)
+    cuda_pin = next(
+        (
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("torch==")
+        ),
+        None,
+    )
+    if cuda_pin is None:
+        failures.append(f"{CUDA_FILE} has no torch pin")
+        return failures
+    cuda_version = _torch_base_version(cuda_pin)
+    if base_version is not None and cuda_version != base_version:
+        failures.append(
+            f"{CUDA_FILE} torch base version {cuda_version} does not match "
+            f"the requirements.txt torch base version {base_version}"
+        )
+    if not re.search(r"\+cu[0-9]+$", cuda_pin):
+        failures.append(f"{CUDA_FILE} torch pin is not a CUDA wheel: {cuda_pin}")
+    return failures
 
 
 def _full_freeze() -> str:
@@ -119,6 +197,8 @@ def main(argv=None) -> int:
             path = ROOT / name
             if not path.exists() or path.read_text(encoding="utf-8") != outputs[name]:
                 failures.append(name)
+        if "requirements.txt" in checked:
+            failures.extend(_verify_cuda_file(ROOT, outputs["requirements.txt"]))
         if failures:
             print(
                 "lock drift: regenerate with `python scripts/freeze_lock.py`: "

@@ -117,6 +117,16 @@ class SimulationRunner:
         if not path.exists():
             raise FileNotFoundError(f"Strategy file not found: {path}")
         payload = json.loads(path.read_text(encoding="utf-8"))
+        from ashare_model.artifact_versions import classify_strategy
+
+        verdict = classify_strategy(payload)
+        if verdict["legacy"]:
+            logger.warning(
+                "LEGACY strategy artifact: {} — {}; the paper account is "
+                "replaying an old generation, not the current champion",
+                path,
+                "; ".join(verdict["reasons"]),
+            )
         self.formula_tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
         self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
         # The trainer records the trade direction it learned on its

@@ -89,12 +89,14 @@ class ModelConfig:
     collapse_warn_fraction: float = 0.95
     collapse_warn_steps: int = 10
     feature_names: list[str] | None = None
-    # Default formula searcher (T2-03 admission decision): "rl" (REINFORCE
-    # policy), "gp" (strongly-typed GP, DEAP) or "random" (uniform
-    # mask-legal search) — all billed in unique semantic evaluations.  The
-    # admission experiment decides whether RL keeps this default; if it
-    # fails, the default flips to "gp" and RL stays an opt-in experiment.
-    searcher: str = "rl"
+    # Default formula searcher (T2-03 admission verdict: RL was NOT admitted
+    # — best-so-far area 0.899 vs GP 0.975 / random 0.938 / TPE 0.916 median
+    # under identical unique-semantic-evaluation budgets across 5 independent
+    # seeds).  "gp" (strongly-typed GP, DEAP) is the production default;
+    # "rl" (REINFORCE policy) stays an experimental opt-in and "random" a
+    # uniform mask-legal baseline — all billed in unique semantic
+    # evaluations.  YAML may override this default via model.searcher.
+    searcher: str = "gp"
 
 
 @dataclass
@@ -103,10 +105,10 @@ class RewardConfig:
 
     Semantic changes to the reward implementation bump
     ``ashare_model.reward.REWARD_VERSION``; these values only tune the
-    current version (v12: robust HAC-shrunk ICIR + hard signal-quality
-    gates + AST complexity billing; scoring quantity unchanged:
-    direction-adjusted rank-ICIR minus the annualized mean of exact daily
-    execution costs).
+    current version (v13: portfolio active IR minus exact annualized
+    execution costs; IC/ICIR are auxiliary reported/gated statistics;
+    robust HAC-shrunk ICIR, hard signal-quality gates and AST complexity
+    billing carried over from v12).
     """
 
     reward_clip_low: float = -1.0

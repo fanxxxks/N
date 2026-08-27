@@ -147,7 +147,23 @@ def get_strategy() -> dict:
     if data_config is None:
         return {}
     payload = _read_json(data_config.data_dir / "best_ashare_strategy.json") or {}
-    return payload if isinstance(payload, dict) else {"formula": payload}
+    if not isinstance(payload, dict):
+        return {"formula": payload}
+    # P0-04: never present an old artifact as the current champion — a
+    # strategy that classifies as legacy but carries no stamp gets the
+    # legacy flag computed here (the file itself is stamped by
+    # scripts/stamp_legacy_artifacts.py).
+    if "legacy" not in payload:
+        from ashare_model.artifact_versions import classify_strategy
+
+        verdict = classify_strategy(payload)
+        if verdict["legacy"]:
+            payload = {
+                **payload,
+                "legacy": True,
+                "legacy_reason": verdict["reasons"],
+            }
+    return payload
 
 
 def get_sim_state() -> dict:
