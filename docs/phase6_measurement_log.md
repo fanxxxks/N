@@ -22,11 +22,11 @@
 | 分层诊断（真实数据） | 运行（无代码） | — | — | `data/tier_report_diagnostics.json`：A=44 / AB=56 / all=62 特征 |
 | 分层消融（真实数据，confined 语义） | `84b7221`、`a9630cc`、`6a80a13` | — | — | 每次消融 run 报告 token 级限定在层级集合内的公式（selected-first） |
 | docs: R-21 已落实 | `7199ba8` | — | — | 既有风险清单勾销 |
-| 最终验证 | `（合并哈希）` | **981** | — | 全量复跑 981 passed（+40 新增，0 回归），合并回 main |
+| 最终验证 | `cc27073`（合并） | **981** | — | 全量复跑 981 passed（+40 新增，0 回归），合并回 main |
 
 ## 1. 提交前后不变量
 
-| 不变量 | 改动前（main @ 600ba0e） | 改动后（main @ 合并哈希） | 验证方式 |
+| 不变量 | 改动前（main @ 600ba0e） | 改动后（main @ cc27073） | 验证方式 |
 |---|---|---|---|
 | 全量 Python 测试 | 941 passed | **981 passed, 0 failed**（+40 新增，0 回归） | `pytest -q tests`（webapi 排除） |
 | 语义版本 | PROTOCOL_VERSION 20 / REWARD_VERSION 13 / FEATURE_REGISTRY_VERSION 1 | PROTOCOL_VERSION **21**（产物逐行记录 data_tier）/ REWARD_VERSION 13 不变 / FEATURE_REGISTRY_VERSION **2** / 新增 DATA_TIER_VERSION 1、TIER_REPORT_VERSION 1 | `grep` 各版本常量 |
