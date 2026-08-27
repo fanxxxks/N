@@ -106,12 +106,29 @@ class CandidateScore:
         def finite_or_none(value: float) -> float | None:
             return float(value) if math.isfinite(float(value)) else None
 
+        # P2-02: the candidate's formula is traced back to the credibility
+        # tiers of its features (``None`` when nothing is traceable).
+        from .data_tier import formula_data_tier_report
+
+        tier = formula_data_tier_report(
+            tokens=self.tokens, feature_name=self.formula_text
+        )
+
         return {
             "tokens": list(self.tokens) if self.tokens is not None else None,
             "candidate_id": self.candidate_id,
             "formula_text": self.formula_text,
             "source": self.source,
             "direction": self.direction,
+            "data_tier": (
+                {
+                    "data_tier_version": tier["data_tier_version"],
+                    "max_tier": tier["max_tier"],
+                    "tiers_used": tier["tiers_used"],
+                }
+                if tier is not None
+                else None
+            ),
             "val_reward": finite_or_none(self.val_reward),
             "val_icir": finite_or_none(self.val_icir),
             "train_reward": finite_or_none(self.train_reward),

@@ -153,6 +153,14 @@ remain readable: their raw rows stitch under the same rule when loaded
 with ``--trials``, and the per-fold row-level ``aggregates`` are kept
 for drill-down.
 
+v21 (P2) records the free-data credibility tier of every measured
+formula: each row, stitched trial and the top trial carry a ``data_tier``
+block (``data_tier_version`` / ``max_tier`` / ``tiers_used``) resolved
+from the formula's features via :mod:`ashare_model.data_tier`
+(``docs/p2_data_tier_contract.md``).  Formula semantics are unchanged;
+the artifact schema gains provenance fields, and the promotion gates use
+them (Tier A default, Tier B separate comparison, Tier C never).
+
 ``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
 mechanism exists yet (weekly / multi-period targets are deferred to a later
 phase), but they are written into artifacts so future runs stay comparable.
@@ -205,6 +213,7 @@ from .candidates import (
     score_chunk_size,
 )
 from .data_loader import AshareDataLoader
+from .data_tier import DATA_TIER_VERSION, formula_data_tier_report
 from .diagnostics import rank_ic_stats
 from .gp_search import run_gp_baseline
 from .ir import FormulaSyntaxError, canonical_tokens
@@ -227,7 +236,7 @@ from .train import (
 from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "20"
+PROTOCOL_VERSION = "21"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -1730,6 +1739,25 @@ def _regime_payload(regime, proto_cfg: ProtocolConfig) -> dict | None:
     }
 
 
+def _data_tier_block(formula, formula_text: str | None) -> dict | None:
+    """Compact credibility-tier block for one formula (v21, P2-02).
+
+    Resolves the formula's features to their A/B/C tiers via
+    :func:`ashare_model.data_tier.formula_data_tier_report` (``formula``
+    tokens first; bare baseline rows fall back to ``formula_text``).
+    ``None`` when there is no traceable formula (e.g. ``equal_weight``).
+    """
+
+    report = formula_data_tier_report(tokens=formula, feature_name=formula_text)
+    if report is None:
+        return None
+    return {
+        "data_tier_version": report["data_tier_version"],
+        "max_tier": report["max_tier"],
+        "tiers_used": report["tiers_used"],
+    }
+
+
 def build_result(
     proto_cfg: ProtocolConfig,
     tier_name: str,
@@ -1763,14 +1791,32 @@ def build_result(
     dataset manifest the rows were measured on (``None`` for legacy
     databases, recorded as ``null``).  ``random_budget_matched`` /
     ``random_budget`` record the T1-05 baseline budget actually used.
+    v21 (P2): every row / stitched trial / top trial records its
+    free-data credibility tier (``data_tier`` block, resolved from the
+    formula's features); ``data_tier_version`` pins the mapping at the
+    artifact level.
     """
+
+    # P2-02: annotate rows that were produced before this schema (or by
+    # callers outside the protocol) with their credibility tier, derived
+    # from the recorded formula tokens / bare feature name.
+    for row in rows:
+        if row.get("data_tier") is None:
+            row["data_tier"] = _data_tier_block(
+                row.get("formula"), row.get("formula_text")
+            )
 
     stitched = stitch_oos_series(rows)
     for trial in stitched:
         trial.update(stitched_metrics(trial))
+        trial["data_tier"] = _data_tier_block(None, trial.get("formula_text"))
+    top = top_trial(rows)
+    if top is not None:
+        top["data_tier"] = _data_tier_block(None, top.get("formula_text"))
     return _sanitize(
         {
             "protocol_version": PROTOCOL_VERSION,
+            "data_tier_version": DATA_TIER_VERSION,
             "reward_version": REWARD_VERSION,
             "dataset_id": dataset_id,
             "frequency": proto_cfg.frequency,
@@ -1799,7 +1845,7 @@ def build_result(
                 "n_trials": len(stitched),
                 "trials": stitched,
             },
-            "top_trial": top_trial(rows),
+            "top_trial": top,
             "dsr": dsr_from_rows(rows, extra_trial_rows=extra_trial_rows),
             "max_t": max_t_from_rows(
                 rows, n_perms=max_t_perms, extra_trial_rows=extra_trial_rows

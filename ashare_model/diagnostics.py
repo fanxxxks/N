@@ -73,6 +73,7 @@ def factor_coverage(
     tensor: np.ndarray,
     *,
     eligible: np.ndarray,
+    names: list[str] | None = None,
 ) -> dict[str, float]:
     """Fraction of non-neutral (non-zero) cells per feature.
 
@@ -81,7 +82,8 @@ def factor_coverage(
     ``eligible`` is the mandatory ``[stock, date]`` bool PIT universe mask:
     the denominator counts only eligible cells (cells outside the universe
     neither count as covered nor inflate the denominator), so a future
-    member can never change an eligible factor's coverage.
+    member can never change an eligible factor's coverage.  ``names``
+    overrides the vocabulary-derived row labels (e.g. a tier subset).
     """
 
     arr = np.asarray(tensor)
@@ -90,7 +92,7 @@ def factor_coverage(
     cells = int(eligible.sum())
     return {
         name: float(nonzero[i]) / max(cells, 1)
-        for i, name in enumerate(_names_for(arr))
+        for i, name in enumerate(_names_for(arr) if names is None else names)
     }
 
 
@@ -144,6 +146,7 @@ def correlation_summary(
     tensor: np.ndarray,
     *,
     eligible: np.ndarray,
+    names: list[str] | None = None,
 ) -> dict[str, object]:
     """Cross-sectional correlation structure of the factor stack.
 
@@ -153,12 +156,13 @@ def correlation_summary(
     correlated pairs.  ``eligible`` is the mandatory ``[stock, date]`` bool
     PIT universe mask: each day's correlation uses only the eligible cells
     of that date, so a future member's extreme pre-join values can never
-    move an eligible factor's correlations.
+    move an eligible factor's correlations.  ``names`` overrides the
+    vocabulary-derived row labels (e.g. a tier subset).
     """
 
     f, s, t = tensor.shape
     eligible = _validate_eligible(tensor, eligible)
-    names = _names_for(tensor)
+    names = _names_for(tensor) if names is None else list(names)
     mean_abs = np.zeros((f, f), dtype=np.float64)
     n_dates = 0
     for day in range(t):
@@ -212,8 +216,16 @@ def factor_report(
     loader: AshareDataLoader,
     train_end_date: str,
     output_path: str | Path | None = None,
+    tiers: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
-    """Assemble the full diagnostics report over the training window."""
+    """Assemble the full diagnostics report over the training window.
+
+    ``tiers`` restricts the report to the features of the given data
+    credibility tiers (e.g. ``("A",)`` for the Tier A-only report, P2-05);
+    ``None`` reports the full vocabulary.  Every reported feature records
+    its ``data_tier``, and the report carries the tier version and the
+    usable-time rules (P2-02).
+    """
 
     tensor = loader.factor_tensor
     if tensor is None:
@@ -230,13 +242,34 @@ def factor_report(
     )[:, :signal_end]
     target = loader.mask_by_universe(target)[:, :signal_end]
 
-    coverage = factor_coverage(window, eligible=eligibility)
-    ic = rank_ic_stats(
-        window, target, dates[:signal_end], eligible=eligibility
+    from .data_tier import (
+        DATA_TIER_VERSION,
+        TIER_TIME_RULES,
+        DataTier,
+        feature_tier,
     )
-    corr = correlation_summary(window, eligible=eligibility)
+
+    names: list[str] = list(FEATURE_NAMES)
+    if tiers is not None:
+        wanted = {DataTier(t) for t in tiers}
+        idx = [
+            i for i, name in enumerate(FEATURE_NAMES)
+            if feature_tier(name) in wanted
+        ]
+        window = window[idx]
+        names = [FEATURE_NAMES[i] for i in idx]
+
+    coverage = factor_coverage(window, eligible=eligibility, names=names)
+    ic = rank_ic_stats(
+        window, target, dates[:signal_end], names=names, eligible=eligibility
+    )
+    corr = correlation_summary(window, eligible=eligibility, names=names)
+    tier_counts: dict[str, int] = {}
+    for name in names:
+        tier = feature_tier(name).value
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
     report = {
-        "feature_count": len(FEATURE_NAMES),
+        "feature_count": len(names),
         # The full-period code union, kept for provenance.  It is NOT the
         # daily selectable size: that number is mean_eligible_stocks.
         "stock_count": len(loader.ts_codes),
@@ -245,14 +278,19 @@ def factor_report(
         ),
         "date_count": signal_end,
         "dates": [dates[0], dates[signal_end - 1]],
+        "data_tier_version": DATA_TIER_VERSION,
+        "tiers": sorted(tier_counts) if tiers is not None else None,
+        "tier_summary": tier_counts,
+        "data_tier_rules": dict(TIER_TIME_RULES),
         "per_feature": [
             {
                 "name": name,
                 "family": feature_family(name),
+                "data_tier": feature_tier(name).value,
                 "coverage": round(coverage[name], 4),
                 **{k: round(v, 4) for k, v in ic[name].items()},
             }
-            for name in FEATURE_NAMES
+            for name in names
         ],
         "correlations": corr,
     }
@@ -293,6 +331,11 @@ def main() -> None:
     parser.add_argument("--config", default=None)
     parser.add_argument("--output", default="data/factor_report.json")
     parser.add_argument(
+        "--tiers",
+        default=None,
+        help="Comma-separated data tiers to report (A, B, C); default: all",
+    )
+    parser.add_argument(
         "--min-eligible",
         type=int,
         default=None,
@@ -308,7 +351,12 @@ def main() -> None:
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         loader = AshareDataLoader(data_config, model_config)
-        report = factor_report(loader, backtest_config.train_end_date, root / args.output)
+        tiers = (
+            tuple(t.strip().upper() for t in args.tiers.split(",") if t.strip())
+            if args.tiers
+            else None
+        )
+        report = factor_report(loader, backtest_config.train_end_date, root / args.output, tiers=tiers)
         _print_report(report)
     finally:
         export_log_txt(run_name="diagnostics")

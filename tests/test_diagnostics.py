@@ -134,6 +134,45 @@ def test_factor_report_writes_file(populated_db: DataConfig, tmp_path):
     assert payload["feature_count"] == len(FEATURE_NAMES)
 
 
+def test_factor_report_records_data_tiers_and_time_rules(populated_db: DataConfig):
+    """P2-02: every reported feature carries its A/B/C tier; the report
+    records the tier version and the usable-time rules."""
+    from ashare_model.data_tier import DATA_TIER_VERSION, DataTier
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    report = factor_report(loader, "2024-02-01")
+    assert report["data_tier_version"] == DATA_TIER_VERSION
+    assert set(report["data_tier_rules"]) == {t.value for t in DataTier}
+    assert report["tiers"] is None  # full-vocabulary report
+    by_name = {row["name"]: row for row in report["per_feature"]}
+    assert by_name["RET_1"]["data_tier"] == "A"
+    assert by_name["ROE"]["data_tier"] == "B"
+    assert by_name["INDUSTRY_MOMENTUM"]["data_tier"] == "C"
+    assert sum(report["tier_summary"].values()) == len(FEATURE_NAMES)
+
+
+def test_factor_report_tier_filter_restricts_the_subset(populated_db: DataConfig):
+    """P2-05: a Tier A-only report contains only Tier A features, and the
+    correlation matrix is restricted to that subset."""
+    from ashare_model.data_tier import DataTier, feature_tier
+    from ashare_model.vocab import FEATURE_NAMES
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    report = factor_report(loader, "2024-02-01", tiers=("A",))
+    names = [row["name"] for row in report["per_feature"]]
+    assert all(feature_tier(name) is DataTier.A for name in names)
+    tier_a = {n for n in FEATURE_NAMES if feature_tier(n) is DataTier.A}
+    assert set(names) == tier_a
+    assert report["tiers"] == ["A"]
+    assert set(report["tier_summary"]) == {"A"}
+    # The correlation matrix only covers the reported features.
+    assert set(report["correlations"]["matrix"]) == tier_a
+    for name in names:
+        assert set(report["correlations"]["matrix"][name]) == tier_a
+
+
 # --- PIT universe mask in diagnostics ----------------------------------------
 
 

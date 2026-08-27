@@ -30,7 +30,7 @@ from .vocab import FEATURE_NAMES
 
 # Bump when the metadata schema, the tier mapping or the clustering
 # semantics change.
-FEATURE_REGISTRY_VERSION = 1
+FEATURE_REGISTRY_VERSION = 2
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9
@@ -188,12 +188,20 @@ class FeatureRegistry:
         return dict(self._records)
 
     def summary(self) -> dict[str, object]:
+        # Lazy import: ``data_tier`` resolves features back through this
+        # module, so the dependency cannot be module-level.
+        from .data_tier import tier_of_pit_level
+
         by_level: dict[str, int] = {}
+        by_tier: dict[str, int] = {}
         for record in self._records.values():
             by_level[record.pit_level.value] = by_level.get(record.pit_level.value, 0) + 1
+            tier = tier_of_pit_level(record.pit_level).value
+            by_tier[tier] = by_tier.get(tier, 0) + 1
         return {
             "n_features": len(self._records),
             "by_pit_level": by_level,
+            "by_data_tier": by_tier,
             "deprecated": sorted(
                 name for name, r in self._records.items() if r.deprecated
             ),
@@ -203,8 +211,12 @@ class FeatureRegistry:
         }
 
     def to_dict(self) -> dict[str, object]:
+        # Lazy import: see :meth:`summary`.
+        from .data_tier import DATA_TIER_VERSION, tier_of_pit_level
+
         return {
             "version": FEATURE_REGISTRY_VERSION,
+            "data_tier_version": DATA_TIER_VERSION,
             "slice": self.slice_spec,
             "source": self.source,
             "features": [
@@ -212,6 +224,7 @@ class FeatureRegistry:
                     "name": r.name,
                     "family": r.family,
                     "pit_level": r.pit_level.value,
+                    "data_tier": tier_of_pit_level(r.pit_level).value,
                     "coverage": r.coverage,
                     "correlation_cluster": r.correlation_cluster,
                     "deprecated": r.deprecated,

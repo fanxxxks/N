@@ -45,6 +45,7 @@ from .candidates import (
 )
 from .complexity import complexity_bill
 from .data_loader import AshareDataLoader
+from .data_tier import formula_data_tier_report
 from .ops import OPS_CONFIG
 from .reward import (
     REWARD_VERSION,
@@ -812,6 +813,9 @@ class AshareTrainer:
             "semantic_cache_version": SEMANTIC_CACHE_VERSION,
             "unique_semantic_evals": self.semantic_cache.budget_used,
             "semantic_cache_stats": self.semantic_cache.stats(),
+            # P2-02: the strategy formula traces back to the credibility
+            # tiers of its features (``None`` when nothing is traceable).
+            "data_tier": formula_data_tier_report(tokens=self.best_tokens),
             # Data provenance: the immutable dataset manifest this formula
             # was selected on (None for pre-T1-01 databases).
             "dataset_id": self.loader.dataset_id,

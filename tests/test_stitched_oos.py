@@ -250,6 +250,49 @@ def test_build_result_v20_schema_with_stitched_block():
     assert result["dsr"]["n_trials"] == 1
 
 
+def test_build_result_v21_records_data_tiers():
+    """P2-02: every row / stitched trial / top trial traces back to the
+    credibility tier of its features; the artifact pins the tier version."""
+    from ashare_model.data_tier import DATA_TIER_VERSION
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    def _tok(name: str) -> int:
+        return FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index(name)
+
+    rows = _two_fold_rows("trained", 42)
+    for row in rows:
+        row["formula_text"] = "ROE"
+        row["formula"] = [_tok("ROE")]
+    rows[0]["formula_text"] = "RET_1"
+    rows[0]["formula"] = [_tok("RET_1")]
+    result = build_result(
+        ProtocolConfig(), "screening", TierConfig(150, 256), rows,
+        data_end_date="2026-01-01",
+    )
+    assert result["data_tier_version"] == DATA_TIER_VERSION
+    assert result["rows"][0]["data_tier"]["max_tier"] == "A"
+    assert result["rows"][1]["data_tier"]["max_tier"] == "B"
+    assert result["rows"][1]["data_tier"]["tiers_used"] == ["B"]
+    # The stitched trial and the top trial carry the weak tier of the
+    # recorded formula text (the top trial is the ROE row here).
+    assert result["stitched"]["trials"][0]["data_tier"]["max_tier"] == "B"
+    assert result["top_trial"]["data_tier"]["max_tier"] == "B"
+
+
+def test_build_result_untraceable_rows_record_null_tier():
+    rows = _two_fold_rows("trained", 42)
+    for row in rows:
+        row.pop("formula_text", None)
+        row.pop("formula", None)
+    result = build_result(
+        ProtocolConfig(), "screening", TierConfig(150, 256), rows,
+        data_end_date="2026-01-01",
+    )
+    assert result["rows"][0]["data_tier"] is None
+    assert result["stitched"]["trials"][0]["data_tier"] is None
+    assert result["top_trial"]["data_tier"] is None
+
+
 def test_build_result_records_ledger_and_regime():
     rows = _two_fold_rows()
     regime = RegimeRegistry(

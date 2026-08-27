@@ -113,6 +113,69 @@ def test_selector_filters_before_ranking_and_keeps_best_rejected():
     ]
 
 
+def test_candidate_score_records_data_tier():
+    """P2-02: a candidate's artifact trace records the credibility tier of
+    its formula (weakest tier used), or null when nothing is traceable."""
+    from ashare_model.data_tier import DATA_TIER_VERSION
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    def _tok(name: str) -> int:
+        return FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index(name)
+
+    tier_a = CandidateScore(
+        tokens=(_tok("RET_1"),),
+        candidate_id="a",
+        formula_text="RET_1",
+        source="test",
+        direction=1,
+        val_reward=0.1,
+        val_icir=0.2,
+        train_reward=0.1,
+        train_icir=0.2,
+        complexity_penalty=0.0,
+        eligible=True,
+        rejection_reasons=(),
+    )
+    assert tier_a.to_dict()["data_tier"] == {
+        "data_tier_version": DATA_TIER_VERSION,
+        "max_tier": "A",
+        "tiers_used": ["A"],
+    }
+    tier_bc = CandidateScore(
+        tokens=(_tok("ROE"), _tok("INDUSTRY_MOMENTUM"),
+                FORMULA_VOCAB.operator_offset),  # ROE ADD INDUSTRY_MOMENTUM
+        candidate_id="bc",
+        formula_text="ROE INDUSTRY_MOMENTUM",
+        source="test",
+        direction=1,
+        val_reward=0.1,
+        val_icir=0.2,
+        train_reward=0.1,
+        train_icir=0.2,
+        complexity_penalty=0.0,
+        eligible=True,
+        rejection_reasons=(),
+    )
+    payload = tier_bc.to_dict()
+    assert payload["data_tier"]["max_tier"] == "C"
+    assert set(payload["data_tier"]["tiers_used"]) == {"B", "C"}
+    untraceable = CandidateScore(
+        tokens=None,
+        candidate_id="u",
+        formula_text="equal_weight",
+        source="test",
+        direction=1,
+        val_reward=0.0,
+        val_icir=0.0,
+        train_reward=0.0,
+        train_icir=0.0,
+        complexity_penalty=0.0,
+        eligible=True,
+        rejection_reasons=(),
+    )
+    assert untraceable.to_dict()["data_tier"] is None
+
+
 def test_selector_uses_all_metrics_then_token_key_for_ties():
     left = _score(
         "left", val_reward=0.5, val_icir=0.4, train_reward=0.3,
