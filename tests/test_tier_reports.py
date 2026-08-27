@@ -30,7 +30,7 @@ def _tok(name: str) -> int:
 
 def _candidate(tokens, val_reward: float, *, eligible: bool) -> CandidateScore:
     return CandidateScore(
-        tokens=tuple(tokens),
+        tokens=tuple(tokens) if tokens is not None else None,
         candidate_id=str(val_reward),
         formula_text="f",
         source="test",
