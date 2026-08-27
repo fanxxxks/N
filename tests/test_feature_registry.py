@@ -139,7 +139,29 @@ def test_registry_serializes_and_roundtrips(tensor, mask):
 
 
 def test_registry_version_is_pinned():
-    assert FEATURE_REGISTRY_VERSION == 1
+    # v2 (P2): each feature record additionally carries ``data_tier``
+    # (A/B/C credibility tier) and the payload records ``data_tier_version``
+    # (contract: docs/p2_data_tier_contract.md §4).
+    assert FEATURE_REGISTRY_VERSION == 2
+
+
+def test_registry_records_data_tiers(tensor, mask):
+    from ashare_model.data_tier import DATA_TIER_VERSION, DataTier
+
+    registry = FeatureRegistry.build(
+        tensor, mask, calibration_slice=CalibrationSlice.of(40)
+    )
+    payload = registry.to_dict()
+    assert payload["data_tier_version"] == DATA_TIER_VERSION
+    by_name = {f["name"]: f for f in payload["features"]}
+    assert by_name["RET_1"]["data_tier"] == DataTier.A.value
+    assert by_name["ROE"]["data_tier"] == DataTier.B.value
+    assert by_name["MARGIN_BALANCE_CHG"]["data_tier"] == DataTier.B.value
+    assert by_name["INDUSTRY_MOMENTUM"]["data_tier"] == DataTier.C.value
+    assert by_name["NORTHBOUND_CHG"]["data_tier"] == DataTier.C.value
+    summary = registry.summary()
+    assert set(summary["by_data_tier"]) == {t.value for t in DataTier}
+    assert sum(summary["by_data_tier"].values()) == len(FEATURE_NAMES)
 
 
 def test_summary_reports_tiers_and_deprecations(tensor, mask):

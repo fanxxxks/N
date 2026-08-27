@@ -1,7 +1,7 @@
-"""Champion/Challenger promotion gates (T4-01).
+"""Champion/Challenger promotion gates (T4-01, P2-03/P2-04).
 
 A challenger (the top stitched trial of a v20 protocol artifact) is
-promoted to champion **only** when all five gates pass at once:
+promoted to champion **only** when all six gates pass at once:
 
 * **G1 data & formula P0** — the artifact is v20, bound to the current
   immutable dataset, measured under a declared data regime on future or
@@ -17,7 +17,14 @@ promoted to champion **only** when all five gates pass at once:
   multipliers) and every cell still satisfies the G3 risk bounds;
 * **G5 future paper-trading window** — at least one complete paper
   window on future/locked data (>= ``paper_min_sessions`` sessions,
-  already ended) exists for this exact formula.
+  already ended) exists for this exact formula;
+* **G6 data credibility tier** (P2) — the challenger formula is traced
+  back to the free-data tiers of its features
+  (:mod:`ashare_model.data_tier`, ``docs/p2_data_tier_contract.md``):
+  by default **only Tier A** features qualify (``allowed_data_tiers``,
+  default ``("A",)``); Tier B is promotable only through an explicit
+  separate comparison; Tier C (industry snapshot / ST approximation /
+  placeholder) can never enter a promotion verdict.
 
 Every gate reports ``passed`` plus human-readable ``reasons``, and the
 verdict records the thresholds used, so a refusal is auditable.
@@ -35,6 +42,12 @@ from pathlib import Path
 
 from ashare_data.io_utils import atomic_write_json, read_json_safe
 
+from .data_tier import (
+    DATA_TIER_VERSION,
+    TIER_TIME_RULES,
+    DataTier,
+    formula_data_tier_report,
+)
 from .evaluation import (
     PROTOCOL_VERSION,
     evaluate_formula,
@@ -72,6 +85,31 @@ def formula_hash(tokens, formula_text: str | None = None) -> str:
     else:
         raise ValueError("formula_hash needs tokens or formula_text")
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def validate_allowed_tiers(allowed: tuple[str, ...]) -> tuple[str, ...]:
+    """Validate the promotion's data-tier policy (P2-03/P2-04).
+
+    Only Tier A (default) or explicitly Tier A+B are promotable; Tier C is
+    research-display only and **never** enters a promotion verdict, and an
+    unknown tier is a contract violation — both raise ``ValueError``
+    instead of silently degrading.
+    """
+
+    known = {t.value for t in DataTier}
+    unknown = sorted(set(allowed) - known)
+    if unknown:
+        raise ValueError(
+            f"unknown data tiers in promotion policy: {unknown}; "
+            f"allowed values are {sorted(known)}"
+        )
+    if "C" in allowed:
+        raise ValueError(
+            "Tier C data (industry snapshot / ST approximation / placeholder) "
+            "is research-display only and can never enter promotion "
+            "(docs/p2_data_tier_contract.md)"
+        )
+    return tuple(dict.fromkeys(allowed))
 
 
 # --- paper-trading window registry -------------------------------------------
@@ -312,16 +350,20 @@ def evaluate_challenger(
     paper_registry: PaperWindowRegistry | None = None,
     stress: dict | None = None,
     thresholds: PromotionThresholds | None = None,
+    allowed_data_tiers: tuple[str, ...] = ("A",),
     today: str | None = None,
 ) -> dict:
-    """Apply the five promotion gates to a v20 protocol artifact.
+    """Apply the six promotion gates to a v20 protocol artifact.
 
     Every gate returns ``{"passed": bool, "reasons": [...]}``; the
-    challenger is promoted only when all five pass.  ``today`` is
-    injectable for tests (paper-window completion check).
+    challenger is promoted only when all six pass.  ``allowed_data_tiers``
+    is the P2 data-tier policy (default Tier A only; Tier B requires an
+    explicit separate comparison; Tier C raises).  ``today`` is injectable
+    for tests (paper-window completion check).
     """
 
     thresholds = thresholds or PromotionThresholds()
+    allowed = validate_allowed_tiers(allowed_data_tiers)
     gates: dict[str, dict] = {}
     top = artifact.get("top_trial")
 
@@ -461,6 +503,31 @@ def evaluate_challenger(
         reasons.append("no top trial to promote")
     gates["paper_window"] = _gate(not reasons, reasons)
 
+    # G6 -- data credibility tier (P2-03/P2-04): the challenger formula is
+    # traced back to the tiers of its features; every feature must belong
+    # to the allowed tiers (default: Tier A only).  Tier C can never be
+    # allowed here (validate_allowed_tiers rejects it up front).
+    reasons = []
+    tier_report = None
+    if top_rows:
+        last = top_rows[-1]
+        tier_report = formula_data_tier_report(
+            tokens=last.get("formula"), feature_name=last.get("formula_text")
+        )
+    if tier_report is None:
+        reasons.append(
+            "no traceable formula for the top trial; promotion requires "
+            "a formula whose features all belong to the allowed data tiers"
+        )
+    else:
+        for feature, tier in sorted(tier_report["per_feature"].items()):
+            if tier not in allowed:
+                reasons.append(
+                    f"feature {feature} uses data tier {tier}, which is not "
+                    f"in the allowed tiers {list(allowed)}"
+                )
+    gates["data_tier"] = _gate(not reasons, reasons)
+
     return {
         "promoted": all(g["passed"] for g in gates.values()),
         "challenger": {
@@ -474,6 +541,12 @@ def evaluate_challenger(
                 if top_rows
                 else None
             ),
+        },
+        "data_tier_policy": {
+            "data_tier_version": DATA_TIER_VERSION,
+            "allowed_tiers": list(allowed),
+            "formula_data_tier": tier_report,
+            "time_rules": dict(TIER_TIME_RULES),
         },
         "gates": gates,
         "thresholds": {
@@ -509,6 +582,11 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--formula-hash", default=None)
     parser.add_argument("--config-sha256", default="")
+    parser.add_argument(
+        "--allow-tier-b",
+        action="store_true",
+        help="P2-03: run the separate Tier A+B comparison (default: Tier A only)",
+    )
     args = parser.parse_args(argv)
 
     root = Path(__file__).resolve().parents[1]
@@ -583,10 +661,15 @@ def main(argv=None) -> int:
             dataset_id=loader.dataset_id,
             paper_registry=paper,
             stress=stress,
+            allowed_data_tiers=("A", "B") if args.allow_tier_b else ("A",),
         )
     else:
         verdict = evaluate_challenger(
-            artifact, regime=regime, paper_registry=paper, stress=stress
+            artifact,
+            regime=regime,
+            paper_registry=paper,
+            stress=stress,
+            allowed_data_tiers=("A", "B") if args.allow_tier_b else ("A",),
         )
 
     out_path = Path(args.output)

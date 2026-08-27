@@ -39,6 +39,7 @@ import pandas as pd
 from loguru import logger
 
 from .db import AshareDB, sql_quoted_list
+from .processor import is_valid_a_share_code
 
 # Feature names produced by the point-in-time pipeline (MARKET_CAP is a
 # local daily-bar factor, not a PIT field).
@@ -364,6 +365,101 @@ def build_pit_frames(
     return frames
 
 
+# --- P2-01: fundamentals-table scope ------------------------------------------
+#
+# The ``fundamental_pit`` table only ever holds rows whose ts_code is a
+# valid A-share code AND belongs to the persisted stock scope: the
+# ``stocks`` table (current snapshot + PIT backfills), the PIT
+# ``constituents`` members and the cached daily-bar codes.  Codes outside
+# the scope (BJ/NEEQ instruments without bars, B-shares, index symbols)
+# can never be consumed by the loader, and their presence would mislabel
+# the table as broader than the pipeline's actual data reach.
+
+
+def persisted_scope_codes(db: AshareDB, config) -> set[str]:
+    """The persisted stock scope: stocks ∪ PIT constituents ∪ cached bars.
+
+    Only valid A-share codes count; a missing table (fresh database) is
+    treated as an empty member, never an error.
+    """
+
+    codes: set[str] = set()
+    for table in (config.stocks_table, config.constituents_table):
+        try:
+            df = db.query(f"SELECT DISTINCT ts_code FROM {table}")
+            codes |= {str(c) for c in df["ts_code"]}
+        except Exception:  # noqa: BLE001 - table may not exist yet.
+            continue
+    daily_dir = config.parquet_dir / "daily"
+    if daily_dir.exists():
+        codes |= {path.stem for path in daily_dir.glob("*.parquet")}
+    return {code for code in codes if is_valid_a_share_code(code)}
+
+
+def fundamental_scope_stats(db: AshareDB, config) -> dict[str, object]:
+    """Scope audit of the fundamentals table: how many rows/codes lie
+    inside and outside the persisted stock scope (P2-01)."""
+
+    scope = persisted_scope_codes(db, config)
+    try:
+        rows = db.query(
+            f"SELECT ts_code, count(*) AS n FROM {config.fundamentals_table} "
+            "GROUP BY ts_code"
+        )
+    except Exception:  # noqa: BLE001 - table may not exist yet.
+        return {
+            "total_rows": 0,
+            "in_scope_rows": 0,
+            "out_of_scope_rows": 0,
+            "out_of_scope_codes": [],
+            "out_of_scope_codes_count": 0,
+            "scope_codes_count": len(scope),
+        }
+    total = 0
+    in_scope = 0
+    out_by_code: dict[str, int] = {}
+    for row in rows.itertuples():
+        code = str(row.ts_code)
+        count = int(row.n)
+        total += count
+        if code in scope:
+            in_scope += count
+        else:
+            out_by_code[code] = out_by_code.get(code, 0) + count
+    return {
+        "total_rows": total,
+        "in_scope_rows": in_scope,
+        "out_of_scope_rows": total - in_scope,
+        "out_of_scope_codes": sorted(out_by_code),
+        "out_of_scope_codes_count": len(out_by_code),
+        "scope_codes_count": len(scope),
+    }
+
+
+def purge_out_of_scope_fundamentals(db: AshareDB, config) -> dict[str, int]:
+    """Delete every fundamentals row outside the persisted stock scope.
+
+    Migration for pre-P2 tables (P2-01); idempotent — a second purge
+    removes nothing.  Returns measured before/after counts.
+    """
+
+    scope = persisted_scope_codes(db, config)
+    before = int(
+        db.query(f"SELECT count(*) AS n FROM {config.fundamentals_table}")["n"].iloc[0]
+    )
+    if scope:
+        db.execute(
+            f"DELETE FROM {config.fundamentals_table} "
+            f"WHERE ts_code NOT IN ({sql_quoted_list(sorted(scope))})"
+        )
+    else:
+        db.execute(f"DELETE FROM {config.fundamentals_table}")
+    after = int(
+        db.query(f"SELECT count(*) AS n FROM {config.fundamentals_table}")["n"].iloc[0]
+    )
+    return {"removed_rows": before - after, "rows_before": before, "rows_after": after}
+
+
 def sync_fundamentals(
     client,
     db: AshareDB,
@@ -372,8 +468,11 @@ def sync_fundamentals(
 ) -> dict[str, Any]:
     """Sync quarterly fundamentals for the given universe.
 
-    Degrades per stock/quarter like the daily-bar sync: failures are
-    logged and skipped, never fatal.  Offline mode skips entirely.
+    Bulk earnings rows are restricted to ``universe`` before they are
+    cached or stored (P2-01 scope contract: the table only holds rows for
+    codes the pipeline can consume).  Degrades per stock/quarter like the
+    daily-bar sync: failures are logged and skipped, never fatal.  Offline
+    mode skips entirely.
     """
 
     if client.offline:
@@ -388,6 +487,10 @@ def sync_fundamentals(
     quarters = _quarter_ends(int(config.start_date[:4]), today)
     total_rows = 0
     failures = 0
+    # P2-01 scope: the bulk endpoint covers the whole market incl. BJ/NEEQ
+    # instruments the pipeline can never consume; only the synced universe
+    # may be stored (cache included).
+    universe_set = set(universe)
     for quarter in quarters:
         quarter_date = datetime.strptime(quarter, "%Y%m%d").date()
         announcing = (datetime.now().date() - quarter_date).days < _ANNOUNCING_WINDOW_DAYS
@@ -397,6 +500,7 @@ def sync_fundamentals(
             try:
                 df = client.get_earnings_report(quarter)
                 if not df.empty:
+                    df = df[df["ts_code"].isin(universe_set)]
                     _write_cached(path, df)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"Earnings report failed for {quarter}: {exc}")
