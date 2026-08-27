@@ -482,7 +482,7 @@ def _print_human(report: dict[str, Any]) -> None:
             else "present" if artifact.get("exists")
             else "absent"
         )
-        print(f"  {artifact['name']}: {artifact['path']} — {status}")
+        print(f"  {artifact['name']}: {artifact['path']} - {status}")
     print("dependencies: " + ", ".join(
         f"{name}={version or 'MISSING'}"
         for name, version in sorted(report["dependencies"].items())
