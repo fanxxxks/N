@@ -3,6 +3,7 @@
 torch==2.11.0+cu128
 numpy==2.5.2
 pandas==3.0.5
+cvxpy==1.6.5
 akshare==1.18.91
 duckdb==1.5.5
 pyarrow==24.0.0

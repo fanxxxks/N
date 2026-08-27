@@ -7,6 +7,9 @@ torch
 numpy
 pandas
 
+# Portfolio layer (T3-01): constrained portfolio QP on CVXPY/OSQP
+cvxpy
+
 akshare
 duckdb
 pyarrow
