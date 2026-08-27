@@ -60,14 +60,16 @@ model:
 
 # Reward-scoring constants; semantic changes to the reward implementation
 # bump ashare_model.reward.REWARD_VERSION and are recorded in artifacts.
-# Current semantics: reward = rank-ICIR - cost_weight * (annualized turnover cost),
-# clipped to [reward_clip_low, reward_clip_high]; validation reward is the
-# median over validation_splits sub-windows; bare single-factor formulas pay
-# a small complexity_penalty (kept tiny so the validation floor stays
-# reachable); artifacts are saved only when BOTH the best validation reward
-# reaches min_val_reward AND the best formula's validation-window rank-ICIR
-# reaches min_val_icir (signal-quality gate against low-IC, low-turnover
-# fundamental copies).
+# Current semantics (v13): reward = portfolio active IR — annualized
+# effective-n shrunk information ratio of the gross basket returns versus
+# the equal-weight universe benchmark — minus the exact annualized
+# execution-cost drag; IC/ICIR are auxiliary reported/gated statistics.
+# Validation reward is the median over validation_splits sub-windows; bare
+# single-factor formulas pay a small complexity_penalty (kept tiny so the
+# validation floor stays reachable); artifacts are saved only when BOTH
+# the best validation reward reaches min_val_reward AND the best formula's
+# validation-window rank-ICIR reaches min_val_icir (signal-quality gate
+# against low-IC, low-turnover fundamental copies).
 reward:
   reward_clip_low: -1.0
   reward_clip_high: 1.0

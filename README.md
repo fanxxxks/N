@@ -78,11 +78,11 @@ python scripts/ablate_families.py --steps 50 --batch-size 256   # 逐族消融�
 
 ### 测量协议（nested walk-forward 评价，T4-01）
 
-在改动奖励语义之前，先固定"怎么证明公式变好"的测量协议；协议裁决与 RL reward
+在改动奖励语义之前，先固定"怎么证明公式变好"的测量协议；协议裁决与训练奖励
 完全解耦，所以不同 `reward_version` 代的产物仍然可比：
 
 ```bash
-python -m ashare_model.evaluation --tier screening     # 快速筛选档（50 步 x 256）
+python -m ashare_model.evaluation --tier screening     # 快速筛选档（150 步 x 256）
 python -m ashare_model.evaluation --tier confirmation  # 确认档（200 步 x 512）
 python -m ashare_model.evaluation --selfcheck          # 空转验收：纯噪声候选，DS/max-t 必须不显著
 # 确认档可并入此前筛选档的全部试错，计入多重检验校正：
@@ -278,13 +278,17 @@ python scripts/archive_run.py --mode sim --commit
 - **交易规则**：A 股 T+1、买入 100 股整手、卖出可零股清仓、涨停不买/跌停不卖、一字板判定。涨跌停价幅与名称解耦：历史回放与回测只按板块价幅（主板 10%、创业板/科创板 20%），股票名称仅用于展示；真实当日模拟（执行日期等于今天）才额外按 `stocks.is_st` 当前快照使用 5% 价幅，且仅限当日。
 - **费用模型**：佣金万 2.5（最低 5 元）、印花税卖出 0.05%、过户费 0.001%、滑点 0.05%；回测与训练奖励使用同一套费用口径。
 - **涨跌停事件因子**：`LIMIT_UP_EVENT`/`LIMIT_DOWN_EVENT` 由一字板真实计算（创业板/科创板 20%，其余 10%）。
-- **训练**：REINFORCE + value baseline + 熵正则（advantage 裁剪防数值爆炸）；训练
-  奖励为**截面 rank-ICIR 减去连续换手成本**（`reward.py` v5：成本按费率比例计入，
-  无阈值跳变；篮子模拟按执行日（t+1 开盘）对齐回测引擎的**可交易性屏蔽**——
-  停牌/一字涨停不买、停牌/一字跌停持仓强制保留），验证段按
+- **搜索与训练**：默认强类型 GP（`model.searcher: gp`；RL/random 为实验与
+  基线选项，RL 路径为 REINFORCE + value baseline + 熵正则、advantage 裁剪
+  防数值爆炸）；训练奖励为**组合主动 IR 减去精确年化执行成本**
+  （`reward.py` v13：basket 在 signal-date 与 entry-date 双重 PIT eligible
+  上选股，执行日（t+1 开盘）对齐回测引擎的**可交易性屏蔽**——
+  停牌/一字涨停不买、停牌/一字跌停持仓强制保留，费用按精确日频路径计费），
+  IC/ICIR 是辅助统计与质量门禁；验证段按
   `model.validation_splits`（默认 4）个独立子窗口取**中位数**
   选择最佳公式；不含算子的裸因子公式减 `reward.complexity_penalty`（默认 0.02），
-  最佳公式的验证奖励须达到 `reward.min_val_reward`（默认 0.0）才保存，避免把
+  最佳公式的验证奖励须达到 `reward.min_val_reward`（默认 0.0）、验证窗
+  rank-ICIR 须达到 `reward.min_val_icir`（默认 0.05）才保存，避免把
   负质量公式回测/归档。v7 起，IC/ICIR、候选打分、RL 训练、随机搜索与裸因子
   baseline 的全部质量统计只使用 **signal-date eligible** 股票
   （`universe_mask[:, t]`；买入可交易性仍用 `blocked_buy[:, t+1]`、卖出

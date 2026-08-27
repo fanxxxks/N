@@ -105,10 +105,10 @@ class RewardConfig:
 
     Semantic changes to the reward implementation bump
     ``ashare_model.reward.REWARD_VERSION``; these values only tune the
-    current version (v12: robust HAC-shrunk ICIR + hard signal-quality
-    gates + AST complexity billing; scoring quantity unchanged:
-    direction-adjusted rank-ICIR minus the annualized mean of exact daily
-    execution costs).
+    current version (v13: portfolio active IR minus exact annualized
+    execution costs; IC/ICIR are auxiliary reported/gated statistics;
+    robust HAC-shrunk ICIR, hard signal-quality gates and AST complexity
+    billing carried over from v12).
     """
 
     reward_clip_low: float = -1.0

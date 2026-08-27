@@ -4,13 +4,13 @@ AlphaGPT 仓库速读
 
 代码组织（按功能划分）
 - ashare_data/：数据层。AkShare 拉取交易日历/股票列表/指数成分/日线，DuckDB + Parquet 本地存储，清洗复权、股票池过滤。
-- ashare_model/：策略挖掘。把行情转成因子（factors），定义算子语言（ops）与公式词表（vocab），StackVM 解释执行，Transformer（LoopedTransformer + MTPHead）生成公式 token 序列，REINFORCE + value baseline + 熵正则训练（奖励 = 截面 rank-ICIR − 连续换手成本，多子窗口中位数验证选择，裸因子复杂度惩罚 + 质量门槛），回测评分。
+- ashare_model/：策略挖掘。把行情转成因子（factors），定义算子语言（ops）与公式词表（vocab），StackVM 解释执行；默认强类型 GP（DEAP）搜索公式（RL/random 为实验与基线选项；LoopedTransformer 策略模型仅 RL 实验使用，MODEL_VERSION=2 起已移除无监督信号的 MTPHead），训练奖励 = 组合主动 IR − 精确年化执行成本（REWARD_VERSION=13，多子窗口中位数验证选择，裸因子复杂度惩罚 + ICIR 质量门槛），回测评分。
 - ashare_trading/：模拟盘。券商撮合（涨跌停/停牌/T+1/整手/费用，涨跌停判定与回测共用 processor 单一路径）、组合管理、日频运行器。
 - dashboard/：Streamlit 看板，展示回测净值/基准、选股快照、模拟盘状态与数据状态。
 
 主流程（从数据到模拟盘）
 1) ashare_data.sync 拉取并入库（日历/股票/成分/日线 + 逐期 point-in-time 财报 + 两融/申万行业，Parquet 缓存）
-2) ashare_model.train 训练生成最优公式（best_ashare_strategy.json + ashare_model.pt）
+2) ashare_model.train 搜索最优公式（best_ashare_strategy.json；仅 RL 搜索额外写 ashare_model.pt）
 3) ashare_model.backtest 用公式回测，输出净值/基准/持仓快照（backtest_result.json）
 4) ashare_trading.run_sim 按日生成订单，撮合成交，更新组合状态
 5) dashboard 展示回测与模拟盘
@@ -22,7 +22,7 @@ AlphaGPT 仓库速读
 
 当前因子与算子一览
 - 特征（62 个，分代追加，v1 token id 永不偏移，退役特征按别名重映射）：v1（33 个在用 + RET_20 别名 → MOMENTUM_20）动量/反转/波动（RET_1/5/10、VOL_20/60、MOMENTUM_20/60、REVERSAL_5、SKEW_20、KURT_20）、量价（TURNOVER、TURNOVER_CHG、VOLUME_RATIO、VOLUME_IMPACT、AMPLITUDE、CLOSE_POSITION）、事件（LIMIT_UP/DOWN_EVENT）、基本面（11 个 PIT 字段：PE_TTM/PB/PS_TTM/ROE/ROA/毛利率/净利率/营收与利润增速/负债率/股息率，按披露季节末日进入截面；MARKET_CAP 为流通市值近似=成交额/换手率）、资金类（MARGIN_BALANCE_CHG 融资余额 20 日变化、INDUSTRY_MOMENTUM 申万一级行业 20 日收益映射成分股）、中性占位仅剩（NORTHBOUND_CHG，北向日度数据 2024-08 起停披露）；v2（16 个，全部本地计算，无新接口依赖）日内分解（OVERNIGHT_RET、INTRADAY_RET）、流动性（ILLIQ_20 阿米胡德、AMOUNT_SHARE 成交额占比）、彩票/锚定（MAX_20、HIGH_52W 52 周新高距离）、风险回归（BETA_60、IVOL_60、RSQ_60，对全市场等权组合做滚动 CAPM）、技术（BIAS_20 均线距离、RSI_14、ATR_14、MACD_DIF/DEA）、微观结构（SUSPEND_DAYS_60、LIST_AGE）；v3（13 个，全部本地计算）中期动量/反转（RET_120、REVERSAL_60/120）、换手平滑（TURNOVER_MA5/MA20、TURNOVER_STD20，缺失保持中性）、涨停统计（LIMIT_STREAK 连板数、LIMIT_UP_CNT_20、LIMIT_BREAK 炸板）、行业中性（IND_REL_RET_5/20、IND_REL_VOL_20、IND_REL_TURNOVER，按申万一级行业成分快照去行业均值，无行业数据时保持中性）。因子以元数据注册表（家族/所需列/预热期）驱动，新增因子=加一条注册+测试。
-- 算子（18 个）：ADD/SUB/MUL/DIV/NEG/ABS/SIGN/GATE/JUMP/DECAY/DELAY1/MAX3/DELTA5/MA20/STD20/TS_RANK20/CORR20/DOWNVOL20，全部无未来泄漏（窗口算子用可用历史，除零有保护，非有限结果归零）。
+- 算子（39 个）：二元算术 ADD/SUB/MUL/DIV；一元变换 NEG/ABS/SIGN；条件/动态 GATE/JUMP/DECAY/DELAY1/MAX3；差分 DELTA5/10/20；移动均值 MA5/10/20/60；移动标准差 STD5/10/20/60；时序排名 TS_RANK5/10/20/60；滚动相关 CORR5/10/20/60；下行波动 DOWNVOL5/10/20/60；横截面 CS_RANK/CS_ZSCORE/CS_DEMEAN/CS_NEUTRALIZE，全部无未来泄漏（窗口算子用可用历史，除零有保护，非有限结果归零）。
 
 现状与依赖（实话版）
 - 只需 Python + AkShare 网络访问，无数据库服务依赖；配置在 config/ashare_config.yaml，密钥可选 config/.env。
