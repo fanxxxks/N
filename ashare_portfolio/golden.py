@@ -209,14 +209,16 @@ class GoldenParity:
         universe_mask: np.ndarray,
         *,
         target_weights: list[np.ndarray] | None = None,
+        rebalance_mask: np.ndarray | None = None,
     ) -> ParityReport:
         """Run the golden comparison.
 
-        ``target_weights=None`` uses the engine's own top-n selection (the
-        canonical golden test); a list of full ``[n]`` weight vectors
-        executes those instead (T3-01 optimizer output).  ``raw_cache``,
-        ``ts_codes``, ``dates`` and ``universe_mask`` follow the engine's
-        conventions.
+        ``target_weights=None`` uses the engine's unified portfolio
+        constructor (the canonical golden test); a list of full ``[n]``
+        weight vectors executes those instead (T3-01 optimizer output).
+        ``rebalance_mask`` is forwarded unchanged to the engine-owned path.
+        ``raw_cache``, ``ts_codes``, ``dates`` and ``universe_mask`` follow
+        the engine's conventions.
         """
 
         signals = np.asarray(signals, dtype=np.float64)
@@ -242,6 +244,7 @@ class GoldenParity:
             result = AshareBacktestEngine(self.config).run(
                 signals, raw_cache, ts_codes, dates, mask,
                 execution_delay=delay,
+                rebalance_mask=rebalance_mask,
             )
             if result.target_weights is None:
                 raise ValueError("engine did not record target_weights")

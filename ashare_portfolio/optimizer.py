@@ -338,6 +338,15 @@ class PortfolioOptimizer:
         if noise.any():
             weights[noise] = 0.0
             post_processed = True
+        # OSQP may return a value a few solver-tolerance units above a
+        # binding per-name cap.  Downstream portfolio construction treats
+        # the cap as a hard contract (and may reuse a weight as a ranking-
+        # buffer lower bound on the next date), so project this one-sided
+        # numerical overshoot back to the exact feasible boundary.
+        above_cap = weights > c.single_weight_cap
+        if above_cap.any():
+            weights[above_cap] = c.single_weight_cap
+            post_processed = True
         min_trade_dropped: list[int] = []
         if c.min_trade_amount is not None:
             below = (np.abs(delta) * float(capital) < c.min_trade_amount) & (

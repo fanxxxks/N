@@ -28,11 +28,6 @@ def _validated_dates(dates: Sequence[str]) -> tuple[str, ...]:
     keys = tuple(_date_key(value) for value in values)
     if any(left >= right for left, right in zip(keys, keys[1:])):
         raise ValueError("date axis must be strictly increasing")
-    for value, key in zip(values, keys):
-        try:
-            datetime.strptime(key, "%Y%m%d")
-        except ValueError as exc:
-            raise ValueError(f"invalid trade date {value!r}") from exc
     return values
 
 
@@ -111,7 +106,12 @@ class RebalancePolicy:
             previous_week: tuple[int, int] | None = None
             previous_index = -1
             for index, value in enumerate(values):
-                iso = datetime.strptime(_date_key(value), "%Y%m%d").isocalendar()
+                try:
+                    iso = datetime.strptime(
+                        _date_key(value), "%Y%m%d"
+                    ).isocalendar()
+                except ValueError as exc:
+                    raise ValueError(f"invalid weekly trade date {value!r}") from exc
                 week = (iso.year, iso.week)
                 if previous_week is not None and week != previous_week:
                     mask[previous_index] = True

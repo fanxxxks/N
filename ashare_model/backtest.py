@@ -6,10 +6,10 @@ import math
 from typing import Any
 
 import numpy as np
+from loguru import logger
 
 from ashare_data.config import BacktestConfig
 from ashare_data.processor import (
-    has_cross_sectional_dispersion,
     open_to_open_returns,
     tradability_blocked,
 )
@@ -19,6 +19,8 @@ from ashare_execution import (
     validate_execution_config,
 )
 from ashare_logging import export_log_txt, setup_run_logging
+from ashare_portfolio.constructor import PortfolioConstructor
+from ashare_portfolio.rebalance import RebalancePolicy
 
 from .reward import sortino_ratio
 from .time_contract import TrainingTimeContract
@@ -57,10 +59,18 @@ def equal_weight_benchmark_returns(
 
 
 class AshareBacktestEngine:
-    def __init__(self, config: BacktestConfig | None = None):
+    def __init__(
+        self,
+        config: BacktestConfig | None = None,
+        *,
+        portfolio_constructor: PortfolioConstructor | None = None,
+    ):
         self.config = config or BacktestConfig()
         self.initial_capital = float(self.config.initial_capital)
         self.cost_model = ExecutionCostModel.from_config(self.config)
+        self.portfolio_constructor = (
+            portfolio_constructor or PortfolioConstructor(self.config)
+        )
 
     def run(
         self,
@@ -72,6 +82,7 @@ class AshareBacktestEngine:
         benchmark_returns: list[float] | None = None,
         signal_range: range | tuple[int, int] | None = None,
         execution_delay: int = 1,
+        rebalance_mask: np.ndarray | None = None,
     ) -> BacktestResult:
         """Execute the daily top-n strategy over the signal columns.
 
@@ -108,6 +119,16 @@ class AshareBacktestEngine:
         delay = int(execution_delay)
         if delay < 1:
             raise ValueError("execution_delay must be >= 1")
+        if rebalance_mask is None:
+            rebalance_mask = RebalancePolicy.from_config(
+                self.config
+            ).rebalance_mask(dates)
+        rebalance_mask = np.asarray(rebalance_mask, dtype=bool)
+        if rebalance_mask.shape != (len(dates),):
+            raise ValueError(
+                f"rebalance_mask shape {rebalance_mask.shape} does not match "
+                f"date axis ({len(dates)},)"
+            )
 
         open_ = np.nan_to_num(
             np.asarray(raw_cache["open"], dtype=np.float64),
@@ -178,6 +199,10 @@ class AshareBacktestEngine:
         turnover_list: list[float] = []
         positions: list[dict[str, Any]] = []
         target_weights_list: list[np.ndarray] = []
+        buy_weights_list: list[np.ndarray] = []
+        sell_weights_list: list[np.ndarray] = []
+        cost_fractions: list[float] = []
+        construction_diagnostics: list[dict[str, Any]] = []
 
         for t in signal_indices:
             entry_day = t + delay
@@ -189,8 +214,7 @@ class AshareBacktestEngine:
             # the selection itself.
             eligible = universe_mask[:, t] & universe_mask[:, entry_day]
             exit_day = t + delay + 1
-            selected, selectable_values = self._select_top_n(
-                signal,
+            buy_blocked = self._blocked_mask(
                 entry_day,
                 open_,
                 high,
@@ -199,83 +223,32 @@ class AshareBacktestEngine:
                 volume,
                 ts_codes,
                 side="buy",
-                eligible=eligible,
             )
-            target_weights = np.zeros(n_stocks, dtype=np.float64)
-
-            # No-signal semantics (T1-02): a selectable cross-section
-            # without dispersion (fewer than two distinct values) carries
-            # no ranking information — the book is held as-is with zero
-            # turnover and zero cost, never arbitrarily rebalanced.  The
-            # one exception is the mask-exit contract: positions that lost
-            # universe eligibility are still liquidated through the
-            # ordinary sell path (force-held when sell-blocked), because a
-            # member leaving the pool must never linger silently.
-            if selectable_values and not has_cross_sectional_dispersion(
-                selectable_values
-            ):
-                target_weights = prev_weights.copy()
-                liquidate = (prev_weights > 0.0) & ~eligible
-                if liquidate.any():
-                    target_weights[liquidate] = 0.0
-                    sell_blocked = self._blocked_mask(
-                        entry_day,
-                        open_,
-                        high,
-                        low,
-                        pre_close,
-                        volume,
-                        ts_codes,
-                        side="sell",
-                    )
-                    force_hold = liquidate & sell_blocked
-                    target_weights[force_hold] = prev_weights[force_hold]
-            else:
-                weight = min(
-                    1.0 / max(self.config.top_n, 1),
-                    self.config.single_weight_cap,
-                )
-                raw = np.zeros(n_stocks, dtype=np.float64)
-                for idx in selected:
-                    raw[idx] = weight
-
-                # Positions that must be reduced need to be tradable on the
-                # sell side; a sell-blocked reduction is force-held at its
-                # previous weight (the sell is deferred, never dropped).
-                sell_blocked = self._blocked_mask(
-                    entry_day,
-                    open_,
-                    high,
-                    low,
-                    pre_close,
-                    volume,
-                    ts_codes,
-                    side="sell",
-                )
-                held = np.zeros(n_stocks, dtype=np.float64)
-                for _ in range(n_stocks + 1):
-                    tentative = held + raw
-                    new_holds = (
-                        sell_blocked
-                        & (prev_weights > tentative)
-                        & (held == 0.0)
-                    )
-                    if not new_holds.any():
-                        break
-                    for idx in np.where(new_holds)[0]:
-                        held[idx] = prev_weights[idx]
-                        raw[idx] = 0.0
-                    raw = self._scale_to_budget(raw, held)
-                target_weights = held + self._scale_to_budget(raw, held)
-            # Quantize weights to 1e-12 (same as the reward basket): the
-            # scale-to-budget arithmetic leaves ~1e-16 summation noise
-            # which would fabricate phantom micro-orders that pay the
-            # full minimum commission and break permutation invariance.
-            target_weights = np.round(target_weights, 12)
-
-            buy_weights = np.maximum(target_weights - prev_weights, 0.0)
-            sell_weights = np.maximum(prev_weights - target_weights, 0.0)
-            turnover = float(np.abs(target_weights - prev_weights).sum())
+            sell_blocked = self._blocked_mask(
+                entry_day,
+                open_,
+                high,
+                low,
+                pre_close,
+                volume,
+                ts_codes,
+                side="sell",
+            )
+            output = self.portfolio_constructor.construct(
+                signal,
+                prev_weights,
+                capital=capital,
+                eligible=eligible,
+                buy_blocked=buy_blocked,
+                sell_blocked=sell_blocked,
+                stable_keys=np.asarray(ts_codes),
+                rebalance_due=bool(rebalance_mask[t]),
+                adv=volume[:, entry_day] * open_[:, entry_day],
+            )
+            target_weights = np.asarray(output.weights)
+            buy_weights = np.asarray(output.buy_weights)
+            sell_weights = np.asarray(output.sell_weights)
+            turnover = output.turnover
 
             cost_fraction = float(
                 self.cost_model.rebalance_cost_fraction(
@@ -289,6 +262,7 @@ class AshareBacktestEngine:
             net_ret = gross_ret - cost_fraction
             daily_returns.append(net_ret)
             turnover_list.append(turnover)
+            cost_fractions.append(cost_fraction)
             capital *= 1.0 + net_ret
 
             positions.append(
@@ -304,6 +278,9 @@ class AshareBacktestEngine:
                 }
             )
             target_weights_list.append(target_weights.copy())
+            buy_weights_list.append(buy_weights.copy())
+            sell_weights_list.append(sell_weights.copy())
+            construction_diagnostics.append(dict(output.diagnostics))
             prev_weights = target_weights
 
         equity = self._equity_curve(daily_returns)
@@ -314,6 +291,33 @@ class AshareBacktestEngine:
         )
         metrics = self._metrics(daily_returns, equity)
         metrics["average_turnover"] = float(np.mean(turnover_list)) if turnover_list else 0.0
+        metrics["rebalance_count"] = int(
+            sum(bool(item["rebalance_executed"]) for item in construction_diagnostics)
+        )
+        metrics["rebalance_due_count"] = int(
+            sum(bool(item["rebalance_due"]) for item in construction_diagnostics)
+        )
+        metrics["order_count"] = int(
+            sum(int(item["order_count"]) for item in construction_diagnostics)
+        )
+        metrics["suppressed_trade_count"] = int(
+            sum(
+                int(item.get("suppressed_trade_count", 0))
+                for item in construction_diagnostics
+            )
+        )
+        logger.info(
+            "portfolio path method={} frequency={} periods={} due={} "
+            "rebalanced={} orders={} suppressed={} avg_turnover={:.6f}",
+            self.config.portfolio_method,
+            self.config.rebalance_frequency,
+            len(signal_indices),
+            metrics["rebalance_due_count"],
+            metrics["rebalance_count"],
+            metrics["order_count"],
+            metrics["suppressed_trade_count"],
+            metrics["average_turnover"],
+        )
         return BacktestResult(
             equity_curve=[float(x) for x in equity],
             # Initial equity is marked at the first entry; subsequent points
@@ -330,82 +334,15 @@ class AshareBacktestEngine:
             metrics=metrics,
             positions=positions,
             target_weights=target_weights_list,
+            buy_weights=buy_weights_list,
+            sell_weights=sell_weights_list,
+            cost_fractions=cost_fractions,
+            construction_diagnostics=construction_diagnostics,
         )
 
     @staticmethod
     def _open_to_open_returns(open_: np.ndarray) -> np.ndarray:
         return open_to_open_returns(open_)
-
-    def _select_top_n(
-        self,
-        signal: np.ndarray,
-        exec_day: int,
-        open_: np.ndarray,
-        high: np.ndarray,
-        low: np.ndarray,
-        pre_close: np.ndarray,
-        volume: np.ndarray,
-        ts_codes: list[str],
-        side: str,
-        eligible: np.ndarray,
-        st_mask: np.ndarray | None = None,
-    ) -> tuple[list[int], list[float]]:
-        """Top-n indices of the current signal column.
-
-        ``eligible`` is the mandatory per-stock bool eligibility vector for
-        this signal date (signal-date & entry-date universe membership):
-        ineligible stocks are excluded from the selection regardless of
-        their signal value, so a position can never be newly opened in a
-        stock outside the universe.  ``st_mask`` optionally marks the
-        stocks that are ST as of the exact execution date (same-day paper
-        trading only); the historical engine leaves it None.
-
-        Ties resolve by ``ts_code`` (a stable identifier, not the row
-        index), so the selected set is invariant under stock-row
-        permutation.  Returns ``(indices, selectable_values)``: the top-n
-        indices and the signal values of every selectable stock (the
-        caller's no-signal dispersion check consumes the full selectable
-        cross-section, not just the top-n).
-        """
-
-        blocked = self._blocked_mask(
-            exec_day,
-            open_,
-            high,
-            low,
-            pre_close,
-            volume,
-            ts_codes,
-            side=side,
-            st_mask=st_mask,
-        )
-        valid = [
-            (i, float(signal[i]))
-            for i in range(len(signal))
-            if eligible[i] and not blocked[i] and np.isfinite(signal[i])
-        ]
-        selectable_values = [value for _, value in valid]
-        # Primary key: signal value descending; secondary key: ts_code, so
-        # exact ties never depend on the physical row order.
-        valid.sort(key=lambda item: (-item[1], ts_codes[item[0]]))
-        return [i for i, _ in valid[: self.config.top_n]], selectable_values
-
-    @staticmethod
-    def _scale_to_budget(raw: np.ndarray, held: np.ndarray) -> np.ndarray:
-        """Scale fresh buys down to the cash budget left by force-held
-        positions — the no-renormalization contract (T1-02).
-
-        The book is never renormalized upward: per-name weights stay at
-        ``min(1/top_n, cap)`` (or below), and when force-held positions
-        consume the budget the fresh portion shrinks instead, so the total
-        invested weight never exceeds 1 (no leverage, cash remainder).
-        """
-
-        budget = max(1.0 - float(held.sum()), 0.0)
-        raw_sum = float(raw.sum())
-        if raw_sum <= 0.0 or raw_sum <= budget:
-            return raw
-        return raw * (budget / raw_sum)
 
     @staticmethod
     def _blocked_mask(

@@ -217,8 +217,9 @@ def test_deterministic_report():
 
 
 def test_suspension_blocks_buy_in_both_paths():
-    # Stock 0 carries the top signal but is suspended (zero volume) on the
-    # entry day: neither path may buy it, and parity holds.
+    # Stock 0 is already held and remains in the target Top-2 when it is
+    # suspended.  P3 contract section 2 only prohibits a buy-blocked name
+    # from becoming a *new* holding; it does not create a needless exit.
     signal, raw, ts_codes, dates, mask = _market()
     suspension_day = 5
     raw["volume"][0, suspension_day] = 0.0
@@ -226,8 +227,11 @@ def test_suspension_blocks_buy_in_both_paths():
     GoldenParity(_cfg(), lot_size=100).verify(report)
     entry_record = report.records[suspension_day - 1]
     assert all(f.ts_code != "000001.SZ" for f in entry_record.fills)
-    # The engine picked the second-best name instead; both paths agree.
-    assert any(f.status == "filled" for f in entry_record.fills)
+    assert entry_record.fills == ()
+    np.testing.assert_array_equal(
+        report.target_weights[suspension_day - 1],
+        report.target_weights[suspension_day - 2],
+    )
 
 
 def test_limit_up_open_blocks_buy():

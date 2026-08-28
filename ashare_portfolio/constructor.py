@@ -135,8 +135,8 @@ class PortfolioConstructor:
             raise ValueError("prev_weights must be finite and non-negative")
         if float(prev_weights.sum()) > 1.0 + 1e-9:
             raise ValueError("prev_weights must not exceed full investment")
-        if not np.isfinite(float(capital)) or float(capital) <= 0.0:
-            raise ValueError("capital must be a finite positive number")
+        if not np.isfinite(float(capital)):
+            raise ValueError("capital must be finite")
         if len(set(stable_keys.tolist())) != len(stable_keys):
             raise ValueError("stable_keys must be unique")
 
@@ -214,6 +214,7 @@ class PortfolioConstructor:
             "legacy_position_wind_down": (),
             "initial_funding": bool(prev.sum() <= _WEIGHT_EPSILON),
         }
+        notional_capital = max(float(capital), 0.0)
         if not rebalance_due:
             selected = tuple(np.flatnonzero(prev > _WEIGHT_EPSILON).astype(int))
             return self._output(prev, prev, selected, "not_due", diagnostics)
@@ -231,6 +232,12 @@ class PortfolioConstructor:
             order = np.lexsort((stable_keys[candidates], -signal[candidates]))
             ranked = candidates[order]
             rank[ranked] = np.arange(len(ranked), dtype=np.int64)
+
+        ranked_selectable = np.asarray([], dtype=np.int64)
+        if selectable.any():
+            candidates = np.flatnonzero(selectable)
+            order = np.lexsort((stable_keys[candidates], -signal[candidates]))
+            ranked_selectable = candidates[order]
 
         forced_exit = held & ~eligible & ~sell_blocked
         mandatory = forced_exit.copy()
@@ -259,10 +266,8 @@ class PortfolioConstructor:
             slots = self.buy_rank - len(survivors)
             entrants = [
                 int(index)
-                for index in ranked
+                for index in ranked_selectable[: self.buy_rank]
                 if slots > 0
-                and rank[index] < self.buy_rank
-                and selectable[index]
                 and index not in survivor_set
             ][:slots]
             selected_list = survivors + entrants
@@ -291,7 +296,7 @@ class PortfolioConstructor:
                 solution = self.optimizer.solve(
                     alpha,
                     prev,
-                    capital=float(capital),
+                    capital=notional_capital,
                     cov=cov,
                     industries=industries,
                     beta=beta,
@@ -335,7 +340,7 @@ class PortfolioConstructor:
             below = (
                 discretionary
                 & (np.abs(delta) > 0.0)
-                & (np.abs(delta) * float(capital) < float(minimum))
+                & (np.abs(delta) * notional_capital < float(minimum))
             )
             if below.any():
                 min_trade_dropped.update(np.flatnonzero(below).astype(int).tolist())
@@ -358,7 +363,7 @@ class PortfolioConstructor:
             below = (
                 discretionary
                 & (np.abs(delta) > 0.0)
-                & (np.abs(delta) * float(capital) < float(minimum))
+                & (np.abs(delta) * notional_capital < float(minimum))
             )
             if below.any():
                 min_trade_dropped.update(np.flatnonzero(below).astype(int).tolist())

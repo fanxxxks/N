@@ -399,13 +399,13 @@ def test_batch_sim_degenerate_shapes_match_scalar():
         universe_mask=np.ones((3, 1), dtype=bool),
     )
     assert ref_daily.size == 0 and ref_to == 0.0
-    # top_n <= 0: every day skipped, zero daily and zero turnover.
-    df, tf = simulate_basket_daily_returns_batch(
-        np.zeros((2, 3, 6)), np.zeros((3, 6)), _cfg(top_n=0),
-        universe_mask=np.ones((3, 6), dtype=bool),
-    )
-    assert np.all(df == 0.0)
-    assert list(tf) == [0.0, 0.0]
+    # P3 contract section 2: ranks are positive; an invalid zero rank is
+    # rejected instead of being interpreted as a silent empty strategy.
+    with pytest.raises(ValueError, match="buy_rank must be >= 1"):
+        simulate_basket_daily_returns_batch(
+            np.zeros((2, 3, 6)), np.zeros((3, 6)), _cfg(top_n=0),
+            universe_mask=np.ones((3, 6), dtype=bool),
+        )
     # Not enough finite rows on any day: same zero behavior.
     sig = np.full((1, 3, 6), np.nan)
     df, tf = simulate_basket_daily_returns_batch(
