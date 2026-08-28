@@ -298,6 +298,14 @@ class BacktestConfig:
     target_horizon: int = 1
     initial_capital: float = 100000.0
     top_n: int = 30
+    # P3 constructor fields. ``None`` ranks preserve legacy programmatic
+    # callers: buy_rank=top_n and sell_rank=buy_rank (no implicit buffer).
+    portfolio_method: str = "equal_weight"
+    buy_rank: int | None = None
+    sell_rank: int | None = None
+    min_trade_amount: float | None = None
+    turnover_budget: float | None = None
+    target_weight_change_threshold: float = 0.0
     single_weight_cap: float = 0.05
     commission_rate: float = 0.00025
     min_commission: float = 5.0
@@ -519,6 +527,9 @@ def make_backtest_config(raw: dict[str, Any]) -> BacktestConfig:
     from ashare_portfolio.rebalance import RebalancePolicy
 
     RebalancePolicy.from_config(cfg)
+    from ashare_portfolio.constructor import validate_portfolio_config
+
+    validate_portfolio_config(cfg)
     return cfg
 
 

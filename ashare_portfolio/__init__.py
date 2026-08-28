@@ -12,6 +12,15 @@ from importlib import import_module
 
 
 _EXPORTS = {
+    "PORTFOLIO_CONSTRUCTOR_VERSION": (
+        "ashare_portfolio.constructor",
+        "PORTFOLIO_CONSTRUCTOR_VERSION",
+    ),
+    "PortfolioConstructor": (
+        "ashare_portfolio.constructor",
+        "PortfolioConstructor",
+    ),
+    "PortfolioOutput": ("ashare_portfolio.constructor", "PortfolioOutput"),
     "EXECUTION_SPEC_VERSION": ("ashare_portfolio.golden", "EXECUTION_SPEC_VERSION"),
     "DayParityRecord": ("ashare_portfolio.golden", "DayParityRecord"),
     "FillRecord": ("ashare_portfolio.golden", "FillRecord"),

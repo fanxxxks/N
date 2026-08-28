@@ -174,6 +174,7 @@ class PortfolioOptimizer:
         beta: np.ndarray | None = None,
         size: np.ndarray | None = None,
         adv: np.ndarray | None = None,
+        min_weights: np.ndarray | None = None,
     ) -> PortfolioSolution:
         """Solve one rebalance: expected alpha -> constrained target weights.
 
@@ -186,6 +187,9 @@ class PortfolioOptimizer:
         ADV/impact terms (a name without liquidity data cannot be
         liquidity-constrained), and supplying ``adv`` with every entry
         excluded while an ADV term is configured raises ``ValueError``.
+        ``min_weights`` is an optional per-name lower bound used by the P3
+        ranking buffer: an incumbent that has not crossed its exit rank may
+        be increased but cannot be sold by the optimizer.
         """
 
         alpha = np.asarray(alpha, dtype=np.float64)
@@ -201,7 +205,24 @@ class PortfolioOptimizer:
             raise ValueError("prev_weights must be finite")
         n = alpha.shape[0]
 
+        if min_weights is None:
+            min_weights_arr = np.zeros(n, dtype=np.float64)
+        else:
+            min_weights_arr = np.asarray(min_weights, dtype=np.float64)
+            if min_weights_arr.shape != (n,):
+                raise ValueError(
+                    f"min_weights shape {min_weights_arr.shape} does not match alpha"
+                )
+            if not np.isfinite(min_weights_arr).all() or np.any(min_weights_arr < 0.0):
+                raise ValueError("min_weights must be finite and non-negative")
+            if np.any(min_weights_arr > self.constraints.single_weight_cap + 1e-12):
+                raise ValueError("min_weights exceed single_weight_cap")
+            if float(min_weights_arr.sum()) > 1.0 - self.constraints.min_cash + 1e-12:
+                raise ValueError("min_weights exceed the investable budget")
+
         finite = np.isfinite(alpha)
+        if np.any((min_weights_arr > 0.0) & ~finite):
+            raise ValueError("positive min_weights require finite alpha")
         if not finite.any():
             return PortfolioSolution(
                 weights=np.zeros(n, dtype=np.float64),
@@ -250,7 +271,7 @@ class PortfolioOptimizer:
                 raise ValueError("adv contains no valid (finite, positive) entries")
 
         w = cp.Variable(n)
-        constraints = [w >= 0.0, w <= c.single_weight_cap]
+        constraints = [w >= min_weights_arr, w <= c.single_weight_cap]
         constraints.append(cp.sum(w) <= 1.0 - c.min_cash)
         if (~finite).any():
             constraints.append(w[~finite] == 0.0)

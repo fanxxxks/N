@@ -122,7 +122,15 @@ backtest:
   end_date: "2026-12-31"
   train_end_date: "2023-12-31"
   initial_capital: 100000.0
-  top_n: 30
+  # P3 production constructor: 100k starts with at most twenty 5k orders;
+  # buffer + shared filters prevent 30-name daily micro-order churn.
+  top_n: 20
+  portfolio_method: equal_weight
+  buy_rank: 20
+  sell_rank: 30
+  min_trade_amount: 5000.0
+  turnover_budget: 0.20
+  target_weight_change_threshold: 0.01
   single_weight_cap: 0.05
   commission_rate: 0.00025
   min_commission: 5.0
@@ -133,7 +141,7 @@ backtest:
 
 sim:
   initial_capital: 100000.0
-  max_positions: 30
+  max_positions: 20
   single_weight_cap: 0.05
   benchmark: "全市场等权"
   stop_signal_path: STOP_SIGNAL
