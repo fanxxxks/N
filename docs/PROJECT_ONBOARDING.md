@@ -1,7 +1,8 @@
-# AlphaGPT 项目架构与新开发者上手指南
+# AlphaGPT 项目架构指南
 
 > 分析日期：2026-08-27（Asia/Shanghai）  
-> 分析基线：<code>main</code> @ <code>c5b801e936f6ef6cdba4c80ff1e81d12a7387ca6</code>  
+> 分析基线：<code>main</code> @ <code>c5b801e936f6ef6cdba4c80ff1e81d12a7387ca6</code>（原始基线）
+> 核验更新：2026-08-28（Asia/Shanghai）；核验基线 <code>main</code> @ <code>80918fa</code>（c5b801e 之后合入 P0/P1/P2 三个阶段，见 §0.3；本文已按当前仓库状态修订）  
 > 分析方式：源码、配置、测试、历史实验、现有 DuckDB 与本地运行时产物的静态/只读核查。除创建本文档外，没有执行数据同步、训练、回测、模拟盘、归档、部署或任何项目业务数据/运行时写操作。  
 > 文档定位：帮助刚接手项目的开发者在不误用旧产物、不破坏本地数据的前提下，快速建立正确的系统心智模型。
 
@@ -22,10 +23,10 @@ AlphaGPT 当前是一套本地优先、单用户、纯 A 股横截面因子研�
 |---|---|---|
 | 这是模块化单体/分层批处理系统，不是微服务，也不是在线预测服务 | 主流程由 CLI 驱动，模块之间大量通过 DuckDB、Parquet、JSON 和文件锁衔接 | [README.md](../README.md#L45)、[webapi/app.py](../webapi/app.py#L1)、[ashare_data/sync.py](../ashare_data/sync.py#L197) |
 | 当前生产默认搜索器是强类型 GP，不是 Transformer/RL | RL 保留为实验选项，但准入实验失败；不要把项目简称为“RL 生产系统” | [config/ashare_config.yaml](../config/ashare_config.yaml#L42)、[docs/phase2_measurement_log.md](phase2_measurement_log.md#L130)、[ashare_model/train.py](../ashare_model/train.py#L1223) |
-| 当前奖励实现是 v13：组合主动 IR 减精确年化费用；ICIR 是辅助指标 | README 和 YAML 注释仍描述旧的 rank-ICIR 主奖励，阅读时以源码为准 | [ashare_model/reward.py](../ashare_model/reward.py#L15)、[ashare_model/reward.py](../ashare_model/reward.py#L765)、[README.md](../README.md#L273)、[config/ashare_config.yaml](../config/ashare_config.yaml#L61) |
+| 当前奖励实现是 v13：组合主动 IR 减精确年化费用；ICIR 是辅助指标 | README 与 YAML 注释已同步为 v13 描述（P0-02 更新）；仍以源码为准 | [ashare_model/reward.py](../ashare_model/reward.py#L15)、[ashare_model/reward.py](../ashare_model/reward.py#L765)、[README.md](../README.md#L273)、[config/ashare_config.yaml](../config/ashare_config.yaml#L61) |
 | 本机数据库的 G1-G7 生产门禁当前全部通过 | PIT 成分、上市日、日历、最小股票数和历史成员 bar 覆盖目前可用；这不等价于策略或产物可用于决策 | [ashare_data/gates.py](../ashare_data/gates.py#L1)、[scripts/check_production_gates.py](../scripts/check_production_gates.py) |
 | 本机现有策略、回测和协议产物彼此不一致且全部落后于当前源码代际 | 看板目前可能把不同公式、不同版本、不同数据时间的结果拼在一起；接手后不能直接引用这些数字 | [data/best_ashare_strategy.json](../data/best_ashare_strategy.json)、[data/backtest_result.json](../data/backtest_result.json)、[data/protocol_result.json](../data/protocol_result.json) |
-| 当前没有可称为最终 holdout 的历史区间，也没有当前 v20/v13 的显著 alpha 证据 | 2021-2026 已被反复查看，只能算开发/验证数据；旧协议曾显示无显著候选 | [docs/phase4_measurement_log.md](phase4_measurement_log.md#L15)、[docs/evaluation_20260823.md](evaluation_20260823.md#L163) |
+| 当前没有可称为最终 holdout 的历史区间，也没有当前 v21/v13 的显著 alpha 证据 | 2021-2026 已被反复查看，只能算开发/验证数据；v20 selfcheck 曾显示 DSR=0.000、max-t p=1.0000（无显著候选） | [docs/phase4_measurement_log.md](phase4_measurement_log.md#L15)、[docs/phase5_measurement_log.md](phase5_measurement_log.md#L17) |
 | 组合优化器已经实现并有黄金一致性测试，但未接入默认训练、回测或模拟盘 | 当前生产策略仍是 top-N 等权加单票权重上限；不要从目录名推断已启用优化组合 | [ashare_portfolio/optimizer.py](../ashare_portfolio/optimizer.py#L105)、[ashare_portfolio/golden.py](../ashare_portfolio/golden.py#L180)、[ashare_model/backtest.py](../ashare_model/backtest.py#L339) |
 | 项目面向研究和 paper trading，不连接真实券商 | 所有成交由本地模拟撮合器生成，状态保存在 JSON；没有实盘下单适配器 | [ashare_trading/matching.py](../ashare_trading/matching.py)、[ashare_trading/run_sim.py](../ashare_trading/run_sim.py#L83) |
 
@@ -35,26 +36,26 @@ AlphaGPT 当前是一套本地优先、单用户、纯 A 股横截面因子研�
 
 | 项目 | 当前值 |
 |---|---|
-| Git | <code>main</code> 与 <code>origin/main</code> 对齐；分析开始时工作区干净 |
+| Git | <code>main</code> 与 <code>origin/main</code> 对齐（P0/P1/P2 共 28 个提交已推送）；工作区仅本文档有未提交修订 |
 | Python | 项目说明要求 3.10+；CI 使用 3.12；本机可用项目环境为 <code>D:\minequant\.venv\Scripts\python.exe</code>，Python 3.13.12 |
 | 默认 shell Python | <code>C:\ProgramData\miniconda3\python.exe</code>；它不是当前依赖完整的项目环境 |
 | Node / npm | Node 24.14.0 / npm 11.9.0 |
 | DuckDB | 786,444,288 bytes；日线 4,874,595 行，2015-01-05 至 2026-08-21 |
-| 股票/成分 | 5,546 只股票元数据；2,574 条 PIT 成分区间 |
+| 股票/成分 | 5,539 只股票元数据（P2-01 清除 7 个 900xxx B 股脏行）；2,574 条 PIT 成分区间 |
 | 生产门禁 | G1-G7 全部通过；每年最少 eligible 股票数 473；2,426 个有效成员区间中零 bar 区间为 0 |
-| 数据集清单 | 当前数据库没有 <code>dataset_manifest</code>/<code>dataset_manifest_cache</code> 表，因此加载器会把 <code>dataset_id</code> 降级为 <code>None</code> |
+| 数据集清单 | <code>dataset_manifest</code> 1 行 + <code>dataset_manifest_cache</code> 129 行；dataset_id <code>b927074a455a…</code>（11,003,350 行 / 8 表，P0 构建，P2 purge 后沿用） |
 | STOP 信号 | 根目录现有被忽略的 <code>STOP_SIGNAL</code>，内容为 <code>STOP</code> |
-| 协议治理文件 | <code>experiment_ledger.jsonl</code>、<code>holdout_registry.json</code>、<code>paper_windows.json</code>、<code>promotion_verdict.json</code> 均不存在 |
+| 协议治理文件 | <code>holdout_registry.json</code>、<code>paper_windows.json</code>、<code>promotion_verdict.json</code> 不存在；<code>experiment_ledger.jsonl</code> 已存在（10 行 selfcheck 记录，见 P0/P1 日志） |
 
 数据库表的当前行数：
 
 | 表 | 行数 | 说明 |
 |---|---:|---|
-| <code>stocks</code> | 5,546 | 股票快照、上市日、当前 ST 标识 |
+| <code>stocks</code> | 5,539 | 股票快照、上市日、当前 ST 标识（P2-01 已清除 7 个 B 股脏行） |
 | <code>daily_bar</code> | 4,874,595 | 前复权日线 |
 | <code>constituents</code> | 2,574 | 沪深 300/中证 500 PIT 成分半开区间 |
 | <code>trade_calendar</code> | 8,797 | 交易日历 |
-| <code>fundamental_pit</code> | 322,876 | 财务 PIT 近似数据 |
+| <code>fundamental_pit</code> | 205,589 | 财务 PIT 近似数据（P2-01 范围治理后） |
 | <code>margin_balance</code> | 5,642,388 | 融资余额 |
 | <code>sw_industry_index</code> | 141,378 | 申万行业指数历史 |
 | <code>sw_industry_member</code> | 5,196 | 当前申万行业成分映射 |
@@ -64,12 +65,24 @@ AlphaGPT 当前是一套本地优先、单用户、纯 A 股横截面因子研�
 
 | 产物 | 当前内容 | 与当前源码的差异 |
 |---|---|---|
-| [data/best_ashare_strategy.json](../data/best_ashare_strategy.json) | 公式为 <code>(VOL_20 CORR60 (ATR_14 ADD MAX3((RET_10 ADD (PS_TTM MUL TS_RANK20(DIVIDEND_YIELD))))))</code>，方向 -1，reward v10 | 当前 reward v13；缺少 <code>searcher</code>、<code>protocol_version</code>、<code>model_version</code>、<code>dataset_id</code> 和语义缓存元数据 |
+| [data/best_ashare_strategy.json](../data/best_ashare_strategy.json) | 公式为 <code>(VOL_20 CORR60 (ATR_14 ADD MAX3((RET_10 ADD (PS_TTM MUL TS_RANK20(DIVIDEND_YIELD))))))</code>，方向 -1，reward v10 | 已由 <code>scripts/stamp_legacy_artifacts.py</code> 盖章 legacy（无 searcher / reward v10≠13 / 无 protocol_version / 无 model_version / 无 dataset_id，2026-08-27T10:31:32Z）；当前 reward v13 |
 | [data/backtest_result.json](../data/backtest_result.json) | 公式为 <code>LIMIT_BREAK</code>，2015-01-06 至 2026-08-14，累计收益 -100%，Sharpe -1.956 | 公式与当前策略 JSON 不同；无 <code>dataset_id</code>；属于旧 schema |
-| [data/protocol_result.json](../data/protocol_result.json) | protocol v12、reward v10、60 行候选 | 当前 protocol v20、reward v13；没有 stitched OOS、dataset、ledger 或 data-regime 块 |
+| [data/protocol_result.json](../data/protocol_result.json) | protocol v12、reward v10、60 行候选 | 已盖章 legacy（protocol v12≠21 / reward v10≠13 / 无 dataset_id / 无 stitched / 无 ledger）；当前 protocol v21、reward v13；没有 stitched OOS、dataset、ledger 或 data-regime 块 |
 | [data/sim_portfolio_state.json](../data/sim_portfolio_state.json) | 2,822 个权益点、28,179 笔成交、最后日期 2026-08-14 | 旧状态没有 <code>last_exec_date</code>、公式、配置版本或 <code>dataset_id</code>；续跑时可能把新策略接到旧权益曲线上 |
 
-结论：当前 UI 只能视为“历史文件查看器”，不能被当作一组同源、同版本、可复现的研究结果。任何策略判断前，应先生成数据 manifest，再按当前版本重新训练、回测、执行 v20 协议，并通过晋级门禁。
+结论：当前 UI 只能视为“历史文件查看器”，不能被当作一组同源、同版本、可复现的研究结果。任何策略判断前，应先核对数据 manifest（当前已存在，dataset_id <code>b927074a455a…</code>），再按当前版本重新训练、回测、执行 v21 协议，并通过六道晋级门禁。
+
+### 0.3 自基线以来的变更（P0 / P1 / P2）
+
+文档基线 c5b801e 之后，main 又合入三个阶段（核验基线 <code>80918fa</code>，2026-08-28 已推送 origin/main）：
+
+| 阶段 | 主题 | 主要改动 |
+|---|---|---|
+| P0（2026-08-27） | GP 默认统一、doctor、legacy 盖章、CI web 构建、CPU/CUDA 依赖拆分 | 默认搜索器统一为 GP（deap 移入基础依赖）；新增只读 <code>research_doctor</code> 与 manifest CLI；旧策略/协议产物盖章 legacy 并在消费端防护（web API 补章、backtest/run_sim 警告）；CI 新增 React 构建 job；<code>requirements.txt</code> 改 pin CPU torch，GPU 机器用 [requirements-cuda.txt](../requirements-cuda.txt) 替换 |
+| P1（2026-08-27） | 低成本测量与成本诊断 | [cost_matrix.py](../ashare_model/cost_matrix.py)（费用矩阵）、[bare_factor_backtest.py](../ashare_model/bare_factor_backtest.py)（七裸因子固定回测）、[searcher_bench.py](../ashare_model/searcher_bench.py)（四搜索器成本测量）、selfcheck 空转验收；P1 收尾 949 passed |
+| P2（2026-08-28） | 免费数据可信度分层 | Tier A/B/C 定义与可用时间规则（契约见 [docs/p2_data_tier_contract.md](p2_data_tier_contract.md)）、feature registry v2、协议 v21 逐行记录 data_tier、promotion 第六道 data_tier 门（默认 A-only、B 单独对照、C 永不晋级）、分层诊断/消融报告、fundamental_pit/stocks 范围治理（purge 117,287 行）；P2 收尾 981 passed |
+
+各阶段测量记录见 [docs/phase0_measurement_log.md](phase0_measurement_log.md) 至 [docs/phase6_measurement_log.md](phase6_measurement_log.md)。本文其余章节已按当前状态修订。
 
 ## 1. 项目概览
 
@@ -154,8 +167,8 @@ AlphaGPT 的核心目标是自动发现可解释的 A 股横截面选股公式�
 
 - Python 代码没有 <code>pyproject.toml</code>、<code>setup.py</code> 或 <code>setup.cfg</code>，不是可安装包；通常必须从仓库根目录运行。
 - 没有 Dockerfile、Compose、Kubernetes、Makefile、tox、正式迁移工具或部署清单。
-- 唯一 CI 是 GitHub Actions：Ubuntu、Python 3.12、安装两份 pin 文件、执行 pip check、lock check 和全量 pytest，见 [.github/workflows/ci.yml](../.github/workflows/ci.yml)。
-- 前端没有测试、lint 或 CI 构建步骤。
+- 唯一 CI 是 GitHub Actions：Python 3.12 job（安装两份 pin 文件、执行 pip check、lock check 和全量 pytest；freeze_lock 还校验 <code>requirements-cuda.txt</code> 与基础 torch 版本一致）加 Node 22 web job（npm ci、npm ls --depth=0、npm run build），见 [.github/workflows/ci.yml](../.github/workflows/ci.yml)。
+- 前端没有测试和 lint；CI 已有构建步骤（P0-05 新增）。
 - Web 的“生产模式”只是先构建 <code>webui/dist</code>，再由单个 Uvicorn/FastAPI 进程提供 API 和静态文件，见 [webapi/app.py](../webapi/app.py#L7)。
 
 ## 3. 整体架构
@@ -189,7 +202,7 @@ flowchart LR
         Search[GP / Random / RL / TPE]
         VM[AST + StackVM]
         Score[Reward v13 + CandidateSelector]
-        Backtest[回测与 v20 评价协议]
+        Backtest[回测与 v21 评价协议]
         Optimizer[独立 QP 组合优化器]
         Sim[SimulationRunner + SimBroker]
         Artifacts[(JSON / PT / 日志 / 实验档案)]
@@ -301,7 +314,7 @@ flowchart TD
     N --> O[开盘 t+2 收益标签/退出]
     O --> P[主动 IR - 精确年化费用 + 质量/复杂度/容量门禁]
     P --> Q[策略 JSON]
-    Q --> R[回测 / v20 协议 / 模拟盘]
+    Q --> R[回测 / v21 协议 / 模拟盘]
 ~~~
 
 同步入口见 [ashare_data/sync.py](../ashare_data/sync.py#L197)，PIT 导入见 [scripts/import_pit_universe.py](../scripts/import_pit_universe.py#L1)，统一门禁见 [ashare_data/gates.py](../ashare_data/gates.py#L1)，加载和目标构造见 [ashare_model/data_loader.py](../ashare_model/data_loader.py#L184)。
@@ -389,7 +402,7 @@ API 管理器启动时会清理旧 STOP；直接 CLI 只有带 <code>--resume</c
 | 成分区间 | <code>[in_date, out_date)</code> 半开区间，可多次进出指数 | [ashare_data/universe.py](../ashare_data/universe.py#L205) |
 | 收益标签 | signal 日 t；t+1 开盘进入；t+2 开盘退出，目标为 <code>open[t+2]/open[t+1]-1</code> | [ashare_model/data_loader.py](../ashare_model/data_loader.py#L299)、[ashare_model/time_contract.py](../ashare_model/time_contract.py) |
 | 训练/验证 | 策略梯度只读 IS 头部；验证尾部切成 4 个子窗，以中位数选公式 | [ashare_model/train.py](../ashare_model/train.py#L880) |
-| 评价 trial | v20 中一个 trial 是一个 <code>(candidate, seed)</code> 跨折拼接 OOS 序列，不是一折一行 | [docs/phase4_measurement_log.md](phase4_measurement_log.md#L23) |
+| 评价 trial | v20 起（当前 v21）一个 trial 是一个 <code>(candidate, seed)</code> 跨折拼接 OOS 序列，不是一折一行 | [docs/phase4_measurement_log.md](phase4_measurement_log.md#L23) |
 | PIT 选择 | 信号日和入场日必须 eligible；退出成员通过正常卖出路径处理 | [ashare_model/reward.py](../ashare_model/reward.py#L17)、[ashare_model/backtest.py](../ashare_model/backtest.py#L65) |
 | no-signal | 可选截面少于两个不同值时保持原仓，不做信号驱动换手 | [ashare_model/reward.py](../ashare_model/reward.py#L36)、[ashare_trading/run_sim.py](../ashare_trading/run_sim.py#L283) |
 
@@ -418,7 +431,7 @@ AlphaGPT/
 └─ logs/                 本地运行日志，gitignored
 ~~~
 
-仓库跟踪文件分布：<code>ashare_data</code> 14 个、<code>ashare_model</code> 28 个、<code>ashare_portfolio</code> 3 个、<code>ashare_trading</code> 7 个、<code>webapi</code> 4 个、<code>webui</code> 18 个、<code>scripts</code> 9 个、<code>tests</code> 65 个、<code>experiments</code> 95 个。<code>experiments</code> 中的大 JSON 占绝大多数行数，做源码搜索或统计时应排除它。
+仓库跟踪文件分布：<code>ashare_data</code> 14 个、<code>ashare_model</code> 35 个、<code>ashare_portfolio</code> 3 个、<code>ashare_trading</code> 7 个、<code>webapi</code> 4 个、<code>webui</code> 18 个、<code>scripts</code> 12 个、<code>tests</code> 73 个（65 个测试模块 + conftest + 7 fixtures）、<code>experiments</code> 95 个。<code>experiments</code> 中的大 JSON 占绝大多数行数，做源码搜索或统计时应排除它。
 
 ### 4.2 根目录
 
@@ -426,11 +439,12 @@ AlphaGPT/
 |---|---|---|
 | 核心 | [ashare_execution.py](../ashare_execution.py) | 回测、训练奖励、组合黄金规范和模拟撮合共享的唯一费用模型；佣金最低额、印花税、过户费、滑点、可买股数 |
 | 辅助 | [ashare_logging.py](../ashare_logging.py) | Loguru 控制台/文件/内存配置；10 MB rotation、14 份 retention、最多 10,000 行内存、文本导出 |
-| 文档 | [README.md](../README.md) | 主运行说明；覆盖面广但奖励、manifest 和部分版本描述已漂移 |
-| 文档 | [CATREADME.md](../CATREADME.md) | 仓库速读；仍写 18 个算子，当前实际为 39 个 |
+| 文档 | [README.md](../README.md) | 主运行说明；已更新 reward v13、P2 分层与 CPU/CUDA 安装说明（P0-02/P0-06/P2），少量历史描述仍可能滞后于源码 |
+| 文档 | [CATREADME.md](../CATREADME.md) | 仓库速读；已更新为 39 个算子并含 P2 分层说明（98405a7） |
 | 依赖 | [requirements.in](../requirements.in)、[requirements.txt](../requirements.txt) | 直接依赖的人读清单和精确 pin |
 | 依赖 | [requirements-optional.in](../requirements-optional.in)、[requirements-optional.txt](../requirements-optional.txt) | 测试/统计/GP/TPE 可选依赖 |
 | 依赖 | [requirements.lock](../requirements.lock) | 当前开发机完整环境快照，含平台特定包 |
+| 依赖 | [requirements-cuda.txt](../requirements-cuda.txt) | GPU 机器的 torch CUDA wheel 替换清单（P0-06）；与基础 pin 同版本，CI 校验一致性 |
 | 配置 | [.gitignore](../.gitignore) | 忽略 data、logs、token、runtime overrides、node_modules、dist 等 |
 | 法务 | [LICENSE](../LICENSE) | Apache License 2.0 |
 | 遗留资产 | [showcase.png](../showcase.png) | 未引用的转债界面截图，与当前主线没有可验证关系 |
@@ -486,14 +500,21 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 搜索 | [baseline_harness.py](../ashare_model/baseline_harness.py) | matched unique-semantic-evaluation 预算和统一搜索评价适配器 |
 | 搜索治理 | [admission.py](../ashare_model/admission.py) | RL 与 random/GP/TPE 的预注册准入裁决 |
 | 评价 | [backtest.py](../ashare_model/backtest.py) | 连续权重 top-N 回测、基准、费用、持仓快照和指标 |
-| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v20 nested walk-forward、基线、拼接 OOS、DSR、max-t、自检 |
+| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v21 nested walk-forward、基线、拼接 OOS、DSR、max-t、自检 |
 | 评价 | [pareto.py](../ashare_model/pareto.py) | 多目标 Pareto frontier 辅助 |
 | 治理 | [ledger.py](../ashare_model/ledger.py) | append-only JSONL 试验账本、序列和 SHA-256 hash chain |
 | 治理 | [regime.py](../ashare_model/regime.py) | dev cutoff、预锁 final slice、dataset 绑定和违规拒绝 |
-| 治理 | [promotion.py](../ashare_model/promotion.py) | Champion/Challenger 五门晋级与成本/容量压力网格 |
+| 治理 | [promotion.py](../ashare_model/promotion.py) | Champion/Challenger 六门晋级（+data_tier）与成本/容量压力网格 |
 | 时间 | [time_contract.py](../ashare_model/time_contract.py) | t/t+1/t+2 和 fold 内标签边界 |
 | 诊断 | [diagnostics.py](../ashare_model/diagnostics.py) | 因子覆盖率、rank-IC、相关性报告 |
 | 实验 | [experiment_tracking.py](../ashare_model/experiment_tracking.py) | 可选 MLflow；无 URI/无包时结构化 no-op |
+| 版本 | [artifact_versions.py](../ashare_model/artifact_versions.py) | MODEL/REWARD/PROTOCOL/DATA_TIER/TIER_REPORT 等版本常量唯一来源（P0 新增） |
+| 数据分层 | [data_tier.py](../ashare_model/data_tier.py) | DATA_TIER_VERSION=1；PitLevel→DataTier 映射、各档可用时间规则、<code>formula_data_tier_report</code> 公式追溯 API（P2 新增） |
+| 分层报告 | [tier_reports.py](../ashare_model/tier_reports.py) | TIER_REPORT_VERSION=1；A/A+B/all 分层诊断与消融报告（P2 新增） |
+| 测量 | [cost_matrix.py](../ashare_model/cost_matrix.py) | FEE_MATRIX_VERSION=1；资金×持仓数×换手率费用矩阵（P1 新增） |
+| 测量 | [bare_factor_backtest.py](../ashare_model/bare_factor_backtest.py) | BARE_FACTOR_BACKTEST_VERSION=1；七裸因子固定回测（P1 新增） |
+| 测量 | [searcher_bench.py](../ashare_model/searcher_bench.py) | SEARCHER_BENCH_VERSION=1；gp/tpe/random/rl 时间与峰值内存成本测量（P1 新增） |
+| 诊断 | [research_doctor.py](../ashare_model/research_doctor.py) | 只读研究医生：门禁、依赖与运行量估算，输出 data/research_doctor.json（P0 新增） |
 | 兼容 | [ir.py](../ashare_model/ir.py)、[vocab.py](../ashare_model/vocab.py) | 旧 token/裸因子迁移和别名解析 |
 | 包入口 | [__init__.py](../ashare_model/__init__.py) | 包标识 |
 
@@ -503,9 +524,13 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 |---|---:|
 | 模型 | <code>MODEL_VERSION = 2</code> |
 | 奖励 | <code>REWARD_VERSION = 13</code> |
-| 评价协议 | <code>PROTOCOL_VERSION = 20</code> |
+| 评价协议 | <code>PROTOCOL_VERSION = 21</code>（v21 起逐行记录 data_tier） |
 | 公式语法 | <code>GRAMMAR_VERSION = 2</code> |
-| feature registry | 1 |
+| feature registry | 2（v2 起逐特征记录 data_tier） |
+| data tier | 1（ashare_model/data_tier.py，P2 新增） |
+| tier report | 1（ashare_model/tier_reports.py，P2 新增） |
+| fee matrix / bare factor backtest / searcher bench | 1（P1 新增测量模块） |
+| execution spec | 1（ashare_portfolio/golden.py） |
 | semantic cache | 1 |
 | dataset manifest | 1 |
 
@@ -586,15 +611,19 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | [analyze_sim.py](../scripts/analyze_sim.py) | 汇总模拟盘日文件和交易表现 |
 | [archive_run.py](../scripts/archive_run.py) | 归档公式、配置、指标、模型 hash 和 commit；带 <code>--commit</code> 会创建 Git commit |
 | [freeze_lock.py](../scripts/freeze_lock.py) | 从当前解释器已安装包生成 pin/完整 lock；无参数会改写依赖文件，<code>--check</code> 才是只读核对 |
+| [check_fundamental_scope.py](../scripts/check_fundamental_scope.py) | P2-01 基本面表范围审计与清理；<code>--report</code> 只读，<code>--purge</code> 删除范围外行并把前后计数写入 data/fundamental_scope.json |
+| [stamp_legacy_artifacts.py](../scripts/stamp_legacy_artifacts.py) | P0-04 旧策略/协议产物盖章 legacy（幂等，可重复执行） |
+| [tier_reports.py](../scripts/tier_reports.py) | P2-05 分层诊断与消融报告；写 data/tier_report.json 与 tier_report_diagnostics.json |
 
 ### 4.9 tests：测试结构
 
-65 个跟踪文件中包含 57 个测试模块、1 个 <code>conftest.py</code> 和 7 个 JSON fixtures。命名基本与生产模块一一对应：
+73 个跟踪文件中包含 65 个测试模块、1 个 <code>conftest.py</code> 和 7 个 JSON fixtures。命名基本与生产模块一一对应：
 
 - 数据：<code>test_akshare_client</code>、<code>test_sync</code>、<code>test_db</code>、<code>test_universe</code>、<code>test_gates</code>、<code>test_manifest</code>、<code>test_fundamentals</code>、<code>test_capital_flow</code>。
 - 公式/模型：<code>test_factors</code>、<code>test_ops</code>、<code>test_vm</code>、<code>test_vocab</code>、<code>test_ir</code>、<code>test_grammar</code>、<code>test_train</code>、<code>test_candidates</code>。
-- 研究有效性：<code>test_evaluation</code>、<code>test_stitched_oos</code>、<code>test_ledger</code>、<code>test_regime</code>、<code>test_promotion</code>、<code>test_semantic_cache</code>、<code>test_admission</code>。
+- 研究有效性：<code>test_evaluation</code>、<code>test_stitched_oos</code>、<code>test_ledger</code>、<code>test_regime</code>、<code>test_promotion</code>、<code>test_semantic_cache</code>、<code>test_admission</code>、<code>test_data_tier</code>、<code>test_tier_reports</code>、<code>test_fundamental_scope</code>、<code>test_artifact_versions</code>。
 - 执行：<code>test_backtest</code>、<code>test_execution</code>、<code>test_trading</code>、<code>test_run_sim</code>、<code>test_jobmanager</code>、<code>test_golden_parity</code>。
+- 测量（P1）：<code>test_cost_matrix</code>、<code>test_bare_factor_backtest</code>、<code>test_searcher_bench</code>、<code>test_research_doctor</code>。
 - UI/API：<code>test_dashboard</code>、<code>test_webapi</code>。
 - 完成性：<code>test_completion_gates</code> 聚合检查版本、文档/配置和关键契约。
 
@@ -605,13 +634,13 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | 目录 | 职责/现状 |
 |---|---|
 | [config](../config) | [ashare_config.yaml](../config/ashare_config.yaml) 是版本化基线；[.env.example](../config/.env.example) 只列三个数据路径变量；真实 <code>.env</code>、<code>.webapi_token</code> 和 <code>runtime_overrides.yaml</code> 被忽略 |
-| [docs](.) | 2026-08-23 旧工程评估和 Phase 1-4 测量日志；旧评估基于更早 commit，部分缺陷已修复，不能照单全收 |
+| [docs](.) | 本指南、P2 契约（[p2_data_tier_contract.md](p2_data_tier_contract.md)）与 Phase 0-6 七份测量日志；旧评估报告 evaluation_20260823.md 已删除（74f833e） |
 | [experiments](../experiments) | 只增不改的研究快照；当前有多个 2026-08-15 至 2026-08-23 归档和 [admission_experiment.json](../experiments/admission_experiment.json) |
 | [assets](../assets) | 两张无 provenance 的旧回测图片 |
 | [paper](../paper) | 一篇与 A 股主线无关的 Uniswap V4 论文 |
 | [.github](../.github) | 单一 Python CI workflow |
-| <code>data</code> | gitignored，约含 DuckDB、Parquet、策略、模型、回测、协议、模拟状态、逐日订单/成交 |
-| <code>logs</code> | gitignored，当前约 1,600 个历史文件；API 可读取其尾部 |
+| <code>data</code> | gitignored，约含 DuckDB、Parquet、策略、模型、回测、协议、模拟状态、逐日订单/成交，以及 P0/P1/P2 产物（fee_matrix、bare_factor_backtest、searcher_bench、selfcheck、research_doctor、tier_report、fundamental_scope 等）和 purge 前备份 ashare.duckdb.p2bak |
+| <code>logs</code> | gitignored，当前约 1,800 个历史文件；API 可读取其尾部 |
 
 ## 5. 功能清单与代码映射
 
@@ -631,9 +660,9 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | 训练奖励 | [reward.py](../ashare_model/reward.py) + [ashare_execution.py](../ashare_execution.py) | basket、基准、交易阻塞、费用 | reward/ICIR/objectives |
 | 因子诊断/消融 | [diagnostics.py](../ashare_model/diagnostics.py)、[scripts/ablate_families.py](../scripts/ablate_families.py) | 因子张量 | factor_report/ablation JSON |
 | 回测 | [backtest.py](../ashare_model/backtest.py) | 策略信号、行情、mask | 净值、指标、持仓、基准 |
-| Nested walk-forward 评价 | [evaluation.py](../ashare_model/evaluation.py) | 候选、fold、seed | protocol v20 JSON |
+| Nested walk-forward 评价 | [evaluation.py](../ashare_model/evaluation.py) | 候选、fold、seed | protocol v21 JSON（逐行记录 data_tier） |
 | 试验账本/数据区间治理 | [ledger.py](../ashare_model/ledger.py)、[regime.py](../ashare_model/regime.py) | trial/fold/dataset | hash-chain ledger、registry |
-| 策略晋级 | [promotion.py](../ashare_model/promotion.py) | v20 协议、paper windows、当前数据 | 五门 verdict |
+| 策略晋级 | [promotion.py](../ashare_model/promotion.py) | v21 协议、paper windows、当前数据 | 六门 verdict（+data_tier，默认 A-only） |
 | QP 组合优化 | [optimizer.py](../ashare_portfolio/optimizer.py) | alpha、前仓、风险/暴露/ADV | PortfolioSolution；默认主链未消费 |
 | 回测/撮合黄金一致性 | [golden.py](../ashare_portfolio/golden.py) | 回测目标权重和原始 bar | ParityReport |
 | 模拟订单与撮合 | [orders.py](../ashare_trading/orders.py)、[matching.py](../ashare_trading/matching.py) | 目标权重、现金、bar | SimOrder/SimTrade |
@@ -642,6 +671,11 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | Web/API 看板 | [webapi](../webapi)、[webui](../webui) | DB/JSON/logs | 六页 SPA |
 | 简版看板 | [dashboard](../dashboard) | DB/JSON | Streamlit 五 tab |
 | 归档/复现 | [scripts/archive_run.py](../scripts/archive_run.py)、[experiments](../experiments) | 运行产物 | manifest/config/metrics/formula/model hash |
+| 数据等级追溯 | [data_tier.py](../ashare_model/data_tier.py) | 公式 token / 裸因子名 | {max_tier, tiers_used, per_feature}（P2） |
+| 分层诊断/消融 | [tier_reports.py](../ashare_model/tier_reports.py)、[scripts/tier_reports.py](../scripts/tier_reports.py) | 因子张量、训练预算 | data/tier_report*.json（P2） |
+| 费用矩阵 | [cost_matrix.py](../ashare_model/cost_matrix.py) | 资金×持仓×换手网格 | data/fee_matrix.json（P1） |
+| 裸因子固定回测 | [bare_factor_backtest.py](../ashare_model/bare_factor_backtest.py) | 七裸因子 | data/bare_factor_backtest.json（P1） |
+| 搜索器成本测量 | [searcher_bench.py](../ashare_model/searcher_bench.py) | 四搜索器、统一语义预算 | data/searcher_bench.json（P1） |
 
 ### 5.1 62 个基础因子
 
@@ -778,7 +812,7 @@ API 没有数据同步、训练、回测、协议评价或晋级路由，这些�
 | <code>run_protocol</code> | <code>(loader,data_cfg,model_cfg,bt_cfg,reward_cfg,proto_cfg,tier_name,...)</code> | evaluation CLI |
 | <code>ExperimentLedger</code> | <code>(path, run_id=None)</code>；<code>trial/finalize</code> | protocol 自动试验账本 |
 | <code>RegimeRegistry</code> | <code>(path, regime=None)</code>；<code>assert_folds_clear/assert_final_evaluation</code> | protocol/晋级数据边界 |
-| <code>evaluate_challenger</code> | 读取 v20 artifact + current dataset + paper window | 五门晋级 |
+| <code>evaluate_challenger</code> | 读取协议产物 + current dataset + paper window；<code>allowed_data_tiers=("A",)</code> | 六门晋级（+data_tier；<code>--allow-tier-b</code> 单独对照） |
 | <code>PortfolioOptimizer.solve</code> | <code>(alpha,prev_weights,capital=...,cov=None,industries=None,beta=None,size=None,adv=None) → PortfolioSolution</code> | 当前仅测试/golden |
 | <code>ExecutionCostModel.rebalance_cost</code> | <code>(buy_weights,sell_weights,capital) → ExecutionCosts</code> | reward/backtest/golden |
 | <code>build_orders</code> | <code>(exec_date,codes,open_prices,target_shares,selected,current_quantities,lot_size=100)</code> | sim/golden |
@@ -803,6 +837,14 @@ API 没有数据同步、训练、回测、协议评价或晋级路由，这些�
 | 逐日订单/成交 | <code>data/sim_orders/YYYYMMDD.json</code>、<code>sim_trades</code> | SimulationRunner | API/分析/归档 |
 | 运行记录/进度 | <code>data/sim_run.json</code>、<code>sim_progress.json</code> | Manager/Runner | API 状态 |
 | 运行时覆盖 | <code>config/runtime_overrides.yaml</code> | Web config API | 所有 load_config 调用者 |
+| 费用矩阵 | <code>data/fee_matrix.json</code> | cost_matrix CLI | 人工研究/归档（P1） |
+| 裸因子回测 | <code>data/bare_factor_backtest.json</code> | bare_factor_backtest CLI | 人工研究/归档（P1） |
+| 搜索器成本 | <code>data/searcher_bench.json</code> | searcher_bench CLI | 人工研究/归档（P1） |
+| selfcheck | <code>data/selfcheck_result.json</code> | evaluation --selfcheck | 人工研究/归档（P1） |
+| 研究医生 | <code>data/research_doctor.json</code> | research_doctor CLI | 只读健康检查（P0） |
+| 分层报告 | <code>data/tier_report.json</code>、<code>tier_report_diagnostics.json</code> | tier_reports CLI | 研究/晋级准备（P2） |
+| 基本面范围 | <code>data/fundamental_scope.json</code> | check_fundamental_scope.py | 治理审计（P2） |
+| 数据库备份 | <code>data/ashare.duckdb.p2bak</code> | P2 purge 前备份 | 回滚参考（P2） |
 
 ## 7. 依赖关系
 
@@ -812,7 +854,7 @@ API 没有数据同步、训练、回测、协议评价或晋级路由，这些�
 
 | 依赖 | 当前 pin | 用途 | 主要调用模块 |
 |---|---:|---|---|
-| torch | 2.11.0+cu128 | Transformer、采样、Tensor VM、可选 CUDA | <code>ashare_model</code> |
+| torch | 2.11.0+cpu（基础 pin；GPU 按 [requirements-cuda.txt](../requirements-cuda.txt) 换 +cu128） | Transformer、采样、Tensor VM、可选 CUDA | <code>ashare_model</code> |
 | numpy | 2.5.2 | 数值矩阵、回测、奖励、执行 | 全部核心层 |
 | pandas | 3.0.5 | 表格、滚动窗口、DB frame、数据清洗 | data/model/dashboard |
 | cvxpy | 1.6.5 | QP 建模；默认 solver OSQP 来自其依赖 | portfolio |
@@ -835,14 +877,16 @@ API 没有数据同步、训练、回测、协议评价或晋级路由，这些�
 |---|---:|---|
 | pytest | 9.1.1 | 测试 |
 | scipy | 1.18.0 | 统计/数值测试 |
-| deap | 1.4.4 | 强类型 GP；由于 GP 是默认 searcher，实际已接近运行时必需 |
+| deap | 1.4.4 | 强类型 GP；P0-01 已移入基础依赖（GP 是生产默认搜索器） |
 | optuna | 4.9.0 | TPE 协议基线 |
+| httpx2 | 2.12.0 | starlette TestClient（test_webapi）依赖；P0 修复后已收录 |
 
-存在三处依赖声明缺口：
+存在两处依赖声明缺口：
 
 1. <code>baostock==0.9.3</code> 只出现在完整 [requirements.lock](../requirements.lock#L9)，不在直接或 optional spec/pin 中，但 [ashare_data/akshare_client.py](../ashare_data/akshare_client.py#L514) 和 [scripts/import_pit_universe.py](../scripts/import_pit_universe.py#L138) 会动态 import；干净安装无法完成正式 PIT bootstrap/兜底。
 2. <code>mlflow</code> 是 [ashare_model/experiment_tracking.py](../ashare_model/experiment_tracking.py) 的可选动态依赖，但没有出现在任何 requirements；模块在未安装时会 no-op。
-3. 当前 Starlette 1.3.1 的 TestClient 需要 <code>httpx2</code>，但 lock 和 pin 均没有它；因此 [tests/test_webapi.py](../tests/test_webapi.py#L10) 当前无法收集。
+
+此前 test_webapi 缺 <code>httpx2</code> 的第三处缺口已由 P0 修复：httpx2 现列于 optional pin 且本机已安装。
 
 ### 7.3 前端依赖
 
@@ -856,7 +900,7 @@ API 没有数据同步、训练、回测、协议评价或晋级路由，这些�
 | typescript | ^5.6.3 | 类型 |
 | vite / react plugin | ^5.4.11 / ^4.3.4 | 构建/开发服务 |
 
-[webui/package-lock.json](../webui/package-lock.json) 锁定实际 npm 依赖树；CI 当前没有执行 <code>npm ci</code>、TypeScript 检查或 build。
+[webui/package-lock.json](../webui/package-lock.json) 锁定实际 npm 依赖树；CI web job 执行 <code>npm ci</code>、<code>npm ls --depth=0</code> 和 <code>npm run build</code>（含 <code>tsc -b</code>），仍没有 lint 或前端测试。
 
 ### 7.4 内部依赖约束
 
@@ -965,17 +1009,17 @@ python scripts/freeze_lock.py --check
 py -3.12 -m venv .venv
 & .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install "torch==2.11.0+cu128" --index-url https://download.pytorch.org/whl/cu128
 python -m pip install -r requirements.txt -r requirements-optional.txt
 python -m pip install baostock==0.9.3
+# 有 NVIDIA 显卡时再把 torch 换成 CUDA wheel（与基础同版本，P0-06）
+python -m pip install -r requirements-cuda.txt
 ~~~
 
 风险说明：
 
-- <code>requirements.txt</code> 自己已经 pin <code>torch==2.11.0+cu128</code>，但没有声明 PyTorch index；在普通 PyPI/CI 环境可能无法解析或会下载巨大的 CUDA 构建。
-- README 的“先安装 requirements，再单独安装 CUDA torch”顺序与现有 pin 冲突。
-- CPU-only 机器仍会被要求安装 CUDA 构建；应由维护者拆分 CPU/CUDA constraints，而不是新开发者私自改 lock。
+- 基础 pin 已是 CPU torch（自带 PyTorch CPU index，P0-06 拆分），干净环境和 CI 不再需要 CUDA wheel；GPU 机器按 <code>requirements-cuda.txt</code> 显式替换，版本一致性由 freeze_lock --check 校验。
 - <code>requirements.lock</code> 含 <code>win32_setctime</code> 等 Windows 特定包，不应直接拿到 Linux CI 安装。
+- <code>baostock</code> 仍只存在于 lock，干净环境须手装（见 §7.2）。
 
 ### 8.5 数据初始化：全新环境
 
@@ -1009,28 +1053,29 @@ python scripts/check_production_gates.py
 - PIT import 和 backfill 会改 DuckDB；backfill 后若不重建 manifest，manifest 与实际数据可能不一致。
 - <code>--offline</code> 使用工作日近似日历并只适合 fixtures/开发，不能产出正式结果。
 - <code>--limit</code> 会限制股票数且跳过 purge，适合烟雾检查，但 G6/G7 正式门禁通常不会通过。
+- P2-01 后，怀疑 <code>fundamental_pit</code>/<code>stocks</code> 混入范围外行时，先跑 <code>python scripts/check_fundamental_scope.py --report</code>（只读审计）再决定是否 <code>--purge</code>；purge 前已有备份 <code>data/ashare.duckdb.p2bak</code>。
 
-### 8.6 现有本机数据的接手顺序
 
-当前 G1-G7 已通过，但 manifest 表缺失、全部研究产物落后。建议在获准写运行时数据后按以下顺序恢复，而不是直接点“模拟盘续跑”：
 
-1. 备份 <code>data</code> 和当前 Git commit 信息。
-2. 清点/归档现有策略、回测、协议和模拟状态，明确它们只能作为 legacy evidence。
-3. 运行一次当前 sync，生成 <code>dataset_manifest</code>；必要时 full verify。
-4. 再跑 G1-G7，记录完整 JSON。
-5. 用当前默认 GP、reward v13、protocol v20 重新训练。
-6. 用同一策略和 dataset_id 重新回测。
-7. 初始化 ledger 和 data regime，跑 screening/selfcheck，再决定是否付出 confirmation 成本。
-8. 只有 v20 统计门禁和未来 paper window 都满足后，才讨论 challenger promotion。
-9. 模拟盘应先归档并 reset，不能在当前 legacy equity history 上 resume 新策略。
-
-本次分析没有执行上述任何写操作。
-
-### 8.7 研究与模拟 CLI
+### 8.6 研究与模拟 CLI
 
 ~~~powershell
 # 因子诊断
 python -m ashare_model.diagnostics
+
+# 只读研究医生（门禁/依赖/运行量估算，P0）
+python -m ashare_model.research_doctor
+
+# P1 测量：费用矩阵 / 七裸因子固定回测 / 搜索器成本
+python -m ashare_model.cost_matrix
+python -m ashare_model.bare_factor_backtest
+python -m ashare_model.searcher_bench --budget 128
+
+# P2 分层诊断与消融（A / A+B / all）
+python scripts/tier_reports.py --steps 50 --batch-size 256
+
+# P2 基本面表范围审计（--purge 才会删除行）
+python scripts/check_fundamental_scope.py --report
 
 # 默认 GP 训练；GPU 只用于 VM，policy/采样始终 CPU
 python -m ashare_model.train --device auto
@@ -1055,7 +1100,7 @@ streamlit run dashboard/app.py
 
 模拟 CLI 当前根目录已有 STOP 文件；不带 <code>--resume</code>/<code>--reset</code> 的首次命令不会清除它，可能立即停止。不要手工删除状态文件来规避；应先按归档/重置流程处理。
 
-### 8.8 React + FastAPI
+### 8.7 React + FastAPI
 
 开发模式：
 
@@ -1097,14 +1142,14 @@ python -m uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 
 | 检查 | 结果 | 说明 |
 |---|---|---|
-| <code>pip check</code> | 通过 | 使用 <code>D:\minequant\.venv</code> |
-| <code>freeze_lock.py --check</code> | 通过 | 只核对 direct/optional pin，不核对完整平台 lock |
-| TypeScript <code>tsc --noEmit</code> | 通过 | 没有执行 Vite build，避免写 dist |
-| pytest collection | 887 tests collected，1 collection error | <code>tests/test_webapi.py</code> 因缺 <code>httpx2</code> 失败 |
-| 最新阶段记录 | 887 个非 Web API 测试通过 | Phase 4 明确排除了 test_webapi，见 [docs/phase4_measurement_log.md](phase4_measurement_log.md#L3) |
-| 生产数据门禁 | G1-G7 全通过 | 本次只读运行当前 DB |
+| <code>pip check</code> | 通过 | 使用 <code>D:\minequant\.venv</code>（2026-08-28 核验复跑） |
+| <code>freeze_lock.py --check</code> | 通过 | 只核对 direct/optional pin 与 CUDA 一致性，不核对完整平台 lock（2026-08-28 核验复跑） |
+| TypeScript <code>tsc --noEmit</code> | 通过（基线时点） | 没有执行 Vite build，避免写 dist |
+| pytest collection | 已无 blocker | P0 起 <code>httpx2</code> 已入 optional pin 且本机已装，test_webapi 可收集 |
+| 最新阶段记录 | P0 921 → P1 949 → P2 最终 981 passed | P2 日志口径排除 test_webapi，见 [docs/phase6_measurement_log.md](phase6_measurement_log.md#L25) |
+| 生产数据门禁 | G1-G7 全通过 | 2026-08-28 核验只读复跑：min eligible 473（2015）、2,426 个成员区间 0 个零 bar |
 
-本次没有运行完整 pytest，因为测试会生成被忽略的日志，而且已在 collection 阶段发现依赖 blocker。不要把“887 collected”写成“887 当前全通过”；准确说法是“阶段日志记录 887 个非 Web API 测试通过，当前全套 collection 被 Web API 依赖阻塞”。
+本次核验没有重跑完整 pytest（测试会生成被忽略的日志），数字以阶段日志为准；基线时点的“887 collected / 1 collection error”已因 httpx2 修复而过时。
 
 ### 9.2 推荐验证命令
 
@@ -1113,10 +1158,7 @@ python -m uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 python -m pip check
 python scripts/freeze_lock.py --check
 
-# 当前环境可运行的非 Web 基线
-python -m pytest -q tests --ignore=tests/test_webapi.py
-
-# 修复依赖后必须恢复为真正全量
+# 当前环境可运行的全量测试（httpx2 已入 pin，P0 起无需排除 test_webapi）
 python -m pytest -q tests
 
 Set-Location webui
@@ -1125,336 +1167,5 @@ npm ci
 npm run build
 ~~~
 
-### 9.3 质量保障的优点
 
-- 测试与核心源码规模接近，模块覆盖广。
-- 有 PIT 未来成员哨兵、t/t+1/t+2 时间契约、CPU/GPU VM、resume 等价、no-signal、语义 cache、ledger 篡改、locked holdout、promotion all-gates 等高价值测试。
-- 回测、训练 reward 和模拟撮合共享费用与大部分可交易性语义。
-- 语义变化有 MODEL/REWARD/PROTOCOL/GRAMMAR 版本。
-- 协议从单折行升级为 stitched OOS trial，并有 Deflated Sharpe/max-t 多重检验。
 
-### 9.4 质量保障缺口
-
-- 声明的 CI 当前很可能在全套 collection 或 CUDA torch 安装处失败。
-- CI 不跑前端 typecheck/build。
-- 没有 Python lint、format、typecheck 或覆盖率门槛。
-- 没有端到端浏览器测试。
-- 阶段测量日志手工排除 Web API，与 CI 的全量 pytest 命令不一致。
-- 没有针对“策略 + 回测 + protocol + sim 必须同一 dataset/formula/version”的产物集合一致性测试。
-
-## 10. 潜在风险、技术债与注意事项
-
-### 10.1 P0：会让研究/决策结论失真的风险
-
-#### R-01 现有运行时产物不构成同一实验
-
-现状：
-
-- 策略是复杂公式、reward v10；
-- 回测是 <code>LIMIT_BREAK</code>、-100%；
-- protocol 是 v12/v10；
-- 源码是 protocol v20/reward v13；
-- 三者都没有有效 dataset_id；
-- 模拟状态没有公式/数据/配置 provenance。
-
-影响：概览页会把不相干的策略、回测和模拟历史并排展示，使用者很容易误以为它们来自同一次运行。
-
-建议：
-
-- 引入 <code>run_id/artifact_set_id</code>，策略、回测、协议、模拟状态都记录 formula hash、dataset_id、config hash、版本和 Git commit；
-- API overview 在不一致时返回显式 red status，而不是静默组合；
-- 当前所有 data JSON 标记 legacy，只读归档后重跑。
-
-证据：[webapi/app.py](../webapi/app.py#L66)、[webapi/service.py](../webapi/service.py#L90)、当前 <code>data/*.json</code>。
-
-#### R-02 当前没有最终 holdout，也没有当前代际的显著 alpha
-
-2021-2026 已被反复查看，只能作为 dev/validation。2026-08-23 的旧 screening 结果为 DSR 0.043、max-t p=1.0，没有候选显著；其最佳非基准仍是已知因子。之后代码已升级，因此这个结果不能代表 v20/v13，但同样不能被升级本身推翻。
-
-影响：任何“已发现可部署 alpha”的陈述都没有当前证据。
-
-建议：
-
-- 先创建 data regime registry；
-- 把未来数据或预先锁定且无人查看的切片作为最终评价；
-- 用 v20 完整记录所有试错并完成 future paper window；
-- 只有 promotion 五门全过才允许进入 challenger。
-
-证据：[docs/evaluation_20260823.md](evaluation_20260823.md#L163)、[docs/phase4_measurement_log.md](phase4_measurement_log.md#L15)、[ashare_model/promotion.py](../ashare_model/promotion.py#L1)。
-
-#### R-03 dataset lineage 是 fail-open，且 manifest cache 不能可靠发现同分区值修正
-
-三个层面：
-
-1. 当前 DB 无 manifest 表；[AshareDataLoader.load_data](../ashare_model/data_loader.py#L304) 捕获所有异常并把 dataset_id 设为 None，正式门禁仍通过。
-2. 回测和模拟加载策略时没有调用 <code>check_dataset_id</code>；即使 DB 有 manifest，策略与当前数据不匹配也不会阻止执行，见 [ashare_model/backtest.py](../ashare_model/backtest.py#L520) 和 [ashare_trading/run_sim.py](../ashare_trading/run_sim.py#L115)。
-3. manifest cache 的复用键只有 partition 的 row_count 和 max key。上游更正同一日期的值、但行数和最大日期不变时，默认 <code>use_cache=True</code> 可能复用旧 hash；sync 因而可能生成不变的 dataset_id。只有 full verify 或禁用 cache 才会重新 hash，见 [ashare_data/manifest.py](../ashare_data/manifest.py#L364)。
-
-影响：所谓 content-addressed dataset_id 可能缺失或对值级修正不敏感，实验可复现性和晋级 P0 门禁被削弱。
-
-建议：
-
-- 将“manifest 存在且可 full verify”加入 formal gate；
-- backtest/sim/train/API start 强制 artifact dataset_id == current dataset_id，不再接受 None；
-- sync 的最终 manifest 生成禁用 cache，或让 cache 额外绑定数据库变更版本/分区内容校验；
-- backfill/PIT import 后强制重建 manifest。
-
-### 10.2 P1：高优先级运行/安全风险
-
-#### R-04 模拟盘 resume 没有绑定策略、数据和配置
-
-[SimulationPortfolio](../ashare_trading/portfolio.py#L83) 状态只含本金、现金、持仓、交易数、last date 和权益历史；公式、direction、formula hash、dataset_id、reward/protocol、费用和 Git commit 都不在状态中。<code>run_sim --resume</code> 会读取当前 <code>best_ashare_strategy.json</code> 接着跑。
-
-影响：更换策略/数据库/费用后续跑，会把多个制度拼进一条权益曲线，且没有可检测标志。当前 legacy state 已满足这个风险条件。
-
-建议：状态增加 immutable run contract；任何不匹配默认拒绝 resume，只允许 archive + reset 或显式 migration。
-
-#### R-05 状态损坏会被自动重置并覆盖
-
-[SimulationPortfolio.load](../ashare_trading/portfolio.py#L60) 捕获任何异常后调用 <code>reset()</code>，后者立即原子写一个空状态。虽然避免崩溃，但会覆盖损坏文件，丢失现场和持仓恢复证据。
-
-建议：把坏文件原子移动到 quarantine，停止运行并要求人工恢复；绝不能自动开一个空账户继续。
-
-#### R-06 loader universe 外的旧持仓可能永久滞留
-
-[build_orders](../ashare_trading/orders.py#L109) 对不在当前 <code>ts_codes</code> 的持仓直接跳过；[run_sim.py](../ashare_trading/run_sim.py#L394) 只能用 <code>last_price</code> 估值。若配置指数变化、数据缺失或股票从 loader 彻底消失，该仓位不会生成卖单。
-
-建议：建立 orphan holdings reconciliation：独立查询持仓 bar/退市状态，显式强平、现金结算或阻止运行。
-
-#### R-07 Web 安全边界只适合纯本机，且 React 与 token 模式不兼容
-
-- 全部 GET，包括持仓、模拟状态、完整配置摘要和日志内容，都无鉴权。
-- React [client.ts](../webui/src/api/client.ts#L33) 从不发送 <code>X-API-Token</code>，UI 也没有 token 输入；创建 token 后所有控制按钮会 401。
-- 无 token 时基于 <code>request.client.host</code> 判断 loopback；反向代理会让远端请求看起来来自 127.0.0.1。
-- CORS 不能阻止 curl、同机恶意进程或错误代理访问。
-
-建议：保持 loopback；若远程使用，统一认证所有 API、让前端安全注入 token/会话、配置可信代理头并在代理层二次鉴权。
-
-#### R-08 干净环境安装与 CI 不闭环
-
-- 默认 GP 依赖 DEAP，但 DEAP 放在 optional；
-- BaoStock 被运行时使用但未列 direct/optional；
-- Web API 测试缺 httpx2；
-- CUDA torch pin 没有 index；
-- Linux CI 与 Windows full lock 不同；
-- 阶段日志排除 Web API，CI 却不排除。
-
-影响：新开发者很可能在安装或 test collection 就失败；main 的绿色状态不能从当前文件静态保证。
-
-建议：用 pyproject/constraints 建立 base、research、web、dev、cpu/cuda extras；在干净 Windows/Linux job 实际安装；CI 增加前端。
-
-#### R-09 数据质量门禁覆盖 universe/bar，但不覆盖因子源完整性
-
-[build_pit_frames](../ashare_data/fundamentals.py#L269) 和 [build_capital_frames](../ashare_data/capital_flow.py#L194) 在表缺失/查询失败时降级为中性 frame；G1-G7 不检查财务、融资、行业的日期覆盖或缺失率。
-
-影响：formal 训练可能在某个因子族全为中性的情况下继续，结果只在日志中留 warning。
-
-建议：新增按因子族的数据 SLO 门禁和 artifact coverage 摘要；生产模式对必需源 fail-closed，开发模式才中性降级。
-
-#### R-10 组合优化模块“存在但未部署”
-
-QP optimizer 和黄金 harness 测试充分，但默认搜索、回测、模拟都不消费 optimizer 输出。
-
-影响：开发者/文档可能误报“系统已有行业中性、风险约束、冲击优化的生产组合”；实际只有等权 top-N。
-
-建议：要么明确标记 experimental，要么建立单一 PortfolioConstructor 接口并同时接入 reward/backtest/sim/golden。
-
-#### R-11 完整 sync 和 Web reset 都包含易被忽略的破坏性副作用
-
-- full sync 会 purge 不在 universe 的日线和 Parquet；
-- Web sim reset 先运行 <code>archive_run.py --mode sim --commit</code>，会创建 Git commit；归档失败则 reset 失败；
-- reset 会把 orders/trades 目录整体改名为 timestamp backup。
-
-影响：运维操作会删除/移动本地数据或改变 Git 历史，与按钮名称表达的范围不完全一致。
-
-建议：UI/CLI 显示 dry-run plan、精确目标和预计空间；归档与 Git commit 解耦；提供显式确认和恢复说明。
-
-### 10.3 P2：中优先级技术债
-
-#### R-12 文档和源码语义漂移
-
-- README/YAML/RewardConfig docstring 仍写 rank-ICIR 主奖励或 v12；
-- CATREADME 写 18 个算子，当前 39；
-- README 的 manifest 段仍写“不记录数据 hash”，当前源码已记录 dataset_id；
-- README 的旧策略描述和当前 data 文件不一致。
-
-建议：把版本常量、因子/算子数、默认搜索器、配置 schema、CLI/API 表由代码生成并在 completion test 中比对。
-
-#### R-13 Data Status 只说明“文件存在”，不说明“可用于生产”
-
-[webapi/service.py](../webapi/service.py#L219) 只统计 stocks、daily rows、日期和 artifact stat，不运行 G1-G7、不检查 manifest、公式/版本/dataset 一致性，也不返回成功路径的顶层 <code>ready</code>。
-
-建议：新增 readiness 聚合：gates、manifest verify、artifact set compatibility、STOP/run state、protocol/promotion 状态。
-
-#### R-14 双 UI 与大量可选字段导致 schema 漂移
-
-Streamlit 直接读原始 JSON；React 通过 service 做兼容映射；TypeScript 多数字段可选。缺少 schema version/Pydantic response model。
-
-建议：定义版本化 artifact schemas 和 FastAPI <code>response_model</code>，两套 UI 共用同一 service 或退役旧 UI。
-
-#### R-15 没有正式数据库迁移机制
-
-<code>create_schema</code> 里做 IF NOT EXISTS 和 constituents 主键特例迁移；manifest 表又在 save 时创建。没有 schema version、upgrade/downgrade 或备份策略。
-
-建议：建立 schema_version + 可重复 migration，启动前备份并验证；不要继续把迁移散落在业务函数。
-
-#### R-16 全量加载是稠密且昂贵的
-
-62 × 约 2,400 股票 × 2,800 日期的 float32 因子张量约 1.7 GiB，还不含 9 个原始矩阵、Pandas 宽表、industry、targets 和 reward float64 批次。虽然 reward chunk 约束为 512 MB，冷启动和内存峰值仍高。<code>factor_cache</code> 当前 0 行。
-
-建议：按日期/因子分块、持久化版本化因子 cache、memory-map/Arrow、基于 registry 只算公式需要因子；记录峰值内存 benchmark。
-
-#### R-17 本地文件状态缺少事务级一致性
-
-单个 JSON 用原子替换，但一天的 orders、trades、portfolio、progress 是多文件顺序写；进程崩溃仍可能留下跨文件不一致。watermark 降低了重放风险，但没有 WAL/transaction id。
-
-建议：每执行日写 transaction directory/commit marker，恢复时验证全套 hash。
-
-#### R-18 运行状态的 exit_code 基本无法得到
-
-Manager 启动后只存 PID，不保留 Popen 句柄；状态通过 psutil 判断死亡并看 progress phase，<code>exit_code</code> 没有赋值路径。
-
-建议：增加 watcher 进程/线程 wait 子进程并持久化真实 return code。
-
-#### R-19 日志保留策略不能有效控制跨运行文件增长
-
-每次运行使用新的 timestamp 文件 handler；Loguru 的 rotation/retention 主要约束该 handler 的旋转文件，另有每次导出的 txt。当前已有约 1,600 个日志文件。
-
-建议：全局日志清理任务、按 run_id 单文件或结构化日志数据库；API 列表分页。
-
-#### R-20 前端缺测试，错误体与回测 exporter schema 不闭环
-
-client 只读取 <code>body.detail</code>；许多 service 错误以 <code>{ok:false,reason}</code> 且 HTTP 200/400 返回，UI 可能只显示 statusText，丢失 reason。另一个具体断点是：<code>BacktestResult</code> 内有 <code>daily_returns</code> 和 <code>turnover</code>，React 回测页也绘制“日收益与换手”，但 [backtest.main](../ashare_model/backtest.py#L578) 没有把这两个字段写入 JSON；当前产物确实缺少它们，因此该图没有数据。
-
-建议：统一 Problem Details/error schema；用版本化 response/artifact model 驱动 exporter 和 TypeScript；增加 API contract tests、React component tests 和 e2e。
-
-#### R-21 当前行业/ST/财报近似可能影响历史有效性
-
-- 历史指数成员边界只有月粒度；
-- 当前申万行业成分被投射到历史；
-- 没有日期化历史 ST，历史涨跌停只按板块 10%/20%；
-- 财报采用法定披露季末近似且不追踪重述；
-- NORTHBOUND 为 0；
-- offline 日历包含节假日。
-
-这些不是实现 bug，而是已知研究假设；产物必须记录并在结论中披露。证据见 [README.md](../README.md#L329)。
-
-**P2 已落实**（`docs/p2_data_tier_contract.md`）：以上近似按数据可信度分层——
-月粒度成员/日线属于 Tier A（晋级默认唯一准入）；财报季末近似与两融属于 Tier B
-（晋级需单独对照）；当前行业快照/ST 近似/北向占位属于 Tier C（仅研究展示、永不
-晋级）。任意公式经 `formula_data_tier_report` 追溯其数据等级，协议产物 v21 起
-逐行记录；`fundamental_pit` 表范围治理见 P2-01（`scripts/check_fundamental_scope.py`）。
-
-#### R-22 当前 STOP 文件与旧 sim state 容易造成误操作
-
-直接 run_sim 不带 resume/reset 会先因已有 history 退出；带 resume 会清 STOP 并在旧状态上使用当前策略。UI 启动同样倾向自动 resume。
-
-建议：UI 首屏显示 legacy/incompatible 状态并禁用 resume，直到人工 archive + reset。
-
-### 10.4 P3：清理与可维护性
-
-- [paper/20251226.pdf](../paper/20251226.pdf)、[showcase.png](../showcase.png) 和两张 assets 图片与主线无引用/无 provenance，应移到明确的 archive 或删除。
-- 项目不是 installable package，依赖 cwd；建议引入 pyproject、console scripts 和 src/test 配置。
-- <code>factor_cache</code> 表目前是死 schema；要么实现版本化缓存，要么移除以免误导。
-- 日志、data、experiments 的保留/容量策略没有统一运维文档。
-- <code>webapi/service.py</code> 直接返回宽松 dict，内部/外部边界难做静态检查。
-- 多处 broad <code>except Exception</code> 为看板容错服务，但会把数据/状态错误变成空对象或中性数据；应按 formal/dev 分级。
-
-### 10.5 风险修复优先顺序
-
-~~~mermaid
-flowchart TD
-    A[1. 冻结并归档 legacy runtime artifacts] --> B[2. 修复依赖与 CI 可重复安装]
-    B --> C[3. 强制 manifest + artifact dataset/formula/config 绑定]
-    C --> D[4. 修复 sim resume/corrupt/orphan 状态安全]
-    D --> E[5. 统一 API 认证与错误/schema]
-    E --> F[6. 重新生成 v13/v20 同源产物]
-    F --> G[7. 建立未来 holdout + paper window]
-    G --> H[8. 决定是否把 optimizer 接入主链]
-    H --> I[9. 性能、迁移、双 UI 与遗留资产清理]
-~~~
-
-## 11. 新开发者上手路线
-
-### 11.1 第一天
-
-1. 阅读本指南的第 0、3、8、10 节。
-2. 确认 Git 分支和工作区，不要把 <code>data</code>/<code>logs</code> 当作版本化事实。
-3. 激活正确 venv，执行 pip check 和 lock check。
-4. 阅读 [config/ashare_config.yaml](../config/ashare_config.yaml)，特别是 universe、searcher、fold 和费用。
-5. 运行只读 G1-G7 检查，理解每个 gate。
-6. 不启动 sim、不 resume、不引用现有 backtest 指标。
-
-### 11.2 建立代码心智模型的推荐阅读顺序
-
-1. [ashare_data/config.py](../ashare_data/config.py)
-2. [ashare_data/gates.py](../ashare_data/gates.py) 与 [universe.py](../ashare_data/universe.py)
-3. [ashare_model/data_loader.py](../ashare_model/data_loader.py)
-4. [feature_registry.py](../ashare_model/feature_registry.py)、[factors.py](../ashare_model/factors.py)
-5. [ir.py](../ashare_model/ir.py)、[vocab.py](../ashare_model/vocab.py)、[ops.py](../ashare_model/ops.py)、[vm.py](../ashare_model/vm.py)
-6. [reward.py](../ashare_model/reward.py)、[candidates.py](../ashare_model/candidates.py)
-7. [train.py](../ashare_model/train.py)、[evaluation.py](../ashare_model/evaluation.py)
-8. [backtest.py](../ashare_model/backtest.py)、[ashare_execution.py](../ashare_execution.py)
-9. [ashare_trading/run_sim.py](../ashare_trading/run_sim.py)、[matching.py](../ashare_trading/matching.py)、[portfolio.py](../ashare_trading/portfolio.py)
-10. [webapi/app.py](../webapi/app.py)、[service.py](../webapi/service.py)、[webui/src/types.ts](../webui/src/types.ts)
-
-### 11.3 常见改动应该落在哪里
-
-| 需求 | 首选修改点 | 必须联动 |
-|---|---|---|
-| 新基础因子 | feature_registry + factors | 因子测试、vocab feature version、diagnostics、必要的数据门禁 |
-| 新公式算子 | ops + IR arity/metadata | grammar/vocab、VM CPU/GPU、因果性测试、复杂度成本 |
-| 改 reward | reward + candidates | REWARD_VERSION、产物 schema、基线/准入、README/config 注释 |
-| 改公式搜索 | gp/tpe/train/baseline harness | matched semantic budget、admission、protocol rows |
-| 改交易费用/规则 | ashare_execution 或 processor/matching | reward、backtest、sim、golden parity、配置 API |
-| 改 universe | universe/gates/loader | 全链路未来成员哨兵、benchmark、diagnostics、sim exit |
-| 改回测 | backtest | reward/golden/evaluation 和 artifact schema |
-| 接入 optimizer | 新 PortfolioConstructor 边界 | reward、backtest、sim、golden、capacity stress |
-| 改 API | app/service + Pydantic model | webui types/client、test_webapi、认证 |
-| 改模拟状态 | portfolio/manager/run_sim | archive/migration/API types、resume 黄金测试 |
-
-### 11.4 提交前检查
-
-- 是否引入未来数据、训练/验证混用或 universe 泄漏？
-- 是否改变 reward/protocol/model/grammar/manifest/execution 语义？若是，版本是否 bump？
-- 旧 artifact 的迁移或拒绝政策是否明确？
-- data/formula/config/Git provenance 是否写入产物？
-- 回测、reward、sim 和 golden 是否仍使用同一交易规则/费用？
-- formal 是否 fail-closed，dev 降级是否显式 <code>degraded=true</code>？
-- 单元、集成、统计自检、前端类型和 CI 是否都覆盖？
-- 文档中的默认搜索器、因子/算子数、版本和命令是否同步？
-- 是否意外改写/归档/删除本地 data、logs 或用户未提交内容？
-
-## 12. 术语表
-
-| 术语 | 含义 |
-|---|---|
-| PIT | Point-in-time；只使用当时可见的成员、上市状态和财务数据 |
-| eligible | 当日属于配置指数、已上市满要求 session、状态有效且有 bar |
-| signal date | 公式产生横截面分数的 t 日 |
-| entry/exec date | t+1 开盘执行 |
-| label/exit | t+2 开盘相对 t+1 开盘的收益 |
-| active IR | 策略 gross basket return 相对当日 universe 等权基准的年化、有效样本收缩信息比 |
-| robust ICIR | 日度横截面 rank IC 的 HAC 有效样本收缩统计；v13 为辅助/门禁指标 |
-| semantic budget | 只对唯一规范 AST/数值语义计费的公式评价预算 |
-| stitched OOS | 同一 candidate/seed 跨年度 fold 按时间拼接后的完整 OOS 序列 |
-| DSR | Deflated Sharpe Ratio，校正候选数、样本长度、偏度和峰度 |
-| max-t | 对多次试错的最大统计量校正 |
-| degraded | 开发模式或门禁失败后的显式非生产标记 |
-| golden parity | 连续回测、lot-free matcher 和 whole-lot 模拟间的可解释一致性规范 |
-| paper window | 完成的未来纸面交易观察窗口，是 promotion G5 必需证据 |
-
-## 13. 最终接手建议
-
-把当前仓库视为“工程能力较完整、研究治理正在升级、运行时产物尚未迁移到最新代际”的量化研究平台最准确。
-
-短期不要从“继续调模型”开始。最高价值顺序是：
-
-1. 修复可重复安装和 CI；
-2. 建立不可绕过的数据/策略/回测/模拟 provenance；
-3. 安全处理 legacy sim state；
-4. 生成同一 commit、dataset、formula、config 下的 v13/v20 全套产物；
-5. 用真正未来数据和 paper window 证明策略；
-6. 再决定是否投入搜索算法、因子扩展或组合优化接线。
-
-这样能先保证“测到的东西是真的、同源的、可复现的”，再讨论它是否更赚钱。
