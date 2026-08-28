@@ -90,7 +90,9 @@ reward:
 # T4-01: every trial is auto-recorded in data/experiment_ledger.jsonl, and
 # data/ holdout_registry.json (ashare_model.regime) marks 2021-2026 as
 # dev/validation data with an optional strictly locked final slice.
-# frequency/horizon are record-only for now.
+# P3: frequency/horizon drive the shared rebalance calendar and causal target.
+# Allowed non-overlapping pairs are daily/1, weekly/1, every_5_days/1..5,
+# and every_10_days/1..10.
 # batch_size must stay >= 256: below that the advantage normalization
 # (rewards.std) risks degenerating.
 protocol:

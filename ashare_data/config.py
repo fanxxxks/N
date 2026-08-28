@@ -191,10 +191,8 @@ class ProtocolConfig:
 
     Semantic changes to the protocol implementation bump
     ``ashare_model.evaluation.PROTOCOL_VERSION``; these values only tune the
-    current version.  ``frequency``/``horizon`` are record-only for now: no
-    rebalance-calendar mechanism exists yet (weekly/multi-period deferred to
-    a later phase), but they are written into protocol artifacts so future
-    runs can be told apart.
+    current version. P3 makes ``frequency``/``horizon`` executable: they
+    resolve the shared rebalance calendar and causal research target.
     """
 
     frequency: str = "daily"
@@ -296,6 +294,8 @@ class BacktestConfig:
     start_date: str = "2015-01-01"
     end_date: str = "2026-12-31"
     train_end_date: str = "2023-12-31"
+    rebalance_frequency: str = "daily"
+    target_horizon: int = 1
     initial_capital: float = 100000.0
     top_n: int = 30
     single_weight_cap: float = 0.05
@@ -491,8 +491,9 @@ def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
     )
     if not cfg.seeds:
         raise ValueError("protocol.seeds must not be empty")
-    if cfg.horizon < 1:
-        raise ValueError("protocol.horizon must be a positive integer")
+    from ashare_portfolio.rebalance import RebalancePolicy
+
+    RebalancePolicy(cfg.frequency, cfg.horizon)
     if cfg.random_samples < 0:
         raise ValueError("protocol.random_samples must be >= 0")
     return cfg
@@ -505,7 +506,20 @@ def make_backtest_config(raw: dict[str, Any]) -> BacktestConfig:
         k: bt_raw.get(k, getattr(defaults, k))
         for k in BacktestConfig.__dataclass_fields__
     }
-    return BacktestConfig(**data)
+    proto_raw = raw.get("protocol", {}) or {}
+    if "rebalance_frequency" not in bt_raw:
+        data["rebalance_frequency"] = str(
+            proto_raw.get("frequency", defaults.rebalance_frequency)
+        )
+    if "target_horizon" not in bt_raw:
+        data["target_horizon"] = int(
+            proto_raw.get("horizon", defaults.target_horizon)
+        )
+    cfg = BacktestConfig(**data)
+    from ashare_portfolio.rebalance import RebalancePolicy
+
+    RebalancePolicy.from_config(cfg)
+    return cfg
 
 
 def make_sim_config(raw: dict[str, Any], project_root: Path) -> SimConfig:

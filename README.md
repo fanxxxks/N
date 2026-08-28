@@ -129,8 +129,9 @@ python scripts/archive_run.py --mode protocol --commit # 结果归档进 experim
   以及至少一个完整的未来纸面交易观察窗口（`data/paper_windows.json`）。
 - 产物 `data/protocol_result.json` 记录 `protocol_version` / `reward_version` /
   `frequency` / `horizon`、`ledger`、`data_regime` 与逐折逐种子原始行 + `stitched`
-  拼接块（含逐日收益序列，便于下钻）；`frequency` / `horizon` 目前只是记录字段
-  （周频 / 多周期目标留待后续阶段）。
+  拼接块（含逐日收益序列，便于下钻）；P3 起 `frequency` / `horizon` 驱动共享
+  调仓日历和 `signal[t] -> open[t+1] -> open[t+1+horizon]` 因果标签，重叠配置
+  在加载阶段直接拒绝。
 - `batch_size` 不要低于 256：advantage 归一化（`rewards.std()`）在更小批次下有
   退化风险。
 
