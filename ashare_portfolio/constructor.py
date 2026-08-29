@@ -30,6 +30,21 @@ def _readonly(values: np.ndarray) -> np.ndarray:
     return out
 
 
+def _cap_increases_to_available_cash(
+    target: np.ndarray,
+    prev: np.ndarray,
+) -> np.ndarray:
+    """Shrink only fresh increases until the long-only book is funded."""
+
+    increase = np.maximum(target - prev, 0.0)
+    base = target - increase
+    available = max(1.0 - float(base.sum()), 0.0)
+    increase_sum = float(increase.sum())
+    if increase_sum > available and increase_sum > 0.0:
+        return base + increase * (available / increase_sum)
+    return target
+
+
 def effective_ranks(config: "BacktestConfig") -> tuple[int, int]:
     """Resolve P3 ranks while preserving legacy ``top_n`` callers."""
 
@@ -314,12 +329,7 @@ class PortfolioConstructor:
         # renormalized upward.
         blocked_reduction = sell_blocked & (raw_target < prev)
         raw_target[blocked_reduction] = prev[blocked_reduction]
-        increase = np.maximum(raw_target - prev, 0.0)
-        base = raw_target - increase
-        available = max(1.0 - float(base.sum()), 0.0)
-        increase_sum = float(increase.sum())
-        if increase_sum > available and increase_sum > 0.0:
-            raw_target = base + increase * (available / increase_sum)
+        raw_target = _cap_increases_to_available_cash(raw_target, prev)
 
         target = raw_target.copy()
         discretionary = ~mandatory
@@ -368,6 +378,11 @@ class PortfolioConstructor:
             if below.any():
                 min_trade_dropped.update(np.flatnonzero(below).astype(int).tolist())
                 target[below] = prev[below]
+
+        # Both suppression passes can restore a planned reduction after fresh
+        # buys were sized.  Re-apply the same cash boundary so the resulting
+        # book remains self-financing; only increases may shrink.
+        target = _cap_increases_to_available_cash(target, prev)
 
         diagnostics["threshold_dropped"] = tuple(sorted(threshold_dropped))
         diagnostics["min_trade_dropped"] = tuple(sorted(min_trade_dropped))

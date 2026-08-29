@@ -256,6 +256,28 @@ def test_minimum_amount_is_reapplied_after_turnover_scaling():
     assert set(out.diagnostics["min_trade_dropped"]) == set(range(15, 25))
 
 
+def test_suppressed_reductions_recap_new_buys_to_available_cash():
+    """P3 contract section 3: filters cannot create an overinvested book."""
+
+    cfg = BacktestConfig(
+        top_n=3,
+        buy_rank=3,
+        sell_rank=3,
+        single_weight_cap=0.6,
+        min_trade_amount=20_000.0,
+    )
+    prev = np.asarray([0.40, 0.35, 0.25, 0.0])
+    out = _construct(cfg, _signal_from_order([0, 1, 3, 2]), prev)
+
+    # The 6.67k and 1.67k reductions are suppressed.  The departing 25k
+    # position then funds exactly 25k of the proposed 33.33k new buy.
+    assert out.weights == pytest.approx([0.40, 0.35, 0.0, 0.25])
+    assert out.weights.sum() <= 1.0
+    assert out.sell_weights == pytest.approx([0.0, 0.0, 0.25, 0.0])
+    assert out.buy_weights == pytest.approx([0.0, 0.0, 0.0, 0.25])
+    assert set(out.diagnostics["min_trade_dropped"]) == {0, 1}
+
+
 def test_non_rebalance_day_never_generates_drift_alignment_orders():
     cfg = BacktestConfig(top_n=2, buy_rank=2, sell_rank=2, single_weight_cap=0.5)
     prev = np.asarray([0.6, 0.4, 0.0])
