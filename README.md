@@ -59,7 +59,8 @@ python -m ashare_model.train        # 默认 GP 搜索器（model.searcher: gp�
 python -m ashare_model.backtest
 python -m ashare_model.evaluation --tier screening  # 测量协议（见下）
 python -m ashare_model.cost_matrix                 # 资金×持仓数×换手率费用矩阵（P1-02）
-python -m ashare_model.bare_factor_backtest        # 七裸因子固定回测（P1-03，不做搜索）
+python -m ashare_model.bare_factor_backtest        # 裸因子固定四象限（v3，不做搜索）
+python -m ashare_model.p3_measurement              # P3 真实可复现验收测量
 python -m ashare_model.searcher_bench --budget 128 # 四搜索器成本测量/小预算 smoke（P1-04/05）
 python -m ashare_trading.run_sim
 python scripts/analyze_sim.py               # 模拟盘费用拖累/毛盈亏/现金核对
@@ -143,10 +144,16 @@ python scripts/archive_run.py --mode protocol --commit # 结果归档进 experim
 ```bash
 python -m ashare_model.cost_matrix            # -> data/fee_matrix.json
 python -m ashare_model.bare_factor_backtest   # -> data/bare_factor_backtest.json
+python -m ashare_model.p3_measurement         # -> data/p3_measurement.json
 python -m ashare_model.searcher_bench --budget 1000 --fold 0 --window-cap 300x400 \
     --seed 42                                 # -> data/searcher_bench.json
 python -m ashare_model.evaluation --selfcheck # 空转验收：噪声 DSR/max-t 必须不显著
 ```
+
+`p3_measurement` 在本地真实 loader 数据的固定尾部日期窗上，以固定 seed 从满足
+PIT/价格/因子覆盖的股票池抽样，记录 reward/backtest 权重与费用最大差、标签区间
+重叠、10 万默认订单结构、pre-P3 兼容配置对照，以及同一裸因子的
+`daily/weekly × equal_weight/optimizer` 四象限；它是执行/成本验收，不宣称 Alpha。
 
 - **费用矩阵（P1-02）**：按全项目唯一费用口径（`backtest` 段的佣金/最低佣金/
   印花税/过户费/滑点），对资金×持仓数×年换手（每个持仓每年完整买卖回合数）
