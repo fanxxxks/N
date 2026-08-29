@@ -302,6 +302,8 @@ class AshareTrainer:
         # run hard-fails when this stays empty (bare-factor screening).
         self._run_operator_coverage: set[str] = set()
         self.search_result: SearchResult | None = None
+        self.rl_initialization = "random"
+        self.imitation_result = None
 
     @staticmethod
     def _normalized_advantages(
@@ -963,6 +965,12 @@ class AshareTrainer:
             semantic_duplicates=semantic_duplicates,
             proposal_count=proposal_count,
         )
+        run_diagnostics["initialization"] = self.rl_initialization
+        run_diagnostics["imitation"] = (
+            self.imitation_result.to_dict()
+            if self.imitation_result is not None
+            else None
+        )
         return SearchResult(
             backend="rl",
             seed=int(seed),
@@ -1038,6 +1046,18 @@ class AshareTrainer:
             # was selected on (None for pre-T1-01 databases).
             "dataset_id": self.loader.dataset_id,
         }
+        if searcher == "rl":
+            output.update(
+                {
+                    "rl_initialization": self.rl_initialization,
+                    "imitation": (
+                        self.imitation_result.to_dict()
+                        if self.imitation_result is not None
+                        else None
+                    ),
+                    "experimental": self.rl_initialization == "random",
+                }
+            )
         out_path = self.data_config.data_dir / "best_ashare_strategy.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         if self.search_result is not None and self.search_result.elite_archive is not None:
@@ -1233,6 +1253,8 @@ class AshareTrainer:
         save_artifacts: bool = True,
         device: str | None = None,
         window_cap: tuple[int, int] | None = None,
+        rl_initialization: str | None = None,
+        elite_archive=None,
     ) -> SearchResult:
         """Run any registered backend and return the common result schema.
 
@@ -1252,6 +1274,32 @@ class AshareTrainer:
         )
         backend = get_search_backend(searcher)
         if searcher == "rl":
+            initialization = str(
+                rl_initialization or self.model_config.rl_initialization
+            )
+            if initialization not in {"imitation", "random"}:
+                raise ValueError(
+                    "rl_initialization must be 'imitation' or 'random'"
+                )
+            if initialization == "imitation":
+                if self.imitation_result is not None:
+                    raise RuntimeError(
+                        "this trainer was already imitation-pretrained; use a fresh "
+                        "trainer for an independent run"
+                    )
+                if elite_archive is None:
+                    from .elite_archive import load_elite_archive  # noqa: PLC0415
+
+                    elite_archive = load_elite_archive(
+                        self.data_config.data_dir / "search_elite_archive.json"
+                    )
+                self.pretrain_from_archive(elite_archive, seed=request.seed)
+            else:
+                if self.imitation_result is not None:
+                    raise RuntimeError(
+                        "random-initialized RL requires a fresh unpretrained trainer"
+                    )
+                self.rl_initialization = "random"
             log_search_start(searcher, request)
 
             def runner(req: SearchRequest, _evaluator) -> SearchResult:
@@ -1285,6 +1333,38 @@ class AshareTrainer:
         if self.search_result is None:
             raise RuntimeError(f"{searcher} run completed without SearchResult")
         return self.search_result
+
+    def pretrain_from_archive(self, archive, *, seed: int = 42):
+        """Imitate baseline elites, then reset the optimizer for RL."""
+
+        from .imitation import pretrain_on_elites  # noqa: PLC0415
+
+        result = pretrain_on_elites(
+            self.model,
+            archive,
+            max_formula_len=int(self.model_config.max_formula_len),
+            epochs=int(self.model_config.imitation_epochs),
+            batch_size=int(self.model_config.imitation_batch_size),
+            learning_rate=float(self.model_config.imitation_learning_rate),
+            seed=int(seed),
+        )
+        # The supervised optimizer state is not part of the RL comparison.
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(), lr=self.model_config.learning_rate
+        )
+        self.rl_initialization = "imitation"
+        self.imitation_result = result
+        logger.info(
+            "rl.imitation samples={} tokens={} initial_loss={} final_loss={} "
+            "initial_accuracy={} final_accuracy={}",
+            result.sample_count,
+            result.token_count,
+            result.initial_loss,
+            result.final_loss,
+            result.initial_token_accuracy,
+            result.final_token_accuracy,
+        )
+        return result
 
     def train_search(
         self,

@@ -55,10 +55,9 @@ def test_alphagpt_model_forward():
 
 
 def test_model_version_is_pinned():
-    # v2 removed the MTPHead: no multi-task supervision existed and the
-    # trainer discarded its router probabilities.  Bumping the version is
-    # the migration contract for old checkpoints.
-    assert MODEL_VERSION == 2
+    # P4 contract §6: v3 records mandatory elite-imitation initialization;
+    # v2 checkpoints cannot prove that training contract and are retrained.
+    assert MODEL_VERSION == 3
     model = AlphaGPTModel(ModelConfig(d_model=32, nhead=4, num_layers=1))
     state = model.state_dict()
     assert not any("mtp_head" in name for name in state)

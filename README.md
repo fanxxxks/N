@@ -75,6 +75,11 @@ elite archive；保存正式策略时同时写入 `data/search_elite_archive.jso
 原因、entropy、semantic duplicate、advantage 方差、更新前 gradient norm、
 公式长度和算子覆盖；关键数值同时写入 `rl.metrics` 日志。
 
+正式 `model.searcher: rl` 会先读取 baseline elite archive 做 teacher-forcing
+next-token imitation，再重新创建 optimizer 进入 REINFORCE；archive 缺失、为空
+或版本不符会明确失败，不会静默退化成随机初始化。随机初始化 RL 只用于配对
+实验，相关产物标记 `experimental=true`（`MODEL_VERSION=3`）。
+
 ### 因子诊断与家族消融
 
 新增因子族（或怀疑某族退化）时，先看证据再训练：

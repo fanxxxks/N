@@ -491,7 +491,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 核心 | [vocab.py](../ashare_model/vocab.py) | feature/operator token 布局、EOS/PAD、feature_version、旧词表按名迁移 |
 | 核心 | [ir.py](../ashare_model/ir.py) | 公式 AST、解析、规范化、canonical hash；公式语义事实来源 |
 | 核心 | [vm.py](../ashare_model/vm.py) | StackVM；执行后缀 token、PIT 截面算子和最终按日 z-score |
-| 核心 | [alphagpt.py](../ashare_model/alphagpt.py) | Looped Transformer、RMSNorm、QK norm、SwiGLU、actor/critic heads；MODEL_VERSION=2 |
+| 核心 | [alphagpt.py](../ashare_model/alphagpt.py)、[imitation.py](../ashare_model/imitation.py) | Looped Transformer、actor/critic；v3 先做 baseline-elite teacher forcing，随后重建 optimizer 进入 RL |
 | 核心 | [train.py](../ashare_model/train.py) | RL/GP/random 统一训练窗口、语义预算、候选选择、策略/模型产物写入 |
 | 核心 | [reward.py](../ashare_model/reward.py) | reward v14；稀疏因果标签用于 IC/质量门，相邻 open 逐日收益用于资金曲线，统一 constructor 与精确费用 |
 | 核心 | [candidates.py](../ashare_model/candidates.py) | CandidateSpec/Score、方向对称评分、质量/复杂度/容量门禁、选择 |
@@ -528,7 +528,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 
 | 组件 | 版本 |
 |---|---:|
-| 模型 | <code>MODEL_VERSION = 2</code> |
+| 模型 | <code>MODEL_VERSION = 3</code>（v3 记录 elite-imitation 初始化；v2 checkpoint 明确拒绝晋级并重训） |
 | 奖励 | <code>REWARD_VERSION = 14</code>（v14 分离稀疏研究标签与逐日组合收益） |
 | 评价协议 | <code>PROTOCOL_VERSION = 23</code>（v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
 | 公式语法 | <code>GRAMMAR_VERSION = 2</code> |

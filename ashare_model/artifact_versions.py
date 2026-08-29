@@ -34,6 +34,7 @@ from typing import Any
 from ashare_data.io_utils import atomic_write_json, read_json_safe
 
 from .alphagpt import MODEL_VERSION
+from .imitation import IMITATION_VERSION
 from .evaluation import PROTOCOL_VERSION
 from .reward import REWARD_VERSION
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
@@ -126,8 +127,25 @@ def classify_strategy(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if mismatch:
         reasons.append(mismatch)
-    if "model_version" not in payload:
-        reasons.append("no model_version (pre-T2-03)")
+    mismatch = _required_version_reason(
+        payload,
+        "model_version",
+        MODEL_VERSION,
+        "no model_version (pre-T2-03)",
+    )
+    if mismatch:
+        reasons.append(mismatch)
+    if payload.get("searcher") == "rl":
+        if payload.get("rl_initialization") != "imitation":
+            reasons.append("RL strategy is not elite-imitation initialized")
+        imitation = payload.get("imitation")
+        if not isinstance(imitation, dict):
+            reasons.append("RL strategy has no imitation provenance")
+        elif str(imitation.get("version")) != str(IMITATION_VERSION):
+            reasons.append(
+                f"imitation version {imitation.get('version')} != current "
+                f"{IMITATION_VERSION}"
+            )
     if "dataset_id" not in payload:
         reasons.append("no dataset_id (pre-T1-01)")
     reasons.extend(_required_execution_reasons(payload))

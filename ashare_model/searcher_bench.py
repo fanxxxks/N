@@ -224,6 +224,9 @@ def benchmark_searchers(
                 train_end_date=train_end_date,
                 window_cap=window_cap,
                 device=str(vm_device),
+                # The benchmark's RL row is the explicitly named random-init
+                # arm; imitation is compared separately by P4 admission.
+                rl_initialization="random" if searcher == "rl" else None,
             )
 
         logger.info(

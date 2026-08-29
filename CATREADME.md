@@ -4,7 +4,7 @@ AlphaGPT 仓库速读
 
 代码组织（按功能划分）
 - ashare_data/：数据层。AkShare 拉取交易日历/股票列表/指数成分/日线，DuckDB + Parquet 本地存储，清洗复权、股票池过滤。
-- ashare_model/：策略挖掘。把行情转成因子（factors），定义算子语言（ops）与公式词表（vocab），StackVM 解释执行；默认强类型 GP（DEAP）搜索公式（TPE/random/RL 为正式可选后端；LoopedTransformer 策略模型仅 RL 实验使用，MODEL_VERSION=2 起已移除无监督信号的 MTPHead），训练奖励 = 组合主动 IR − 精确年化执行成本（REWARD_VERSION=13，多子窗口中位数验证选择，裸因子复杂度惩罚 + ICIR 质量门槛），回测评分。
+- ashare_model/：策略挖掘。把行情转成因子（factors），定义算子语言（ops）与公式词表（vocab），StackVM 解释执行；默认强类型 GP（DEAP）搜索公式（TPE/random/RL 为正式可选后端；LoopedTransformer 仅 RL 实验使用，MODEL_VERSION=3 要求记录 baseline elite imitation 初始化，v2 已移除无监督 MTPHead），训练奖励 = 组合主动 IR − 精确年化执行成本（REWARD_VERSION=14，多子窗口中位数验证选择，裸因子复杂度惩罚 + ICIR 质量门槛），回测评分。
 - ashare_trading/：模拟盘。券商撮合（涨跌停/停牌/T+1/整手/费用，涨跌停判定与回测共用 processor 单一路径）、组合管理、日频运行器。
 - dashboard/：Streamlit 看板，展示回测净值/基准、选股快照、模拟盘状态与数据状态。
 

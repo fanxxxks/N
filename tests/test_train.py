@@ -1009,6 +1009,100 @@ def test_train_search_respects_budget_and_backend(
         trainer.train_search(searcher="unknown", steps=1, batch_size=2)
 
 
+def test_imitation_pretraining_resets_optimizer_and_records_provenance(
+    populated_db: DataConfig,
+):
+    from ashare_model.candidates import CandidateScore
+    from ashare_model.elite_archive import build_elite_archive
+
+    model_config = ModelConfig(
+        batch_size=4,
+        train_steps=1,
+        max_formula_len=6,
+        imitation_epochs=1,
+        imitation_batch_size=1,
+        imitation_learning_rate=0.01,
+    )
+    loader = AshareDataLoader(populated_db, model_config)
+    loader.load_data()
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    tokens = (
+        FORMULA_VOCAB.feature_offset,
+        FORMULA_VOCAB.eos_token_id,
+        0,
+        0,
+        0,
+        0,
+    )
+    score = CandidateScore(
+        tokens=tokens,
+        candidate_id="gp:elite",
+        formula_text="RET_1",
+        source="gp",
+        direction=1,
+        val_reward=1.0,
+        val_icir=1.0,
+        train_reward=1.0,
+        train_icir=1.0,
+        complexity_penalty=0.0,
+        eligible=True,
+        rejection_reasons=(),
+    )
+    archive = build_elite_archive("gp", [score])
+    original_optimizer = trainer.optimizer
+    result = trainer.pretrain_from_archive(archive, seed=9)
+    assert result.sample_count == 1
+    assert trainer.rl_initialization == "imitation"
+    assert trainer.imitation_result == result
+    assert trainer.optimizer is not original_optimizer
+    assert not trainer.optimizer.state  # supervised optimizer state is discarded
+
+
+def test_formal_rl_missing_archive_fails_instead_of_falling_back_to_random(
+    populated_db: DataConfig,
+):
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    trainer = _make_trainer(populated_db.data_dir, loader)
+    with pytest.raises(FileNotFoundError, match="search_elite_archive"):
+        trainer.search(
+            searcher="rl",
+            steps=1,
+            batch_size=4,
+            save_artifacts=False,
+        )
+
+
+def test_broken_imitation_path_does_not_block_gp(
+    populated_db: DataConfig,
+    monkeypatch,
+):
+    import ashare_model.imitation as imitation
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    trainer = _make_trainer(populated_db.data_dir, loader)
+
+    def fail_if_called(*args, **kwargs):
+        raise RuntimeError("injected imitation failure")
+
+    monkeypatch.setattr(imitation, "pretrain_on_elites", fail_if_called)
+    result = trainer.search(
+        searcher="gp",
+        steps=2,
+        batch_size=1,
+        save_artifacts=False,
+    )
+    assert result.backend == "gp"
+    assert result.consumed_budget <= result.requested_budget == 2
+
+
 def test_window_cap_slices_every_measurement(
     populated_db: DataConfig,
 ):
