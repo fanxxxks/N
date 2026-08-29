@@ -38,6 +38,7 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Mapping
 from uuid import uuid4
 
 import numpy as np
@@ -51,7 +52,11 @@ from ashare_trading.matching import SimBroker
 from ashare_trading.orders import build_orders, target_shares_from_weights
 from ashare_trading.portfolio import PositionState, SimulationPortfolio
 
-EXECUTION_SPEC_VERSION = 1
+from .execution_spec import (
+    EXECUTION_SPEC_VERSION,
+    execution_provenance,
+    validate_execution_provenance,
+)
 
 _BAR_COLUMNS = ("open", "high", "low", "pre_close", "volume")
 
@@ -108,6 +113,9 @@ class ParityReport:
     target_weights: tuple[np.ndarray, ...]
     lot_size: int
     execution_delay: int
+    execution_version: int
+    constructor_provenance: Mapping[str, Any]
+    weights_source: str
 
 
 def _nan_to_zero(matrix: np.ndarray) -> np.ndarray:
@@ -209,6 +217,7 @@ class GoldenParity:
         universe_mask: np.ndarray,
         *,
         target_weights: list[np.ndarray] | None = None,
+        target_weights_provenance: Mapping[str, Any] | None = None,
         rebalance_mask: np.ndarray | None = None,
     ) -> ParityReport:
         """Run the golden comparison.
@@ -216,6 +225,9 @@ class GoldenParity:
         ``target_weights=None`` uses the engine's unified portfolio
         constructor (the canonical golden test); a list of full ``[n]``
         weight vectors executes those instead (T3-01 optimizer output).
+        External weights must carry the exact constructor provenance returned
+        by :func:`execution_provenance`; unversioned legacy weights are still
+        readable elsewhere but cannot claim P3 golden parity.
         ``rebalance_mask`` is forwarded unchanged to the engine-owned path.
         ``raw_cache``, ``ts_codes``, ``dates`` and ``universe_mask`` follow
         the engine's conventions.
@@ -240,7 +252,13 @@ class GoldenParity:
         volume = _nan_to_zero(raw_cache["volume"])
         target_ret = open_to_open_returns(open_)
 
+        provenance = execution_provenance(self.config)
         if target_weights is None:
+            if target_weights_provenance is not None:
+                raise ValueError(
+                    "target_weights_provenance is only valid with external "
+                    "target_weights"
+                )
             result = AshareBacktestEngine(self.config).run(
                 signals, raw_cache, ts_codes, dates, mask,
                 execution_delay=delay,
@@ -250,13 +268,19 @@ class GoldenParity:
                 raise ValueError("engine did not record target_weights")
             weights = [np.asarray(w, dtype=np.float64) for w in result.target_weights]
             engine_daily_returns = tuple(float(x) for x in result.daily_returns)
+            weights_source = "portfolio_constructor"
         else:
+            provenance = validate_execution_provenance(
+                target_weights_provenance,
+                self.config,
+            )
             weights = [np.asarray(w, dtype=np.float64) for w in target_weights]
             if any(w.shape != (n,) for w in weights):
                 raise ValueError("target_weights must be [n] vectors")
             if len(weights) > n_dates - delay - 1:
                 raise ValueError("target_weights exceed the executable periods")
             engine_daily_returns = None
+            weights_source = "external_versioned"
         n_periods = len(weights)
 
         # Spec blocking rule applied to every weight vector (no-op for
@@ -367,6 +391,9 @@ class GoldenParity:
             target_weights=tuple(executed),
             lot_size=self.lot_size,
             execution_delay=delay,
+            execution_version=EXECUTION_SPEC_VERSION,
+            constructor_provenance=provenance,
+            weights_source=weights_source,
         )
 
     def verify(self, report: ParityReport) -> None:
@@ -381,6 +408,14 @@ class GoldenParity:
         """
 
         violations: list[str] = []
+        expected_provenance = execution_provenance(self.config)
+        if report.execution_version != EXECUTION_SPEC_VERSION:
+            violations.append(
+                f"execution_version {report.execution_version} != "
+                f"{EXECUTION_SPEC_VERSION}"
+            )
+        if dict(report.constructor_provenance) != expected_provenance:
+            violations.append("constructor provenance does not match golden config")
         capital = float(self.config.initial_capital)
         tol = self.atol * max(capital, 1.0)
         for k, (free, lot_free) in enumerate(

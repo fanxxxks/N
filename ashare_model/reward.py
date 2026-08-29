@@ -14,6 +14,11 @@ never be compared silently.
 
 Version history
 ---------------
+* v14: P3 separates sparse causal research labels from adjacent-open daily
+  portfolio returns, carries the global rebalance schedule through every
+  training/validation window, and routes target construction through the
+  shared ``PortfolioConstructor``.  v13 artifacts cannot be compared or
+  promoted as v14 evidence.
 * v13: the reward's primary term is the portfolio **active IR** — annualized
   effective-n shrunk information ratio of the gross basket returns versus
   the equal-weight universe benchmark — minus the exact execution-cost
@@ -133,7 +138,7 @@ from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
 from ashare_portfolio.constructor import PortfolioConstructor
 
-REWARD_VERSION = "13"
+REWARD_VERSION = "14"
 
 _ANNUALIZATION = 252
 
@@ -726,7 +731,7 @@ def formula_reward(
     realized_ret: np.ndarray | None = None,
     rebalance_mask: np.ndarray | None = None,
 ) -> float:
-    """Scalar v13 reward: active IR minus exact annualized daily cost.
+    """Scalar v14 reward: active IR minus exact annualized daily cost.
 
     The primary term is the portfolio **active IR** (gross basket returns
     minus the equal-weight universe benchmark, effective-n shrunk,
@@ -804,7 +809,7 @@ def batched_basket_rewards(
     rebalance_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray | None,
            np.ndarray | None]:
-    """v13 rewards for a batch: active IR minus exact annualized daily
+    """v14 rewards for a batch: active IR minus exact annualized daily
     costs, with raw ICIR values and portfolio objectives exposed.
 
     ``signals`` is ``[B, stocks, dates]``.  Returns

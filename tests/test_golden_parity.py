@@ -37,6 +37,7 @@ import pytest
 
 from ashare_data.config import BacktestConfig
 from ashare_portfolio.golden import EXECUTION_SPEC_VERSION, GoldenParity
+from ashare_portfolio.execution_spec import execution_provenance
 from ashare_portfolio.optimizer import (
     PortfolioConstraints,
     PortfolioObjective,
@@ -116,7 +117,21 @@ def _run(
 
 
 def test_execution_spec_is_versioned():
-    assert EXECUTION_SPEC_VERSION == 1
+    assert EXECUTION_SPEC_VERSION == 2
+
+
+def test_external_weights_without_constructor_provenance_are_rejected():
+    signal, raw, ts_codes, dates, mask = _market(n_dates=10)
+    weights = [np.asarray([0.5, 0.5, 0.0], dtype=np.float64)]
+    with pytest.raises(ValueError, match="constructor provenance"):
+        GoldenParity(_cfg(), lot_size=0).run(
+            signal,
+            raw,
+            ts_codes,
+            dates,
+            mask,
+            target_weights=weights,
+        )
 
 
 # --- canonical parity -------------------------------------------------------
@@ -124,8 +139,12 @@ def test_execution_spec_is_versioned():
 
 def test_lot_free_matches_engine_exactly():
     signal, raw, ts_codes, dates, mask = _market()
-    _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=0)
+    cfg = _cfg()
+    _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=0, cfg=cfg)
     assert report.records
+    assert report.execution_version == EXECUTION_SPEC_VERSION
+    assert dict(report.constructor_provenance) == execution_provenance(cfg)
+    assert report.weights_source == "portfolio_constructor"
     for free, lot_free in zip(report.free_equity, report.lot_free_equity):
         assert free == pytest.approx(lot_free, rel=1e-9)
     # The weight-based free path reproduces the engine's own daily returns.
@@ -471,7 +490,13 @@ def test_optimizer_weights_execute_with_constraints():
     cfg = _cfg(top_n=2, single_weight_cap=0.5, initial_capital=1e6)
     harness = GoldenParity(cfg, lot_size=100)
     report = harness.run(
-        signal, raw, ts_codes, dates, mask, target_weights=weights
+        signal,
+        raw,
+        ts_codes,
+        dates,
+        mask,
+        target_weights=weights,
+        target_weights_provenance=execution_provenance(cfg),
     )
     harness.verify(report)
     # The executed book (fills) respects the optimizer's caps within lot
@@ -489,7 +514,13 @@ def test_optimizer_weights_lot_free_matches_mirror():
     cfg = _cfg(top_n=2, single_weight_cap=0.5, initial_capital=1e6)
     harness = GoldenParity(cfg, lot_size=0)
     report = harness.run(
-        signal, raw, ts_codes, dates, mask, target_weights=weights
+        signal,
+        raw,
+        ts_codes,
+        dates,
+        mask,
+        target_weights=weights,
+        target_weights_provenance=execution_provenance(cfg),
     )
     harness.verify(report)
     for free, lot_free in zip(report.free_equity, report.lot_free_equity):

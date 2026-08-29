@@ -46,6 +46,7 @@ from ashare_model.targets import causal_target_returns
 from ashare_model.vm import StackVM, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
 from ashare_portfolio.constructor import PortfolioConstructor
+from ashare_portfolio.execution_spec import portfolio_config_provenance
 from ashare_portfolio.rebalance import RebalancePolicy
 
 from .matching import SimBroker
@@ -129,6 +130,16 @@ class SimulationRunner:
                 path,
                 "; ".join(verdict["reasons"]),
             )
+        else:
+            runtime_portfolio_config = portfolio_config_provenance(
+                self.backtest_config
+            )
+            if payload.get("portfolio_config") != runtime_portfolio_config:
+                logger.warning(
+                    "Strategy portfolio_config differs from the current "
+                    "simulation config; replay remains readable but is not "
+                    "the strategy's recorded execution evidence"
+                )
         self.formula_tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
         self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
         # The trainer records the trade direction it learned on its

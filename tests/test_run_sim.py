@@ -333,6 +333,22 @@ def test_simulation_runner_honors_artifact_direction(tmp_path: Path):
     assert flipped_orders != replay_orders
 
 
+def test_simulation_warns_when_strategy_has_no_execution_version(
+    tmp_path: Path, monkeypatch
+):
+    import ashare_trading.run_sim as run_sim
+
+    runner, _ = _make_runner(tmp_path, n_dates=12)
+    warnings: list[str] = []
+
+    def capture(message, *args):
+        warnings.append(str(message).format(*args))
+
+    monkeypatch.setattr(run_sim.logger, "warning", capture)
+    runner.load_formula()
+    assert any("no execution_version (pre-P3)" in item for item in warnings)
+
+
 # --- PIT eligibility in daily selection + current-ST isolation ---------------
 
 

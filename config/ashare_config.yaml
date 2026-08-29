@@ -60,10 +60,11 @@ model:
 
 # Reward-scoring constants; semantic changes to the reward implementation
 # bump ashare_model.reward.REWARD_VERSION and are recorded in artifacts.
-# Current semantics (v13): reward = portfolio active IR — annualized
+# Current semantics (v14): reward = portfolio active IR — annualized
 # effective-n shrunk information ratio of the gross basket returns versus
 # the equal-weight universe benchmark — minus the exact annualized
-# execution-cost drag; IC/ICIR are auxiliary reported/gated statistics.
+# execution-cost drag; sparse causal targets drive IC/ICIR while adjacent-open
+# daily returns drive PnL, all under the global P3 rebalance schedule.
 # Validation reward is the median over validation_splits sub-windows; bare
 # single-factor formulas pay a small complexity_penalty (kept tiny so the
 # validation floor stays reachable); artifacts are saved only when BOTH

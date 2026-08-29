@@ -161,10 +161,14 @@ from the formula's features via :mod:`ashare_model.data_tier`
 the artifact schema gains provenance fields, and the promotion gates use
 them (Tier A default, Tier B separate comparison, Tier C never).
 
-``frequency`` / ``horizon`` are executable protocol fields. Every fold
-retains the global rebalance-calendar slice, research IC/quality consumes
-the sparse causal target ``open[t+1+horizon] / open[t+1] - 1``, and the
-portfolio curve independently consumes adjacent-open daily returns.
+v22 (P3) makes ``frequency`` / ``horizon`` executable protocol fields.
+Every fold and validation subwindow retains its slice of the global
+rebalance calendar; research IC/quality consumes the sparse causal target
+``open[t+1+horizon] / open[t+1] - 1``, while the portfolio curve separately
+consumes adjacent-open daily returns.  Protocol artifacts record execution
+spec v2, the portfolio-constructor version and the complete resolved
+portfolio configuration; pre-v22 artifacts remain readable history but are
+not current promotion evidence.
 """
 
 from __future__ import annotations
@@ -229,6 +233,7 @@ from .semantic_cache import (
 from .time_contract import FoldTimeContract
 from .targets import causal_target_returns
 from ashare_portfolio.rebalance import RebalancePolicy
+from ashare_portfolio.execution_spec import execution_provenance
 from .tpe_search import run_tpe_baseline
 from .train import (
     AshareTrainer,
@@ -239,7 +244,7 @@ from .train import (
 from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "21"
+PROTOCOL_VERSION = "22"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -1851,6 +1856,7 @@ def build_result(
     random_budget: int | None = None,
     ledger: dict | None = None,
     regime=None,
+    backtest_config: BacktestConfig | None = None,
 ) -> dict:
     """Assemble the protocol artifact (schema contract, see module docstring).
 
@@ -1876,6 +1882,23 @@ def build_result(
     artifact level.
     """
 
+    if backtest_config is None:
+        backtest_config = BacktestConfig(
+            rebalance_frequency=proto_cfg.frequency,
+            target_horizon=proto_cfg.horizon,
+        )
+    artifact_provenance = execution_provenance(backtest_config)
+    if (
+        artifact_provenance["portfolio_config"]["rebalance_frequency"]
+        != proto_cfg.frequency
+        or artifact_provenance["portfolio_config"]["target_horizon"]
+        != proto_cfg.horizon
+    ):
+        raise ValueError(
+            "protocol frequency/horizon must match BacktestConfig execution "
+            "provenance"
+        )
+
     # P2-02: annotate rows that were produced before this schema (or by
     # callers outside the protocol) with their credibility tier, derived
     # from the recorded formula tokens / bare feature name.
@@ -1897,6 +1920,7 @@ def build_result(
             "protocol_version": PROTOCOL_VERSION,
             "data_tier_version": DATA_TIER_VERSION,
             "reward_version": REWARD_VERSION,
+            **artifact_provenance,
             "dataset_id": dataset_id,
             "frequency": proto_cfg.frequency,
             "horizon": proto_cfg.horizon,
@@ -2174,6 +2198,7 @@ def run_protocol(
         ),
         ledger=ledger_payload,
         regime=regime,
+        backtest_config=backtest_config,
     )
 
 
@@ -2316,6 +2341,7 @@ def main(argv=None) -> int:
                 dataset_id=loader.dataset_id,
                 ledger=ledger_payload,
                 regime=regime,
+                backtest_config=backtest_config,
             )
         else:
             fold_indices = list(range(args.folds)) if args.folds else None

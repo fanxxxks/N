@@ -186,7 +186,7 @@ python scripts/check_fundamental_scope.py --purge   # 基本面表范围审计/�
 ```
 
 - **公式可追溯（P2-02）**：每个携带公式的产物（因子报告、feature registry、
-  候选评分、策略产物、协议产物 v21）记录 `data_tier`（`max_tier`/`tiers_used`/
+  候选评分、策略产物、协议产物 v22）记录 `data_tier`（`max_tier`/`tiers_used`/
   `data_tier_version`）+ 各档可用时间规则；`formula_data_tier_report(tokens)`
   把任意公式追溯回其依赖的数据等级。
 - **晋级门禁（P2-03/P2-04）**：`evaluate_challenger` 新增第六道 `data_tier`
@@ -356,7 +356,8 @@ python scripts/archive_run.py --mode sim --commit
 - **搜索与训练**：默认强类型 GP（`model.searcher: gp`；RL/random 为实验与
   基线选项，RL 路径为 REINFORCE + value baseline + 熵正则、advantage 裁剪
   防数值爆炸）；训练奖励为**组合主动 IR 减去精确年化执行成本**
-  （`reward.py` v13：basket 在 signal-date 与 entry-date 双重 PIT eligible
+  （`reward.py` v14：稀疏因果标签仅驱动 IC/质量门，逐日资金曲线消费相邻 open
+  收益；basket 在 signal-date 与 entry-date 双重 PIT eligible
   上选股，执行日（t+1 开盘）对齐回测引擎的**可交易性屏蔽**——
   停牌/一字涨停不买、停牌/一字跌停持仓强制保留，费用按精确日频路径计费），
   IC/ICIR 是辅助统计与质量门禁；验证段按

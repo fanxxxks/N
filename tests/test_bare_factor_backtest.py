@@ -29,6 +29,10 @@ from ashare_model.bare_factor_backtest import (
     main as bare_factor_main,
 )
 from ashare_model.data_loader import AshareDataLoader
+from ashare_model.evaluation import PROTOCOL_VERSION
+from ashare_model.reward import REWARD_VERSION
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
 
 SEVEN = ["REVERSAL_5", "RSQ_60", "ILLIQ_20", "OVERNIGHT_RET",
          "MOMENTUM_20", "ROE", "TURNOVER"]
@@ -56,6 +60,14 @@ def test_backtest_seven_factors_fixed_only(populated_db: DataConfig):
     bt = BacktestConfig(top_n=2, train_end_date="2024-02-01")
     payload = backtest_bare_factors(loader, bt, names=SEVEN)
     assert payload["version"] == BARE_FACTOR_BACKTEST_VERSION
+    assert payload["reward_version"] == REWARD_VERSION
+    assert payload["protocol_version"] == PROTOCOL_VERSION
+    assert payload["execution_version"] == EXECUTION_SPEC_VERSION
+    assert (
+        payload["portfolio_constructor_version"]
+        == PORTFOLIO_CONSTRUCTOR_VERSION
+    )
+    assert payload["portfolio_config"]["buy_rank"] == 2
     assert payload["search"] == "none"  # fixed backtest: no searcher
     assert [r["name"] for r in payload["factors"]] == SEVEN
     assert payload["config"]["top_n"] == 2

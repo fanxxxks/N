@@ -63,6 +63,7 @@ from .time_contract import TrainingTimeContract
 from .vm import StackVM, formula_decode
 from .vocab import FORMULA_VOCAB, GRAMMAR_VERSION
 from ashare_portfolio.rebalance import RebalancePolicy
+from ashare_portfolio.execution_spec import execution_provenance
 from . import ir as ir_module
 from ashare_logging import export_log_txt, setup_run_logging
 
@@ -761,6 +762,7 @@ class AshareTrainer:
             selection_payload = {
                 "reward_version": REWARD_VERSION,
                 "protocol_version": PROTOCOL_VERSION,
+                **execution_provenance(self.backtest_config),
                 "semantic_cache_version": SEMANTIC_CACHE_VERSION,
                 "dataset_id": self.loader.dataset_id,
                 "train_end": contract.train_end,
@@ -846,6 +848,7 @@ class AshareTrainer:
             # T2-01 provenance: the evaluation-budget ledger generation and
             # the unique semantic evaluations this run actually performed.
             "protocol_version": PROTOCOL_VERSION,
+            **execution_provenance(self.backtest_config),
             "semantic_cache_version": SEMANTIC_CACHE_VERSION,
             "unique_semantic_evals": self.semantic_cache.budget_used,
             "semantic_cache_stats": self.semantic_cache.stats(),

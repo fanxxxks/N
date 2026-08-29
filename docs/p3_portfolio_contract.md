@@ -136,6 +136,22 @@ P3 改变奖励组合、协议日历/标签和执行目标，版本同步提升�
 不得参加 P3 golden parity 声明。旧 `top_n` 配置按第 2 节的兼容规则读取，不改写
 原文件。
 
+迁移是拒绝/重跑策略，不是 JSON 字段转换：
+
+1. 旧 strategy、protocol 和 bare-factor JSON 原样保留，不删除、不改写为当前版本；
+   archive 仍允许收录，并在 manifest 中记录实际版本、组合配置、legacy 状态和原因；
+2. `scripts/stamp_legacy_artifacts.py` 只增加 `legacy`、`legacy_reason` 和时间戳，
+   不补 reward/protocol/execution/constructor/config 字段，也不改变历史测量值；
+3. simulation 可以为复现目的读取旧策略，但必须输出 pre-P3 警告；旧策略及其模拟
+   结果不能作为 champion 或 promotion 证据；
+4. promotion 必须拒绝 legacy 标记，以及缺失或不匹配的 reward v14、protocol v22、
+   execution v2、portfolio-constructor 版本和完整组合配置；
+5. 手工向旧 JSON 补字段不能构成升级。策略证据必须用当前代码重新训练，协议和裸
+   因子证据必须重新运行，产物版本与完整 provenance 由生产路径写入；
+6. 外部 target weights 必须由当前 `PortfolioConstructor` 重新生成，并携带与本次
+   golden 配置完全一致的 execution/constructor/config provenance；缺失或不一致时
+   golden parity 直接拒绝。
+
 ## 7. 验收测量
 
 除全量测试外，P3 交付必须报告：

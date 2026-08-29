@@ -175,6 +175,11 @@ def test_legacy_formula_without_reward_version_archives(repo):
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["formula"]["reward_version"] is None
     assert manifest["formula"]["val_reward"] == 0.5
+    assert manifest["formula"]["legacy"] is True
+    assert any(
+        "no execution_version (pre-P3)" in reason
+        for reason in manifest["formula"]["legacy_reasons"]
+    )
 
 
 def test_big_model_is_hash_referenced_only(repo):
@@ -305,6 +310,11 @@ def test_protocol_mode_archives_with_manifest_block(repo):
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     block = manifest["protocol"]
     assert block["version"] == "1"
+    assert block["legacy"] is True
+    assert any(
+        "no execution_version (pre-P3)" in reason
+        for reason in block["legacy_reasons"]
+    )
     assert block["frequency"] == "daily" and block["horizon"] == 1
     assert block["tier"] == "screening"
     assert block["steps"] == 50 and block["batch_size"] == 256

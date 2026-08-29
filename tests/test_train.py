@@ -21,6 +21,8 @@ from ashare_model.train import (
 )
 from ashare_model.vocab import FORMULA_VOCAB, GRAMMAR_VERSION
 from ashare_portfolio.rebalance import RebalancePolicy
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
 
 
 def test_resolve_device_auto_prefers_cuda(monkeypatch):
@@ -597,6 +599,21 @@ def test_train_artifact_records_vocab_provenance(tmp_path, populated_db: DataCon
     assert artifact["feature_version"] == FORMULA_VOCAB.feature_version
     assert artifact["grammar_version"] == GRAMMAR_VERSION
     assert artifact["reward_version"] == REWARD_VERSION
+    assert artifact["execution_version"] == EXECUTION_SPEC_VERSION
+    assert (
+        artifact["portfolio_constructor_version"]
+        == PORTFOLIO_CONSTRUCTOR_VERSION
+    )
+    assert artifact["portfolio_config"]["buy_rank"] == 2
+    assert artifact["portfolio_config"]["sell_rank"] == 2
+    selection = json.loads(
+        (populated_db.data_dir / "training_selection.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert selection["reward_version"] == REWARD_VERSION
+    assert selection["execution_version"] == EXECUTION_SPEC_VERSION
+    assert selection["portfolio_config"] == artifact["portfolio_config"]
     # The recorded metadata must be enough to resolve the formula back.
     assert resolve_formula_tokens(artifact) == list(tokens)
 

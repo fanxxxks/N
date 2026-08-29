@@ -12,10 +12,18 @@ import json
 
 import pytest
 
+from ashare_data.config import BacktestConfig
 from ashare_model.alphagpt import MODEL_VERSION
 from ashare_model.evaluation import PROTOCOL_VERSION
 from ashare_model.reward import REWARD_VERSION
 from ashare_model import research_doctor as doctor
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.execution_spec import execution_provenance
+from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
+
+
+def _current_portfolio_config() -> dict:
+    return execution_provenance(BacktestConfig())["portfolio_config"]
 
 
 def _green(legacy: bool = False, reasons: tuple[str, ...] = ()) -> dict:
@@ -25,6 +33,9 @@ def _green(legacy: bool = False, reasons: tuple[str, ...] = ()) -> dict:
         "reward_version": REWARD_VERSION,
         "protocol_version": PROTOCOL_VERSION,
         "model_version": MODEL_VERSION,
+        "execution_version": EXECUTION_SPEC_VERSION,
+        "portfolio_constructor_version": PORTFOLIO_CONSTRUCTOR_VERSION,
+        "portfolio_config": _current_portfolio_config(),
     }
     return dict(
         code={"commit": "abc123", "branch": "main", "dirty": False},
@@ -62,6 +73,11 @@ def _green(legacy: bool = False, reasons: tuple[str, ...] = ()) -> dict:
                     "protocol_version": PROTOCOL_VERSION,
                     "reward_version": REWARD_VERSION,
                     "dataset_id": "d1",
+                    "execution_version": EXECUTION_SPEC_VERSION,
+                    "portfolio_constructor_version": (
+                        PORTFOLIO_CONSTRUCTOR_VERSION
+                    ),
+                    "portfolio_config": _current_portfolio_config(),
                 },
             },
         ],
@@ -102,6 +118,16 @@ def test_version_mismatch_without_legacy_flag_is_error():
         and "not marked legacy" in e
         for e in errors
     )
+
+
+def test_partial_portfolio_config_without_legacy_flag_is_error():
+    artifacts = _green()["artifacts"]
+    artifacts[0]["fields"]["portfolio_config"] = {
+        "portfolio_method": "equal_weight"
+    }
+    report = _report(artifacts=artifacts)
+    assert report["healthy"] is False
+    assert any("portfolio_config" in message for message in _errors(report))
 
 
 def test_version_mismatch_with_legacy_flag_is_informational():
@@ -247,7 +273,12 @@ def cli_env(monkeypatch):
                 "fields": {"searcher": "gp", "dataset_id": "d1",
                            "reward_version": REWARD_VERSION,
                            "protocol_version": PROTOCOL_VERSION,
-                           "model_version": MODEL_VERSION},
+                           "model_version": MODEL_VERSION,
+                           "execution_version": EXECUTION_SPEC_VERSION,
+                           "portfolio_constructor_version": (
+                               PORTFOLIO_CONSTRUCTOR_VERSION
+                           ),
+                           "portfolio_config": _current_portfolio_config()},
             }
         ],
     )

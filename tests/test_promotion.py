@@ -159,6 +159,42 @@ def test_g1_rejects_old_protocol_version(tmp_path):
     assert any("protocol_version 19" in r for r in gate["reasons"])
 
 
+def test_g1_rejects_missing_execution_version(tmp_path):
+    artifact = _strong_artifact()
+    artifact.pop("execution_version", None)
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["data_formula_p0"]
+    assert not gate["passed"]
+    assert any("execution_version" in reason for reason in gate["reasons"])
+
+
+def test_g1_rejects_runtime_portfolio_config_mismatch(tmp_path):
+    recorded = BacktestConfig(
+        portfolio_method="optimizer",
+        top_n=20,
+        buy_rank=20,
+        sell_rank=30,
+    )
+    artifact = _strong_artifact(backtest_config=recorded)
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+        backtest_config=BacktestConfig(),
+    )
+    gate = verdict["gates"]["data_formula_p0"]
+    assert not gate["passed"]
+    assert any("portfolio_config" in reason for reason in gate["reasons"])
+
+
 def test_g1_rejects_dataset_mismatch(tmp_path):
     artifact = _strong_artifact()
     verdict = _verdict(

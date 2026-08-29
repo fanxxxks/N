@@ -13,7 +13,8 @@ The payload records ``search: "none"`` and the full provenance
 (dataset_id, universe policy, top_n, fee params, window), so the report
 is auditably a measurement of the bare factors, not a claim about them.
 
-See docs/phase5_measurement_log.md §2 (BARE_FACTOR_BACKTEST_VERSION 1).
+Version 2 adds P3 frequency/horizon, constructor and execution provenance;
+version-1 measurements remain readable history but are not P3 evidence.
 """
 
 from __future__ import annotations
@@ -39,12 +40,15 @@ from ashare_logging import export_log_txt, setup_run_logging
 from .backtest import AshareBacktestEngine
 from .data_loader import AshareDataLoader
 from .reward import signal_direction
+from .reward import REWARD_VERSION
+from .evaluation import PROTOCOL_VERSION
 from .targets import causal_target_returns
 from .time_contract import TrainingTimeContract
 from .vocab import FEATURE_NAMES
 from ashare_portfolio.rebalance import RebalancePolicy
+from ashare_portfolio.execution_spec import execution_provenance
 
-BARE_FACTOR_BACKTEST_VERSION = 1
+BARE_FACTOR_BACKTEST_VERSION = 2
 
 
 def backtest_bare_factors(
@@ -128,6 +132,9 @@ def backtest_bare_factors(
     universe_policy = getattr(loader, "universe_policy", None)
     return {
         "version": BARE_FACTOR_BACKTEST_VERSION,
+        "reward_version": REWARD_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
+        **execution_provenance(bt_cfg),
         "search": "none",  # fixed backtest only: no searcher ever runs
         "dataset_id": loader.dataset_id,
         "universe_policy": (
@@ -171,8 +178,8 @@ def backtest_bare_factors(
 def main(argv=None) -> int:
     setup_run_logging(run_name="bare_factor_backtest")
     parser = argparse.ArgumentParser(
-        description="Fixed backtest of the seven bare baseline factors "
-        "(P1-03; no search of any kind)"
+        description="Fixed backtest of the bare baseline factors "
+        "(P3 version 2; no search of any kind)"
     )
     parser.add_argument("--config", default=None)
     parser.add_argument("--output", default="data/bare_factor_backtest.json")

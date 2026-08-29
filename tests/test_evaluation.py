@@ -44,6 +44,8 @@ from ashare_model.evaluation import (
     top_trial,
 )
 from ashare_model.reward import REWARD_VERSION, rank_ic_series
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 from tests.conftest import make_bars
 
@@ -670,6 +672,12 @@ def test_build_result_schema_and_sanitization():
     result = build_result(proto, "screening", tier, rows, data_end_date="20240201")
     assert result["protocol_version"] == PROTOCOL_VERSION
     assert result["reward_version"] == REWARD_VERSION
+    assert result["execution_version"] == EXECUTION_SPEC_VERSION
+    assert (
+        result["portfolio_constructor_version"]
+        == PORTFOLIO_CONSTRUCTOR_VERSION
+    )
+    assert result["portfolio_config"]["portfolio_method"] == "equal_weight"
     assert result["frequency"] == "daily"
     assert result["horizon"] == 1
     assert result["tier"] == "screening"

@@ -21,7 +21,26 @@ _EXPORTS = {
         "PortfolioConstructor",
     ),
     "PortfolioOutput": ("ashare_portfolio.constructor", "PortfolioOutput"),
-    "EXECUTION_SPEC_VERSION": ("ashare_portfolio.golden", "EXECUTION_SPEC_VERSION"),
+    "EXECUTION_SPEC_VERSION": (
+        "ashare_portfolio.execution_spec",
+        "EXECUTION_SPEC_VERSION",
+    ),
+    "execution_provenance": (
+        "ashare_portfolio.execution_spec",
+        "execution_provenance",
+    ),
+    "portfolio_config_provenance": (
+        "ashare_portfolio.execution_spec",
+        "portfolio_config_provenance",
+    ),
+    "validate_portfolio_config_provenance": (
+        "ashare_portfolio.execution_spec",
+        "validate_portfolio_config_provenance",
+    ),
+    "validate_execution_provenance": (
+        "ashare_portfolio.execution_spec",
+        "validate_execution_provenance",
+    ),
     "DayParityRecord": ("ashare_portfolio.golden", "DayParityRecord"),
     "FillRecord": ("ashare_portfolio.golden", "FillRecord"),
     "GoldenParity": ("ashare_portfolio.golden", "GoldenParity"),
