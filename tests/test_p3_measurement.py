@@ -11,7 +11,7 @@ from ashare_model.p3_measurement import (
 
 
 def test_p3_measurement_schema_version_is_pinned():
-    assert P3_MEASUREMENT_VERSION == 2
+    assert P3_MEASUREMENT_VERSION == 3
 
 
 def test_build_p3_measurement_covers_acceptance_metrics(
@@ -42,6 +42,8 @@ def test_build_p3_measurement_covers_acceptance_metrics(
     assert payload["random_seed"] == 20260829
     assert payload["sample"]["n_stocks"] == 3
     assert payload["sample"]["n_dates"] == 30
+    sample_start = payload["sample"]["full_start_index"]
+    assert sample_start == len(loader.dates) - 30
 
     parity = payload["parity"]
     assert parity["max_target_weight_diff"] == 0.0
@@ -58,6 +60,13 @@ def test_build_p3_measurement_covers_acceptance_metrics(
         "every_5_days",
         "every_10_days",
     }
+    policies = {row["frequency"]: row for row in labels["policies"]}
+    for frequency, stride in (("every_5_days", 5), ("every_10_days", 10)):
+        row = policies[frequency]
+        assert all(index % stride == 0 for index in row["rebalance_indices"])
+        assert row["sample_rebalance_indices"] == [
+            index - sample_start for index in row["rebalance_indices"]
+        ]
 
     default = payload["default_100k"]
     assert default["initial_order_count"] >= 0

@@ -47,7 +47,7 @@ from .reward import simulate_basket_daily_returns
 from .vocab import FEATURE_NAMES
 
 
-P3_MEASUREMENT_VERSION = 2
+P3_MEASUREMENT_VERSION = 3
 DEFAULT_FACTOR = "REVERSAL_5"
 DEFAULT_SEED = 20260829
 DEFAULT_STOCKS = 60
@@ -159,6 +159,7 @@ def _measurement_view(
         "pool_size": int(pool.size),
         "n_stocks": int(n_stocks),
         "n_dates": int(n_dates),
+        "full_start_index": int(date_start),
         "start_date": view.dates[0],
         "end_date": view.dates[-1],
         "train_end_date": view.dates[train_end_index],
@@ -352,7 +353,18 @@ def _runtime_comparison(
     return results, runtime
 
 
-def _label_measurements(dates: list[str]) -> dict[str, Any]:
+def _label_measurements(
+    full_dates: list[str],
+    *,
+    sample_start_index: int,
+    sample_n_dates: int,
+) -> dict[str, Any]:
+    sample_stop_index = sample_start_index + sample_n_dates
+    if not 0 <= sample_start_index < len(full_dates):
+        raise ValueError("sample_start_index is outside the full date axis")
+    if sample_n_dates < 1 or sample_stop_index > len(full_dates):
+        raise ValueError("sample date window is outside the full date axis")
+
     policies = (
         RebalancePolicy("daily", 1),
         RebalancePolicy("weekly", 1),
@@ -362,11 +374,12 @@ def _label_measurements(dates: list[str]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     overall = 0
     for policy in policies:
-        mask = policy.rebalance_mask(dates)
+        mask = policy.rebalance_mask(full_dates)
         indices = [
             int(index)
             for index in np.flatnonzero(mask)
-            if index + 1 + policy.horizon < len(dates)
+            if sample_start_index <= index
+            and index + 1 + policy.horizon < sample_stop_index
         ]
         intervals = [(index + 1, index + 1 + policy.horizon) for index in indices]
         maximum = 0
@@ -381,7 +394,10 @@ def _label_measurements(dates: list[str]) -> dict[str, Any]:
                 "frequency": policy.frequency,
                 "horizon": int(policy.horizon),
                 "rebalance_indices": indices,
-                "rebalance_dates": [dates[index] for index in indices],
+                "sample_rebalance_indices": [
+                    index - sample_start_index for index in indices
+                ],
+                "rebalance_dates": [full_dates[index] for index in indices],
                 "valid_label_count": len(indices),
                 "max_overlap_sessions": int(maximum),
             }
@@ -564,7 +580,11 @@ def build_p3_measurement(
         "sample": {**sample, "factor": factor_name},
         "execution": execution_provenance(p3_config),
         "parity": parity,
-        "labels": _label_measurements(view.dates),
+        "labels": _label_measurements(
+            loader.dates,
+            sample_start_index=sample["full_start_index"],
+            sample_n_dates=sample["n_dates"],
+        ),
         "default_100k": p3_summary,
         "pre_post": {
             "invariants": {

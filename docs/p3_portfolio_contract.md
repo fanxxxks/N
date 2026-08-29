@@ -130,8 +130,10 @@ P3 改变奖励组合、协议日历/标签和执行目标，版本同步提升�
 - `EXECUTION_SPEC_VERSION`: 1 -> 2；
 - `BARE_FACTOR_BACKTEST_VERSION`: 2 -> 3；v2 只有单配置 provenance，v3 才是
   固定 `daily/weekly x equal_weight/optimizer` 四象限证据；
-- `P3_MEASUREMENT_VERSION`: 1 -> 2；v1 未记录 reward/backtest 逐日订单数差，不能
-  作为最终 P3 验收证据，必须用当前入口重新运行，不能手工补字段。
+- `P3_MEASUREMENT_VERSION`: 1 -> 2 -> 3；v1 未记录 reward/backtest 逐日订单数差，
+  v2 的 `every_N_days` 审计从样本窗重新锚定；两者都不能作为最终 P3 验收证据。
+  v3 同时记录完整日期轴索引和样本相对索引；旧测量必须用当前入口重新运行，不能
+  手工补字段。
 
 新策略、训练选择、协议、裸因子和 parity 产物记录 reward/protocol/execution 版本及
 组合配置。缺少 `execution_version`，或任一对应版本不匹配的旧策略/协议产物，仍可
