@@ -21,7 +21,8 @@ module is the single source of the classification rules:
 Migration/refusal policy: old artifacts are never deleted or converted —
 they stay readable and archived, but every consumer that would treat them
 as champion evidence either refuses (promotion, protocol checks) or flags
-them legacy (stamp + API + doctor).
+them legacy (stamp + API + doctor). Bare-factor v2 single-configuration
+measurements are likewise historical after the v3 fixed-quadrant schema.
 """
 
 from __future__ import annotations
@@ -163,6 +164,113 @@ def classify_protocol(payload: dict[str, Any]) -> dict[str, Any]:
     return {"legacy": bool(reasons), "reasons": reasons}
 
 
+def _bare_factor_quadrant_reasons(payload: dict[str, Any]) -> list[str]:
+    expected_quadrants = {
+        ("daily", 1, "equal_weight"),
+        ("daily", 1, "optimizer"),
+        ("weekly", 1, "equal_weight"),
+        ("weekly", 1, "optimizer"),
+    }
+    required_result_fields = {
+        "name",
+        "direction",
+        "frequency",
+        "horizon",
+        "method",
+        "total_return",
+        "annual_return",
+        "sharpe",
+        "sortino",
+        "max_drawdown",
+        "turnover",
+        "order_count",
+        "cost",
+    }
+    quadrants = payload.get("quadrants")
+    if not isinstance(quadrants, list):
+        return ["no quadrants block (pre-v3 bare-factor schema)"]
+
+    reasons: list[str] = []
+    observed: set[tuple[str, int, str]] = set()
+    reference_names: set[str] | None = None
+    reference_directions: dict[str, int] = {}
+    for index, quadrant in enumerate(quadrants):
+        prefix = f"quadrants[{index}]"
+        if not isinstance(quadrant, dict):
+            reasons.append(f"{prefix} is not an object")
+            continue
+        try:
+            key = (
+                str(quadrant.get("frequency")),
+                int(quadrant.get("horizon")),
+                str(quadrant.get("method")),
+            )
+        except (TypeError, ValueError):
+            reasons.append(f"{prefix} has invalid frequency/horizon/method")
+            continue
+        observed.add(key)
+        for reason in _required_execution_reasons(quadrant):
+            reasons.append(f"{prefix}: {reason}")
+        portfolio_config = quadrant.get("portfolio_config")
+        if not isinstance(portfolio_config, dict):
+            portfolio_config = {}
+        if (
+            portfolio_config.get("rebalance_frequency") != key[0]
+            or portfolio_config.get("target_horizon") != key[1]
+            or portfolio_config.get("portfolio_method") != key[2]
+        ):
+            reasons.append(f"{prefix} labels do not match portfolio_config")
+
+        factors = quadrant.get("factors")
+        if not isinstance(factors, list) or not factors:
+            reasons.append(f"{prefix} has no factor results")
+            continue
+        names: set[str] = set()
+        for factor_index, result in enumerate(factors):
+            result_prefix = f"{prefix}.factors[{factor_index}]"
+            if not isinstance(result, dict):
+                reasons.append(f"{result_prefix} is not an object")
+                continue
+            missing = sorted(required_result_fields - set(result))
+            if missing:
+                reasons.append(
+                    f"{result_prefix} missing fields: {', '.join(missing)}"
+                )
+                continue
+            name = str(result["name"])
+            names.add(name)
+            if (
+                result.get("frequency") != key[0]
+                or result.get("horizon") != key[1]
+                or result.get("method") != key[2]
+            ):
+                reasons.append(f"{result_prefix} labels do not match quadrant")
+            try:
+                direction = int(result["direction"])
+            except (TypeError, ValueError):
+                reasons.append(f"{result_prefix} has invalid direction")
+                continue
+            if direction not in (-1, 1):
+                reasons.append(f"{result_prefix} direction must be -1 or 1")
+                continue
+            prior_direction = reference_directions.setdefault(name, direction)
+            if direction != prior_direction:
+                reasons.append(
+                    f"{result_prefix} direction differs across quadrants"
+                )
+        if reference_names is None:
+            reference_names = names
+        elif names != reference_names:
+            reasons.append(f"{prefix} factor set differs across quadrants")
+
+    if observed != expected_quadrants or len(quadrants) != 4:
+        reasons.append(
+            "quadrants must be exactly daily/weekly x equal_weight/optimizer "
+            "with horizon=1"
+        )
+    return reasons
+
+
 def classify_bare_factor(payload: dict[str, Any]) -> dict[str, Any]:
     """Legacy verdict for the fixed bare-factor measurement artifact."""
 
@@ -183,6 +291,7 @@ def classify_bare_factor(payload: dict[str, Any]) -> dict[str, Any]:
     if "dataset_id" not in payload:
         reasons.append("no dataset_id (pre-T1-01)")
     reasons.extend(_required_execution_reasons(payload))
+    reasons.extend(_bare_factor_quadrant_reasons(payload))
     return {"legacy": bool(reasons), "reasons": reasons}
 
 

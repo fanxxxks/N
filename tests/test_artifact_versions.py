@@ -8,6 +8,7 @@ computed flag and the research doctor's classification surface.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 
 from ashare_data.config import BacktestConfig
@@ -61,6 +62,56 @@ def _current_protocol() -> dict:
     }
 
 
+def _current_bare_factor() -> dict:
+    base = BacktestConfig()
+    quadrants = []
+    for frequency, method in (
+        ("daily", "equal_weight"),
+        ("daily", "optimizer"),
+        ("weekly", "equal_weight"),
+        ("weekly", "optimizer"),
+    ):
+        config = replace(
+            base,
+            rebalance_frequency=frequency,
+            target_horizon=1,
+            portfolio_method=method,
+        )
+        quadrants.append(
+            {
+                "frequency": frequency,
+                "horizon": 1,
+                "method": method,
+                **execution_provenance(config),
+                "factors": [
+                    {
+                        "name": "TURNOVER",
+                        "direction": 1,
+                        "frequency": frequency,
+                        "horizon": 1,
+                        "method": method,
+                        "total_return": 0.0,
+                        "annual_return": 0.0,
+                        "sharpe": 0.0,
+                        "sortino": 0.0,
+                        "max_drawdown": 0.0,
+                        "turnover": 0.0,
+                        "order_count": 0,
+                        "cost": 0.0,
+                    }
+                ],
+            }
+        )
+    return {
+        "version": BARE_FACTOR_BACKTEST_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
+        "reward_version": REWARD_VERSION,
+        "dataset_id": "d1",
+        **execution_provenance(base),
+        "quadrants": quadrants,
+    }
+
+
 def _v12_protocol() -> dict:
     return {
         "protocol_version": "12",
@@ -78,7 +129,7 @@ def test_p3_semantic_versions_are_bumped_together():
     assert REWARD_VERSION == "14"
     assert PROTOCOL_VERSION == "22"
     assert EXECUTION_SPEC_VERSION == 2
-    assert BARE_FACTOR_BACKTEST_VERSION == 2
+    assert BARE_FACTOR_BACKTEST_VERSION == 3
 
 
 def test_strategy_without_execution_provenance_is_legacy():
@@ -149,14 +200,31 @@ def test_protocol_without_semantic_versions_is_legacy():
 
 
 def test_current_bare_factor_with_full_provenance_is_not_legacy():
+    assert classify_bare_factor(_current_bare_factor()) == {
+        "legacy": False,
+        "reasons": [],
+    }
+
+
+def test_current_bare_factor_without_four_quadrants_is_legacy():
+    payload = _current_bare_factor()
+    payload.pop("quadrants")
+    verdict = classify_bare_factor(payload)
+    assert verdict["legacy"] is True
+    assert any("quadrants" in reason for reason in verdict["reasons"])
+
+
+def test_v2_single_config_bare_factor_is_legacy_after_quadrant_schema():
     payload = {
-        "version": BARE_FACTOR_BACKTEST_VERSION,
+        "version": 2,
         "protocol_version": PROTOCOL_VERSION,
         "reward_version": REWARD_VERSION,
         "dataset_id": "d1",
         **execution_provenance(BacktestConfig()),
     }
-    assert classify_bare_factor(payload) == {"legacy": False, "reasons": []}
+    verdict = classify_bare_factor(payload)
+    assert verdict["legacy"] is True
+    assert any("version 2 != current 3" in reason for reason in verdict["reasons"])
 
 
 def test_bare_factor_without_execution_provenance_is_legacy():

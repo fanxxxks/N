@@ -515,7 +515,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 数据分层 | [data_tier.py](../ashare_model/data_tier.py) | DATA_TIER_VERSION=1；PitLevel→DataTier 映射、各档可用时间规则、<code>formula_data_tier_report</code> 公式追溯 API（P2 新增） |
 | 分层报告 | [tier_reports.py](../ashare_model/tier_reports.py) | TIER_REPORT_VERSION=1；A/A+B/all 分层诊断与消融报告（P2 新增） |
 | 测量 | [cost_matrix.py](../ashare_model/cost_matrix.py) | FEE_MATRIX_VERSION=1；资金×持仓数×换手率费用矩阵（P1 新增） |
-| 测量 | [bare_factor_backtest.py](../ashare_model/bare_factor_backtest.py) | BARE_FACTOR_BACKTEST_VERSION=2；固定裸因子回测与 P3 execution/constructor/config provenance |
+| 测量 | [bare_factor_backtest.py](../ashare_model/bare_factor_backtest.py) | BARE_FACTOR_BACKTEST_VERSION=3；固定 daily/weekly × equal_weight/optimizer 四象限，逐象限记录 P3 provenance、收益、风险、换手、订单与成本 |
 | 测量 | [searcher_bench.py](../ashare_model/searcher_bench.py) | SEARCHER_BENCH_VERSION=1；gp/tpe/random/rl 时间与峰值内存成本测量（P1 新增） |
 | 诊断 | [research_doctor.py](../ashare_model/research_doctor.py) | 只读研究医生：门禁、依赖与运行量估算，输出 data/research_doctor.json（P0 新增） |
 | 兼容 | [ir.py](../ashare_model/ir.py)、[vocab.py](../ashare_model/vocab.py) | 旧 token/裸因子迁移和别名解析 |
@@ -533,7 +533,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | data tier | 1（ashare_model/data_tier.py，P2 新增） |
 | tier report | 1（ashare_model/tier_reports.py，P2 新增） |
 | fee matrix / searcher bench | 1（P1 新增测量模块） |
-| bare factor backtest | 2（P3 起记录完整执行 provenance） |
+| bare factor backtest | 3（v2 记录完整执行 provenance；v3 固定四象限 schema） |
 | portfolio constructor | 1（ashare_portfolio/constructor.py） |
 | execution spec | 2（ashare_portfolio/execution_spec.py） |
 | semantic cache | 1 |

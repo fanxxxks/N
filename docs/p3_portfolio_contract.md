@@ -127,7 +127,9 @@ P3 改变奖励组合、协议日历/标签和执行目标，版本同步提升�
 
 - `REWARD_VERSION`: 13 -> 14；
 - `PROTOCOL_VERSION`: 21 -> 22；
-- `EXECUTION_SPEC_VERSION`: 1 -> 2。
+- `EXECUTION_SPEC_VERSION`: 1 -> 2；
+- `BARE_FACTOR_BACKTEST_VERSION`: 2 -> 3；v2 只有单配置 provenance，v3 才是
+  固定 `daily/weekly x equal_weight/optimizer` 四象限证据。
 
 新策略、训练选择、协议、裸因子和 parity 产物记录 reward/protocol/execution 版本及
 组合配置。缺少 `execution_version`，或任一对应版本不匹配的旧策略/协议产物，仍可

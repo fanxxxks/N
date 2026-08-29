@@ -13,15 +13,20 @@ The payload records ``search: "none"`` and the full provenance
 (dataset_id, universe policy, top_n, fee params, window), so the report
 is auditably a measurement of the bare factors, not a claim about them.
 
-Version 2 adds P3 frequency/horizon, constructor and execution provenance;
-version-1 measurements remain readable history but are not P3 evidence.
+Version 2 adds P3 frequency/horizon, constructor and execution provenance.
+Version 3 fixes the four comparison quadrants (daily/weekly x equal-weight/
+optimizer), holds each factor's signal direction constant across them and
+records flattened return, risk, turnover, order and cost measurements.
+Versions 1/2 remain readable history but are not current quadrant evidence.
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
+from typing import Mapping
 
 from loguru import logger
 
@@ -48,21 +53,30 @@ from .vocab import FEATURE_NAMES
 from ashare_portfolio.rebalance import RebalancePolicy
 from ashare_portfolio.execution_spec import execution_provenance
 
-BARE_FACTOR_BACKTEST_VERSION = 2
+BARE_FACTOR_BACKTEST_VERSION = 3
+
+_QUADRANTS = (
+    ("daily", 1, "equal_weight"),
+    ("daily", 1, "optimizer"),
+    ("weekly", 1, "equal_weight"),
+    ("weekly", 1, "optimizer"),
+)
 
 
-def backtest_bare_factors(
+def _backtest_bare_factors_single(
     loader: AshareDataLoader,
     bt_cfg,
     names: list[str],
     train_end_date: str | None = None,
+    *,
+    directions: Mapping[str, int] | None = None,
 ) -> dict:
-    """Fixed (search-free) backtest of ``names`` factor columns.
+    """Run one fixed configuration through the shared backtest engine.
 
-    ``names`` must be non-empty feature names from the vocabulary; the
-    CLI feeds ``protocol.baseline_signals`` (the seven bare factors).
-    Deterministic: no RNG anywhere, identical inputs produce a
-    bit-identical payload.
+    When ``directions`` is omitted, the daily reference run learns each
+    factor's orientation once from its training window.  The other three
+    quadrants pass that mapping back unchanged so the compared signal is
+    identical and only the calendar/constructor method varies.
     """
 
     if not names:
@@ -73,22 +87,25 @@ def backtest_bare_factors(
 
     effective_train_end = train_end_date or bt_cfg.train_end_date
     rebalance_policy = RebalancePolicy.from_config(bt_cfg)
-    contract = TrainingTimeContract.resolve(
-        loader.dates,
-        effective_train_end,
-        horizon=rebalance_policy.horizon,
-    )
-    price_end = contract.train_label_end
-    signal_end = contract.train_signal_end
-    open_np = loader.raw_data_cache["open"][:, :price_end].numpy()
     full_rebalance_mask = rebalance_policy.rebalance_mask(loader.dates)
-    train_target = causal_target_returns(
-        open_np,
-        loader.dates[:price_end],
-        rebalance_policy,
-        rebalance_mask=full_rebalance_mask[:price_end],
-    )
-    train_target = loader.mask_by_universe(train_target)
+    signal_end: int | None = None
+    train_target = None
+    if directions is None:
+        contract = TrainingTimeContract.resolve(
+            loader.dates,
+            effective_train_end,
+            horizon=rebalance_policy.horizon,
+        )
+        price_end = contract.train_label_end
+        signal_end = contract.train_signal_end
+        open_np = loader.raw_data_cache["open"][:, :price_end].numpy()
+        train_target = causal_target_returns(
+            open_np,
+            loader.dates[:price_end],
+            rebalance_policy,
+            rebalance_mask=full_rebalance_mask[:price_end],
+        )
+        train_target = loader.mask_by_universe(train_target)
     universe_mask = loader.universe_mask
     raw_data = {k: v.numpy() for k, v in loader.raw_data_cache.items()}
 
@@ -97,11 +114,21 @@ def backtest_bare_factors(
     for name in names:
         idx = FEATURE_NAMES.index(name)
         factor = loader.factor_tensor[idx]
-        direction = signal_direction(
-            factor[:, :signal_end].numpy(),
-            train_target[:, :signal_end],
-            universe_mask=universe_mask[:, :signal_end],
-        )
+        if directions is None:
+            assert signal_end is not None and train_target is not None
+            direction = signal_direction(
+                factor[:, :signal_end].numpy(),
+                train_target[:, :signal_end],
+                universe_mask=universe_mask[:, :signal_end],
+            )
+        else:
+            if name not in directions:
+                raise ValueError(f"directions has no entry for factor {name!r}")
+            direction = int(directions[name])
+            if direction not in (-1, 1):
+                raise ValueError(
+                    f"direction for factor {name!r} must be -1 or 1"
+                )
         signal_np = float(direction) * factor.numpy()
         result = engine.run(
             signal_np,
@@ -111,12 +138,26 @@ def backtest_bare_factors(
             universe_mask=universe_mask,
             rebalance_mask=full_rebalance_mask,
         )
+        cost_fractions = list(result.cost_fractions or [])
+        if len(cost_fractions) != len(result.daily_returns):
+            raise RuntimeError("backtest cost trail is not aligned to returns")
+        total_cost = float(
+            sum(
+                float(bt_cfg.initial_capital)
+                * float(result.equity_curve[index])
+                * float(cost_fraction)
+                for index, cost_fraction in enumerate(cost_fractions)
+            )
+        )
         rows.append(
             {
                 "name": name,
                 "formula_text": name,
                 "direction": int(direction),
                 "metrics": result.metrics,
+                "cost": total_cost,
+                "cost_fraction": float(sum(cost_fractions)),
+                "total_turnover": float(sum(result.turnover)),
             }
         )
         logger.info(
@@ -175,11 +216,131 @@ def backtest_bare_factors(
     }
 
 
+def _quadrant_factor_result(
+    row: dict,
+    *,
+    frequency: str,
+    horizon: int,
+    method: str,
+) -> dict:
+    """Flatten the required auditable metrics for one factor/quadrant."""
+
+    metrics = row["metrics"]
+    required_metrics = (
+        "total_return",
+        "annual_return",
+        "sharpe",
+        "sortino",
+        "max_drawdown",
+        "average_turnover",
+        "order_count",
+    )
+    missing = [key for key in required_metrics if key not in metrics]
+    if missing:
+        raise RuntimeError(
+            "bare-factor quadrant backtest has no " + ", ".join(missing)
+        )
+    return {
+        "name": row["name"],
+        "formula_text": row["formula_text"],
+        "direction": int(row["direction"]),
+        "frequency": frequency,
+        "horizon": int(horizon),
+        "method": method,
+        "total_return": float(metrics["total_return"]),
+        "annual_return": float(metrics["annual_return"]),
+        "sharpe": float(metrics["sharpe"]),
+        "sortino": float(metrics["sortino"]),
+        "max_drawdown": float(metrics["max_drawdown"]),
+        "turnover": float(metrics["average_turnover"]),
+        "total_turnover": float(row["total_turnover"]),
+        "order_count": int(metrics["order_count"]),
+        "cost": float(row["cost"]),
+        "cost_fraction": float(row["cost_fraction"]),
+        "metrics": dict(metrics),
+    }
+
+
+def backtest_bare_factors(
+    loader: AshareDataLoader,
+    bt_cfg,
+    names: list[str],
+    train_end_date: str | None = None,
+) -> dict:
+    """Run the fixed P3 four-quadrant bare-factor measurement.
+
+    The daily/equal-weight quadrant is the reference: it fixes each factor's
+    training-window direction once.  Daily/weekly x equal-weight/optimizer
+    then run through :class:`AshareBacktestEngine` and its shared
+    :class:`~ashare_portfolio.constructor.PortfolioConstructor`.  No search,
+    sampling or alternative constructor is involved.
+    """
+
+    reference: dict | None = None
+    fixed_directions: dict[str, int] | None = None
+    quadrants: list[dict] = []
+    flat_results: list[dict] = []
+
+    for frequency, horizon, method in _QUADRANTS:
+        quadrant_config = replace(
+            bt_cfg,
+            rebalance_frequency=frequency,
+            target_horizon=horizon,
+            portfolio_method=method,
+        )
+        single = _backtest_bare_factors_single(
+            loader,
+            quadrant_config,
+            names,
+            train_end_date=train_end_date,
+            directions=fixed_directions,
+        )
+        if fixed_directions is None:
+            fixed_directions = {
+                row["name"]: int(row["direction"])
+                for row in single["factors"]
+            }
+            reference = single
+
+        factor_results = [
+            _quadrant_factor_result(
+                row,
+                frequency=frequency,
+                horizon=horizon,
+                method=method,
+            )
+            for row in single["factors"]
+        ]
+        flat_results.extend(factor_results)
+        quadrants.append(
+            {
+                "frequency": frequency,
+                "horizon": int(horizon),
+                "method": method,
+                **execution_provenance(quadrant_config),
+                "factors": factor_results,
+            }
+        )
+
+    if reference is None or fixed_directions is None:
+        raise RuntimeError("fixed quadrant specification produced no reference run")
+    reference["artifact_schema"] = "fixed_four_quadrants"
+    reference["direction_reference"] = {
+        "frequency": "daily",
+        "horizon": 1,
+        "method": "equal_weight",
+        "directions": fixed_directions,
+    }
+    reference["quadrants"] = quadrants
+    reference["results"] = flat_results
+    return reference
+
+
 def main(argv=None) -> int:
     setup_run_logging(run_name="bare_factor_backtest")
     parser = argparse.ArgumentParser(
         description="Fixed backtest of the bare baseline factors "
-        "(P3 version 2; no search of any kind)"
+        "(P3 version 3 four-quadrant measurement; no search of any kind)"
     )
     parser.add_argument("--config", default=None)
     parser.add_argument("--output", default="data/bare_factor_backtest.json")
@@ -216,7 +377,7 @@ def main(argv=None) -> int:
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         logger.success(f"Bare-factor backtest written to {out_path}")
-        print(json.dumps(payload["factors"], ensure_ascii=False, indent=2))
+        print(json.dumps(payload["results"], ensure_ascii=False, indent=2))
     finally:
         export_log_txt(run_name="bare_factor_backtest")
     return 0

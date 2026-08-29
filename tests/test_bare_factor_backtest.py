@@ -1,6 +1,6 @@
-"""Tests for the seven bare-factor fixed backtest (P1-03).
+"""Tests for the fixed bare-factor four-quadrant backtest (P1-03/P3).
 
-Contract (docs/phase5_measurement_log.md §2, BARE_FACTOR_BACKTEST_VERSION 1):
+Contract (docs/p3_portfolio_contract.md §§5/7):
 
 * Fixed backtest only: the bare factor column enters the shared backtest
   engine directly; there is NO searcher, NO sampling and NO trial-and-
@@ -13,6 +13,8 @@ Contract (docs/phase5_measurement_log.md §2, BARE_FACTOR_BACKTEST_VERSION 1):
   per factor, never searched.
 * One row per factor: name, direction, engine metrics (net of the shared
   fee schedule), plus config provenance (top_n, fee params, window).
+* P3 compares daily/weekly x equal_weight/optimizer with one fixed signal
+  direction per factor and records return, risk, turnover, orders and cost.
 """
 from __future__ import annotations
 
@@ -48,6 +50,27 @@ METRIC_KEYS = {
     "average_turnover",
 }
 
+QUADRANTS = {
+    ("daily", 1, "equal_weight"),
+    ("daily", 1, "optimizer"),
+    ("weekly", 1, "equal_weight"),
+    ("weekly", 1, "optimizer"),
+}
+
+QUADRANT_RESULT_KEYS = {
+    "frequency",
+    "horizon",
+    "method",
+    "total_return",
+    "annual_return",
+    "sharpe",
+    "sortino",
+    "max_drawdown",
+    "turnover",
+    "order_count",
+    "cost",
+}
+
 
 def _loader(populated_db: DataConfig) -> AshareDataLoader:
     loader = AshareDataLoader(populated_db, ModelConfig())
@@ -80,6 +103,47 @@ def test_backtest_seven_factors_fixed_only(populated_db: DataConfig):
         assert METRIC_KEYS <= set(row["metrics"])
         assert np.isfinite(row["metrics"]["average_turnover"])
         assert row["metrics"]["average_turnover"] >= 0.0
+
+
+def test_backtest_records_fixed_four_quadrants(populated_db: DataConfig):
+    loader = _loader(populated_db)
+    bt = BacktestConfig(top_n=2, train_end_date="2024-02-01")
+    payload = backtest_bare_factors(loader, bt, names=["TURNOVER"])
+
+    quadrants = payload["quadrants"]
+    assert {
+        (row["frequency"], row["horizon"], row["method"])
+        for row in quadrants
+    } == QUADRANTS
+    assert len(quadrants) == 4
+
+    directions = set()
+    for quadrant in quadrants:
+        assert quadrant["execution_version"] == EXECUTION_SPEC_VERSION
+        assert (
+            quadrant["portfolio_constructor_version"]
+            == PORTFOLIO_CONSTRUCTOR_VERSION
+        )
+        assert quadrant["portfolio_config"]["rebalance_frequency"] == (
+            quadrant["frequency"]
+        )
+        assert quadrant["portfolio_config"]["target_horizon"] == (
+            quadrant["horizon"]
+        )
+        assert quadrant["portfolio_config"]["portfolio_method"] == (
+            quadrant["method"]
+        )
+        assert len(quadrant["factors"]) == 1
+        result = quadrant["factors"][0]
+        assert QUADRANT_RESULT_KEYS <= set(result)
+        assert result["name"] == "TURNOVER"
+        assert result["frequency"] == quadrant["frequency"]
+        assert result["horizon"] == quadrant["horizon"]
+        assert result["method"] == quadrant["method"]
+        assert result["order_count"] >= 0
+        assert result["cost"] >= 0.0
+        directions.add(result["direction"])
+    assert len(directions) == 1  # identical signal orientation in all quadrants
 
 
 def test_backtest_is_deterministic(populated_db: DataConfig):
@@ -151,3 +215,4 @@ def test_cli_smoke_writes_versioned_payload(tmp_path, populated_db: DataConfig):
     assert payload["version"] == BARE_FACTOR_BACKTEST_VERSION
     assert payload["search"] == "none"
     assert len(payload["factors"]) == len(SEVEN)
+    assert len(payload["quadrants"]) == 4
