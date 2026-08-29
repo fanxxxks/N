@@ -26,12 +26,13 @@ from ashare_data.config import (
 from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 from ashare_data.capital_flow import EXTERNAL_FACTOR_NAMES
 from ashare_data.gates import ProductionGateRunner
-from ashare_data.processor import open_to_open_returns
 from ashare_logging import export_log_txt, setup_run_logging
+from ashare_portfolio.rebalance import RebalancePolicy
 
 from .data_loader import AshareDataLoader
 from .factors import FACTOR_REGISTRY, NEUTRAL_FEATURE_NAMES
 from .reward import icir_from_series, rank_ic_series
+from .targets import causal_target_returns
 from .time_contract import TrainingTimeContract
 from .vocab import FEATURE_NAMES
 
@@ -217,6 +218,9 @@ def factor_report(
     train_end_date: str,
     output_path: str | Path | None = None,
     tiers: tuple[str, ...] | None = None,
+    *,
+    frequency: str = "daily",
+    horizon: int = 1,
 ) -> dict[str, object]:
     """Assemble the full diagnostics report over the training window.
 
@@ -232,13 +236,19 @@ def factor_report(
         loader.load_data()
         tensor = loader.factor_tensor
     dates = loader.dates
-    contract = TrainingTimeContract.resolve(dates, train_end_date)
+    policy = RebalancePolicy(frequency, horizon)
+    contract = TrainingTimeContract.resolve(
+        dates, train_end_date, horizon=policy.horizon
+    )
     signal_end = contract.train_signal_end
     price_end = contract.train_label_end
     window = tensor[:, :, :signal_end].numpy().copy()
     eligibility = loader.universe_mask[:, :signal_end]
-    target = open_to_open_returns(
-        loader.raw_data_cache["open"][:, :price_end].numpy()
+    target = causal_target_returns(
+        loader.raw_data_cache["open"][:, :price_end].numpy(),
+        dates[:price_end],
+        policy,
+        rebalance_mask=policy.rebalance_mask(dates)[:price_end],
     )[:, :signal_end]
     target = loader.mask_by_universe(target)[:, :signal_end]
 
@@ -359,7 +369,14 @@ def main() -> None:
             if args.tiers
             else None
         )
-        report = factor_report(loader, backtest_config.train_end_date, root / args.output, tiers=tiers)
+        report = factor_report(
+            loader,
+            backtest_config.train_end_date,
+            root / args.output,
+            tiers=tiers,
+            frequency=backtest_config.rebalance_frequency,
+            horizon=backtest_config.target_horizon,
+        )
         _print_report(report)
     finally:
         export_log_txt(run_name="diagnostics")

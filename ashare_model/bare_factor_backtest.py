@@ -33,15 +33,16 @@ from ashare_data.config import (
     make_sim_config,
 )
 from ashare_data.gates import ProductionGateRunner
-from ashare_data.processor import open_to_open_returns
 from ashare_execution import validate_execution_config
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .backtest import AshareBacktestEngine
 from .data_loader import AshareDataLoader
 from .reward import signal_direction
+from .targets import causal_target_returns
 from .time_contract import TrainingTimeContract
 from .vocab import FEATURE_NAMES
+from ashare_portfolio.rebalance import RebalancePolicy
 
 BARE_FACTOR_BACKTEST_VERSION = 1
 
@@ -67,11 +68,23 @@ def backtest_bare_factors(
             raise ValueError(f"unknown factor {name!r} (not in FEATURE_NAMES)")
 
     effective_train_end = train_end_date or bt_cfg.train_end_date
-    contract = TrainingTimeContract.resolve(loader.dates, effective_train_end)
+    rebalance_policy = RebalancePolicy.from_config(bt_cfg)
+    contract = TrainingTimeContract.resolve(
+        loader.dates,
+        effective_train_end,
+        horizon=rebalance_policy.horizon,
+    )
     price_end = contract.train_label_end
     signal_end = contract.train_signal_end
     open_np = loader.raw_data_cache["open"][:, :price_end].numpy()
-    train_target = loader.mask_by_universe(open_to_open_returns(open_np))
+    full_rebalance_mask = rebalance_policy.rebalance_mask(loader.dates)
+    train_target = causal_target_returns(
+        open_np,
+        loader.dates[:price_end],
+        rebalance_policy,
+        rebalance_mask=full_rebalance_mask[:price_end],
+    )
+    train_target = loader.mask_by_universe(train_target)
     universe_mask = loader.universe_mask
     raw_data = {k: v.numpy() for k, v in loader.raw_data_cache.items()}
 
@@ -92,6 +105,7 @@ def backtest_bare_factors(
             loader.ts_codes,
             loader.dates,
             universe_mask=universe_mask,
+            rebalance_mask=full_rebalance_mask,
         )
         rows.append(
             {
@@ -111,27 +125,30 @@ def backtest_bare_factors(
             result.metrics.get("average_turnover", float("nan")),
         )
 
-    policy = getattr(loader, "universe_policy", None)
+    universe_policy = getattr(loader, "universe_policy", None)
     return {
         "version": BARE_FACTOR_BACKTEST_VERSION,
         "search": "none",  # fixed backtest only: no searcher ever runs
         "dataset_id": loader.dataset_id,
         "universe_policy": (
             {
-                "index_codes": [str(code) for code in policy.index_codes],
-                "min_listed_sessions": int(policy.min_listed_sessions),
-                "membership_end_inclusive": bool(policy.membership_end_inclusive),
+                "index_codes": [str(code) for code in universe_policy.index_codes],
+                "min_listed_sessions": int(universe_policy.min_listed_sessions),
+                "membership_end_inclusive": bool(universe_policy.membership_end_inclusive),
                 "degraded": (
                     bool(loader.universe_status.degraded)
                     if loader.universe_status is not None
                     else None
                 ),
             }
-            if policy is not None
+            if universe_policy is not None
             else None
         ),
         "config": {
             "train_end_date": effective_train_end,
+            "rebalance_frequency": rebalance_policy.frequency,
+            "target_horizon": rebalance_policy.horizon,
+            "portfolio_method": bt_cfg.portfolio_method,
             "top_n": int(bt_cfg.top_n),
             "single_weight_cap": float(bt_cfg.single_weight_cap),
             "commission_rate": float(bt_cfg.commission_rate),

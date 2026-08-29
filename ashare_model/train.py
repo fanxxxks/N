@@ -51,6 +51,7 @@ from .reward import (
     REWARD_VERSION,
     batched_basket_rewards,
 )
+from .targets import causal_target_returns
 from .semantic_cache import (
     SEMANTIC_CACHE_VERSION,
     CalibrationSlice,
@@ -61,6 +62,7 @@ from .semantic_cache import (
 from .time_contract import TrainingTimeContract
 from .vm import StackVM, formula_decode
 from .vocab import FORMULA_VOCAB, GRAMMAR_VERSION
+from ashare_portfolio.rebalance import RebalancePolicy
 from . import ir as ir_module
 from ashare_logging import export_log_txt, setup_run_logging
 
@@ -89,6 +91,8 @@ class _TrainWindow:
     vm_device: torch.device
     train_universe_mask: np.ndarray
     target_ret: np.ndarray
+    realized_ret: np.ndarray
+    rebalance_mask: np.ndarray
     blocked_buy: np.ndarray
     blocked_sell: np.ndarray
     reward_chunk: int
@@ -113,7 +117,10 @@ def validation_start(train_signal_end: int, model_config) -> int:
 
 
 def validation_windows(
-    train_signal_end: int, model_config
+    train_signal_end: int,
+    model_config,
+    *,
+    rebalance_mask: np.ndarray | None = None,
 ) -> list[tuple[int, int]]:
     """Independent validation sub-windows covering the training tail.
 
@@ -131,13 +138,32 @@ def validation_windows(
     splits = max(1, int(model_config.validation_splits))
     min_len = 3
     if val_len < splits * min_len:
-        return [(val_start, train_signal_end)]
-    base = val_len // splits
-    windows: list[tuple[int, int]] = []
-    for k in range(splits):
-        start = val_start + k * base
-        end = val_start + (k + 1) * base if k < splits - 1 else train_signal_end
-        windows.append((start, end))
+        windows = [(val_start, train_signal_end)]
+    else:
+        base = val_len // splits
+        windows = []
+        for k in range(splits):
+            start = val_start + k * base
+            end = (
+                val_start + (k + 1) * base
+                if k < splits - 1
+                else train_signal_end
+            )
+            windows.append((start, end))
+    if rebalance_mask is not None:
+        due = np.asarray(rebalance_mask, dtype=bool)
+        if due.ndim != 1 or due.shape[0] < train_signal_end:
+            raise ValueError(
+                f"rebalance_mask shape {due.shape} does not cover "
+                f"train_signal_end={train_signal_end}"
+            )
+        for start, end in windows:
+            observations = int(np.count_nonzero(due[start:end]))
+            if observations < 2:
+                raise ValueError(
+                    f"validation window {start}:{end} has {observations} "
+                    "rebalance observations; at least 2 are required for ICIR"
+                )
     return windows
 
 
@@ -300,6 +326,8 @@ class AshareTrainer:
         self,
         pending: list[tuple[CandidateSpec, np.ndarray]],
         target_ret: np.ndarray,
+        realized_ret: np.ndarray,
+        rebalance_mask: np.ndarray,
         val_windows: list[tuple[int, int]],
         step_results: dict[tuple[int, ...], CandidateScore],
         universe_mask: np.ndarray,
@@ -327,6 +355,8 @@ class AshareTrainer:
             # window (a capped admission window is a stock slice).
             tie_break_keys=tie_break_keys,
             adv=adv,
+            realized_ret=realized_ret,
+            rebalance_mask=rebalance_mask,
         )
         for score in scores:
             assert score.tokens is not None
@@ -371,6 +401,8 @@ class AshareTrainer:
         factor_tensor = window.factor_tensor
         train_universe_mask = window.train_universe_mask
         target_ret = window.target_ret
+        realized_ret = window.realized_ret
+        rebalance_mask = window.rebalance_mask
         blocked_buy = window.blocked_buy
         blocked_sell = window.blocked_sell
         reward_chunk = window.reward_chunk
@@ -549,6 +581,8 @@ class AshareTrainer:
                     self._score_pending_chunk(
                         pending,
                         target_ret,
+                        realized_ret,
+                        rebalance_mask,
                         val_windows,
                         step_results,
                         train_universe_mask,
@@ -562,6 +596,8 @@ class AshareTrainer:
             self._score_pending_chunk(
                 pending,
                 target_ret,
+                realized_ret,
+                rebalance_mask,
                 val_windows,
                 step_results,
                 train_universe_mask,
@@ -845,6 +881,7 @@ class AshareTrainer:
         return TrainingTimeContract.resolve(
             self.loader.dates,
             train_end_date or self.backtest_config.train_end_date,
+            horizon=self.backtest_config.target_horizon,
         )
 
     def prepare_window(
@@ -876,16 +913,23 @@ class AshareTrainer:
                 raise ValueError("window_cap must be positive (stocks, dates)")
             stock_slice = slice(0, stocks)
             train_end_idx = min(train_end_idx, dates)
-        # The capped window's signal end: labels need t+1/t+2, so the last
-        # two capped columns are labels only.
+        # The capped window's signal end reserves the exact entry+holding
+        # context declared by the target contract.
         train_signal_end = min(
-            contract.train_signal_end, max(0, train_end_idx - 2)
+            contract.train_signal_end,
+            max(0, train_end_idx - contract.exit_offset),
         )
+        policy = RebalancePolicy.from_config(self.backtest_config)
+        full_rebalance_mask = policy.rebalance_mask(self.loader.dates)
+        rebalance_mask = full_rebalance_mask[:train_end_idx]
         # Hold out the tail of the training window for out-of-sample best
         # formula selection, split into independent sub-windows; the best
         # formula is decided on the *median* validation reward so a single
         # lucky tail stretch cannot win the selection.
-        val_windows = self._validation_windows(train_signal_end)
+        val_windows = self._validation_windows(
+            train_signal_end,
+            rebalance_mask=rebalance_mask,
+        )
         # The *learning* window is the in-sample head only: the policy
         # gradient scores candidates on columns strictly before the first
         # validation window, so the selection data never doubles as the
@@ -922,7 +966,13 @@ class AshareTrainer:
         train_open = self.loader.raw_data_cache["open"][
             stock_slice, :train_end_idx
         ].numpy()
-        target_ret = open_to_open_returns(train_open)
+        target_ret = causal_target_returns(
+            train_open,
+            self.loader.dates[:train_end_idx],
+            policy,
+            rebalance_mask=rebalance_mask,
+        )
+        realized_ret = open_to_open_returns(train_open)
         # Same semantics as loader.mask_by_universe, applied to the capped
         # window (the loader's mask is the full stock axis): values outside
         # the PIT eligibility mask become NaN.
@@ -949,7 +999,7 @@ class AshareTrainer:
             dataset_id=self.loader.dataset_id,
             reward_version=REWARD_VERSION,
             protocol_version=PROTOCOL_VERSION,
-            window_id=self._window_id(contract, val_windows),
+            window_id=self._window_id(contract, val_windows, policy),
             cap=self._REWARD_CACHE_CAP,
         )
         calibration_slice = CalibrationSlice.of(factor_tensor.shape[2])
@@ -975,6 +1025,8 @@ class AshareTrainer:
             vm_device=vm_device,
             train_universe_mask=train_universe_mask,
             target_ret=target_ret,
+            realized_ret=realized_ret,
+            rebalance_mask=rebalance_mask,
             blocked_buy=blocked_buy,
             blocked_sell=blocked_sell,
             reward_chunk=reward_chunk,
@@ -1029,6 +1081,8 @@ class AshareTrainer:
 
         evaluator = SemanticBudgetEvaluator(
             target=window.target_ret,
+            realized_ret=window.realized_ret,
+            rebalance_mask=window.rebalance_mask,
             universe_mask=window.train_universe_mask,
             backtest_config=self.backtest_config,
             reward_config=self.reward_config,
@@ -1039,7 +1093,11 @@ class AshareTrainer:
             fingerprint_execute=self._calibration_execute,
             dataset_id=self.loader.dataset_id,
             protocol_version=PROTOCOL_VERSION,
-            window_id=self._window_id(window.contract, window.val_windows),
+            window_id=self._window_id(
+                window.contract,
+                window.val_windows,
+                RebalancePolicy.from_config(self.backtest_config),
+            ),
             # Selection tie-break keys and the capacity-audit dollar volume
             # are sliced to the measured window (a capped admission window
             # is a stock slice of the loader's universe) — the same slice
@@ -1125,14 +1183,19 @@ class AshareTrainer:
         )
 
     @staticmethod
-    def _window_id(contract, val_windows: list[tuple[int, int]]) -> str:
+    def _window_id(
+        contract,
+        val_windows: list[tuple[int, int]],
+        policy: RebalancePolicy,
+    ) -> str:
         """Deterministic id of the training window: the exact columns the
         semantic-cache key binds scores to."""
 
         val = "|".join(f"{a}:{b}" for a, b in val_windows)
         return (
             f"train:{contract.train_signal_start}:{contract.train_signal_end}:"
-            f"label:{contract.train_label_end}:val:{val}"
+            f"label:{contract.train_label_end}:frequency:{policy.frequency}:"
+            f"horizon:{policy.horizon}:val:{val}"
         )
 
     def _sync_best_from_selection(self) -> None:
@@ -1169,12 +1232,21 @@ class AshareTrainer:
         """
         return validation_start(train_end_idx, self.model_config)
 
-    def _validation_windows(self, train_end_idx: int) -> list[tuple[int, int]]:
+    def _validation_windows(
+        self,
+        train_end_idx: int,
+        *,
+        rebalance_mask: np.ndarray | None = None,
+    ) -> list[tuple[int, int]]:
         """Independent validation sub-windows covering the training tail.
 
         Delegates to the module-level :func:`validation_windows`.
         """
-        return validation_windows(train_end_idx, self.model_config)
+        return validation_windows(
+            train_end_idx,
+            self.model_config,
+            rebalance_mask=rebalance_mask,
+        )
 
     @staticmethod
     def _update_stack_state(

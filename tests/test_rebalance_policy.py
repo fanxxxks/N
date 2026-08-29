@@ -146,6 +146,23 @@ def test_causal_target_missing_endpoint_is_nan_not_zero():
     assert np.isnan(target[1, 0])
 
 
+def test_causal_target_accepts_a_global_schedule_slice_without_reanchoring():
+    policy = RebalancePolicy("every_5_days", horizon=5)
+    opens = np.arange(1.0, 26.0, dtype=np.float64)[None, :]
+    global_mask = policy.rebalance_mask(DATES)
+    # A fold beginning at global index 7 must first rebalance at its local
+    # index 3 (global 10), never at local index 0.
+    start, end = 7, 25
+    target = causal_target_returns(
+        opens[:, start:end],
+        DATES[start:end],
+        policy,
+        rebalance_mask=global_mask[start:end],
+    )
+    assert np.flatnonzero(np.isfinite(target[0])).tolist() == [3, 8]
+    assert target[0, 3] == pytest.approx(opens[0, 16] / opens[0, 11] - 1.0)
+
+
 def test_time_contract_offsets_follow_horizon_without_crossing_anchor():
     training = TrainingTimeContract.resolve(DATES, DATES[15], horizon=5)
     # Inclusive anchor end is 16; exit offset is 1 + 5 = 6.

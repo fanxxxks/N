@@ -12,12 +12,15 @@ from ashare_data.processor import open_to_open_returns
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.evaluation import PROTOCOL_VERSION as EVALUATION_PROTOCOL_VERSION
 from ashare_model.reward import REWARD_VERSION
+from ashare_model.targets import causal_target_returns
 from ashare_model.train import (
     AshareTrainer,
     resolve_device,
     validation_start,
+    validation_windows,
 )
 from ashare_model.vocab import FORMULA_VOCAB, GRAMMAR_VERSION
+from ashare_portfolio.rebalance import RebalancePolicy
 
 
 def test_resolve_device_auto_prefers_cuda(monkeypatch):
@@ -86,6 +89,56 @@ def test_train_end_index_before_data(populated_db: DataConfig):
     assert 0 < idx <= len(loader.dates)
 
 
+def test_prepare_window_separates_causal_target_from_daily_realized_returns(
+    populated_db: DataConfig,
+):
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    trainer = AshareTrainer(
+        populated_db,
+        ModelConfig(
+            batch_size=2,
+            train_steps=1,
+            max_formula_len=4,
+            # The every-5-day validation tail must contain at least two
+            # global due observations under the P3 research contract.
+            validation_fraction=0.5,
+        ),
+        BacktestConfig(
+            top_n=2,
+            train_end_date="2024-02-01",
+            rebalance_frequency="every_5_days",
+            target_horizon=5,
+        ),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    window = trainer.prepare_window("2024-02-01", torch.device("cpu"))
+    assert window.contract.horizon == 5
+    policy = RebalancePolicy.from_config(trainer.backtest_config)
+    full_due = policy.rebalance_mask(loader.dates)
+    end = window.train_end_idx
+    expected_target = causal_target_returns(
+        loader.raw_data_cache["open"][:, :end].numpy(),
+        loader.dates[:end],
+        policy,
+        rebalance_mask=full_due[:end],
+    )
+    expected_target[~window.train_universe_mask] = np.nan
+    np.testing.assert_array_equal(window.target_ret, expected_target)
+    np.testing.assert_array_equal(window.rebalance_mask, full_due[:end])
+    np.testing.assert_array_equal(
+        window.realized_ret,
+        open_to_open_returns(
+            loader.raw_data_cache["open"][:, :end].numpy()
+        ),
+    )
+    assert (
+        ":frequency:every_5_days:horizon:5:"
+        in trainer.semantic_cache.stats()["window_id"]
+    )
+
+
 def test_update_stack_state_feature_and_operator():
     action = torch.tensor([1, FORMULA_VOCAB.operator_offset], dtype=torch.long)
     stack_sizes = torch.zeros(2, dtype=torch.long)
@@ -147,6 +200,21 @@ def test_validation_windows_degrade_to_single_window_when_too_short():
     train_end = 10
     windows = trainer._validation_windows(train_end)
     assert windows == [(trainer._validation_start(train_end), train_end)]
+
+
+def test_validation_windows_reject_underidentified_rebalance_schedule():
+    config = ModelConfig(validation_fraction=0.5, validation_splits=3)
+    rebalance_mask = np.zeros(12, dtype=bool)
+    rebalance_mask[::10] = True
+    with pytest.raises(
+        ValueError,
+        match="validation window .* has 1 rebalance observations; at least 2",
+    ):
+        validation_windows(
+            12,
+            config,
+            rebalance_mask=rebalance_mask,
+        )
 
 
 def test_best_formula_selected_on_validation_window(tmp_path, populated_db: DataConfig, monkeypatch):
@@ -963,7 +1031,10 @@ def test_window_cap_slices_every_measurement(
     for start, end in capped.val_windows:
         assert end <= cap[1]
     # The capped head equals the full window's head slice.
-    assert np.array_equal(
+    # P3 target contract: incomplete endpoints are NaN.  The exact-array
+    # assertion treats paired NaNs as equal while still requiring every
+    # finite value and every missing location to match.
+    np.testing.assert_array_equal(
         capped.target_ret,
         full.target_ret[: cap[0], : cap[1]],
     )

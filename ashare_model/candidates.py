@@ -342,6 +342,8 @@ class CandidateScorer:
         train_signal_range: tuple[int, int] | None = None,
         tie_break_keys: np.ndarray | None = None,
         adv: np.ndarray | None = None,
+        realized_ret: np.ndarray | None = None,
+        rebalance_mask: np.ndarray | None = None,
     ) -> CandidateScore:
         return self.score_many(
             [spec],
@@ -355,6 +357,8 @@ class CandidateScorer:
             train_signal_range=train_signal_range,
             tie_break_keys=tie_break_keys,
             adv=adv,
+            realized_ret=realized_ret,
+            rebalance_mask=rebalance_mask,
         )[0]
 
     def score_many(
@@ -371,6 +375,8 @@ class CandidateScorer:
         train_signal_range: tuple[int, int] | None = None,
         tie_break_keys: np.ndarray | None = None,
         adv: np.ndarray | None = None,
+        realized_ret: np.ndarray | None = None,
+        rebalance_mask: np.ndarray | None = None,
     ) -> list[CandidateScore]:
         """Score a batch of candidates under one PIT eligibility mask.
 
@@ -469,6 +475,8 @@ class CandidateScorer:
                 universe_mask=universe_mask,
                 tie_break_keys=tie_break_keys,
                 adv=adv,
+                realized_ret=realized_ret,
+                rebalance_mask=rebalance_mask,
             )
             rewards, val_rewards, icir, val_icir = reward_out[:4]
             # T1-04 portfolio objectives ([B, 8]: train active_ir /

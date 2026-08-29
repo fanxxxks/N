@@ -35,13 +35,14 @@ from ashare_data.config import (
 )
 from ashare_data.io_utils import atomic_write_json
 from ashare_data.schemas import SimOrder
-from ashare_data.processor import open_to_open_returns, tradability_blocked
+from ashare_data.processor import tradability_blocked
 from ashare_data.gates import ProductionGateRunner
 from ashare_execution import validate_execution_config
 
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.reward import signal_direction
 from ashare_model.time_contract import TrainingTimeContract
+from ashare_model.targets import causal_target_returns
 from ashare_model.vm import StackVM, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
 from ashare_portfolio.constructor import PortfolioConstructor
@@ -173,11 +174,17 @@ class SimulationRunner:
             contract = TrainingTimeContract.resolve(
                 self.loader.dates,
                 self.backtest_config.train_end_date,
+                horizon=self.backtest_config.target_horizon,
             )
             signal_end = contract.train_signal_end
             price_end = contract.train_label_end
-            target = open_to_open_returns(
-                self.loader.raw_data_cache["open"][:, :price_end].numpy()
+            policy = RebalancePolicy.from_config(self.backtest_config)
+            full_rebalance_mask = policy.rebalance_mask(self.loader.dates)
+            target = causal_target_returns(
+                self.loader.raw_data_cache["open"][:, :price_end].numpy(),
+                self.loader.dates[:price_end],
+                policy,
+                rebalance_mask=full_rebalance_mask[:price_end],
             )
             target = self.loader.mask_by_universe(target)
             self.direction = signal_direction(

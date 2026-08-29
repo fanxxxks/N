@@ -249,7 +249,12 @@ def stress_champion(
             )
             rows = []
             for fold_cfg in fold_cfgs:
-                fold = resolve_folds([fold_cfg], loader.dates)[0]
+                fold = resolve_folds(
+                    [fold_cfg],
+                    loader.dates,
+                    frequency=stressed.rebalance_frequency,
+                    horizon=stressed.target_horizon,
+                )[0]
                 metrics = evaluate_formula(
                     list(tokens), loader, fold, stressed, direction=int(direction)
                 )

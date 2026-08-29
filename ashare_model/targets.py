@@ -16,6 +16,8 @@ def causal_target_returns(
     open_: np.ndarray,
     dates: Sequence[str],
     policy: RebalancePolicy,
+    *,
+    rebalance_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Return sparse forward-open labels under ``policy``.
 
@@ -32,8 +34,18 @@ def causal_target_returns(
         raise ValueError(
             f"open_ has {open_arr.shape[1]} dates but date axis has {len(dates)}"
         )
+    if rebalance_mask is None:
+        rebalance_mask = policy.rebalance_mask(dates)
+    rebalance_mask = np.asarray(rebalance_mask, dtype=bool)
+    if rebalance_mask.shape != (len(dates),):
+        raise ValueError(
+            f"rebalance_mask shape {rebalance_mask.shape} does not match "
+            f"date axis ({len(dates)},)"
+        )
+    executable_end = max(len(dates) - policy.exit_offset, 0)
+    signal_indices = np.flatnonzero(rebalance_mask[:executable_end])
     target = np.full(open_arr.shape, np.nan, dtype=np.float64)
-    for signal_index in policy.executable_signal_indices(dates):
+    for signal_index in signal_indices:
         entry = policy.entry_index(signal_index)
         exit_ = policy.exit_index(signal_index)
         entry_open = open_arr[:, entry]

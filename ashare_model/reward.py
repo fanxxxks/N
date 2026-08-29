@@ -723,6 +723,8 @@ def formula_reward(
     universe_mask: np.ndarray,
     tie_break_keys: np.ndarray | None = None,
     adv: np.ndarray | None = None,
+    realized_ret: np.ndarray | None = None,
+    rebalance_mask: np.ndarray | None = None,
 ) -> float:
     """Scalar v13 reward: active IR minus exact annualized daily cost.
 
@@ -736,22 +738,33 @@ def formula_reward(
     is the mandatory ``[stock, date]`` PIT eligibility mask consumed at
     the signal date AND the entry date (T1-04); ``tie_break_keys``
     resolve exact selection ties deterministically (T1-02); ``adv``
-    enables the capacity audit.
+    enables the capacity audit. ``target_ret`` is the research label;
+    when ``realized_ret`` is supplied, only the latter drives portfolio
+    PnL and the benchmark. ``rebalance_mask`` is the global schedule slice.
     """
 
     signal = np.asarray(signal, dtype=np.float64)
     target_ret = np.asarray(target_ret, dtype=np.float64)
+    realized_ret = np.asarray(
+        target_ret if realized_ret is None else realized_ret,
+        dtype=np.float64,
+    )
     universe_mask = np.asarray(universe_mask, dtype=bool)
     if universe_mask.shape != signal.shape:
         raise ValueError(
             f"universe_mask shape {universe_mask.shape} does not match "
             f"signal shape {signal.shape}"
         )
+    if realized_ret.shape != signal.shape:
+        raise ValueError(
+            f"realized_ret shape {realized_ret.shape} does not match "
+            f"signal shape {signal.shape}"
+        )
     if signal_range is None:
         signal_range = (0, max(signal.shape[1] - 2, 0))
     simulation = simulate_basket_daily_returns(
         signal,
-        target_ret,
+        realized_ret,
         bt_cfg,
         blocked_buy,
         blocked_sell,
@@ -759,8 +772,9 @@ def formula_reward(
         universe_mask=universe_mask,
         tie_break_keys=tie_break_keys,
         adv=adv,
+        rebalance_mask=rebalance_mask,
     )
-    benchmark = _window_benchmark(target_ret, signal_range, universe_mask)
+    benchmark = _window_benchmark(realized_ret, signal_range, universe_mask)
     objectives = _portfolio_objectives(
         simulation, benchmark, reward_cfg.ic_hac_max_lags
     )
@@ -786,6 +800,8 @@ def batched_basket_rewards(
     universe_mask: np.ndarray,
     tie_break_keys: np.ndarray | None = None,
     adv: np.ndarray | None = None,
+    realized_ret: np.ndarray | None = None,
+    rebalance_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray | None,
            np.ndarray | None]:
     """v13 rewards for a batch: active IR minus exact annualized daily
@@ -817,15 +833,26 @@ def batched_basket_rewards(
     exactly like the signals).  ``universe_mask`` is the mandatory
     ``[stocks, dates]`` PIT eligibility mask, sliced per window exactly
     like the signals, consumed at the signal date AND the entry date by
-    the basket (T1-04 alignment).
+    the basket (T1-04 alignment). ``target_ret`` drives IC/quality only;
+    ``realized_ret`` drives daily portfolio PnL and the benchmark, while
+    ``rebalance_mask`` fixes the global schedule across all sub-windows.
     """
 
     signals = np.asarray(signals, dtype=np.float64)
     target_ret = np.asarray(target_ret, dtype=np.float64)
+    realized_ret = np.asarray(
+        target_ret if realized_ret is None else realized_ret,
+        dtype=np.float64,
+    )
     universe_mask = np.asarray(universe_mask, dtype=bool)
     if universe_mask.shape != target_ret.shape:
         raise ValueError(
             f"universe_mask shape {universe_mask.shape} does not match "
+            f"target_ret shape {target_ret.shape}"
+        )
+    if realized_ret.shape != target_ret.shape:
+        raise ValueError(
+            f"realized_ret shape {realized_ret.shape} does not match "
             f"target_ret shape {target_ret.shape}"
         )
     if train_signal_range is None:
@@ -842,7 +869,7 @@ def batched_basket_rewards(
     )
     simulation = simulate_basket_daily_returns_batch(
         signals,
-        target_ret,
+        realized_ret,
         bt_cfg,
         blocked_buy,
         blocked_sell,
@@ -850,8 +877,9 @@ def batched_basket_rewards(
         universe_mask=universe_mask,
         tie_break_keys=tie_break_keys,
         adv=adv,
+        rebalance_mask=rebalance_mask,
     )
-    benchmark = _window_benchmark(target_ret, train_signal_range, universe_mask)
+    benchmark = _window_benchmark(realized_ret, train_signal_range, universe_mask)
     objectives = _portfolio_objectives(
         simulation, benchmark, reward_cfg.ic_hac_max_lags
     )
@@ -882,7 +910,7 @@ def batched_basket_rewards(
             )
             win_simulation = simulate_basket_daily_returns_batch(
                 signals,
-                target_ret,
+                realized_ret,
                 bt_cfg,
                 blocked_buy,
                 blocked_sell,
@@ -890,10 +918,11 @@ def batched_basket_rewards(
                 universe_mask=universe_mask,
                 tie_break_keys=tie_break_keys,
                 adv=adv,
+                rebalance_mask=rebalance_mask,
             )
             win_objectives = _portfolio_objectives(
                 win_simulation,
-                _window_benchmark(target_ret, (start, end), universe_mask),
+                _window_benchmark(realized_ret, (start, end), universe_mask),
                 reward_cfg.ic_hac_max_lags,
             )
             win_mean_cost = (

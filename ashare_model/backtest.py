@@ -23,6 +23,7 @@ from ashare_portfolio.constructor import PortfolioConstructor
 from ashare_portfolio.rebalance import RebalancePolicy
 
 from .reward import sortino_ratio
+from .targets import causal_target_returns
 from .time_contract import TrainingTimeContract
 
 
@@ -495,13 +496,20 @@ def main() -> None:
         # a negative-IC formula is never mechanically traded backwards.
         direction = int(payload.get("direction", 1))
         if "direction" not in payload:
+            policy = RebalancePolicy.from_config(backtest_config)
             contract = TrainingTimeContract.resolve(
-                loader.dates, backtest_config.train_end_date
+                loader.dates,
+                backtest_config.train_end_date,
+                horizon=policy.horizon,
             )
             price_end = contract.train_label_end
             signal_end = contract.train_signal_end
-            train_target = open_to_open_returns(
-                loader.raw_data_cache["open"][:, :price_end].numpy()
+            full_rebalance_mask = policy.rebalance_mask(loader.dates)
+            train_target = causal_target_returns(
+                loader.raw_data_cache["open"][:, :price_end].numpy(),
+                loader.dates[:price_end],
+                policy,
+                rebalance_mask=full_rebalance_mask[:price_end],
             )
             train_target = loader.mask_by_universe(train_target)
             direction = signal_direction(

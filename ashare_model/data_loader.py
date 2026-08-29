@@ -296,8 +296,12 @@ class AshareDataLoader:
             encode_industry_frame(industry_frame), dtype=torch.float32
         )
 
-        # Next-open to next-open forward return with a missing-data mask, so
-        # suspended / unlisted days can never fabricate huge fake targets.
+        # Legacy daily/horizon=1 adjacent-open field retained for callers
+        # outside the P3 research path.  P3 training/search/evaluation must
+        # build its sparse causal target from RebalancePolicy on the complete
+        # date axis; this dense field is never a multi-period target.
+        # Missing-data masking still prevents suspended / unlisted days from
+        # fabricating huge fake returns.
         open_tensor = self.raw_data_cache["open"]
         target = self.mask_by_universe(open_to_open_returns(open_tensor.numpy()))
         self.target_ret = torch.tensor(target, dtype=torch.float32)
