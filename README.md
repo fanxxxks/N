@@ -151,8 +151,8 @@ python -m ashare_model.evaluation --selfcheck # 空转验收：噪声 DSR/max-t 
 ```
 
 `p3_measurement` 在本地真实 loader 数据的固定尾部日期窗上，以固定 seed 从满足
-PIT/价格/因子覆盖的股票池抽样，记录 reward/backtest 权重与费用最大差、标签区间
-重叠、10 万默认订单结构、pre-P3 兼容配置对照，以及同一裸因子的
+PIT/价格/因子覆盖的股票池抽样，记录 reward/backtest 权重、买卖、订单数与费用
+最大差、标签区间重叠、10 万默认订单结构、pre-P3 兼容配置对照，以及同一裸因子的
 `daily/weekly × equal_weight/optimizer` 四象限；它是执行/成本验收，不宣称 Alpha。
 
 - **费用矩阵（P1-02）**：按全项目唯一费用口径（`backtest` 段的佣金/最低佣金/

@@ -10,6 +10,10 @@ from ashare_model.p3_measurement import (
 )
 
 
+def test_p3_measurement_schema_version_is_pinned():
+    assert P3_MEASUREMENT_VERSION == 2
+
+
 def test_build_p3_measurement_covers_acceptance_metrics(
     populated_db: DataConfig,
 ):
@@ -43,6 +47,7 @@ def test_build_p3_measurement_covers_acceptance_metrics(
     assert parity["max_target_weight_diff"] == 0.0
     assert parity["max_buy_weight_diff"] == 0.0
     assert parity["max_sell_weight_diff"] == 0.0
+    assert parity["max_order_count_diff"] == 0
     assert parity["max_cost_fraction_diff"] == 0.0
 
     labels = payload["labels"]

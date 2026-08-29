@@ -47,7 +47,7 @@ from .reward import simulate_basket_daily_returns
 from .vocab import FEATURE_NAMES
 
 
-P3_MEASUREMENT_VERSION = 1
+P3_MEASUREMENT_VERSION = 2
 DEFAULT_FACTOR = "REVERSAL_5"
 DEFAULT_SEED = 20260829
 DEFAULT_STOCKS = 60
@@ -490,6 +490,18 @@ def build_p3_measurement(
         ),
         "max_turnover_diff": _max_abs_diff(
             backtest.turnover, reward.turnover
+        ),
+        "max_order_count_diff": int(
+            _max_abs_diff(
+                [
+                    item["order_count"]
+                    for item in backtest.construction_diagnostics
+                ],
+                [
+                    item["order_count"]
+                    for item in reward.construction_diagnostics
+                ],
+            )
         ),
         "max_cost_fraction_diff": _max_abs_diff(
             backtest.cost_fractions, reward.daily_cost_fractions
