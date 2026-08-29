@@ -29,8 +29,9 @@ import random as py_random
 import numpy as np
 from deap import base, creator, gp, tools
 
-from .baseline_harness import BaselineHarnessResult, SemanticBudgetEvaluator
+from .baseline_harness import SemanticBudgetEvaluator
 from .ops import OPS_CONFIG
+from .search_contract import SearchResult
 from .vocab import FormulaVocab
 
 # DEAP creator classes are process-global; create once, reuse forever.
@@ -186,7 +187,7 @@ def run_gp_baseline(
     cxpb: float = 0.6,
     mutpb: float = 0.3,
     tournsize: int = 3,
-) -> BaselineHarnessResult:
+) -> SearchResult:
     """Generational strongly-typed GP search under the semantic budget.
 
     Proposals that the evaluator skips (invalid, degenerate, duplicate or
@@ -274,4 +275,15 @@ def run_gp_baseline(
                 offspring[index] = fresh_individual()
         population = toolbox.select(offspring + population, k=pop_size)
 
-    return evaluator.finish()
+    stalled = evaluator.budget_used < evaluator.budget
+    return evaluator.finish(
+        backend="gp",
+        seed=seed,
+        termination_reason=(
+            "proposal_stagnation" if stalled else "budget_exhausted"
+        ),
+        stagnation_reason=(
+            "three_generations_without_new_semantic_class" if stalled else None
+        ),
+        diagnostics={"stall_generations": stall_generations},
+    )

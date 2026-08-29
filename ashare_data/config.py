@@ -93,9 +93,10 @@ class ModelConfig:
     # — best-so-far area 0.899 vs GP 0.975 / random 0.938 / TPE 0.916 median
     # under identical unique-semantic-evaluation budgets across 5 independent
     # seeds).  "gp" (strongly-typed GP, DEAP) is the production default;
-    # "rl" (REINFORCE policy) stays an experimental opt-in and "random" a
-    # uniform mask-legal baseline — all billed in unique semantic
-    # evaluations.  YAML may override this default via model.searcher.
+    # "rl" (REINFORCE policy) stays an experimental opt-in; "tpe" and
+    # "random" are formal alternative/baseline backends — all billed in
+    # unique semantic evaluations.  YAML may override this default via
+    # model.searcher.
     searcher: str = "gp"
 
 
@@ -438,9 +439,10 @@ def make_model_config(raw: dict[str, Any]) -> ModelConfig:
         for k in ModelConfig.__dataclass_fields__
     }
     cfg = ModelConfig(**data)
-    if cfg.searcher not in ("rl", "gp", "random"):
+    if cfg.searcher not in ("gp", "tpe", "random", "rl"):
         raise ValueError(
-            f"model.searcher must be 'rl', 'gp' or 'random', got {cfg.searcher!r}"
+            "model.searcher must be 'gp', 'tpe', 'random' or 'rl', "
+            f"got {cfg.searcher!r}"
         )
     return cfg
 

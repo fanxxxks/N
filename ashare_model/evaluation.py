@@ -206,7 +206,6 @@ from ashare_logging import export_log_txt, setup_run_logging
 
 from .backtest import AshareBacktestEngine, equal_weight_benchmark_returns
 from .baseline_harness import (
-    BaselineHarnessResult,
     SemanticBudgetEvaluator,
     canonical_form_pool,
 )
@@ -230,6 +229,7 @@ from .semantic_cache import (
     CalibrationSlice,
     make_calibration_execute,
 )
+from .search_contract import SearchResult
 from .time_contract import FoldTimeContract
 from .targets import causal_target_returns
 from ashare_portfolio.rebalance import RebalancePolicy
@@ -244,7 +244,7 @@ from .train import (
 from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "22"
+PROTOCOL_VERSION = "23"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -1076,15 +1076,20 @@ def _search_failed_row(base: dict, reason: str, score=None) -> dict:
 
 def _search_row(
     base: dict,
-    result: BaselineHarnessResult,
+    result: SearchResult,
     loader: AshareDataLoader,
     fold: Fold,
     backtest_config: BacktestConfig,
 ) -> dict:
     """Shape one search result into a protocol row (like a trained row)."""
 
-    base["unique_semantic_evals"] = result.n_evaluated
-    base["semantic_dedups"] = result.n_semantic_dedups
+    base["search_contract_version"] = result.contract_version
+    base["requested_budget"] = result.requested_budget
+    base["consumed_budget"] = result.consumed_budget
+    base["unique_semantic_evals"] = result.consumed_budget
+    base["semantic_dedups"] = result.semantic_duplicates
+    base["termination_reason"] = result.termination_reason
+    base["stagnation_reason"] = result.stagnation_reason
     base["best_so_far"] = list(result.best_so_far)
     selected = result.selected
     if selected is None or selected.tokens is None:
@@ -1183,7 +1188,22 @@ def run_random_search(
         evaluator.propose(key)
         if evaluator.budget_used >= target_count:
             break
-    return _search_row(base, evaluator.finish(), loader, fold, backtest_config)
+    reason = (
+        "budget_exhausted"
+        if evaluator.budget_used >= target_count
+        else "candidate_pool_exhausted"
+    )
+    return _search_row(
+        base,
+        evaluator.finish(
+            backend="random",
+            seed=seed,
+            termination_reason=reason,
+        ),
+        loader,
+        fold,
+        backtest_config,
+    )
 
 
 def run_gp_search(

@@ -499,7 +499,8 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 核心 | [signal_quality.py](../ashare_model/signal_quality.py) | HAC 有效样本 ICIR、block bootstrap、覆盖率/活跃度/符号稳定性 |
 | 核心 | [semantic_cache.py](../ashare_model/semantic_cache.py) | 规范 AST + 校准切片数值指纹；按 dataset/reward/protocol/window 隔离预算 |
 | 搜索 | [gp_search.py](../ashare_model/gp_search.py) | DEAP 强类型 GP |
-| 搜索 | [tpe_search.py](../ashare_model/tpe_search.py) | Optuna TPE |
+| 搜索 | [search_contract.py](../ashare_model/search_contract.py)、[search_backends.py](../ashare_model/search_backends.py) | GP/TPE/Random/RL 统一 `SearchBackend`、预算与 `SearchResult` 契约 |
+| 搜索 | [tpe_search.py](../ashare_model/tpe_search.py) | Optuna TPE（正式 `model.searcher` 后端） |
 | 搜索 | [baseline_harness.py](../ashare_model/baseline_harness.py) | matched unique-semantic-evaluation 预算和统一搜索评价适配器 |
 | 搜索治理 | [admission.py](../ashare_model/admission.py) | RL 与 random/GP/TPE 的预注册准入裁决 |
 | 评价 | [backtest.py](../ashare_model/backtest.py) | 消费统一 PortfolioConstructor 的连续权重回测、基准、费用、持仓快照和指标 |
@@ -527,7 +528,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 |---|---:|
 | 模型 | <code>MODEL_VERSION = 2</code> |
 | 奖励 | <code>REWARD_VERSION = 14</code>（v14 分离稀疏研究标签与逐日组合收益） |
-| 评价协议 | <code>PROTOCOL_VERSION = 22</code>（v21 起逐行记录 data_tier；v22 固定 P3 日历/标签与执行 provenance） |
+| 评价协议 | <code>PROTOCOL_VERSION = 23</code>（v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
 | 公式语法 | <code>GRAMMAR_VERSION = 2</code> |
 | feature registry | 2（v2 起逐特征记录 data_tier） |
 | data tier | 1（ashare_model/data_tier.py，P2 新增） |
@@ -643,7 +644,7 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 |---|---|
 | [config](../config) | [ashare_config.yaml](../config/ashare_config.yaml) 是版本化基线；[.env.example](../config/.env.example) 只列三个数据路径变量；真实 <code>.env</code>、<code>.webapi_token</code> 和 <code>runtime_overrides.yaml</code> 被忽略 |
 | [docs](.) | 本指南、P2 契约（[p2_data_tier_contract.md](p2_data_tier_contract.md)）与 Phase 0-6 七份测量日志；旧评估报告 evaluation_20260823.md 已删除（74f833e） |
-| [experiments](../experiments) | 只增不改的研究快照；当前有多个 2026-08-15 至 2026-08-23 归档和 [admission_experiment.json](../experiments/admission_experiment.json) |
+| [experiments](../experiments) | 只增不改的研究快照；T2 固定-baseline-seed admission 仅为历史证据，P4 晋级必须使用配对独立种子 |
 | [assets](../assets) | 两张无 provenance 的旧回测图片 |
 | [paper](../paper) | 一篇与 A 股主线无关的 Uniswap V4 论文 |
 | [.github](../.github) | 单一 Python CI workflow |

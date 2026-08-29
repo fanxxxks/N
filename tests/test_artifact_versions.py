@@ -125,9 +125,11 @@ def test_current_strategy_is_not_legacy():
     assert verdict == {"legacy": False, "reasons": []}
 
 
-def test_p3_semantic_versions_are_bumped_together():
+def test_current_semantic_versions_are_pinned():
+    # P4 contract §6 changes search comparison/result semantics only; reward
+    # and execution semantics remain at their P3 generations.
     assert REWARD_VERSION == "14"
-    assert PROTOCOL_VERSION == "22"
+    assert PROTOCOL_VERSION == "23"
     assert EXECUTION_SPEC_VERSION == 2
     assert BARE_FACTOR_BACKTEST_VERSION == 3
 

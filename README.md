@@ -55,7 +55,7 @@ dropout 跨设备一致），因此同一 `(init_seed, seed)` 在任何机器上
 ```bash
 python -m ashare_data.sync
 python -m ashare_model.diagnostics   # 因子质量报告（覆盖率/IC/相关性 → data/factor_report.json）
-python -m ashare_model.train        # 默认 GP 搜索器（model.searcher: gp；RL/random 为实验/基线选项）
+python -m ashare_model.train        # 默认 GP（model.searcher: gp；tpe/random/rl 为正式可选后端）
 python -m ashare_model.backtest
 python -m ashare_model.evaluation --tier screening  # 测量协议（见下）
 python -m ashare_model.cost_matrix                 # 资金×持仓数×换手率费用矩阵（P1-02）
@@ -361,8 +361,8 @@ python scripts/archive_run.py --mode sim --commit
   5,000 元、目标权重变化至少 1%、已有组合单次 L1 换手预算 20%；首次注资不算
   换手。旧调用若只传 `top_n`，保持买卖排名相同的无缓冲语义。
 - **涨跌停事件因子**：`LIMIT_UP_EVENT`/`LIMIT_DOWN_EVENT` 由一字板真实计算（创业板/科创板 20%，其余 10%）。
-- **搜索与训练**：默认强类型 GP（`model.searcher: gp`；RL/random 为实验与
-  基线选项，RL 路径为 REINFORCE + value baseline + 熵正则、advantage 裁剪
+- **搜索与训练**：默认强类型 GP（`model.searcher: gp`；TPE/random/RL 为正式
+  可选后端，RL 路径为 REINFORCE + value baseline + 熵正则、advantage 裁剪
   防数值爆炸）；训练奖励为**组合主动 IR 减去精确年化执行成本**
   （`reward.py` v14：稀疏因果标签仅驱动 IC/质量门，逐日资金曲线消费相邻 open
   收益；basket 在 signal-date 与 entry-date 双重 PIT eligible
