@@ -62,6 +62,7 @@ python -m ashare_model.cost_matrix                 # 资金×持仓数×换手�
 python -m ashare_model.bare_factor_backtest        # 裸因子固定四象限（v3，不做搜索）
 python -m ashare_model.p3_measurement              # P3 真实可复现验收测量
 python -m ashare_model.searcher_bench --budget 128 # 四搜索器成本测量/小预算 smoke（P1-04/05）
+python scripts/admission_experiment.py             # P4 五组配对种子准入（含 random/imitation RL）
 python -m ashare_trading.run_sim
 python scripts/analyze_sim.py               # 模拟盘费用拖累/毛盈亏/现金核对
 streamlit run dashboard/app.py
@@ -79,6 +80,11 @@ elite archive；保存正式策略时同时写入 `data/search_elite_archive.jso
 next-token imitation，再重新创建 optimizer 进入 REINFORCE；archive 缺失、为空
 或版本不符会明确失败，不会静默退化成随机初始化。随机初始化 RL 只用于配对
 实验，相关产物标记 `experimental=true`（`MODEL_VERSION=3`）。
+
+P4 准入按五个独立 pair 预注册：同一 pair 的 GP/TPE/Random、随机 RL、
+imitation RL 使用同一 seed 和请求预算。只有 imitation RL 同时相对随机 RL 与
+GP 在 best-so-far area、OOS active IR 的中位数严格更高，且每项至少赢 4/5，
+才允许 RL 晋级及继续研究 PPO/辅助价值/AST embedding；否则默认保持 GP。
 
 ### 因子诊断与家族消融
 

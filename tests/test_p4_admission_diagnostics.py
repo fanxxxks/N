@@ -86,6 +86,82 @@ def test_p4_admission_rejects_unpaired_inputs():
         )
 
 
+def test_failed_imitation_measurement_blocks_admission_and_advanced_rl():
+    from ashare_model.admission import decide_p4_admission
+
+    verdict = decide_p4_admission(
+        imitation_areas=[5.0, 5.0, None, 5.0, 5.0],
+        imitation_oos_irs=[5.0] * 5,
+        random_rl_areas=[1.0] * 5,
+        random_rl_oos_irs=[1.0] * 5,
+        gp_areas=[2.0] * 5,
+        gp_oos_irs=[2.0] * 5,
+    )
+    assert verdict["rl_admitted"] is False
+    assert verdict["advanced_rl_allowed"] is False
+    assert verdict["default_searcher"] == "gp"
+    assert verdict["invalid_metrics"] == ["imitation_areas[2]"]
+
+
+def test_admission_output_retains_failed_arm_and_has_strict_json_values():
+    import numpy as np
+
+    from scripts.admission_experiment import _json_safe, _result_row
+
+    row = _result_row(
+        None,
+        "RuntimeError: injected",
+        requested_budget=8,
+        loader=None,
+        fold=None,
+        backtest_config=None,
+    )
+    assert row == {
+        "error": "RuntimeError: injected",
+        "requested_budget": 8,
+        "consumed_budget": 0,
+        "area": None,
+        "oos_ir": None,
+        "search_result": None,
+    }
+    unsafe = {
+        "nan": float("nan"),
+        "infinite": np.float64(float("inf")),
+        "n": np.int64(2),
+    }
+    assert _json_safe(unsafe) == {"nan": None, "infinite": None, "n": 2}
+
+
+def test_rl_constructor_failure_is_contained_by_admission_boundary(monkeypatch):
+    import scripts.admission_experiment as experiment
+    from ashare_model.search_contract import SearchRequest
+
+    def fail_constructor(*args, **kwargs):
+        raise RuntimeError("injected constructor failure")
+
+    monkeypatch.setattr(experiment, "AshareTrainer", fail_constructor)
+    result, error = experiment._run_rl(
+        initialization="random",
+        archive=None,
+        request=SearchRequest(
+            seed=7,
+            budget=4,
+            max_formula_len=12,
+            steps=1,
+            batch_size=4,
+        ),
+        data_config=None,
+        model_config=None,
+        backtest_config=None,
+        reward_config=None,
+        loader=None,
+        fold=None,
+        window_cap=(3, 20),
+    )
+    assert result is None
+    assert error == "RuntimeError: injected constructor failure"
+
+
 def _rejected(reason: str) -> CandidateScore:
     return CandidateScore(
         tokens=(1,),

@@ -445,12 +445,13 @@ class AshareTrainer:
             : factor_tensor.shape[1], : target_ret.shape[1]
         ]
 
-        history_start = len(self.history)
         run_reward_values: list[float] = []
         run_rejection_reasons: dict[str, int] = {}
         run_formula_lengths: list[int] = []
         run_step_summaries: list[dict[str, object]] = []
         run_semantic_duplicates = 0
+        run_best_so_far: list[tuple[int, float]] = []
+        run_best_reward = -float("inf")
 
         pbar = tqdm(range(steps))
         for step in pbar:
@@ -648,7 +649,19 @@ class AshareTrainer:
                 adv,
             )
             for key, ckey, fingerprint, bill in evaluated:
+                budget_before_put = int(self.semantic_cache.budget_used)
                 self.semantic_cache.put(ckey, step_results[key], fingerprint, bill)
+                budget_after_put = int(self.semantic_cache.budget_used)
+                if budget_after_put > budget_before_put:
+                    run_best_reward = max(
+                        run_best_reward, float(step_results[key].val_reward)
+                    )
+                    run_best_so_far.append((budget_after_put, run_best_reward))
+                else:
+                    # A same-batch numerical equivalent is only discovered
+                    # when the first result is committed to the ledger.  It
+                    # consumed compute but not semantic-evaluation budget.
+                    semantic_duplicate_proposals += 1
 
             batch_scores: list[CandidateScore] = []
             for i in range(batch_size):
@@ -843,12 +856,12 @@ class AshareTrainer:
             seed=seed,
             requested_budget=int(steps) * int(batch_size),
             proposal_count=int(steps) * int(batch_size),
-            history_rows=self.history[history_start:],
             reward_values=run_reward_values,
             step_summaries=run_step_summaries,
             run_rejection_reasons=run_rejection_reasons,
             formula_lengths=run_formula_lengths,
             semantic_duplicates=run_semantic_duplicates,
+            best_so_far=run_best_so_far,
         )
 
         selection_path = self.data_config.data_dir / "training_selection.json"
@@ -912,12 +925,12 @@ class AshareTrainer:
         seed: int,
         requested_budget: int,
         proposal_count: int,
-        history_rows: list[dict[str, object]],
         reward_values: list[float],
         step_summaries: list[dict[str, object]],
         run_rejection_reasons: dict[str, int],
         formula_lengths: list[int],
         semantic_duplicates: int,
+        best_so_far: list[tuple[int, float]],
     ) -> SearchResult:
         """Shape the legacy REINFORCE loop into the shared result schema.
 
@@ -926,19 +939,6 @@ class AshareTrainer:
         Repeated x coordinates (a fully duplicate step) collapse without
         inventing budget consumption.
         """
-
-        by_budget: dict[int, float] = {}
-        for row in history_rows:
-            consumed = int(row.get("unique_semantic_evals", 0))
-            if consumed <= 0:
-                continue
-            reward = float(row.get("best_val_reward", -float("inf")))
-            by_budget[consumed] = max(by_budget.get(consumed, -float("inf")), reward)
-        curve: list[tuple[int, float]] = []
-        best = -float("inf")
-        for consumed, reward in sorted(by_budget.items()):
-            best = max(best, reward)
-            curve.append((consumed, best))
 
         scores = tuple(self._candidate_scores.values())
         rejections: dict[str, int] = {}
@@ -977,7 +977,7 @@ class AshareTrainer:
             requested_budget=int(requested_budget),
             consumed_budget=consumed_budget,
             termination_reason=termination_reason,
-            best_so_far=tuple(curve),
+            best_so_far=tuple(best_so_far),
             scores=scores,
             selected=self.selection_result.selected,
             rejection_reasons=rejections,

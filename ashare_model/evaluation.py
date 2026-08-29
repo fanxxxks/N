@@ -131,8 +131,9 @@ TPE (Optuna) join the random-search baseline with the same matched
 budget per fold (``gp_enabled`` / ``tpe_enabled`` config, both on by
 default), all three rows run on the shared semantic-budget evaluator,
 and every trained row records its actual ``unique_semantic_evals``.
-The admission experiment (scripts/admission_experiment.py) uses these
-rows' budget semantics to decide whether RL stays the default searcher.
+P4's paired admission experiment uses these budget semantics but gives
+every arm the same independent pair seed and requested budget; fixed
+baseline seeds from the historical T2 artifact are not admissible.
 
 v20 (T4-01) re-establishes the valid-experiment protocol.  The 2021-2026
 history has been viewed repeatedly, so it is **development/validation
@@ -169,6 +170,11 @@ consumes adjacent-open daily returns.  Protocol artifacts record execution
 spec v2, the portfolio-constructor version and the complete resolved
 portfolio configuration; pre-v22 artifacts remain readable history but are
 not current promotion evidence.
+
+v23 (P4) makes GP/TPE/Random/RL return one versioned ``SearchResult`` with
+truthful requested/consumed budgets, termination/stagnation and
+per-evaluation best-so-far curves.  This changes comparison and artifact
+semantics, not the candidate reward itself.
 """
 
 from __future__ import annotations

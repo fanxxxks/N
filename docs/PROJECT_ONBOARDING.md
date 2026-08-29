@@ -504,9 +504,9 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | RL 诊断 | [rl_diagnostics.py](../ashare_model/rl_diagnostics.py) | reward/拒绝/entropy/duplicate/advantage/gradient/公式长度/算子覆盖的 v1 纯观测指标 |
 | 搜索 | [tpe_search.py](../ashare_model/tpe_search.py) | Optuna TPE（正式 `model.searcher` 后端） |
 | 搜索 | [baseline_harness.py](../ashare_model/baseline_harness.py) | matched unique-semantic-evaluation 预算和统一搜索评价适配器 |
-| 搜索治理 | [admission.py](../ashare_model/admission.py) | RL 与 random/GP/TPE 的预注册准入裁决 |
+| 搜索治理 | [admission.py](../ashare_model/admission.py) | v2 配对种子规则：imitation RL 必须在 area/OOS IR 同时胜 random RL 与 GP；失败时禁用高级 RL |
 | 评价 | [backtest.py](../ashare_model/backtest.py) | 消费统一 PortfolioConstructor 的连续权重回测、基准、费用、持仓快照和指标 |
-| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v22 nested walk-forward、全局调仓日历、稀疏因果标签、拼接 OOS、DSR、max-t、自检 |
+| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v23 nested walk-forward + P4 四搜索器统一比较语义、全局日历/稀疏标签/拼接 OOS/DSR/max-t |
 | 评价 | [pareto.py](../ashare_model/pareto.py) | 多目标 Pareto frontier 辅助 |
 | 治理 | [ledger.py](../ashare_model/ledger.py) | append-only JSONL 试验账本、序列和 SHA-256 hash chain |
 | 治理 | [regime.py](../ashare_model/regime.py) | dev cutoff、预锁 final slice、dataset 绑定和违规拒绝 |
@@ -618,7 +618,7 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | [check_production_gates.py](../scripts/check_production_gates.py) | 运行 G1-G7 并输出 JSON；检查本身只读 |
 | [baseline_harness.py](../scripts/baseline_harness.py) | 在统一预算下跑裸因子/随机基线 |
 | [ablate_families.py](../scripts/ablate_families.py) | 同 seed 因子家族消融 |
-| [admission_experiment.py](../scripts/admission_experiment.py) | RL 与 random/GP/TPE 五 seed 准入实验 |
+| [admission_experiment.py](../scripts/admission_experiment.py) | 五个独立 pair 同 seed/同请求预算比较 GP/TPE/Random、random RL、imitation RL；失败行不丢弃 |
 | [analyze_sim.py](../scripts/analyze_sim.py) | 汇总模拟盘日文件和交易表现 |
 | [archive_run.py](../scripts/archive_run.py) | 归档公式、配置、指标、模型 hash 和 commit；带 <code>--commit</code> 会创建 Git commit |
 | [freeze_lock.py](../scripts/freeze_lock.py) | 从当前解释器已安装包生成 pin/完整 lock；无参数会改写依赖文件，<code>--check</code> 才是只读核对 |

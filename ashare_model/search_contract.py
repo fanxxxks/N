@@ -119,6 +119,11 @@ class SearchResult:
             normalized.append((x, reward))
             previous_x = x
             previous_reward = reward
+        if consumed > 0:
+            if not normalized or normalized[0][0] != 1:
+                raise ValueError("best_so_far must start at consumed budget 1")
+            if normalized[-1][0] != consumed:
+                raise ValueError("best_so_far must end at consumed budget")
         object.__setattr__(self, "best_so_far", tuple(normalized))
         if int(self.proposal_count) < 0:
             raise ValueError("proposal_count must be non-negative")

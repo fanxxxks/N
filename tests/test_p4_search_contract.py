@@ -88,6 +88,7 @@ def test_search_result_records_requested_consumed_stagnation_and_curve():
         ({"consumed_budget": 5}, "exceed"),
         ({"best_so_far": ((2, 0.1), (1, 0.2))}, "strictly increasing"),
         ({"best_so_far": ((1, 0.2), (2, 0.1))}, "non-decreasing"),
+        ({"best_so_far": ((1, 0.2),)}, "end at consumed budget"),
         ({"stagnation_reason": None}, "stagnation_reason"),
     ],
 )

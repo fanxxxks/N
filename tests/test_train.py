@@ -1647,6 +1647,10 @@ def test_train_grammar_stats_recorded_in_history(
     }
     assert diagnostics["operator_coverage"] == ["ADD"]
     assert trainer.search_result.diagnostics["operator_coverage"] == ["ADD"]
+    assert trainer.search_result.best_so_far == (
+        (1, trainer.search_result.best_so_far[-1][1]),
+    )
+    assert trainer.search_result.consumed_budget == 1
     assert trainer._run_operator_coverage == {"ADD"}
 
 
