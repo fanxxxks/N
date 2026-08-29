@@ -71,6 +71,10 @@ GP、TPE、Random 搜索会在统一 `SearchResult` 中生成确定性去重的 
 elite archive；保存正式策略时同时写入 `data/search_elite_archive.json`
 （`ELITE_ARCHIVE_VERSION=1`）。未知 archive 版本会被明确拒绝，不做猜测迁移。
 
+实验 RL 的每步与 run-level `SearchResult.diagnostics` 记录 reward 分布、拒绝
+原因、entropy、semantic duplicate、advantage 方差、更新前 gradient norm、
+公式长度和算子覆盖；关键数值同时写入 `rl.metrics` 日志。
+
 ### 因子诊断与家族消融
 
 新增因子族（或怀疑某族退化）时，先看证据再训练：

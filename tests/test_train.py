@@ -1490,9 +1490,8 @@ def test_collapse_warning_fires_after_consecutive_collapsed_steps(
 def test_train_grammar_stats_recorded_in_history(
     tmp_path, populated_db: DataConfig, monkeypatch
 ):
-    """T0-02: the training runtime reports formula length, operator
-    coverage, the syntax/semantic unique rates and the cache-hit rate for
-    every step, derived from the AST (the single source of truth)."""
+    """T0-02/P4-05: runtime grammar and RL diagnostics are recorded from
+    the AST, rewards and gradients without changing their contracts."""
 
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
@@ -1538,6 +1537,22 @@ def test_train_grammar_stats_recorded_in_history(
     assert step["semantic_unique_frac"] == pytest.approx(0.25)
     # Cold cache: nothing was reused from a previous step.
     assert step["cache_hit_frac"] == pytest.approx(0.0)
+    diagnostics = step["rl_diagnostics"]
+    assert diagnostics["reward_distribution"]["count"] == 4
+    assert diagnostics["rejection_reasons"] == {}
+    assert diagnostics["entropy"] >= 0.0
+    assert diagnostics["semantic_duplicates"] == 3
+    assert diagnostics["semantic_duplicate_rate"] == pytest.approx(0.75)
+    assert diagnostics["advantage_variance"] >= 0.0
+    assert diagnostics["gradient_norm"] >= 0.0
+    assert diagnostics["formula_length"] == {
+        "count": 1,
+        "min": 4,
+        "mean": 4.0,
+        "max": 4,
+    }
+    assert diagnostics["operator_coverage"] == ["ADD"]
+    assert trainer.search_result.diagnostics["operator_coverage"] == ["ADD"]
     assert trainer._run_operator_coverage == {"ADD"}
 
 

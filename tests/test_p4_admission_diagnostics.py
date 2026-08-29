@@ -10,12 +10,6 @@ import math
 import pytest
 import torch
 
-from ashare_model.admission import (
-    ADMISSION_RULE_VERSION,
-    PAIR_SEEDS,
-    decide_p4_admission,
-    paired_seed_plan,
-)
 from ashare_model.candidates import CandidateScore
 from ashare_model.rl_diagnostics import (
     RL_DIAGNOSTICS_VERSION,
@@ -27,6 +21,8 @@ from ashare_model.rl_diagnostics import (
 
 
 def test_pair_seed_plan_uses_same_seed_within_pair_and_unique_seeds_across_pairs():
+    from ashare_model.admission import PAIR_SEEDS, paired_seed_plan
+
     assert len(PAIR_SEEDS) >= 5
     assert len(set(PAIR_SEEDS)) == len(PAIR_SEEDS)
     plan = paired_seed_plan()
@@ -44,6 +40,8 @@ def test_pair_seed_plan_uses_same_seed_within_pair_and_unique_seeds_across_pairs
 
 
 def test_p4_admission_rule_requires_imitation_to_beat_random_rl_and_gp():
+    from ashare_model.admission import ADMISSION_RULE_VERSION, decide_p4_admission
+
     verdict = decide_p4_admission(
         imitation_areas=[5, 5, 5, 5, 1],
         imitation_oos_irs=[5, 5, 5, 5, 1],
@@ -59,6 +57,8 @@ def test_p4_admission_rule_requires_imitation_to_beat_random_rl_and_gp():
 
 
 def test_p4_admission_failure_keeps_gp_and_forbids_advanced_rl():
+    from ashare_model.admission import decide_p4_admission
+
     verdict = decide_p4_admission(
         imitation_areas=[5, 5, 5, 5, 1],
         imitation_oos_irs=[1, 1, 1, 1, 1],
@@ -73,6 +73,8 @@ def test_p4_admission_failure_keeps_gp_and_forbids_advanced_rl():
 
 
 def test_p4_admission_rejects_unpaired_inputs():
+    from ashare_model.admission import decide_p4_admission
+
     with pytest.raises(ValueError, match="aligned"):
         decide_p4_admission(
             imitation_areas=[1, 2],
