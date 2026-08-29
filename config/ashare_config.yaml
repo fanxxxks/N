@@ -60,10 +60,11 @@ model:
 
 # Reward-scoring constants; semantic changes to the reward implementation
 # bump ashare_model.reward.REWARD_VERSION and are recorded in artifacts.
-# Current semantics (v13): reward = portfolio active IR — annualized
+# Current semantics (v14): reward = portfolio active IR — annualized
 # effective-n shrunk information ratio of the gross basket returns versus
 # the equal-weight universe benchmark — minus the exact annualized
-# execution-cost drag; IC/ICIR are auxiliary reported/gated statistics.
+# execution-cost drag; sparse causal targets drive IC/ICIR while adjacent-open
+# daily returns drive PnL, all under the global P3 rebalance schedule.
 # Validation reward is the median over validation_splits sub-windows; bare
 # single-factor formulas pay a small complexity_penalty (kept tiny so the
 # validation floor stays reachable); artifacts are saved only when BOTH
@@ -90,7 +91,9 @@ reward:
 # T4-01: every trial is auto-recorded in data/experiment_ledger.jsonl, and
 # data/ holdout_registry.json (ashare_model.regime) marks 2021-2026 as
 # dev/validation data with an optional strictly locked final slice.
-# frequency/horizon are record-only for now.
+# P3: frequency/horizon drive the shared rebalance calendar and causal target.
+# Allowed non-overlapping pairs are daily/1, weekly/1, every_5_days/1..5,
+# and every_10_days/1..10.
 # batch_size must stay >= 256: below that the advantage normalization
 # (rewards.std) risks degenerating.
 protocol:
@@ -120,7 +123,15 @@ backtest:
   end_date: "2026-12-31"
   train_end_date: "2023-12-31"
   initial_capital: 100000.0
-  top_n: 30
+  # P3 production constructor: 100k starts with at most twenty 5k orders;
+  # buffer + shared filters prevent 30-name daily micro-order churn.
+  top_n: 20
+  portfolio_method: equal_weight
+  buy_rank: 20
+  sell_rank: 30
+  min_trade_amount: 5000.0
+  turnover_budget: 0.20
+  target_weight_change_threshold: 0.01
   single_weight_cap: 0.05
   commission_rate: 0.00025
   min_commission: 5.0
@@ -131,7 +142,7 @@ backtest:
 
 sim:
   initial_capital: 100000.0
-  max_positions: 30
+  max_positions: 20
   single_weight_cap: 0.05
   benchmark: "全市场等权"
   stop_signal_path: STOP_SIGNAL

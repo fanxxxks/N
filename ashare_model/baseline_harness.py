@@ -226,6 +226,8 @@ class SemanticBudgetEvaluator:
         self,
         *,
         target: np.ndarray,
+        realized_ret: np.ndarray | None = None,
+        rebalance_mask: np.ndarray | None = None,
         universe_mask: np.ndarray,
         backtest_config: BacktestConfig,
         reward_config: RewardConfig,
@@ -248,6 +250,16 @@ class SemanticBudgetEvaluator:
         cache: SemanticCache | None = None,
     ):
         self._target = np.asarray(target, dtype=np.float64)
+        self._realized_ret = (
+            np.asarray(realized_ret, dtype=np.float64)
+            if realized_ret is not None
+            else self._target
+        )
+        self._rebalance_mask = (
+            np.asarray(rebalance_mask, dtype=bool)
+            if rebalance_mask is not None
+            else None
+        )
         self._universe_mask = np.asarray(universe_mask, dtype=bool)
         self._val_windows = val_windows
         self._train_signal_range = train_signal_range
@@ -349,6 +361,8 @@ class SemanticBudgetEvaluator:
                 formula_valid=False,
                 train_signal_range=self._train_signal_range,
                 universe_mask=self._universe_mask,
+                realized_ret=self._realized_ret,
+                rebalance_mask=self._rebalance_mask,
             )
             self._cache.put(ckey, score, None)
             self._register(score, x=self._claim_sequence[-1])
@@ -389,6 +403,8 @@ class SemanticBudgetEvaluator:
             universe_mask=self._universe_mask,
             tie_break_keys=self._tie_break_keys,
             adv=self._adv,
+            realized_ret=self._realized_ret,
+            rebalance_mask=self._rebalance_mask,
         )
         base = len(self._scores)
         for i, (key, score) in enumerate(zip(specs, scored)):

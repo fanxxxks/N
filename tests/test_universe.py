@@ -13,7 +13,7 @@ from ashare_data.config import (
     RewardConfig,
 )
 from ashare_data.db import AshareDB
-from ashare_data.processor import open_to_open_returns
+from ashare_data.processor import open_to_open_returns, tradability_blocked
 from ashare_data.universe import (
     UniverseContractError,
     UniverseDevelopmentFallbackWarning,
@@ -44,6 +44,7 @@ from ashare_model.reward import (
 from ashare_model.train import sample_random_formulas
 from ashare_model.vm import StackVM
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
+from ashare_portfolio.constructor import PortfolioConstructor
 from tests.conftest import make_bars
 from tests.test_run_sim import _make_runner, _orders_for, _replace_stock_bars, _write_sim_db
 
@@ -934,26 +935,25 @@ def test_sentinel_future_member_changes_nothing_before_join(tmp_path):
     engine_full = AshareBacktestEngine(bt_cfg)
     engine_minus = AshareBacktestEngine(bt_cfg)
     t = join_day - 2
-    sel_full, _ = engine_full._select_top_n(
-        raw_signal_full[:, t], t + 1,
-        full.raw_data_cache["open"].numpy(),
-        full.raw_data_cache["high"].numpy(),
-        full.raw_data_cache["low"].numpy(),
-        full.raw_data_cache["pre_close"].numpy(),
-        full.raw_data_cache["volume"].numpy(),
-        full.ts_codes, "buy",
-        eligible=full.universe_mask[:, t] & full.universe_mask[:, t + 1],
-    )
-    sel_minus, _ = engine_minus._select_top_n(
-        raw_signal_minus[:, t], t + 1,
-        minus.raw_data_cache["open"].numpy(),
-        minus.raw_data_cache["high"].numpy(),
-        minus.raw_data_cache["low"].numpy(),
-        minus.raw_data_cache["pre_close"].numpy(),
-        minus.raw_data_cache["volume"].numpy(),
-        minus.ts_codes, "buy",
-        eligible=minus.universe_mask[:, t] & minus.universe_mask[:, t + 1],
-    )
+    def construct(loader, signal):
+        raw = {key: value.numpy() for key, value in loader.raw_data_cache.items()}
+        blocked = tradability_blocked(
+            raw["open"][:, t + 1], raw["high"][:, t + 1],
+            raw["low"][:, t + 1], raw["pre_close"][:, t + 1],
+            raw["volume"][:, t + 1], loader.ts_codes, "buy",
+        )
+        return PortfolioConstructor(bt_cfg).construct(
+            signal[:, t],
+            np.zeros(len(loader.ts_codes)),
+            capital=bt_cfg.initial_capital,
+            eligible=loader.universe_mask[:, t] & loader.universe_mask[:, t + 1],
+            buy_blocked=blocked,
+            sell_blocked=np.zeros(len(loader.ts_codes), dtype=bool),
+            stable_keys=np.asarray(loader.ts_codes),
+        ).selected
+
+    sel_full = construct(full, raw_signal_full)
+    sel_minus = construct(minus, raw_signal_minus)
     assert [full.ts_codes[i] for i in sel_full] == [minus.ts_codes[i] for i in sel_minus]
     result_full = engine_full.run(
         raw_signal_full,

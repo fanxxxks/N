@@ -1,4 +1,4 @@
-"""Stamp legacy strategy/protocol artifacts in the local data directory.
+"""Stamp legacy strategy/protocol/bare-factor artifacts in the data directory.
 
 Migration tool (P0-04): old artifacts (reward-v10 strategy, protocol-v12
 result) get an explicit ``legacy: true`` marker with reasons so nothing

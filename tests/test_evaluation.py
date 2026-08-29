@@ -43,7 +43,9 @@ from ashare_model.evaluation import (
     selfcheck_rows,
     top_trial,
 )
-from ashare_model.reward import REWARD_VERSION
+from ashare_model.reward import REWARD_VERSION, rank_ic_series
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 from tests.conftest import make_bars
 
@@ -123,6 +125,95 @@ def test_epoch_slice_aligns_to_fold_indices(populated_db: DataConfig):
     assert target.shape == (3, len(dates))
     for key in ("open", "high", "low", "close", "pre_close", "volume"):
         assert raw[key].shape == (3, len(dates))
+
+
+def test_epoch_slice_uses_global_multi_period_schedule(populated_db: DataConfig):
+    loader = _loader(populated_db)
+    fold = resolve_folds(
+        [FoldConfig(loader.dates[6], loader.dates[25])],
+        loader.dates,
+        frequency="every_5_days",
+        horizon=5,
+    )[0]
+    fold_data = epoch_slice(loader, fold)
+    global_due = np.arange(len(loader.dates)) % 5 == 0
+    expected_due = global_due[
+        fold.contract.test_signal_start : fold.contract.test_price_end
+    ]
+    np.testing.assert_array_equal(fold_data.rebalance_mask, expected_due)
+    finite_columns = np.flatnonzero(np.isfinite(fold_data.target).any(axis=0))
+    executable_end = len(fold_data.dates) - fold.contract.exit_offset
+    assert finite_columns.tolist() == np.flatnonzero(
+        expected_due[:executable_end]
+    ).tolist()
+    assert finite_columns[0] != 0
+
+
+def test_multi_period_fold_ic_and_turnover_consume_only_global_due_columns(
+    populated_db: DataConfig,
+):
+    loader = _loader(populated_db)
+    fold = resolve_folds(
+        [FoldConfig(loader.dates[6], loader.dates[25])],
+        loader.dates,
+        frequency="every_5_days",
+        horizon=5,
+    )[0]
+    fold_data = epoch_slice(loader, fold)
+    signal = np.tile(
+        np.arange(len(loader.ts_codes), 0, -1, dtype=np.float64)[:, None],
+        (1, len(fold_data.dates)),
+    )
+    cfg = BacktestConfig(
+        rebalance_frequency="every_5_days",
+        target_horizon=5,
+        top_n=2,
+        single_weight_cap=0.5,
+    )
+    metrics = evaluate_signal(signal, loader, fold, cfg)
+    result = AshareBacktestEngine(cfg).run(
+        signal,
+        fold_data.raw,
+        loader.ts_codes,
+        fold_data.dates,
+        signal_range=fold_data.local_signal_range,
+        universe_mask=fold_data.universe_mask,
+        rebalance_mask=fold_data.rebalance_mask,
+    )
+    due = fold_data.rebalance_mask[: fold_data.signal_count]
+    # evaluate_signal intentionally requires 10 stocks; this tiny fixture
+    # has 3. Exercise the same unified IC implementation with the fixture's
+    # explicit threshold so the schedule assertion remains meaningful.
+    ic = rank_ic_series(
+        signal[None, :, : fold_data.signal_count],
+        fold_data.target[:, : fold_data.signal_count],
+        min_stocks=3,
+        universe_mask=fold_data.universe_mask[:, : fold_data.signal_count],
+    )[0]
+    assert np.flatnonzero(np.isfinite(ic)).tolist() == np.flatnonzero(due).tolist()
+    assert metrics["n_ic_dates"] == 0
+    assert np.count_nonzero(np.asarray(result.turnover)[~due]) == 0
+
+
+def test_evaluate_signal_rejects_fold_and_backtest_policy_mismatch(
+    populated_db: DataConfig,
+):
+    loader = _loader(populated_db)
+    fold = resolve_folds(
+        [FoldConfig(loader.dates[6], loader.dates[25])],
+        loader.dates,
+        frequency="every_5_days",
+        horizon=5,
+    )[0]
+    fold_data = epoch_slice(loader, fold)
+    signal = np.zeros(
+        (len(loader.ts_codes), len(fold_data.dates)), dtype=np.float64
+    )
+    with pytest.raises(
+        ValueError,
+        match="fold policy .* does not match BacktestConfig policy",
+    ):
+        evaluate_signal(signal, loader, fold, BacktestConfig())
 
 
 # --- scoring ----------------------------------------------------------------
@@ -581,6 +672,12 @@ def test_build_result_schema_and_sanitization():
     result = build_result(proto, "screening", tier, rows, data_end_date="20240201")
     assert result["protocol_version"] == PROTOCOL_VERSION
     assert result["reward_version"] == REWARD_VERSION
+    assert result["execution_version"] == EXECUTION_SPEC_VERSION
+    assert (
+        result["portfolio_constructor_version"]
+        == PORTFOLIO_CONSTRUCTOR_VERSION
+    )
+    assert result["portfolio_config"]["portfolio_method"] == "equal_weight"
     assert result["frequency"] == "daily"
     assert result["horizon"] == 1
     assert result["tier"] == "screening"

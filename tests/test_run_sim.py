@@ -13,6 +13,8 @@ from ashare_data.db import AshareDB
 from ashare_data.universe import UniverseReason
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.data_loader import AshareDataLoader
+from ashare_portfolio.constructor import PortfolioConstructor
+from ashare_portfolio.rebalance import RebalancePolicy
 from ashare_trading.run_sim import SimulationRunner
 from tests.conftest import make_bars
 
@@ -74,6 +76,7 @@ def _make_runner(
     stocks: list[dict] | None = None,
     today: str | None = None,
     single_weight_cap: float = 0.5,
+    backtest_overrides: dict | None = None,
 ) -> tuple[SimulationRunner, list[str]]:
     """A runner over ``n_dates`` synthetic bars with all paths under tmp_path."""
 
@@ -115,15 +118,17 @@ def _make_runner(
         stop_signal_path=tmp_path / "STOP",
         progress_path=tmp_path / "progress.json",
     )
+    backtest_values = {
+        "initial_capital": sim_config.initial_capital,
+        "top_n": position_count,
+        "single_weight_cap": single_weight_cap,
+        "train_end_date": "2024-01-20",
+    }
+    backtest_values.update(backtest_overrides or {})
     runner = SimulationRunner(
         data_config,
         model_config,
-        BacktestConfig(
-            initial_capital=sim_config.initial_capital,
-            top_n=position_count,
-            single_weight_cap=single_weight_cap,
-            train_end_date="2024-01-20",
-        ),
+        BacktestConfig(**backtest_values),
         sim_config,
         loader,
         today=today,
@@ -326,6 +331,22 @@ def test_simulation_runner_honors_artifact_direction(tmp_path: Path):
         for p in sorted(runner.sim_config.orders_dir.glob("*.json"))
     }
     assert flipped_orders != replay_orders
+
+
+def test_simulation_warns_when_strategy_has_no_execution_version(
+    tmp_path: Path, monkeypatch
+):
+    import ashare_trading.run_sim as run_sim
+
+    runner, _ = _make_runner(tmp_path, n_dates=12)
+    warnings: list[str] = []
+
+    def capture(message, *args):
+        warnings.append(str(message).format(*args))
+
+    monkeypatch.setattr(run_sim.logger, "warning", capture)
+    runner.load_formula()
+    assert any("no execution_version (pre-P3)" in item for item in warnings)
 
 
 # --- PIT eligibility in daily selection + current-ST isolation ---------------
@@ -636,20 +657,31 @@ def test_sim_top_n_matches_backtest_engine_per_signal_date(tmp_path: Path):
         assert {c for c, q in held.items() if q > 0} == set(snapshot["ts_codes"])
 
 
-def test_sim_equal_weights_enforces_single_weight_cap():
-    # T1-02: per-name weight is min(1/top_n, cap) and the remainder stays
-    # in cash — the paper-trading sim must never renormalize above the cap.
-    weights = SimulationRunner._equal_weights(
-        [0, 1], 4, top_n=5, single_weight_cap=0.1
+def test_simulation_owns_no_private_portfolio_constructor(tmp_path: Path):
+    # P3 contract section 4: simulation consumes the production constructor;
+    # it must not retain a second equal-weight implementation.
+    runner, _ = _make_runner(tmp_path, n_dates=8)
+    assert isinstance(runner.portfolio_constructor, PortfolioConstructor)
+    assert not hasattr(SimulationRunner, "_equal_weights")
+
+
+def test_weekly_simulation_emits_no_orders_on_non_rebalance_days(tmp_path: Path):
+    runner, dates = _make_runner(
+        tmp_path,
+        n_dates=16,
+        top_n=2,
+        backtest_overrides={
+            "rebalance_frequency": "weekly",
+            "target_horizon": 1,
+        },
     )
-    assert weights.tolist() == [0.1, 0.1, 0.0, 0.0]
-    assert weights.sum() == pytest.approx(0.2)
-    # With a non-binding cap the weight is exactly 1/top_n.
-    weights = SimulationRunner._equal_weights(
-        [0, 1], 4, top_n=2, single_weight_cap=1.0
-    )
-    assert weights.tolist() == [0.5, 0.5, 0.0, 0.0]
-    assert SimulationRunner._equal_weights([], 3, top_n=2, single_weight_cap=0.1).sum() == 0.0
+    runner.run()
+    due = RebalancePolicy.from_config(
+        runner.backtest_config
+    ).rebalance_mask(dates)
+    for signal_idx in range(len(dates) - 1):
+        if not due[signal_idx]:
+            assert _orders_for(runner, dates[signal_idx + 1]) == []
 
 
 def test_sim_buy_orders_respect_single_weight_cap(tmp_path: Path):

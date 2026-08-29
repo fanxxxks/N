@@ -1,9 +1,9 @@
 """Champion/Challenger promotion gates (T4-01, P2-03/P2-04).
 
-A challenger (the top stitched trial of a v20 protocol artifact) is
+A challenger (the top stitched trial of a current protocol artifact) is
 promoted to champion **only** when all six gates pass at once:
 
-* **G1 data & formula P0** — the artifact is v20, bound to the current
+* **G1 data, formula & execution P0** — the artifact is current, bound to the
   immutable dataset, measured under a declared data regime on future or
   strictly locked windows, and the formula passed the hard eligibility
   gates (no rejection reasons) in every succeeded fold;
@@ -55,7 +55,14 @@ from .evaluation import (
     stitch_oos_series,
     stitched_metrics,
 )
+from .reward import REWARD_VERSION
 from .regime import HoldoutViolation, RegimeRegistry
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.execution_spec import (
+    EXECUTION_SPEC_VERSION,
+    portfolio_config_provenance,
+    validate_portfolio_config_provenance,
+)
 
 
 @dataclass(frozen=True)
@@ -249,7 +256,12 @@ def stress_champion(
             )
             rows = []
             for fold_cfg in fold_cfgs:
-                fold = resolve_folds([fold_cfg], loader.dates)[0]
+                fold = resolve_folds(
+                    [fold_cfg],
+                    loader.dates,
+                    frequency=stressed.rebalance_frequency,
+                    horizon=stressed.target_horizon,
+                )[0]
                 metrics = evaluate_formula(
                     list(tokens), loader, fold, stressed, direction=int(direction)
                 )
@@ -352,8 +364,9 @@ def evaluate_challenger(
     thresholds: PromotionThresholds | None = None,
     allowed_data_tiers: tuple[str, ...] = ("A",),
     today: str | None = None,
+    backtest_config=None,
 ) -> dict:
-    """Apply the six promotion gates to a v20 protocol artifact.
+    """Apply the six promotion gates to a current protocol artifact.
 
     Every gate returns ``{"passed": bool, "reasons": [...]}``; the
     challenger is promoted only when all six pass.  ``allowed_data_tiers``
@@ -369,11 +382,50 @@ def evaluate_challenger(
 
     # G1 -- data & formula P0 gate.
     reasons: list[str] = []
-    if artifact.get("protocol_version") != PROTOCOL_VERSION:
+    if artifact.get("legacy") is True:
+        reasons.append("artifact is explicitly marked legacy")
+    if str(artifact.get("protocol_version")) != str(PROTOCOL_VERSION):
         reasons.append(
             f"artifact protocol_version {artifact.get('protocol_version')} != "
-            f"{PROTOCOL_VERSION}; only v20 stitched artifacts qualify"
+            f"{PROTOCOL_VERSION}; only current stitched artifacts qualify"
         )
+    if str(artifact.get("reward_version")) != str(REWARD_VERSION):
+        reasons.append(
+            f"artifact reward_version {artifact.get('reward_version')} != "
+            f"{REWARD_VERSION}"
+        )
+    if str(artifact.get("execution_version")) != str(EXECUTION_SPEC_VERSION):
+        reasons.append(
+            f"artifact execution_version {artifact.get('execution_version')} != "
+            f"{EXECUTION_SPEC_VERSION}; legacy execution semantics cannot "
+            "be promoted"
+        )
+    if (
+        str(artifact.get("portfolio_constructor_version"))
+        != str(PORTFOLIO_CONSTRUCTOR_VERSION)
+    ):
+        reasons.append(
+            "artifact portfolio_constructor_version "
+            f"{artifact.get('portfolio_constructor_version')} != "
+            f"{PORTFOLIO_CONSTRUCTOR_VERSION}"
+        )
+    recorded_portfolio_config = artifact.get("portfolio_config")
+    try:
+        canonical_portfolio_config = validate_portfolio_config_provenance(
+            recorded_portfolio_config
+        )
+    except ValueError as exc:
+        reasons.append(f"artifact {exc}")
+    else:
+        if backtest_config is not None:
+            runtime_portfolio_config = portfolio_config_provenance(
+                backtest_config
+            )
+            if canonical_portfolio_config != runtime_portfolio_config:
+                reasons.append(
+                    "artifact portfolio_config does not match the current "
+                    "promotion BacktestConfig"
+                )
     art_dataset = artifact.get("dataset_id")
     if not art_dataset:
         reasons.append("artifact carries no dataset_id; legacy measurements "
@@ -568,7 +620,9 @@ def evaluate_challenger(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--artifact", default=None, help="v20 protocol result JSON")
+    parser.add_argument(
+        "--artifact", default=None, help="current protocol result JSON"
+    )
     parser.add_argument("--config", default=None, help="project config (for stress)")
     parser.add_argument("--output", default="data/promotion_verdict.json")
     parser.add_argument("--regime", default="data/holdout_registry.json")
@@ -662,6 +716,7 @@ def main(argv=None) -> int:
             paper_registry=paper,
             stress=stress,
             allowed_data_tiers=("A", "B") if args.allow_tier_b else ("A",),
+            backtest_config=backtest_config,
         )
     else:
         verdict = evaluate_challenger(

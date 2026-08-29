@@ -59,7 +59,8 @@ python -m ashare_model.train        # 默认 GP 搜索器（model.searcher: gp�
 python -m ashare_model.backtest
 python -m ashare_model.evaluation --tier screening  # 测量协议（见下）
 python -m ashare_model.cost_matrix                 # 资金×持仓数×换手率费用矩阵（P1-02）
-python -m ashare_model.bare_factor_backtest        # 七裸因子固定回测（P1-03，不做搜索）
+python -m ashare_model.bare_factor_backtest        # 裸因子固定四象限（v3，不做搜索）
+python -m ashare_model.p3_measurement              # P3 真实可复现验收测量
 python -m ashare_model.searcher_bench --budget 128 # 四搜索器成本测量/小预算 smoke（P1-04/05）
 python -m ashare_trading.run_sim
 python scripts/analyze_sim.py               # 模拟盘费用拖累/毛盈亏/现金核对
@@ -129,8 +130,9 @@ python scripts/archive_run.py --mode protocol --commit # 结果归档进 experim
   以及至少一个完整的未来纸面交易观察窗口（`data/paper_windows.json`）。
 - 产物 `data/protocol_result.json` 记录 `protocol_version` / `reward_version` /
   `frequency` / `horizon`、`ledger`、`data_regime` 与逐折逐种子原始行 + `stitched`
-  拼接块（含逐日收益序列，便于下钻）；`frequency` / `horizon` 目前只是记录字段
-  （周频 / 多周期目标留待后续阶段）。
+  拼接块（含逐日收益序列，便于下钻）；P3 起 `frequency` / `horizon` 驱动共享
+  调仓日历和 `signal[t] -> open[t+1] -> open[t+1+horizon]` 因果标签，重叠配置
+  在加载阶段直接拒绝。
 - `batch_size` 不要低于 256：advantage 归一化（`rewards.std()`）在更小批次下有
   退化风险。
 
@@ -142,10 +144,17 @@ python scripts/archive_run.py --mode protocol --commit # 结果归档进 experim
 ```bash
 python -m ashare_model.cost_matrix            # -> data/fee_matrix.json
 python -m ashare_model.bare_factor_backtest   # -> data/bare_factor_backtest.json
+python -m ashare_model.p3_measurement         # -> data/p3_measurement.json
 python -m ashare_model.searcher_bench --budget 1000 --fold 0 --window-cap 300x400 \
     --seed 42                                 # -> data/searcher_bench.json
 python -m ashare_model.evaluation --selfcheck # 空转验收：噪声 DSR/max-t 必须不显著
 ```
+
+`p3_measurement` 在本地真实 loader 数据的固定尾部日期窗上，以固定 seed 从满足
+PIT/价格/因子覆盖的股票池抽样，记录 reward/backtest 权重、买卖、订单数与费用
+最大差、按完整日期轴锚定的标签区间重叠、10 万默认订单结构、pre-P3 兼容配置
+对照，以及同一裸因子的
+`daily/weekly × equal_weight/optimizer` 四象限；它是执行/成本验收，不宣称 Alpha。
 
 - **费用矩阵（P1-02）**：按全项目唯一费用口径（`backtest` 段的佣金/最低佣金/
   印花税/过户费/滑点），对资金×持仓数×年换手（每个持仓每年完整买卖回合数）
@@ -185,7 +194,7 @@ python scripts/check_fundamental_scope.py --purge   # 基本面表范围审计/�
 ```
 
 - **公式可追溯（P2-02）**：每个携带公式的产物（因子报告、feature registry、
-  候选评分、策略产物、协议产物 v21）记录 `data_tier`（`max_tier`/`tiers_used`/
+  候选评分、策略产物、协议产物 v22）记录 `data_tier`（`max_tier`/`tiers_used`/
   `data_tier_version`）+ 各档可用时间规则；`formula_data_tier_report(tokens)`
   把任意公式追溯回其依赖的数据等级。
 - **晋级门禁（P2-03/P2-04）**：`evaluate_challenger` 新增第六道 `data_tier`
@@ -344,14 +353,19 @@ python scripts/archive_run.py --mode sim --commit
 
 ## 与现实对应的关键设计
 
-- **无未来泄漏**：因子只使用当前及历史截面；`open_to_open_returns` 以 t+1 开盘买入、t+2 开盘卖出为目标收益；缺 bar、未上市或非成员单元的 target 为 `NaN`，绝不产生虚假收益。基本面因子按**公告日期**（不是报告期）进入截面，公告前保持中性。
+- **无未来泄漏**：因子只使用当前及历史截面；正式研究路径按 `signal[t] -> entry open[t+1] -> exit open[t+1+horizon]` 构造全局调仓日上的稀疏因果标签，组合资金曲线另用相邻 open 日收益。`AshareDataLoader.target_ret` 仅为旧调用保留 daily/horizon=1 的相邻 open 字段，不能当作多周期标签。缺 bar、未上市或非成员单元的 target 为 `NaN`，绝不产生虚假收益。基本面因子按**公告日期**（不是报告期）进入截面，公告前保持中性。
 - **交易规则**：A 股 T+1、买入 100 股整手、卖出可零股清仓、涨停不买/跌停不卖、一字板判定。涨跌停价幅与名称解耦：历史回放与回测只按板块价幅（主板 10%、创业板/科创板 20%），股票名称仅用于展示；真实当日模拟（执行日期等于今天）才额外按 `stocks.is_st` 当前快照使用 5% 价幅，且仅限当日。
 - **费用模型**：佣金万 2.5（最低 5 元）、印花税卖出 0.05%、过户费 0.001%、滑点 0.05%；回测与训练奖励使用同一套费用口径。
+- **统一组合构造（P3）**：`PortfolioConstructor` 是等权与 CVXPY/OSQP
+  约束优化器的共同入口。生产默认买入 Top-20、跌出 Top-30 才卖，单笔至少
+  5,000 元、目标权重变化至少 1%、已有组合单次 L1 换手预算 20%；首次注资不算
+  换手。旧调用若只传 `top_n`，保持买卖排名相同的无缓冲语义。
 - **涨跌停事件因子**：`LIMIT_UP_EVENT`/`LIMIT_DOWN_EVENT` 由一字板真实计算（创业板/科创板 20%，其余 10%）。
 - **搜索与训练**：默认强类型 GP（`model.searcher: gp`；RL/random 为实验与
   基线选项，RL 路径为 REINFORCE + value baseline + 熵正则、advantage 裁剪
   防数值爆炸）；训练奖励为**组合主动 IR 减去精确年化执行成本**
-  （`reward.py` v13：basket 在 signal-date 与 entry-date 双重 PIT eligible
+  （`reward.py` v14：稀疏因果标签仅驱动 IC/质量门，逐日资金曲线消费相邻 open
+  收益；basket 在 signal-date 与 entry-date 双重 PIT eligible
   上选股，执行日（t+1 开盘）对齐回测引擎的**可交易性屏蔽**——
   停牌/一字涨停不买、停牌/一字跌停持仓强制保留，费用按精确日频路径计费），
   IC/ICIR 是辅助统计与质量门禁；验证段按

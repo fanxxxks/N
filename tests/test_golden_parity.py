@@ -37,6 +37,7 @@ import pytest
 
 from ashare_data.config import BacktestConfig
 from ashare_portfolio.golden import EXECUTION_SPEC_VERSION, GoldenParity
+from ashare_portfolio.execution_spec import execution_provenance
 from ashare_portfolio.optimizer import (
     PortfolioConstraints,
     PortfolioObjective,
@@ -116,7 +117,21 @@ def _run(
 
 
 def test_execution_spec_is_versioned():
-    assert EXECUTION_SPEC_VERSION == 1
+    assert EXECUTION_SPEC_VERSION == 2
+
+
+def test_external_weights_without_constructor_provenance_are_rejected():
+    signal, raw, ts_codes, dates, mask = _market(n_dates=10)
+    weights = [np.asarray([0.5, 0.5, 0.0], dtype=np.float64)]
+    with pytest.raises(ValueError, match="constructor provenance"):
+        GoldenParity(_cfg(), lot_size=0).run(
+            signal,
+            raw,
+            ts_codes,
+            dates,
+            mask,
+            target_weights=weights,
+        )
 
 
 # --- canonical parity -------------------------------------------------------
@@ -124,8 +139,12 @@ def test_execution_spec_is_versioned():
 
 def test_lot_free_matches_engine_exactly():
     signal, raw, ts_codes, dates, mask = _market()
-    _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=0)
+    cfg = _cfg()
+    _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=0, cfg=cfg)
     assert report.records
+    assert report.execution_version == EXECUTION_SPEC_VERSION
+    assert dict(report.constructor_provenance) == execution_provenance(cfg)
+    assert report.weights_source == "portfolio_constructor"
     for free, lot_free in zip(report.free_equity, report.lot_free_equity):
         assert free == pytest.approx(lot_free, rel=1e-9)
     # The weight-based free path reproduces the engine's own daily returns.
@@ -217,8 +236,9 @@ def test_deterministic_report():
 
 
 def test_suspension_blocks_buy_in_both_paths():
-    # Stock 0 carries the top signal but is suspended (zero volume) on the
-    # entry day: neither path may buy it, and parity holds.
+    # Stock 0 is already held and remains in the target Top-2 when it is
+    # suspended.  P3 contract section 2 only prohibits a buy-blocked name
+    # from becoming a *new* holding; it does not create a needless exit.
     signal, raw, ts_codes, dates, mask = _market()
     suspension_day = 5
     raw["volume"][0, suspension_day] = 0.0
@@ -226,8 +246,11 @@ def test_suspension_blocks_buy_in_both_paths():
     GoldenParity(_cfg(), lot_size=100).verify(report)
     entry_record = report.records[suspension_day - 1]
     assert all(f.ts_code != "000001.SZ" for f in entry_record.fills)
-    # The engine picked the second-best name instead; both paths agree.
-    assert any(f.status == "filled" for f in entry_record.fills)
+    assert entry_record.fills == ()
+    np.testing.assert_array_equal(
+        report.target_weights[suspension_day - 1],
+        report.target_weights[suspension_day - 2],
+    )
 
 
 def test_limit_up_open_blocks_buy():
@@ -467,7 +490,13 @@ def test_optimizer_weights_execute_with_constraints():
     cfg = _cfg(top_n=2, single_weight_cap=0.5, initial_capital=1e6)
     harness = GoldenParity(cfg, lot_size=100)
     report = harness.run(
-        signal, raw, ts_codes, dates, mask, target_weights=weights
+        signal,
+        raw,
+        ts_codes,
+        dates,
+        mask,
+        target_weights=weights,
+        target_weights_provenance=execution_provenance(cfg),
     )
     harness.verify(report)
     # The executed book (fills) respects the optimizer's caps within lot
@@ -485,7 +514,13 @@ def test_optimizer_weights_lot_free_matches_mirror():
     cfg = _cfg(top_n=2, single_weight_cap=0.5, initial_capital=1e6)
     harness = GoldenParity(cfg, lot_size=0)
     report = harness.run(
-        signal, raw, ts_codes, dates, mask, target_weights=weights
+        signal,
+        raw,
+        ts_codes,
+        dates,
+        mask,
+        target_weights=weights,
+        target_weights_provenance=execution_provenance(cfg),
     )
     harness.verify(report)
     for free, lot_free in zip(report.free_equity, report.lot_free_equity):

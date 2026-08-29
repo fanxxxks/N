@@ -14,6 +14,11 @@ never be compared silently.
 
 Version history
 ---------------
+* v14: P3 separates sparse causal research labels from adjacent-open daily
+  portfolio returns, carries the global rebalance schedule through every
+  training/validation window, and routes target construction through the
+  shared ``PortfolioConstructor``.  v13 artifacts cannot be compared or
+  promoted as v14 evidence.
 * v13: the reward's primary term is the portfolio **active IR** — annualized
   effective-n shrunk information ratio of the gross basket returns versus
   the equal-weight universe benchmark — minus the exact execution-cost
@@ -131,8 +136,9 @@ import numpy as np
 
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
+from ashare_portfolio.constructor import PortfolioConstructor
 
-REWARD_VERSION = "13"
+REWARD_VERSION = "14"
 
 _ANNUALIZATION = 252
 
@@ -290,6 +296,10 @@ class BasketSimulation:
     daily_cost_fractions: np.ndarray
     daily_net_returns: np.ndarray
     turnover: np.ndarray
+    target_weights: np.ndarray
+    buy_weights: np.ndarray
+    sell_weights: np.ndarray
+    construction_diagnostics: tuple[dict, ...]
     # T1-04: per-period capacity utilization (max over held names of
     # position value / dollar volume); None when no adv was provided.
     capacity_utilization: np.ndarray | None = None
@@ -313,6 +323,10 @@ class BatchBasketSimulation:
     daily_cost_fractions: np.ndarray
     daily_net_returns: np.ndarray
     turnover: np.ndarray
+    target_weights: np.ndarray
+    buy_weights: np.ndarray
+    sell_weights: np.ndarray
+    construction_diagnostics: tuple[tuple[dict, ...], ...]
     capacity_utilization: np.ndarray | None = None
 
     @property
@@ -339,17 +353,15 @@ def simulate_basket_daily_returns(
     universe_mask: np.ndarray,
     tie_break_keys: np.ndarray | None = None,
     adv: np.ndarray | None = None,
+    rebalance_mask: np.ndarray | None = None,
 ) -> BasketSimulation:
-    """Exact daily top-n basket path, restarted from cash at range start.
+    """Exact basket path through the unified portfolio constructor.
 
-    Mirrors the backtest engine's target-weight construction (position
-    weight ``min(1/top_n, single_weight_cap)``, **never renormalized
-    upward**: under-filled days keep cash and force-held positions consume
-    the budget, so ``single_weight_cap`` is a hard per-name ceiling) and
-    charges the same trading-cost model.  A selectable cross-section
-    without dispersion (fewer than two distinct values) triggers no
-    rebalance at all: the previous basket is held with zero turnover and
-    zero cost.  ``blocked_buy`` / ``blocked_sell`` carry the engine's
+    Target, buy and sell weights are the immutable outputs of
+    :class:`PortfolioConstructor`, shared with backtest, golden parity and
+    paper simulation.  The configured ranking buffer, construction method,
+    trade filters and turnover budget therefore have one implementation.
+    ``blocked_buy`` / ``blocked_sell`` carry the engine's
     tradability masks (``[stock, date]`` bool); ``universe_mask`` is the
     mandatory ``[stock, date]`` bool PIT eligibility mask consumed at the
     signal date **and** the entry date (T1-04 alignment);
@@ -370,46 +382,23 @@ def simulate_basket_daily_returns(
         universe_mask=universe_mask,
         tie_break_keys=tie_break_keys,
         adv=adv,
+        rebalance_mask=rebalance_mask,
     )
     return BasketSimulation(
         daily_gross_returns=batch.daily_gross_returns[0],
         daily_cost_fractions=batch.daily_cost_fractions[0],
         daily_net_returns=batch.daily_net_returns[0],
         turnover=batch.turnover[0],
+        target_weights=batch.target_weights[0],
+        buy_weights=batch.buy_weights[0],
+        sell_weights=batch.sell_weights[0],
+        construction_diagnostics=batch.construction_diagnostics[0],
         capacity_utilization=(
             batch.capacity_utilization[0]
             if batch.capacity_utilization is not None
             else None
         ),
     )
-
-
-def _batch_scale_to_budget(
-    raw: np.ndarray, held: np.ndarray
-) -> np.ndarray:
-    """Scale fresh buys down to the cash budget left by force-held
-    positions (the no-renormalization contract, T1-02).  ``raw``/``held``
-    are ``[batch, stocks]``; per-name weights only shrink, never grow."""
-
-    budget = np.maximum(1.0 - held.sum(axis=1, keepdims=True), 0.0)
-    raw_sum = raw.sum(axis=1, keepdims=True)
-    scale = np.minimum(1.0, budget / np.maximum(raw_sum, 1e-12))
-    return raw * scale
-
-
-def _batch_distinct_count(masked: np.ndarray) -> np.ndarray:
-    """Number of distinct finite values per row of ``masked`` (NaN cells
-    sort last and never count).  Vectorized distinct-count for the
-    dispersion gate."""
-
-    sorted_vals = np.sort(masked, axis=1)
-    with np.errstate(invalid="ignore"):
-        diff = np.diff(sorted_vals, axis=1)
-        transitions = np.count_nonzero(
-            np.isfinite(diff) & (diff > 0), axis=1
-        )
-    first_finite = np.isfinite(sorted_vals[:, 0]).astype(np.int64)
-    return first_finite + transitions
 
 
 def simulate_basket_daily_returns_batch(
@@ -423,26 +412,17 @@ def simulate_basket_daily_returns_batch(
     universe_mask: np.ndarray,
     tie_break_keys: np.ndarray | None = None,
     adv: np.ndarray | None = None,
+    rebalance_mask: np.ndarray | None = None,
 ) -> BatchBasketSimulation:
     """Batched exact basket simulation over an explicit signal range.
 
     ``signals`` is ``[B, stocks, price_dates]``. By default only
     ``range(price_dates - 2)`` is executable; an explicit half-open
     ``signal_range`` is used for independently restarted validation windows.
-    Weight-construction contract (T1-02, shared with the backtest engine):
-
-    * per-date top-n selection over the selectable set (signal-date AND
-      entry-date PIT eligible, entry-day buyable, finite);
-    * a selectable cross-section with fewer than two distinct values is
-      **not rebalanced**: the previous basket is held with zero turnover
-      and zero cost (an all-neutral day never churns the book);
-    * every selected name gets ``min(1/top_n, single_weight_cap)`` and the
-      weights are **never renormalized upward** — under-filled days keep
-      the remainder in cash, and force-held (sell-blocked) positions
-      consume the budget, so no path can ever push a name above
-      ``single_weight_cap`` or the book above full investment;
-    * exact selection ties resolve by ``tie_break_keys`` (per-stock stable
-      identifiers), so the path is invariant under stock-row permutation.
+    Weight construction is delegated to :class:`PortfolioConstructor`.
+    This includes PIT eligibility, stable ranking, no-signal holds, ranking
+    buffers, equal-weight or optimizer targets, blocking, minimum order,
+    weight-change threshold and turnover-budget post-processing.
 
     ``blocked_buy`` / ``blocked_sell`` (``[stocks, dates]`` bool, both
     optional) align the simulation with the backtest engine's execution
@@ -496,13 +476,24 @@ def simulate_basket_daily_returns_batch(
     cost_full = np.zeros((b, n_periods), dtype=np.float64)
     net_full = np.zeros((b, n_periods), dtype=np.float64)
     turnover_full = np.zeros((b, n_periods), dtype=np.float64)
+    target_weights_full = np.zeros((b, n_periods, n_stocks), dtype=np.float64)
+    buy_weights_full = np.zeros_like(target_weights_full)
+    sell_weights_full = np.zeros_like(target_weights_full)
     capacity_full = np.full((b, n_periods), np.nan, dtype=np.float64)
+    diagnostics_full: list[list[dict]] = [[] for _ in range(b)]
 
     def empty_result() -> BatchBasketSimulation:
-        return BatchBasketSimulation(gross_full, cost_full, net_full, turnover_full,
-                                     capacity_utilization=(
-                                         capacity_full if adv is not None else None
-                                     ))
+        return BatchBasketSimulation(
+            gross_full,
+            cost_full,
+            net_full,
+            turnover_full,
+            target_weights_full,
+            buy_weights_full,
+            sell_weights_full,
+            tuple(tuple(row) for row in diagnostics_full),
+            capacity_utilization=(capacity_full if adv is not None else None),
+        )
 
     if n_periods == 0 or n_stocks == 0:
         return empty_result()
@@ -540,104 +531,60 @@ def simulate_basket_daily_returns_batch(
             raise ValueError(
                 f"adv shape {adv.shape} does not match ({n_stocks}, {n_dates})"
             )
+    if rebalance_mask is None:
+        if cfg.rebalance_frequency != "daily":
+            raise ValueError(
+                "rebalance_mask is required for non-daily reward simulation"
+            )
+        rebalance_mask = np.ones(n_dates, dtype=bool)
+    rebalance_mask = np.asarray(rebalance_mask, dtype=bool)
+    if rebalance_mask.shape != (n_dates,):
+        raise ValueError(
+            f"rebalance_mask shape {rebalance_mask.shape} does not match "
+            f"date axis ({n_dates},)"
+        )
 
-    top_n = min(int(cfg.top_n), n_stocks)
-    if top_n <= 0:
-        return empty_result()
-
-    weight = min(1.0 / top_n, float(cfg.single_weight_cap))
     prev = np.zeros((b, n_stocks))
     capital = np.full(b, float(cfg.initial_capital), dtype=np.float64)
     cost_model = ExecutionCostModel.from_config(cfg)
+    constructor = PortfolioConstructor(cfg)
     # Non-finite target cells contribute zero; cleaned once outside the loop.
     target_clean = np.where(np.isfinite(target_ret), target_ret, 0.0)
-    keys_tiled = (
-        np.tile(tie_break_keys, (b, 1)) if tie_break_keys is not None else None
-    )
+    if tie_break_keys is None:
+        tie_break_keys = np.asarray([f"row:{i:09d}" for i in range(n_stocks)])
 
     for output_col, t in enumerate(range(signal_start, signal_end)):
-        # Selection uses the signal column t but executes at the t+1 open
-        # (the target return is open[t+1] -> open[t+2]); the tradability
-        # masks therefore use the t+1 columns, exactly like the engine,
-        # while the PIT eligibility mask uses the signal-date column t.
         exec_col = t + 1
-        column = signals[:, :, t]  # [B, stocks]
-        finite = np.isfinite(column)
-        if blocked_buy is not None:
-            finite &= ~blocked_buy[None, :, exec_col]
-        # T1-04 alignment: signal-date AND entry-date PIT eligibility,
-        # exactly like the engine's ``eligible`` vector.
-        finite &= universe_mask[None, :, t] & universe_mask[None, :, exec_col]
-
-        # No-signal semantics: a selectable cross-section without
-        # dispersion is not signal-rebalanced (previous basket held, zero
-        # turnover, zero cost).  The mask-exit contract still applies:
-        # positions that lost universe eligibility are liquidated through
-        # the ordinary sell path (force-held when sell-blocked), exactly
-        # like the engine.
-        masked = np.where(finite, column, np.nan)
-        selectable_count = finite.sum(axis=1)
-        has_dispersion = _batch_distinct_count(masked) >= 2
-        hold_rows = (selectable_count > 0) & ~has_dispersion
-        hold_target = prev
-        if hold_rows.any():
-            ineligible = ~(
-                universe_mask[None, :, t] & universe_mask[None, :, exec_col]
+        eligible = universe_mask[:, t] & universe_mask[:, exec_col]
+        buy_block = (
+            blocked_buy[:, exec_col]
+            if blocked_buy is not None
+            else np.zeros(n_stocks, dtype=bool)
+        )
+        sell_block = (
+            blocked_sell[:, exec_col]
+            if blocked_sell is not None
+            else np.zeros(n_stocks, dtype=bool)
+        )
+        target = np.zeros_like(prev)
+        buy = np.zeros_like(prev)
+        sell = np.zeros_like(prev)
+        for row in range(b):
+            output = constructor.construct(
+                signals[row, :, t],
+                prev[row],
+                capital=float(capital[row]),
+                eligible=eligible,
+                buy_blocked=buy_block,
+                sell_blocked=sell_block,
+                stable_keys=tie_break_keys,
+                rebalance_due=bool(rebalance_mask[t]),
+                adv=(adv[:, exec_col] if adv is not None else None),
             )
-            liquidate = ineligible & (prev > 0.0)
-            hold_target = np.where(liquidate, 0.0, prev)
-            if blocked_sell is not None:
-                force_hold = liquidate & blocked_sell[None, :, exec_col]
-                hold_target = np.where(force_hold, prev, hold_target)
-
-        if not hold_rows.all():
-            if tie_break_keys is not None:
-                # Deterministic top-n by (value desc, key asc): rank_key =
-                # -value sorts ascending with the highest values first;
-                # excluded cells carry -inf in the rank key and sort last,
-                # so they can never displace a selectable value.
-                rank_key = np.where(finite, -column, np.inf)
-                top_idx = np.empty((b, top_n), dtype=np.int64)
-                for i in range(b):
-                    top_idx[i] = np.lexsort((keys_tiled[i], rank_key[i]))[:top_n]
-            else:
-                fill = np.where(finite, column, -np.inf)
-                top_idx = np.argpartition(fill, kth=-top_n, axis=1)[:, -top_n:]
-            fresh = np.zeros((b, n_stocks))
-            selected_is_finite = np.take_along_axis(finite, top_idx, axis=1)
-            fresh[np.arange(b)[:, None], top_idx] = selected_is_finite * weight
-
-            # Force-held reductions (sell-blocked) keep their previous
-            # weight and consume the budget; fresh buys scale down, never
-            # up.
-            held = np.zeros((b, n_stocks))
-            raw = fresh
-            if blocked_sell is not None:
-                sell_blocked = blocked_sell[None, :, exec_col]
-                for _ in range(n_stocks + 1):
-                    tentative = held + raw
-                    new_holds = sell_blocked & (prev > tentative) & (held == 0.0)
-                    if not new_holds.any():
-                        break
-                    held = np.where(new_holds, prev, held)
-                    raw = np.where(new_holds, 0.0, raw)
-                    raw = _batch_scale_to_budget(raw, held)
-            target = held + _batch_scale_to_budget(raw, held)
-            if hold_rows.any():
-                # Held rows keep the hold-branch target (previous basket
-                # with universe-exit liquidations); traded rows use the
-                # freshly constructed target.
-                target = np.where(hold_rows[:, None], hold_target, target)
-        else:
-            target = hold_target
-        # Quantize weights to 1e-12: the scale-to-budget arithmetic leaves
-        # ~1e-16 summation noise (row-order dependent), which would
-        # otherwise fabricate phantom micro-orders that pay the full
-        # minimum commission and break permutation invariance.
-        target = np.round(target, 12)
-
-        buy = np.maximum(target - prev, 0.0)
-        sell = np.maximum(prev - target, 0.0)
+            target[row] = output.weights
+            buy[row] = output.buy_weights
+            sell[row] = output.sell_weights
+            diagnostics_full[row].append(dict(output.diagnostics))
         cost = np.asarray(
             cost_model.rebalance_cost_fraction(buy, sell, capital),
             dtype=np.float64,
@@ -645,11 +592,14 @@ def simulate_basket_daily_returns_batch(
         rets = target_clean[:, t][None, :]
         gross = (target * rets).sum(axis=1)
         net = gross - cost
-        turnover = np.abs(target - prev).sum(axis=1)
+        turnover = buy.sum(axis=1) + sell.sum(axis=1)
         gross_full[:, output_col] = gross
         cost_full[:, output_col] = cost
         net_full[:, output_col] = net
         turnover_full[:, output_col] = turnover
+        target_weights_full[:, output_col] = target
+        buy_weights_full[:, output_col] = buy
+        sell_weights_full[:, output_col] = sell
         if adv is not None:
             # Capacity audit (T1-04): per held name, position value
             # divided by the execution-day dollar volume; the day's
@@ -671,6 +621,10 @@ def simulate_basket_daily_returns_batch(
         cost_full,
         net_full,
         turnover_full,
+        target_weights_full,
+        buy_weights_full,
+        sell_weights_full,
+        tuple(tuple(row) for row in diagnostics_full),
         capacity_utilization=(
             capacity_full if adv is not None else None
         ),
@@ -774,8 +728,10 @@ def formula_reward(
     universe_mask: np.ndarray,
     tie_break_keys: np.ndarray | None = None,
     adv: np.ndarray | None = None,
+    realized_ret: np.ndarray | None = None,
+    rebalance_mask: np.ndarray | None = None,
 ) -> float:
-    """Scalar v13 reward: active IR minus exact annualized daily cost.
+    """Scalar v14 reward: active IR minus exact annualized daily cost.
 
     The primary term is the portfolio **active IR** (gross basket returns
     minus the equal-weight universe benchmark, effective-n shrunk,
@@ -787,22 +743,33 @@ def formula_reward(
     is the mandatory ``[stock, date]`` PIT eligibility mask consumed at
     the signal date AND the entry date (T1-04); ``tie_break_keys``
     resolve exact selection ties deterministically (T1-02); ``adv``
-    enables the capacity audit.
+    enables the capacity audit. ``target_ret`` is the research label;
+    when ``realized_ret`` is supplied, only the latter drives portfolio
+    PnL and the benchmark. ``rebalance_mask`` is the global schedule slice.
     """
 
     signal = np.asarray(signal, dtype=np.float64)
     target_ret = np.asarray(target_ret, dtype=np.float64)
+    realized_ret = np.asarray(
+        target_ret if realized_ret is None else realized_ret,
+        dtype=np.float64,
+    )
     universe_mask = np.asarray(universe_mask, dtype=bool)
     if universe_mask.shape != signal.shape:
         raise ValueError(
             f"universe_mask shape {universe_mask.shape} does not match "
             f"signal shape {signal.shape}"
         )
+    if realized_ret.shape != signal.shape:
+        raise ValueError(
+            f"realized_ret shape {realized_ret.shape} does not match "
+            f"signal shape {signal.shape}"
+        )
     if signal_range is None:
         signal_range = (0, max(signal.shape[1] - 2, 0))
     simulation = simulate_basket_daily_returns(
         signal,
-        target_ret,
+        realized_ret,
         bt_cfg,
         blocked_buy,
         blocked_sell,
@@ -810,8 +777,9 @@ def formula_reward(
         universe_mask=universe_mask,
         tie_break_keys=tie_break_keys,
         adv=adv,
+        rebalance_mask=rebalance_mask,
     )
-    benchmark = _window_benchmark(target_ret, signal_range, universe_mask)
+    benchmark = _window_benchmark(realized_ret, signal_range, universe_mask)
     objectives = _portfolio_objectives(
         simulation, benchmark, reward_cfg.ic_hac_max_lags
     )
@@ -837,9 +805,11 @@ def batched_basket_rewards(
     universe_mask: np.ndarray,
     tie_break_keys: np.ndarray | None = None,
     adv: np.ndarray | None = None,
+    realized_ret: np.ndarray | None = None,
+    rebalance_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray | None,
            np.ndarray | None]:
-    """v13 rewards for a batch: active IR minus exact annualized daily
+    """v14 rewards for a batch: active IR minus exact annualized daily
     costs, with raw ICIR values and portfolio objectives exposed.
 
     ``signals`` is ``[B, stocks, dates]``.  Returns
@@ -868,15 +838,26 @@ def batched_basket_rewards(
     exactly like the signals).  ``universe_mask`` is the mandatory
     ``[stocks, dates]`` PIT eligibility mask, sliced per window exactly
     like the signals, consumed at the signal date AND the entry date by
-    the basket (T1-04 alignment).
+    the basket (T1-04 alignment). ``target_ret`` drives IC/quality only;
+    ``realized_ret`` drives daily portfolio PnL and the benchmark, while
+    ``rebalance_mask`` fixes the global schedule across all sub-windows.
     """
 
     signals = np.asarray(signals, dtype=np.float64)
     target_ret = np.asarray(target_ret, dtype=np.float64)
+    realized_ret = np.asarray(
+        target_ret if realized_ret is None else realized_ret,
+        dtype=np.float64,
+    )
     universe_mask = np.asarray(universe_mask, dtype=bool)
     if universe_mask.shape != target_ret.shape:
         raise ValueError(
             f"universe_mask shape {universe_mask.shape} does not match "
+            f"target_ret shape {target_ret.shape}"
+        )
+    if realized_ret.shape != target_ret.shape:
+        raise ValueError(
+            f"realized_ret shape {realized_ret.shape} does not match "
             f"target_ret shape {target_ret.shape}"
         )
     if train_signal_range is None:
@@ -893,7 +874,7 @@ def batched_basket_rewards(
     )
     simulation = simulate_basket_daily_returns_batch(
         signals,
-        target_ret,
+        realized_ret,
         bt_cfg,
         blocked_buy,
         blocked_sell,
@@ -901,8 +882,9 @@ def batched_basket_rewards(
         universe_mask=universe_mask,
         tie_break_keys=tie_break_keys,
         adv=adv,
+        rebalance_mask=rebalance_mask,
     )
-    benchmark = _window_benchmark(target_ret, train_signal_range, universe_mask)
+    benchmark = _window_benchmark(realized_ret, train_signal_range, universe_mask)
     objectives = _portfolio_objectives(
         simulation, benchmark, reward_cfg.ic_hac_max_lags
     )
@@ -933,7 +915,7 @@ def batched_basket_rewards(
             )
             win_simulation = simulate_basket_daily_returns_batch(
                 signals,
-                target_ret,
+                realized_ret,
                 bt_cfg,
                 blocked_buy,
                 blocked_sell,
@@ -941,10 +923,11 @@ def batched_basket_rewards(
                 universe_mask=universe_mask,
                 tie_break_keys=tie_break_keys,
                 adv=adv,
+                rebalance_mask=rebalance_mask,
             )
             win_objectives = _portfolio_objectives(
                 win_simulation,
-                _window_benchmark(target_ret, (start, end), universe_mask),
+                _window_benchmark(realized_ret, (start, end), universe_mask),
                 reward_cfg.ic_hac_max_lags,
             )
             win_mean_cost = (

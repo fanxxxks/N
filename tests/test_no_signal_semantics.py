@@ -260,15 +260,17 @@ def test_basket_force_hold_never_renormalizes_above_cap():
     sim = simulate_basket_daily_returns(
         signal, target, cfg, universe_mask=mask, blocked_sell=blocked_sell
     )
-    # Day 1 (exit execution): stock 0 must be reduced but is sell-blocked,
-    # so it is force-held at the cap 0.4; the freed budget (1 - 0.4) is
-    # reinvested in the two new names at 0.3 each — the book is exactly
-    # [0.4, 0.3, 0.3], never renormalized upward (the old path would have
-    # pushed every name above the cap after the second renormalization).
-    assert sim.turnover[1] == pytest.approx(0.4, abs=1e-12)
-    assert sim.daily_gross_returns[1] == pytest.approx(
-        0.4 * float(target[0, 1]) + 0.3 * float(target[1, 1]) + 0.3 * float(target[2, 1]),
-        abs=1e-12,
+    # P3 contract section 3: the blocked 0.4 position consumes budget and
+    # only the fresh buy may shrink.  The surviving 0.4 incumbent cannot be
+    # sold merely to make room, so the exact target is [0.4, 0.4, 0.2].
+    np.testing.assert_array_equal(
+        sim.target_weights[1], np.array([0.4, 0.4, 0.2])
+    )
+    assert sim.turnover[1] == 0.2
+    assert sim.daily_gross_returns[1] == (
+        0.4 * float(target[0, 1])
+        + 0.4 * float(target[1, 1])
+        + 0.2 * float(target[2, 1])
     )
 
 

@@ -8,13 +8,20 @@ computed flag and the research doctor's classification surface.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 
+from ashare_data.config import BacktestConfig
 from ashare_model.alphagpt import MODEL_VERSION
+from ashare_model.bare_factor_backtest import BARE_FACTOR_BACKTEST_VERSION
 from ashare_model.evaluation import PROTOCOL_VERSION
 from ashare_model.reward import REWARD_VERSION
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.execution_spec import execution_provenance
+from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
 from ashare_model.artifact_versions import (
     classify_artifact,
+    classify_bare_factor,
     classify_protocol,
     classify_strategy,
     stamp_legacy_artifacts,
@@ -31,6 +38,7 @@ def _current_strategy() -> dict:
         "model_version": MODEL_VERSION,
         "dataset_id": "d1",
         "direction": 1,
+        **execution_provenance(BacktestConfig()),
     }
 
 
@@ -50,6 +58,57 @@ def _current_protocol() -> dict:
         "dataset_id": "d1",
         "stitched": {"x": 1},
         "ledger": {"path": "data/experiment_ledger.jsonl"},
+        **execution_provenance(BacktestConfig()),
+    }
+
+
+def _current_bare_factor() -> dict:
+    base = BacktestConfig()
+    quadrants = []
+    for frequency, method in (
+        ("daily", "equal_weight"),
+        ("daily", "optimizer"),
+        ("weekly", "equal_weight"),
+        ("weekly", "optimizer"),
+    ):
+        config = replace(
+            base,
+            rebalance_frequency=frequency,
+            target_horizon=1,
+            portfolio_method=method,
+        )
+        quadrants.append(
+            {
+                "frequency": frequency,
+                "horizon": 1,
+                "method": method,
+                **execution_provenance(config),
+                "factors": [
+                    {
+                        "name": "TURNOVER",
+                        "direction": 1,
+                        "frequency": frequency,
+                        "horizon": 1,
+                        "method": method,
+                        "total_return": 0.0,
+                        "annual_return": 0.0,
+                        "sharpe": 0.0,
+                        "sortino": 0.0,
+                        "max_drawdown": 0.0,
+                        "turnover": 0.0,
+                        "order_count": 0,
+                        "cost": 0.0,
+                    }
+                ],
+            }
+        )
+    return {
+        "version": BARE_FACTOR_BACKTEST_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
+        "reward_version": REWARD_VERSION,
+        "dataset_id": "d1",
+        **execution_provenance(base),
+        "quadrants": quadrants,
     }
 
 
@@ -64,6 +123,40 @@ def _v12_protocol() -> dict:
 def test_current_strategy_is_not_legacy():
     verdict = classify_strategy(_current_strategy())
     assert verdict == {"legacy": False, "reasons": []}
+
+
+def test_p3_semantic_versions_are_bumped_together():
+    assert REWARD_VERSION == "14"
+    assert PROTOCOL_VERSION == "22"
+    assert EXECUTION_SPEC_VERSION == 2
+    assert BARE_FACTOR_BACKTEST_VERSION == 3
+
+
+def test_strategy_without_execution_provenance_is_legacy():
+    payload = _current_strategy()
+    payload.pop("execution_version")
+    payload.pop("portfolio_config")
+    verdict = classify_strategy(payload)
+    assert verdict["legacy"] is True
+    reasons = "; ".join(verdict["reasons"])
+    assert "no execution_version (pre-P3)" in reasons
+    assert "no portfolio_config (pre-P3)" in reasons
+
+
+def test_partial_portfolio_config_cannot_claim_current():
+    payload = _current_strategy()
+    payload["portfolio_config"] = {"portfolio_method": "equal_weight"}
+    verdict = classify_strategy(payload)
+    assert verdict["legacy"] is True
+    assert any("portfolio_config" in reason for reason in verdict["reasons"])
+
+
+def test_strategy_without_reward_version_is_legacy():
+    payload = _current_strategy()
+    payload.pop("reward_version")
+    verdict = classify_strategy(payload)
+    assert verdict["legacy"] is True
+    assert "no reward_version" in "; ".join(verdict["reasons"])
 
 
 def test_v10_strategy_is_legacy_with_reasons():
@@ -82,6 +175,71 @@ def test_current_protocol_is_not_legacy():
         "legacy": False,
         "reasons": [],
     }
+
+
+def test_protocol_without_execution_provenance_is_legacy():
+    payload = _current_protocol()
+    payload.pop("execution_version")
+    payload.pop("portfolio_config")
+    verdict = classify_protocol(payload)
+    assert verdict["legacy"] is True
+    reasons = "; ".join(verdict["reasons"])
+    assert "no execution_version (pre-P3)" in reasons
+    assert "no portfolio_config (pre-P3)" in reasons
+
+
+def test_protocol_without_semantic_versions_is_legacy():
+    payload = _current_protocol()
+    payload.pop("protocol_version")
+    payload.pop("reward_version")
+    verdict = classify_protocol(payload)
+    assert verdict["legacy"] is True
+    reasons = "; ".join(verdict["reasons"])
+    assert "no protocol_version" in reasons
+    assert "no reward_version" in reasons
+
+
+def test_current_bare_factor_with_full_provenance_is_not_legacy():
+    assert classify_bare_factor(_current_bare_factor()) == {
+        "legacy": False,
+        "reasons": [],
+    }
+
+
+def test_current_bare_factor_without_four_quadrants_is_legacy():
+    payload = _current_bare_factor()
+    payload.pop("quadrants")
+    verdict = classify_bare_factor(payload)
+    assert verdict["legacy"] is True
+    assert any("quadrants" in reason for reason in verdict["reasons"])
+
+
+def test_v2_single_config_bare_factor_is_legacy_after_quadrant_schema():
+    payload = {
+        "version": 2,
+        "protocol_version": PROTOCOL_VERSION,
+        "reward_version": REWARD_VERSION,
+        "dataset_id": "d1",
+        **execution_provenance(BacktestConfig()),
+    }
+    verdict = classify_bare_factor(payload)
+    assert verdict["legacy"] is True
+    assert any("version 2 != current 3" in reason for reason in verdict["reasons"])
+
+
+def test_bare_factor_without_execution_provenance_is_legacy():
+    verdict = classify_bare_factor(
+        {
+            "version": 1,
+            "protocol_version": "21",
+            "reward_version": "13",
+            "dataset_id": "d1",
+        }
+    )
+    assert verdict["legacy"] is True
+    reasons = "; ".join(verdict["reasons"])
+    assert "execution_version" in reasons
+    assert "portfolio_config" in reasons
 
 
 def test_v12_protocol_is_legacy_with_reasons():
@@ -129,7 +287,10 @@ def test_stamp_marks_v10_v12_and_is_idempotent(tmp_path):
     # Idempotent: a second run touches nothing and reports already legacy.
     outcomes = stamp_legacy_artifacts(tmp_path)
     assert all(o["stamped"] is False for o in outcomes)
-    assert all(o["legacy"] is True for o in outcomes)
+    by_name = {o["name"]: o for o in outcomes}
+    assert by_name["strategy"]["legacy"] is True
+    assert by_name["protocol"]["legacy"] is True
+    assert by_name["bare_factor"]["legacy"] is False
     stamped_at = strategy["legacy_stamped_at"]
     again = json.loads(
         (tmp_path / "best_ashare_strategy.json").read_text(encoding="utf-8")
@@ -152,7 +313,7 @@ def test_stamp_leaves_current_artifacts_untouched(tmp_path):
 
 def test_stamp_tolerates_missing_artifacts(tmp_path):
     outcomes = stamp_legacy_artifacts(tmp_path)
-    assert len(outcomes) == 2
+    assert len(outcomes) == 3
     assert all(o["stamped"] is False for o in outcomes)
 
 

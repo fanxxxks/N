@@ -23,6 +23,12 @@ class BacktestResult:
     # replays these through the whole-lot matcher; None for legacy
     # producers that did not record them.
     target_weights: list[np.ndarray] | None = None
+    # P3-06: exact constructor output and cost trail. Optional only for
+    # one-way compatibility with legacy producers/readers.
+    buy_weights: list[np.ndarray] | None = None
+    sell_weights: list[np.ndarray] | None = None
+    cost_fractions: list[float] | None = None
+    construction_diagnostics: list[dict[str, Any]] | None = None
 
 
 @dataclass

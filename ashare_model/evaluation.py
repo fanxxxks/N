@@ -161,9 +161,14 @@ from the formula's features via :mod:`ashare_model.data_tier`
 the artifact schema gains provenance fields, and the promotion gates use
 them (Tier A default, Tier B separate comparison, Tier C never).
 
-``frequency`` / ``horizon`` are record-only for now: no rebalance-calendar
-mechanism exists yet (weekly / multi-period targets are deferred to a later
-phase), but they are written into artifacts so future runs stay comparable.
+v22 (P3) makes ``frequency`` / ``horizon`` executable protocol fields.
+Every fold and validation subwindow retains its slice of the global
+rebalance calendar; research IC/quality consumes the sparse causal target
+``open[t+1+horizon] / open[t+1] - 1``, while the portfolio curve separately
+consumes adjacent-open daily returns.  Protocol artifacts record execution
+spec v2, the portfolio-constructor version and the complete resolved
+portfolio configuration; pre-v22 artifacts remain readable history but are
+not current promotion evidence.
 """
 
 from __future__ import annotations
@@ -226,6 +231,9 @@ from .semantic_cache import (
     make_calibration_execute,
 )
 from .time_contract import FoldTimeContract
+from .targets import causal_target_returns
+from ashare_portfolio.rebalance import RebalancePolicy
+from ashare_portfolio.execution_spec import execution_provenance
 from .tpe_search import run_tpe_baseline
 from .train import (
     AshareTrainer,
@@ -236,7 +244,7 @@ from .train import (
 from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "21"
+PROTOCOL_VERSION = "22"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -259,6 +267,11 @@ class Fold:
     """A walk-forward fold resolved against a concrete date axis."""
 
     contract: FoldTimeContract
+    frequency: str = "daily"
+
+    @property
+    def policy(self) -> RebalancePolicy:
+        return RebalancePolicy(self.frequency, self.contract.horizon)
 
     @property
     def train_end(self) -> str:
@@ -287,6 +300,8 @@ class FoldData:
     factors: np.ndarray
     raw: dict[str, np.ndarray]
     target: np.ndarray
+    realized_ret: np.ndarray
+    rebalance_mask: np.ndarray
     dates: list[str]
     universe_mask: np.ndarray
     contract: FoldTimeContract
@@ -308,18 +323,29 @@ class FoldData:
         yield self.dates
 
 
-def resolve_folds(fold_cfgs: list[FoldConfig], dates: list[str]) -> list[Fold]:
+def resolve_folds(
+    fold_cfgs: list[FoldConfig],
+    dates: list[str],
+    *,
+    frequency: str = "daily",
+    horizon: int = 1,
+) -> list[Fold]:
     """Resolve fold configs to column indices and check data availability.
 
-    Configured anchors are inclusive. Test data retains the two price-context
-    columns needed to exit its final executable signal, while neither train
-    nor test scoring can observe a price beyond its anchor.
+    Configured anchors are inclusive. Test data retains the exact
+    ``1 + horizon`` price-context columns needed to exit its final executable
+    signal, while neither train nor test scoring can observe a price beyond
+    its anchor.
     """
 
+    policy = RebalancePolicy(frequency, horizon)
     folds: list[Fold] = []
     for cfg in fold_cfgs:
         contract = FoldTimeContract.resolve(
-            dates, train_end=cfg.train_end, test_end=cfg.test_end
+            dates,
+            train_end=cfg.train_end,
+            test_end=cfg.test_end,
+            horizon=policy.horizon,
         )
         if (
             contract.test_price_end == len(dates)
@@ -329,7 +355,7 @@ def resolve_folds(fold_cfgs: list[FoldConfig], dates: list[str]) -> list[Fold]:
                 f"fold {cfg.train_end} -> {cfg.test_end}: test_end is past the "
                 f"data range; test window truncated at {dates[-1]}"
             )
-        folds.append(Fold(contract))
+        folds.append(Fold(contract, frequency=policy.frequency))
     return folds
 
 
@@ -342,10 +368,9 @@ def epoch_slice(
     window loses no history (VM execution must still happen on the full
     tensor and be sliced afterwards).
 
-    The forward target is recomputed from the sliced open on the same code
-    path the engine uses: the engine zeroes the final two signal columns of
-    its input matrix, so scoring on the full-tensor target would attribute
-    returns the engine deliberately drops.
+    The sparse forward target is recomputed from the sliced opens using the
+    fold's global schedule slice. Passing the pre-resolved mask prevents a
+    5/10-day cadence from restarting at the fold boundary.
     """
 
     contract = fold.contract
@@ -358,11 +383,21 @@ def epoch_slice(
     factors = loader.factor_tensor[:, :, s0:s1].numpy()
     raw = {k: v[:, s0:s1].numpy() for k, v in loader.raw_data_cache.items()}
     universe_mask = loader.universe_mask[:, s0:s1]
-    target = loader.mask_by_universe(open_to_open_returns(raw["open"]), start=s0)
+    rebalance_mask = fold.policy.rebalance_mask(loader.dates)[s0:s1]
+    target = causal_target_returns(
+        raw["open"],
+        loader.dates[s0:s1],
+        fold.policy,
+        rebalance_mask=rebalance_mask,
+    )
+    target = loader.mask_by_universe(target, start=s0)
+    realized_ret = open_to_open_returns(raw["open"])
     return FoldData(
         factors=factors,
         raw=raw,
         target=target,
+        realized_ret=realized_ret,
+        rebalance_mask=rebalance_mask,
         dates=loader.dates[s0:s1],
         universe_mask=universe_mask,
         contract=contract,
@@ -419,6 +454,12 @@ def evaluate_signal(
     day).
     """
 
+    config_policy = RebalancePolicy.from_config(bt_cfg)
+    if config_policy != fold.policy:
+        raise ValueError(
+            f"fold policy {fold.policy!r} does not match BacktestConfig "
+            f"policy {config_policy!r}"
+        )
     fold_data = epoch_slice(loader, fold)
     _, raw, target, dates = fold_data
     signal = np.asarray(signal, dtype=np.float64)
@@ -434,6 +475,7 @@ def evaluate_signal(
         dates,
         signal_range=fold_data.local_signal_range,
         universe_mask=fold_data.universe_mask,
+        rebalance_mask=fold_data.rebalance_mask,
     )
     m = result.metrics
     bench_total = (
@@ -552,7 +594,9 @@ def benchmark_row(
     fold_data = epoch_slice(loader, fold)
     _, _, target, dates = fold_data
     daily = equal_weight_benchmark_returns(
-        target, list(fold_data.local_signal_range), fold_data.universe_mask
+        fold_data.realized_ret,
+        list(fold_data.local_signal_range),
+        fold_data.universe_mask,
     )
     equity = [1.0]
     for ret in daily:
@@ -611,10 +655,22 @@ def baseline_candidates(
     train_signal_end = contract.train_signal_end
     train_factors = loader.factor_tensor[:, :, :train_price_end].numpy()
     train_open = loader.raw_data_cache["open"][:, :train_price_end].numpy()
-    train_target = open_to_open_returns(train_open)
+    full_rebalance_mask = fold.policy.rebalance_mask(loader.dates)
+    train_rebalance_mask = full_rebalance_mask[:train_price_end]
+    train_target = causal_target_returns(
+        train_open,
+        loader.dates[:train_price_end],
+        fold.policy,
+        rebalance_mask=train_rebalance_mask,
+    )
     train_target = loader.mask_by_universe(train_target)
+    train_realized_ret = open_to_open_returns(train_open)
     blocked_buy, blocked_sell = loader.tradability_masks()
-    val_windows = validation_windows(train_signal_end, model_cfg)
+    val_windows = validation_windows(
+        train_signal_end,
+        model_cfg,
+        rebalance_mask=train_rebalance_mask,
+    )
     scorer = CandidateScorer(
         bt_cfg,
         reward_cfg,
@@ -648,6 +704,8 @@ def baseline_candidates(
         universe_mask=loader.universe_mask[:, :train_price_end],
         tie_break_keys=np.asarray(loader.ts_codes),
         adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
+        realized_ret=train_realized_ret,
+        rebalance_mask=train_rebalance_mask,
     )
     # The selector is invoked even though the protocol reports every bare
     # factor; this keeps ranking/eligibility behavior on the same code path.
@@ -828,6 +886,8 @@ class _SearchWindow:
     factors: torch.Tensor
     universe_mask: np.ndarray
     target: np.ndarray
+    realized_ret: np.ndarray
+    rebalance_mask: np.ndarray
     val_windows: list[tuple[int, int]]
     train_signal_range: tuple[int, int]
     blocked_buy: np.ndarray
@@ -875,12 +935,23 @@ def _build_search_window(
     # signals and targets (no off-by-one with the val windows, which are
     # index ranges inside the same slice).
     train_universe_mask = universe_mask[:, :train_price_end]
+    train_open = loader.raw_data_cache["open"][:, :train_price_end].numpy()
+    full_rebalance_mask = fold.policy.rebalance_mask(loader.dates)
+    rebalance_mask = full_rebalance_mask[:train_price_end]
     target = loader.mask_by_universe(
-        open_to_open_returns(
-            loader.raw_data_cache["open"][:, :train_price_end].numpy()
+        causal_target_returns(
+            train_open,
+            loader.dates[:train_price_end],
+            fold.policy,
+            rebalance_mask=rebalance_mask,
         )
     )
-    val_windows = validation_windows(train_signal_end, model_config)
+    realized_ret = open_to_open_returns(train_open)
+    val_windows = validation_windows(
+        train_signal_end,
+        model_config,
+        rebalance_mask=rebalance_mask,
+    )
     # Tradability masks shared by every sampled formula, sliced to the
     # training window like the signals (the same path the trainer uses).
     blocked_buy, blocked_sell = loader.tradability_masks()
@@ -913,6 +984,8 @@ def _build_search_window(
         factors=factors,
         universe_mask=train_universe_mask,
         target=target,
+        realized_ret=realized_ret,
+        rebalance_mask=rebalance_mask,
         val_windows=val_windows,
         train_signal_range=train_signal_range,
         blocked_buy=blocked_buy,
@@ -946,6 +1019,8 @@ def _search_evaluator(
 
     return SemanticBudgetEvaluator(
         target=window.target,
+        realized_ret=window.realized_ret,
+        rebalance_mask=window.rebalance_mask,
         universe_mask=window.universe_mask,
         backtest_config=backtest_config,
         reward_config=reward_config or RewardConfig(),
@@ -956,7 +1031,11 @@ def _search_evaluator(
         fingerprint_execute=window.fingerprint_execute,
         dataset_id=loader.dataset_id,
         protocol_version=PROTOCOL_VERSION,
-        window_id=f"fold:{fold.train_end}:{fold.test_end}:seed:{seed}",
+        window_id=(
+            f"fold:{fold.train_end}:{fold.test_end}:"
+            f"frequency:{fold.policy.frequency}:horizon:{fold.policy.horizon}:"
+            f"seed:{seed}"
+        ),
         tie_break_keys=window.tie_break_keys,
         adv=window.adv,
         blocked_buy=window.blocked_buy,
@@ -1650,7 +1729,12 @@ def selfcheck_rows(
     rows: list[dict] = []
     rng = np.random.default_rng(seed)
     for fold_cfg in proto_cfg.folds:
-        fold = resolve_folds([fold_cfg], loader.dates)[0]
+        fold = resolve_folds(
+            [fold_cfg],
+            loader.dates,
+            frequency=proto_cfg.frequency,
+            horizon=proto_cfg.horizon,
+        )[0]
         _, _, _, dates = epoch_slice(loader, fold)
         signal = rng.normal(0.0, 1.0, size=(len(loader.ts_codes), len(dates)))
         metrics = evaluate_signal(signal, loader, fold, backtest_config)
@@ -1772,6 +1856,7 @@ def build_result(
     random_budget: int | None = None,
     ledger: dict | None = None,
     regime=None,
+    backtest_config: BacktestConfig | None = None,
 ) -> dict:
     """Assemble the protocol artifact (schema contract, see module docstring).
 
@@ -1797,6 +1882,23 @@ def build_result(
     artifact level.
     """
 
+    if backtest_config is None:
+        backtest_config = BacktestConfig(
+            rebalance_frequency=proto_cfg.frequency,
+            target_horizon=proto_cfg.horizon,
+        )
+    artifact_provenance = execution_provenance(backtest_config)
+    if (
+        artifact_provenance["portfolio_config"]["rebalance_frequency"]
+        != proto_cfg.frequency
+        or artifact_provenance["portfolio_config"]["target_horizon"]
+        != proto_cfg.horizon
+    ):
+        raise ValueError(
+            "protocol frequency/horizon must match BacktestConfig execution "
+            "provenance"
+        )
+
     # P2-02: annotate rows that were produced before this schema (or by
     # callers outside the protocol) with their credibility tier, derived
     # from the recorded formula tokens / bare feature name.
@@ -1818,6 +1920,7 @@ def build_result(
             "protocol_version": PROTOCOL_VERSION,
             "data_tier_version": DATA_TIER_VERSION,
             "reward_version": REWARD_VERSION,
+            **artifact_provenance,
             "dataset_id": dataset_id,
             "frequency": proto_cfg.frequency,
             "horizon": proto_cfg.horizon,
@@ -1926,7 +2029,12 @@ def run_protocol(
     if regime is not None:
         regime.assert_folds_clear(fold_cfgs, dataset_id=loader.dataset_id)
 
-    folds = resolve_folds(fold_cfgs, loader.dates)
+    folds = resolve_folds(
+        fold_cfgs,
+        loader.dates,
+        frequency=proto_cfg.frequency,
+        horizon=proto_cfg.horizon,
+    )
     rows: list[dict] = []
     for fold in folds:
         rows.append(benchmark_row(loader, fold))
@@ -2090,6 +2198,7 @@ def run_protocol(
         ),
         ledger=ledger_payload,
         regime=regime,
+        backtest_config=backtest_config,
     )
 
 
@@ -2232,6 +2341,7 @@ def main(argv=None) -> int:
                 dataset_id=loader.dataset_id,
                 ledger=ledger_payload,
                 regime=regime,
+                backtest_config=backtest_config,
             )
         else:
             fold_indices = list(range(args.folds)) if args.folds else None

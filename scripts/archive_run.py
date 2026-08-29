@@ -61,6 +61,17 @@ DEFAULTS = {
 }
 
 
+def classify_archive_payload(name, payload):
+    """Classify without blocking archival of legacy evidence."""
+
+    for candidate in (str(DEFAULT_ROOT), str(Path.cwd())):
+        if candidate not in sys.path:
+            sys.path.insert(0, candidate)
+    from ashare_model.artifact_versions import classify_artifact
+
+    return classify_artifact(name, payload)
+
+
 def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -104,6 +115,7 @@ def git_is_dirty(root, exclude_prefix="experiments/"):
 
 def load_formula_info(path):
     data = json.loads(path.read_text(encoding="utf-8"))
+    verdict = classify_archive_payload("strategy", data)
     return {
         "formula": data.get("formula"),
         "formula_text": data.get("formula_text"),
@@ -119,6 +131,14 @@ def load_formula_info(path):
             data.get("full_window_icir", data.get("best_icir")),
         ),
         "reward_version": data.get("reward_version"),
+        "protocol_version": data.get("protocol_version"),
+        "execution_version": data.get("execution_version"),
+        "portfolio_constructor_version": data.get(
+            "portfolio_constructor_version"
+        ),
+        "portfolio_config": data.get("portfolio_config"),
+        "legacy": bool(verdict["legacy"]),
+        "legacy_reasons": list(verdict["reasons"]),
     }
 
 
@@ -145,6 +165,9 @@ def summarize_protocol(data):
     for key in (
         "protocol_version",
         "reward_version",
+        "execution_version",
+        "portfolio_constructor_version",
+        "portfolio_config",
         "frequency",
         "horizon",
         "tier",
@@ -486,6 +509,7 @@ def main(argv=None):
             entry["reason"] = "exceeds --max-metrics-size-mb (summary kept)"
         manifest["metrics"] = entry
         if is_protocol:
+            protocol_verdict = classify_archive_payload("protocol", data)
             rows = data.get("rows", [])
             fold_runs = sorted(
                 {
@@ -505,6 +529,14 @@ def main(argv=None):
             )
             manifest["protocol"] = {
                 "version": data.get("protocol_version"),
+                "reward_version": data.get("reward_version"),
+                "execution_version": data.get("execution_version"),
+                "portfolio_constructor_version": data.get(
+                    "portfolio_constructor_version"
+                ),
+                "portfolio_config": data.get("portfolio_config"),
+                "legacy": bool(protocol_verdict["legacy"]),
+                "legacy_reasons": list(protocol_verdict["reasons"]),
                 "frequency": data.get("frequency"),
                 "horizon": data.get("horizon"),
                 "tier": data.get("tier"),

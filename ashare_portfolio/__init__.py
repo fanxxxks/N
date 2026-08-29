@@ -1,42 +1,75 @@
-"""Portfolio layer (T3-01/T3-02): connects factor outputs to tradable
-portfolios.
+"""Portfolio construction and execution-parity package.
 
-The factor layer (``ashare_model``) produces expected alpha / rank; this
-package owns portfolio construction (``optimizer``) and the unified
-execution spec (``golden``) that ties the fast vectorized research engine
-and the whole-lot paper matcher to the same golden tests.
+Package-level exports stay lazy so low-level configuration code can import
+``ashare_portfolio.rebalance`` without importing the backtest/golden stack and
+creating a dependency cycle. Direct submodule imports remain the preferred
+internal style.
 """
 
-from ashare_portfolio.golden import (
-    EXECUTION_SPEC_VERSION,
-    DayParityRecord,
-    FillRecord,
-    GoldenParity,
-    GoldenParityViolation,
-    ParityReport,
-    apply_blocking_rule,
-)
-from ashare_portfolio.optimizer import (
-    PORTFOLIO_OPTIMIZER_VERSION,
-    PortfolioConstraints,
-    PortfolioObjective,
-    PortfolioOptimizationError,
-    PortfolioOptimizer,
-    PortfolioSolution,
-)
+from __future__ import annotations
 
-__all__ = [
-    "EXECUTION_SPEC_VERSION",
-    "DayParityRecord",
-    "FillRecord",
-    "GoldenParity",
-    "GoldenParityViolation",
-    "PORTFOLIO_OPTIMIZER_VERSION",
-    "ParityReport",
-    "PortfolioConstraints",
-    "PortfolioObjective",
-    "PortfolioOptimizationError",
-    "PortfolioOptimizer",
-    "PortfolioSolution",
-    "apply_blocking_rule",
-]
+from importlib import import_module
+
+
+_EXPORTS = {
+    "PORTFOLIO_CONSTRUCTOR_VERSION": (
+        "ashare_portfolio.constructor",
+        "PORTFOLIO_CONSTRUCTOR_VERSION",
+    ),
+    "PortfolioConstructor": (
+        "ashare_portfolio.constructor",
+        "PortfolioConstructor",
+    ),
+    "PortfolioOutput": ("ashare_portfolio.constructor", "PortfolioOutput"),
+    "EXECUTION_SPEC_VERSION": (
+        "ashare_portfolio.execution_spec",
+        "EXECUTION_SPEC_VERSION",
+    ),
+    "execution_provenance": (
+        "ashare_portfolio.execution_spec",
+        "execution_provenance",
+    ),
+    "portfolio_config_provenance": (
+        "ashare_portfolio.execution_spec",
+        "portfolio_config_provenance",
+    ),
+    "validate_portfolio_config_provenance": (
+        "ashare_portfolio.execution_spec",
+        "validate_portfolio_config_provenance",
+    ),
+    "validate_execution_provenance": (
+        "ashare_portfolio.execution_spec",
+        "validate_execution_provenance",
+    ),
+    "DayParityRecord": ("ashare_portfolio.golden", "DayParityRecord"),
+    "FillRecord": ("ashare_portfolio.golden", "FillRecord"),
+    "GoldenParity": ("ashare_portfolio.golden", "GoldenParity"),
+    "GoldenParityViolation": ("ashare_portfolio.golden", "GoldenParityViolation"),
+    "ParityReport": ("ashare_portfolio.golden", "ParityReport"),
+    "apply_blocking_rule": ("ashare_portfolio.golden", "apply_blocking_rule"),
+    "PORTFOLIO_OPTIMIZER_VERSION": (
+        "ashare_portfolio.optimizer",
+        "PORTFOLIO_OPTIMIZER_VERSION",
+    ),
+    "PortfolioConstraints": ("ashare_portfolio.optimizer", "PortfolioConstraints"),
+    "PortfolioObjective": ("ashare_portfolio.optimizer", "PortfolioObjective"),
+    "PortfolioOptimizationError": (
+        "ashare_portfolio.optimizer",
+        "PortfolioOptimizationError",
+    ),
+    "PortfolioOptimizer": ("ashare_portfolio.optimizer", "PortfolioOptimizer"),
+    "PortfolioSolution": ("ashare_portfolio.optimizer", "PortfolioSolution"),
+    "RebalancePolicy": ("ashare_portfolio.rebalance", "RebalancePolicy"),
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str):
+    try:
+        module_name, attribute = _EXPORTS[name]
+    except KeyError as exc:  # pragma: no cover - standard module protocol
+        raise AttributeError(name) from exc
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value

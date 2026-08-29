@@ -19,6 +19,8 @@ from ashare_model.reward import (
     simulate_basket_daily_returns_batch,
     sortino_ratio,
 )
+from ashare_model.targets import causal_target_returns
+from ashare_portfolio.rebalance import RebalancePolicy
 
 
 def _cfg(**kwargs) -> BacktestConfig:
@@ -40,6 +42,55 @@ def _reward_cfg(**kwargs) -> RewardConfig:
     defaults = dict(ic_min_stocks=2)
     defaults.update(kwargs)
     return RewardConfig(**defaults)
+
+
+def test_multi_period_research_target_never_replaces_daily_portfolio_returns():
+    n_stocks, n_dates = 4, 18
+    dates = [f"202401{i + 1:02d}" for i in range(n_dates)]
+    open_ = (
+        10.0
+        + np.arange(n_stocks, dtype=np.float64)[:, None]
+        + np.arange(n_dates, dtype=np.float64)[None, :]
+        * np.asarray([0.05, 0.10, 0.20, 0.30])[:, None]
+    )
+    signal = np.tile(np.arange(n_stocks, dtype=np.float64)[:, None], (1, n_dates))
+    cfg = _cfg(
+        rebalance_frequency="every_5_days",
+        target_horizon=5,
+        top_n=2,
+        buy_rank=2,
+        sell_rank=2,
+    )
+    policy = RebalancePolicy.from_config(cfg)
+    rebalance_mask = policy.rebalance_mask(dates)
+    target = causal_target_returns(open_, dates, policy)
+    realized = open_to_open_returns(open_)
+    mask = np.ones_like(signal, dtype=bool)
+
+    first = batched_basket_rewards(
+        signal[None],
+        target,
+        cfg,
+        _reward_cfg(),
+        train_signal_range=(0, n_dates - policy.exit_offset),
+        universe_mask=mask,
+        realized_ret=realized,
+        rebalance_mask=rebalance_mask,
+    )
+    second = batched_basket_rewards(
+        signal[None],
+        -target,
+        cfg,
+        _reward_cfg(),
+        train_signal_range=(0, n_dates - policy.exit_offset),
+        universe_mask=mask,
+        realized_ret=realized,
+        rebalance_mask=rebalance_mask,
+    )
+    # Portfolio reward/cost uses the same daily path; only research IC sees
+    # the changed five-day label orientation.
+    np.testing.assert_array_equal(first[0], second[0])
+    assert first[2][0] != second[2][0]
 
 
 # --- trading_cost_fraction -------------------------------------------------
@@ -399,13 +450,13 @@ def test_batch_sim_degenerate_shapes_match_scalar():
         universe_mask=np.ones((3, 1), dtype=bool),
     )
     assert ref_daily.size == 0 and ref_to == 0.0
-    # top_n <= 0: every day skipped, zero daily and zero turnover.
-    df, tf = simulate_basket_daily_returns_batch(
-        np.zeros((2, 3, 6)), np.zeros((3, 6)), _cfg(top_n=0),
-        universe_mask=np.ones((3, 6), dtype=bool),
-    )
-    assert np.all(df == 0.0)
-    assert list(tf) == [0.0, 0.0]
+    # P3 contract section 2: ranks are positive; an invalid zero rank is
+    # rejected instead of being interpreted as a silent empty strategy.
+    with pytest.raises(ValueError, match="buy_rank must be >= 1"):
+        simulate_basket_daily_returns_batch(
+            np.zeros((2, 3, 6)), np.zeros((3, 6)), _cfg(top_n=0),
+            universe_mask=np.ones((3, 6), dtype=bool),
+        )
     # Not enough finite rows on any day: same zero behavior.
     sig = np.full((1, 3, 6), np.nan)
     df, tf = simulate_basket_daily_returns_batch(

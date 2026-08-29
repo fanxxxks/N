@@ -1,4 +1,4 @@
-"""Daily A-share paper-trading loop.
+"""Policy-scheduled A-share paper-trading loop.
 
 Usage:
     python -m ashare_trading.run_sim [--config config/ashare_config.yaml]
@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -36,16 +35,19 @@ from ashare_data.config import (
 )
 from ashare_data.io_utils import atomic_write_json
 from ashare_data.schemas import SimOrder
-from ashare_data.processor import has_cross_sectional_dispersion, open_to_open_returns
+from ashare_data.processor import tradability_blocked
 from ashare_data.gates import ProductionGateRunner
 from ashare_execution import validate_execution_config
 
-from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.reward import signal_direction
 from ashare_model.time_contract import TrainingTimeContract
+from ashare_model.targets import causal_target_returns
 from ashare_model.vm import StackVM, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
+from ashare_portfolio.constructor import PortfolioConstructor
+from ashare_portfolio.execution_spec import portfolio_config_provenance
+from ashare_portfolio.rebalance import RebalancePolicy
 
 from .matching import SimBroker
 from .orders import build_orders, target_shares_from_weights
@@ -104,6 +106,7 @@ class SimulationRunner:
             sim_config.initial_capital, sim_config.state_path
         )
         self.broker = SimBroker()
+        self.portfolio_constructor = PortfolioConstructor(backtest_config)
         # Built lazily in compute_signals() once the loader's PIT mask is
         # guaranteed to exist.
         self.vm: StackVM | None = None
@@ -127,6 +130,16 @@ class SimulationRunner:
                 path,
                 "; ".join(verdict["reasons"]),
             )
+        else:
+            runtime_portfolio_config = portfolio_config_provenance(
+                self.backtest_config
+            )
+            if payload.get("portfolio_config") != runtime_portfolio_config:
+                logger.warning(
+                    "Strategy portfolio_config differs from the current "
+                    "simulation config; replay remains readable but is not "
+                    "the strategy's recorded execution evidence"
+                )
         self.formula_tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
         self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
         # The trainer records the trade direction it learned on its
@@ -172,11 +185,17 @@ class SimulationRunner:
             contract = TrainingTimeContract.resolve(
                 self.loader.dates,
                 self.backtest_config.train_end_date,
+                horizon=self.backtest_config.target_horizon,
             )
             signal_end = contract.train_signal_end
             price_end = contract.train_label_end
-            target = open_to_open_returns(
-                self.loader.raw_data_cache["open"][:, :price_end].numpy()
+            policy = RebalancePolicy.from_config(self.backtest_config)
+            full_rebalance_mask = policy.rebalance_mask(self.loader.dates)
+            target = causal_target_returns(
+                self.loader.raw_data_cache["open"][:, :price_end].numpy(),
+                self.loader.dates[:price_end],
+                policy,
+                rebalance_mask=full_rebalance_mask[:price_end],
             )
             target = self.loader.mask_by_universe(target)
             self.direction = signal_direction(
@@ -246,18 +265,15 @@ class SimulationRunner:
 
         self.sim_config.orders_dir.mkdir(parents=True, exist_ok=True)
         self.sim_config.trades_dir.mkdir(parents=True, exist_ok=True)
-        # The paper-trading position count is driven by the sim config, with
-        # the backtest config as a fallback.
-        engine = AshareBacktestEngine(
-            replace(
-                self.backtest_config,
-                top_n=self.sim_config.max_positions or self.backtest_config.top_n,
-            )
-        )
+        rebalance_mask = RebalancePolicy.from_config(
+            self.backtest_config
+        ).rebalance_mask(dates)
 
         self._write_progress("executing", current_date=self.portfolio.last_exec_date)
         last_equity: float | None = None
         stopped = False
+        portfolio_diagnostics: list[dict[str, object]] = []
+        actual_order_count = 0
         for signal_idx in range(start_idx, end_idx):
             if self._handle_stop_signal():
                 stopped = True
@@ -273,72 +289,58 @@ class SimulationRunner:
                 if st_codes
                 else None
             )
-            # Selection uses universe_mask[:, signal_idx] (and the entry
-            # date, exactly like the backtest engine): ineligible stocks
-            # can never generate new buy orders.
             eligible = universe_mask[:, signal_idx] & universe_mask[:, exec_idx]
-            selected, selectable_values = engine._select_top_n(
-                signals[:, signal_idx],
-                exec_idx,
-                raw["open"],
-                raw["high"],
-                raw["low"],
-                raw["pre_close"],
-                raw["volume"],
+            buy_blocked = tradability_blocked(
+                raw["open"][:, exec_idx],
+                raw["high"][:, exec_idx],
+                raw["low"][:, exec_idx],
+                raw["pre_close"][:, exec_idx],
+                raw["volume"][:, exec_idx],
                 ts_codes,
-                side="buy",
-                eligible=eligible,
+                "buy",
                 st_mask=st_mask,
             )
-            # No-signal semantics (T1-02): a selectable cross-section
-            # without dispersion carries no ranking information — the
-            # portfolio is held as-is (no signal-driven orders), never
-            # churned.  Positions that lost universe eligibility are still
-            # liquidated through the ordinary exit path (the mask-exit
-            # contract); the remaining book is kept at its current weights.
-            if selectable_values and not has_cross_sectional_dispersion(
-                selectable_values
-            ):
-                held_names = []
-                hold_weights = np.zeros(len(ts_codes), dtype=np.float64)
-                equity = self.portfolio.cash
-                for code, pos in self.portfolio.positions.items():
-                    if code not in ts_codes:
-                        equity += pos.quantity * pos.last_price
-                        continue
-                    i = ts_codes.index(code)
-                    equity += pos.quantity * raw["close"][i, exec_idx - 1]
-                    if eligible[i]:
-                        held_names.append(i)
-                        hold_weights[i] = (
-                            pos.quantity * raw["close"][i, exec_idx - 1]
-                        )
-                if equity > 0:
-                    hold_weights /= equity
-                orders = self._make_orders(
-                    hold_weights,
-                    held_names,
-                    ts_codes,
-                    exec_idx,
-                    exec_date,
-                    raw,
-                )
+            sell_blocked = tradability_blocked(
+                raw["open"][:, exec_idx],
+                raw["high"][:, exec_idx],
+                raw["low"][:, exec_idx],
+                raw["pre_close"][:, exec_idx],
+                raw["volume"][:, exec_idx],
+                ts_codes,
+                "sell",
+                st_mask=st_mask,
+            )
+            prev_weights, equity = self._portfolio_weights(
+                ts_codes, raw["open"][:, exec_idx]
+            )
+            output = self.portfolio_constructor.construct(
+                signals[:, signal_idx],
+                prev_weights,
+                capital=equity,
+                eligible=eligible,
+                buy_blocked=buy_blocked,
+                sell_blocked=sell_blocked,
+                stable_keys=np.asarray(ts_codes),
+                rebalance_due=bool(rebalance_mask[signal_idx]),
+                adv=raw["volume"][:, exec_idx] * raw["open"][:, exec_idx],
+            )
+            portfolio_diagnostics.append(dict(output.diagnostics))
+            if not rebalance_mask[signal_idx]:
+                # P3: a non-rebalance day is a true hold.  Recomputing
+                # target shares from price-drifted weights would create a
+                # spurious alignment order even though the constructor
+                # correctly returned the previous book.
+                orders = []
             else:
-                target_weights = self._equal_weights(
-                    selected,
-                    len(ts_codes),
-                    top_n=self.sim_config.max_positions
-                    or self.backtest_config.top_n,
-                    single_weight_cap=self.backtest_config.single_weight_cap,
-                )
                 orders = self._make_orders(
-                    target_weights,
-                    selected,
+                    np.asarray(output.weights),
                     ts_codes,
                     exec_idx,
                     exec_date,
                     raw,
+                    equity=equity,
                 )
+            actual_order_count += len(orders)
 
             bars = self.loader.bars
             trades = self.broker.execute_orders(
@@ -380,10 +382,41 @@ class SimulationRunner:
             current_date=self.portfolio.last_exec_date,
             equity=last_equity,
         )
+        metrics = {
+            "processed_periods": len(portfolio_diagnostics),
+            "rebalance_due_count": sum(
+                bool(item["rebalance_due"]) for item in portfolio_diagnostics
+            ),
+            "rebalance_count": sum(
+                bool(item["rebalance_executed"]) for item in portfolio_diagnostics
+            ),
+            "constructor_order_count": sum(
+                int(item["order_count"]) for item in portfolio_diagnostics
+            ),
+            "actual_order_count": actual_order_count,
+            "suppressed_trade_count": sum(
+                int(item.get("suppressed_trade_count", 0))
+                for item in portfolio_diagnostics
+            ),
+        }
+        logger.info(
+            "simulation portfolio path method={} frequency={} periods={} "
+            "due={} rebalanced={} constructor_orders={} actual_orders={} "
+            "suppressed={}",
+            self.backtest_config.portfolio_method,
+            self.backtest_config.rebalance_frequency,
+            metrics["processed_periods"],
+            metrics["rebalance_due_count"],
+            metrics["rebalance_count"],
+            metrics["constructor_order_count"],
+            metrics["actual_order_count"],
+            metrics["suppressed_trade_count"],
+        )
         return {
             "final_cash": self.portfolio.cash,
             "trade_count": self.portfolio.trade_count,
             "equity_history": self.portfolio.equity_history,
+            "portfolio_metrics": metrics,
         }
 
     def _write_progress(
@@ -404,20 +437,14 @@ class SimulationRunner:
     def _make_orders(
         self,
         target_weights: np.ndarray,
-        selected: list[int],
         ts_codes: list[str],
         exec_idx: int,
         exec_date: str,
         raw: dict[str, np.ndarray],
+        *,
+        equity: float,
     ) -> list[SimOrder]:
         open_prices = raw["open"][:, exec_idx]
-        equity = self.portfolio.cash
-        for code, pos in self.portfolio.positions.items():
-            if code in ts_codes:
-                i = ts_codes.index(code)
-                equity += pos.quantity * raw["close"][i, exec_idx - 1]
-            else:
-                equity += pos.quantity * pos.last_price
 
         # T3-02: one shared weight->order rule (whole-lot buys, sells
         # first, full-exit sells) with the paper-trading lot size.
@@ -427,6 +454,7 @@ class SimulationRunner:
         current_quantities = {
             code: pos.quantity for code, pos in self.portfolio.positions.items()
         }
+        selected = np.flatnonzero(target_weights > 0.0).astype(int).tolist()
         return build_orders(
             exec_date,
             ts_codes,
@@ -437,29 +465,32 @@ class SimulationRunner:
             lot_size=100,
         )
 
-    @staticmethod
-    def _equal_weights(
-        selected: list[int],
-        n_stocks: int,
-        *,
-        top_n: int,
-        single_weight_cap: float,
-    ) -> np.ndarray:
-        """Target weights of the selected names, engine-aligned (T1-02).
+    def _portfolio_weights(
+        self,
+        ts_codes: list[str],
+        mark_prices: np.ndarray,
+    ) -> tuple[np.ndarray, float]:
+        """Return the execution-open account weights and total equity."""
 
-        Each selected name gets ``min(1/top_n, single_weight_cap)`` and the
-        weights are never renormalized upward: an under-filled day keeps
-        the remainder in cash, and the cap is a hard per-name ceiling —
-        exactly the backtest engine's weight construction.
-        """
-
-        weights = np.zeros(n_stocks, dtype=np.float64)
-        if not selected:
-            return weights
-        weight = min(1.0 / max(top_n, 1), float(single_weight_cap))
-        for i in selected:
-            weights[i] = weight
-        return weights
+        index_of = {code: i for i, code in enumerate(ts_codes)}
+        notionals = np.zeros(len(ts_codes), dtype=np.float64)
+        equity = float(self.portfolio.cash)
+        for code, position in self.portfolio.positions.items():
+            index = index_of.get(code)
+            if index is None:
+                equity += float(position.quantity * position.last_price)
+                continue
+            price = float(mark_prices[index])
+            if not np.isfinite(price) or price <= 0.0:
+                price = float(position.last_price)
+            value = float(position.quantity * price)
+            notionals[index] = value
+            equity += value
+        if equity > 0.0:
+            notionals /= equity
+        else:
+            notionals.fill(0.0)
+        return notionals, equity
 
     def _stock_names(self) -> dict[str, str]:
         # Display names for orders/portfolio only; fall back to the code

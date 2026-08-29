@@ -60,6 +60,11 @@ from .alphagpt import MODEL_VERSION
 from .artifact_versions import classify_artifact
 from .evaluation import PROTOCOL_VERSION
 from .reward import REWARD_VERSION
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.execution_spec import (
+    EXECUTION_SPEC_VERSION,
+    validate_portfolio_config_provenance,
+)
 
 # Legacy stamp field contract (written by scripts/stamp_legacy_artifacts.py,
 # consumed by this doctor and the web API): a legacy artifact carries
@@ -78,12 +83,18 @@ _ARTIFACT_FIELDS = {
         "reward_version",
         "protocol_version",
         "model_version",
+        "execution_version",
+        "portfolio_constructor_version",
+        "portfolio_config",
         "dataset_id",
         "unique_semantic_evals",
     ),
     "protocol": (
         "protocol_version",
         "reward_version",
+        "execution_version",
+        "portfolio_constructor_version",
+        "portfolio_config",
         "dataset_id",
         "ledger",
         "stitched",
@@ -184,6 +195,11 @@ def build_report(
             ("reward_version", REWARD_VERSION),
             ("protocol_version", PROTOCOL_VERSION),
             ("model_version", MODEL_VERSION),
+            ("execution_version", EXECUTION_SPEC_VERSION),
+            (
+                "portfolio_constructor_version",
+                PORTFOLIO_CONSTRUCTOR_VERSION,
+            ),
         ):
             recorded = fields.get(key)
             if recorded is not None and str(recorded) != str(current):
@@ -208,6 +224,49 @@ def build_report(
                             ),
                         }
                     )
+        for key in ("execution_version", "portfolio_constructor_version"):
+            if fields.get(key) is None:
+                message = f"{name} artifact carries no {key} (pre-P3)"
+                findings.append(
+                    {
+                        "severity": "info" if legacy else "error",
+                        "message": (
+                            f"{message} (legacy: {'; '.join(reasons)})"
+                            if legacy
+                            else message + " and is not marked legacy"
+                        ),
+                    }
+                )
+        recorded_portfolio_config = fields.get("portfolio_config")
+        if not isinstance(recorded_portfolio_config, dict):
+            message = f"{name} artifact carries no portfolio_config (pre-P3)"
+            findings.append(
+                {
+                    "severity": "info" if legacy else "error",
+                    "message": (
+                        f"{message} (legacy: {'; '.join(reasons)})"
+                        if legacy
+                        else message + " and is not marked legacy"
+                    ),
+                }
+            )
+        else:
+            try:
+                validate_portfolio_config_provenance(
+                    recorded_portfolio_config
+                )
+            except ValueError as exc:
+                message = f"{name} artifact {exc}"
+                findings.append(
+                    {
+                        "severity": "info" if legacy else "error",
+                        "message": (
+                            f"{message} (legacy: {'; '.join(reasons)})"
+                            if legacy
+                            else message + " and is not marked legacy"
+                        ),
+                    }
+                )
         recorded_dataset = fields.get("dataset_id")
         if (
             recorded_dataset is not None
