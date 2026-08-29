@@ -948,6 +948,14 @@ class AshareTrainer:
         }
         out_path = self.data_config.data_dir / "best_ashare_strategy.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.search_result is not None and self.search_result.elite_archive is not None:
+            from .elite_archive import write_elite_archive  # noqa: PLC0415
+
+            archive_path = write_elite_archive(
+                self.data_config.data_dir / "search_elite_archive.json",
+                self.search_result.elite_archive,
+            )
+            logger.info("search.elite_archive path={}", archive_path)
         out_path.write_text(
             json.dumps(output, ensure_ascii=False, indent=2),
             encoding="utf-8",

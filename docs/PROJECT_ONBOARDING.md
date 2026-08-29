@@ -500,6 +500,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 核心 | [semantic_cache.py](../ashare_model/semantic_cache.py) | 规范 AST + 校准切片数值指纹；按 dataset/reward/protocol/window 隔离预算 |
 | 搜索 | [gp_search.py](../ashare_model/gp_search.py) | DEAP 强类型 GP |
 | 搜索 | [search_contract.py](../ashare_model/search_contract.py)、[search_backends.py](../ashare_model/search_backends.py) | GP/TPE/Random/RL 统一 `SearchBackend`、预算与 `SearchResult` 契约 |
+| 搜索 | [elite_archive.py](../ashare_model/elite_archive.py) | GP/TPE/Random eligible elite 的 v1 确定性归档、合并、读写与版本拒绝 |
 | 搜索 | [tpe_search.py](../ashare_model/tpe_search.py) | Optuna TPE（正式 `model.searcher` 后端） |
 | 搜索 | [baseline_harness.py](../ashare_model/baseline_harness.py) | matched unique-semantic-evaluation 预算和统一搜索评价适配器 |
 | 搜索治理 | [admission.py](../ashare_model/admission.py) | RL 与 random/GP/TPE 的预注册准入裁决 |

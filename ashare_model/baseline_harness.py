@@ -444,8 +444,16 @@ class SemanticBudgetEvaluator:
                 if self.budget_used >= self._budget
                 else "candidate_pool_exhausted"
             )
+        result_backend = backend or self._source
+        elite_archive = None
+        if result_backend in {"gp", "tpe", "random"}:
+            from .elite_archive import build_elite_archive  # noqa: PLC0415
+
+            elite_archive = build_elite_archive(
+                result_backend, self._scores, vocab=self._vocab
+            )
         return SearchResult(
-            backend=backend or self._source,
+            backend=result_backend,
             seed=int(seed),
             requested_budget=self._budget,
             consumed_budget=self.budget_used,
@@ -457,6 +465,7 @@ class SemanticBudgetEvaluator:
             proposal_count=self._proposal_count,
             invalid_proposals=self._n_invalid,
             semantic_duplicates=self._n_semantic_dedups,
+            elite_archive=elite_archive,
             best_so_far=tuple((int(x), reward) for x, reward in self._best_so_far),
             diagnostics={
                 **(diagnostics or {}),
@@ -615,6 +624,8 @@ def run_matched_baseline(
     for index, score in enumerate(scores, start=1):
         best = max(best, float(score.val_reward))
         curve.append((index, best))
+    from .elite_archive import build_elite_archive  # noqa: PLC0415
+
     return SearchResult(
         backend="random",
         seed=seed,
@@ -630,5 +641,6 @@ def run_matched_baseline(
         rejection_reasons=rejections,
         proposal_count=len(canonical_forms),
         invalid_proposals=n_invalid,
+        elite_archive=build_elite_archive("random", scores, vocab=vocab),
         best_so_far=tuple(curve),
     )

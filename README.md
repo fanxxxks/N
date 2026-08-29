@@ -67,6 +67,10 @@ python scripts/analyze_sim.py               # 模拟盘费用拖累/毛盈亏/�
 streamlit run dashboard/app.py
 ```
 
+GP、TPE、Random 搜索会在统一 `SearchResult` 中生成确定性去重的 eligible
+elite archive；保存正式策略时同时写入 `data/search_elite_archive.json`
+（`ELITE_ARCHIVE_VERSION=1`）。未知 archive 版本会被明确拒绝，不做猜测迁移。
+
 ### 因子诊断与家族消融
 
 新增因子族（或怀疑某族退化）时，先看证据再训练：

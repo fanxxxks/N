@@ -17,9 +17,10 @@ from ashare_model.elite_archive import (
     ELITE_ARCHIVE_VERSION,
     EliteArchive,
     build_elite_archive,
+    load_elite_archive,
     merge_elite_archives,
+    write_elite_archive,
 )
-from ashare_model.imitation import IMITATION_VERSION, pretrain_on_elites
 from ashare_model.vocab import FORMULA_VOCAB
 
 
@@ -92,7 +93,23 @@ def test_merge_archive_keeps_baseline_sources_and_deterministic_top_k():
     assert [entry.val_reward for entry in merged.entries] == [0.7, 0.6]
 
 
+def test_elite_archive_file_round_trip_and_unknown_version_rejection(tmp_path):
+    archive = build_elite_archive(
+        "random",
+        [_score(2, source="random", val_reward=0.5, train_reward=0.4)],
+    )
+    path = write_elite_archive(tmp_path / "elite.json", archive)
+    assert load_elite_archive(path) == archive
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["version"] = 0
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported elite archive version"):
+        load_elite_archive(path)
+
+
 def test_imitation_teacher_forcing_reduces_loss_on_baseline_elites():
+    from ashare_model.imitation import IMITATION_VERSION, pretrain_on_elites
+
     torch.manual_seed(5)
     config = ModelConfig(
         d_model=16,
@@ -128,6 +145,8 @@ def test_imitation_teacher_forcing_reduces_loss_on_baseline_elites():
 
 
 def test_imitation_refuses_empty_or_nonbaseline_archive():
+    from ashare_model.imitation import pretrain_on_elites
+
     config = ModelConfig(
         d_model=16,
         nhead=2,
