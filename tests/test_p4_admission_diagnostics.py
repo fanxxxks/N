@@ -40,7 +40,14 @@ def test_pair_seed_plan_uses_same_seed_within_pair_and_unique_seeds_across_pairs
 
 
 def test_p4_admission_rule_requires_imitation_to_beat_random_rl_and_gp():
-    from ashare_model.admission import ADMISSION_RULE_VERSION, decide_p4_admission
+    from ashare_model.admission import (
+        ADMISSION_BATCH,
+        ADMISSION_RULE_VERSION,
+        ADMISSION_STEPS,
+        ADMISSION_WINDOW,
+        apply_p4_tier_gate,
+        decide_p4_admission,
+    )
 
     verdict = decide_p4_admission(
         imitation_areas=[5, 5, 5, 5, 1],
@@ -54,6 +61,16 @@ def test_p4_admission_rule_requires_imitation_to_beat_random_rl_and_gp():
     assert verdict["rl_admitted"] is True
     assert verdict["advanced_rl_allowed"] is True
     assert verdict["default_searcher"] == "rl"
+    promoted = apply_p4_tier_gate(
+        verdict,
+        steps=ADMISSION_STEPS,
+        batch_size=ADMISSION_BATCH,
+        window=ADMISSION_WINDOW,
+    )
+    assert promoted["metric_rule_passed"] is True
+    assert promoted["registered_tier"] is True
+    assert promoted["promotion_blockers"] == []
+    assert promoted["rl_admitted"] is True
 
 
 def test_p4_admission_failure_keeps_gp_and_forbids_advanced_rl():
@@ -101,6 +118,29 @@ def test_failed_imitation_measurement_blocks_admission_and_advanced_rl():
     assert verdict["advanced_rl_allowed"] is False
     assert verdict["default_searcher"] == "gp"
     assert verdict["invalid_metrics"] == ["imitation_areas[2]"]
+
+
+def test_engineering_tier_cannot_promote_even_when_metric_rule_passes():
+    from ashare_model.admission import apply_p4_tier_gate
+
+    metric_verdict = {
+        "rule_version": 2,
+        "rl_admitted": True,
+        "advanced_rl_allowed": True,
+        "default_searcher": "rl",
+    }
+    verdict = apply_p4_tier_gate(
+        metric_verdict,
+        steps=2,
+        batch_size=16,
+        window=(100, 120),
+    )
+    assert verdict["metric_rule_passed"] is True
+    assert verdict["registered_tier"] is False
+    assert verdict["rl_admitted"] is False
+    assert verdict["advanced_rl_allowed"] is False
+    assert verdict["default_searcher"] == "gp"
+    assert verdict["promotion_blockers"] == ["non_registered_admission_tier"]
 
 
 def test_admission_output_retains_failed_arm_and_has_strict_json_values():

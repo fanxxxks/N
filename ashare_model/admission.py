@@ -234,6 +234,42 @@ def decide_p4_admission(
     }
 
 
+def apply_p4_tier_gate(
+    metric_verdict: dict,
+    *,
+    steps: int,
+    batch_size: int,
+    window: tuple[int, int],
+) -> dict:
+    """Prevent budget/window overrides from becoming promotion evidence."""
+
+    registered = (
+        int(steps) == ADMISSION_STEPS
+        and int(batch_size) == ADMISSION_BATCH
+        and tuple(int(value) for value in window) == ADMISSION_WINDOW
+    )
+    metric_rule_passed = bool(metric_verdict.get("rl_admitted", False))
+    blockers: list[str] = []
+    if not registered:
+        blockers.append("non_registered_admission_tier")
+    if not metric_rule_passed:
+        blockers.append("metric_rule_failed")
+
+    verdict = dict(metric_verdict)
+    verdict.update(
+        metric_rule_passed=metric_rule_passed,
+        registered_tier=registered,
+        promotion_blockers=blockers,
+    )
+    if blockers:
+        verdict.update(
+            rl_admitted=False,
+            advanced_rl_allowed=False,
+            default_searcher="gp",
+        )
+    return verdict
+
+
 def default_searcher(verdict: dict) -> str:
     """The production default searcher per the admission verdict."""
 

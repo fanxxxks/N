@@ -44,6 +44,7 @@ from ashare_model.admission import (
     ADMISSION_STEPS,
     ADMISSION_WINDOW,
     PAIR_SEEDS,
+    apply_p4_tier_gate,
     best_so_far_area,
     decide_p4_admission,
     paired_seed_plan,
@@ -432,13 +433,18 @@ def main(argv=None) -> int:
                 }
             )
 
-        verdict = decide_p4_admission(
-            imitation_areas=imitation_areas,
-            imitation_oos_irs=imitation_irs,
-            random_rl_areas=random_rl_areas,
-            random_rl_oos_irs=random_rl_irs,
-            gp_areas=baseline_areas["gp"],
-            gp_oos_irs=baseline_irs["gp"],
+        verdict = apply_p4_tier_gate(
+            decide_p4_admission(
+                imitation_areas=imitation_areas,
+                imitation_oos_irs=imitation_irs,
+                random_rl_areas=random_rl_areas,
+                random_rl_oos_irs=random_rl_irs,
+                gp_areas=baseline_areas["gp"],
+                gp_oos_irs=baseline_irs["gp"],
+            ),
+            steps=int(args.steps),
+            batch_size=int(args.batch_size),
+            window=window_cap,
         )
         payload = _json_safe(
             {
@@ -460,6 +466,11 @@ def main(argv=None) -> int:
                 "steps": int(args.steps),
                 "batch_size": int(args.batch_size),
                 "window_cap": list(window_cap),
+                "registered_admission_tier": {
+                    "steps": ADMISSION_STEPS,
+                    "batch_size": ADMISSION_BATCH,
+                    "window_cap": list(ADMISSION_WINDOW),
+                },
                 "pair_seed_plan": paired_seed_plan(PAIR_SEEDS),
                 "pairs": pair_rows,
                 "metrics": {

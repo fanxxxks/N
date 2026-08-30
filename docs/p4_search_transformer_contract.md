@@ -117,6 +117,12 @@ P4 使用至少五个互不相同的 `PAIR_SEEDS`。每个 pair 中，GP、TPE�
 PPO、辅助价值预测或 AST-aware embedding。TPE 和 Random 同预算结果必须完整
 报告，但不降低上述 GP 晋级门槛。
 
+只有精确使用预注册的 `ADMISSION_STEPS`、`ADMISSION_BATCH` 和
+`ADMISSION_WINDOW` 才具备生产晋级资格。CLI 的较小预算或窗口覆盖属于工程层；
+即使指标规则碰巧通过，也必须记录 `metric_rule_passed`，同时强制
+`rl_admitted = false`、`advanced_rl_allowed = false`、默认 `gp`，并给出
+`non_registered_admission_tier` blocker，禁止把 smoke 冒充正式准入。
+
 ## 6. 版本与旧产物策略
 
 - 搜索比较、预算曲线与准入语义变化：`PROTOCOL_VERSION 22 -> 23`。
