@@ -75,3 +75,18 @@ def test_facade_surface_complete():
     evaluation = importlib.import_module("ashare_model.evaluation")
     missing = [name for name in FACADE_SURFACE if not hasattr(evaluation, name)]
     assert not missing, f"facade lost names: {missing}"
+
+
+def test_eval_folds_reexport_identity():
+    """A1: fold/window names moved to eval_folds; the facade re-exports the
+    same objects (no second copy, no drift)."""
+    evaluation = importlib.import_module("ashare_model.evaluation")
+    eval_folds = importlib.import_module("ashare_model.eval_folds")
+    for name in (
+        "Fold",
+        "FoldData",
+        "search_window_id",
+        "resolve_folds",
+        "epoch_slice",
+    ):
+        assert getattr(evaluation, name) is getattr(eval_folds, name), name
