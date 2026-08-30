@@ -77,3 +77,27 @@ monkeypatch 面保持不变量（测试直接验证）：
 - 运行态变更声明（契约 §5 已预注册）：模拟 resume 语义 fail-closed 化。
   warnings 全程 618 未增长；skipped 全程 5。
 - 未运行项：无。研究结论：本阶段无研究语义变化，不产生研究结论。
+
+## Phase D：单一注册表（D1–D3）
+
+轻量契约：主计划 §6.1（预注册，先于代码）。
+
+| PR | 内容 | 全量结果 | 墙钟 |
+|---|---|---|---|
+| D1 | `feature_metadata.py`（62 特征著录：availability/hypothesis/direction/semantic_type/promotion）+ `FeatureRecord` 九字段 + 派生（horizon←P6 域、cost/depends_on←FACTOR_REGISTRY）；`FEATURE_REGISTRY_VERSION` 2→3；缺著录 fail-closed | 1167 / 5 / 618 | 612s |
+| D2 | `operator_registry.py`（39 算子：类别/逐参数输入语义/输出语义/成本/稳定性备注；arity 从 OPS_CONFIG 派生，import 断言对齐） | 1179 / 5 / 618 | 604s |
+| D3 | `scripts/generate_registry_docs.py` 生成 `docs/feature_registry.md` + 漂移守卫（生成物≠注册表即红）；onboarding §5.1/§5.2 手工名单退役 | 1181 / 5 / 618 | 603s |
+
+- D1 著录内容核对路径：62 特征逐条对照 `FactorSpec.description`（计算定义）
+  与 fundamentals/capital_flow 数据源；语义类型分布
+  price 5 / return 19 / volume 11 / fundamental 13 / cross-sectional 8 /
+  event 6 = 62；`KURT_20`、`RSQ_60` 如实著录方向 0（无明确预期）。
+- 单一权威核对：expected_horizon 全部由 `RESEARCH_DOMAINS` 派生
+  （61 个活跃特征恰属一个域，NORTHBOUND_CHG 为 None）；
+  `tests/test_feature_metadata.py::test_expected_horizon_derives_from_research_domains`
+  同时是 P6 划分的回归守卫。
+- D3 生成物：`docs/feature_registry.md`（131 行，`--check` 同步）；
+  onboarding 手工算子名单删除由测试防复活。
+- `test_registry_version_is_pinned` 2→3：需求变更路径，引用 §6.1。
+- 未运行项：无。研究结论：本阶段全部为描述性元数据与文档，无搜索/评分/
+  晋级语义变化，不产生研究结论。
