@@ -139,10 +139,15 @@ def test_registry_serializes_and_roundtrips(tensor, mask):
 
 
 def test_registry_version_is_pinned():
-    # v2 (P2): each feature record additionally carries ``data_tier``
-    # (A/B/C credibility tier) and the payload records ``data_tier_version``
-    # (contract: docs/p2_data_tier_contract.md §4).
-    assert FEATURE_REGISTRY_VERSION == 2
+    # v3 (P7 D1): records additionally carry authored research metadata
+    # (availability rule, economic hypothesis, expected direction,
+    # semantic type, promotion permission) plus the horizon/cost/
+    # depends_on triple derived from the P6 domain registry and
+    # FACTOR_REGISTRY.  Descriptive only -- no search, scoring or
+    # promotion semantics change (contract: docs/p7_maintainability_plan.md
+    # §6.1, which supersedes the pinned v2 assertion on the requirement-
+    # change path).
+    assert FEATURE_REGISTRY_VERSION == 3
 
 
 def test_registry_records_data_tiers(tensor, mask):
