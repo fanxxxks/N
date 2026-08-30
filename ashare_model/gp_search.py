@@ -30,8 +30,11 @@ import numpy as np
 from deap import base, creator, gp, tools
 
 from .baseline_harness import SemanticBudgetEvaluator
-from .ops import OPS_CONFIG
+from .feature_metadata import FEATURE_METADATA, SemanticType
+from .operator_registry import OPERATOR_REGISTRY
+from .ops import OPS_BY_NAME, OPS_CONFIG
 from .search_contract import SearchResult
+from .semantic_sampling import fixed_output, is_gate, same_type_args
 from .vocab import FormulaVocab
 
 # DEAP creator classes are process-global; create once, reuse forever.
@@ -54,19 +57,41 @@ def _ensure_creator() -> None:
 
 
 # DEAP typed primitives need a real class as the type token (it calls
-# ``issubclass`` on it); every formula node produces one signal.
+# ``issubclass`` on it).  P7-E: one class per semantic type (contract:
+# docs/p7_semantic_types_contract.md) instead of the single pre-P7
+# ``Signal`` type, so a tree can only combine operator applications whose
+# registered signatures match.
+_TYPE_CLASSES: dict[SemanticType, type] = {}
+
+
+def _type_class(semantic_type: SemanticType) -> type:
+    cls = _TYPE_CLASSES.get(semantic_type)
+    if cls is None:
+        cls = type(
+            f"Signal_{semantic_type.value}", (), {"__slots__": ()}
+        )
+        _TYPE_CLASSES[semantic_type] = cls
+    return cls
+
+
 class Signal:
-    """Type token of the strongly-typed formula tree (one per node)."""
+    """Root type token of the primitive set (generation always passes an
+    explicit continuous root family via :func:`_typed_expr`, so this root
+    is never produced by a primitive)."""
 
 
 def build_pset(vocab: FormulaVocab, feature_ids: list[int] | None = None):
     """Strongly-typed primitive set over the formula vocabulary.
 
-    Every feature is a terminal of type :class:`Signal` and every operator
-    is a primitive ``Signal^arity -> Signal``, so any tree generated from
-    the set is a well-typed formula.  ``feature_ids`` (P6 §4.2) restricts
-    the terminal set to the given feature tokens; ``None`` keeps every
-    vocabulary feature.
+    Every feature is a terminal typed by its authored semantic type
+    (:mod:`ashare_model.feature_metadata`) and every operator is
+    registered once per legal signature from
+    :mod:`ashare_model.operator_registry` plus the contract's output
+    rules — the token mapping only reads the primitive *name*, so the
+    per-signature variants map to the same vocabulary token and the
+    search space never drifts from the registry.  ``feature_ids`` (P6
+    §4.2) restricts the terminal set to the given feature tokens;
+    ``None`` keeps every vocabulary feature.
     """
 
     pset = gp.PrimitiveSetTyped("FORMULA", [], Signal)
@@ -82,22 +107,140 @@ def build_pset(vocab: FormulaVocab, feature_ids: list[int] | None = None):
             if token in allowed
         ]
     for name in feature_names:
-        pset.addTerminal(name, Signal)
-    for name, _, arity in OPS_CONFIG:
-        pset.addPrimitive(
-            _op_placeholder(name), [Signal] * arity, Signal, name=name
-        )
+        pset.addTerminal(name, _type_class(FEATURE_METADATA[name].semantic_type))
+    for name in vocab.operator_names:
+        try:
+            arity = OPS_BY_NAME[name][1]
+        except KeyError:
+            raise ValueError(
+                f"operator {name!r} has no implementation/signature in OPS_BY_NAME"
+            ) from None
+        meta = OPERATOR_REGISTRY[name]
+        fixed = fixed_output(name)
+        arg_sets = [
+            set(meta.inputs[j])
+            - ({SemanticType.BOOLEAN_EVENT_SIGNAL} if not is_gate(name) or j else set())
+            for j in range(arity)
+        ]
+        order = tuple(SemanticType)
+        if same_type_args(name):
+            # One shared family T across the branch arguments; the GATE
+            # condition varies over its (any-type) allowed set.
+            branch_sets = arg_sets[1:] if is_gate(name) else arg_sets
+            common = set.intersection(*branch_sets) if branch_sets else set()
+            conditions = (
+                [semantic_type for semantic_type in order if semantic_type in arg_sets[0]]
+                if is_gate(name)
+                else [None]
+            )
+            for cond in conditions:
+                for semantic_type in [t for t in order if t in common]:
+                    in_types = []
+                    if is_gate(name):
+                        in_types.append(_type_class(cond))
+                    in_types.extend(
+                        [_type_class(semantic_type)]
+                        * (arity - (1 if is_gate(name) else 0))
+                    )
+                    pset.addPrimitive(
+                        _op_placeholder(name),
+                        in_types,
+                        _type_class(semantic_type),
+                        name=name,
+                    )
+        elif fixed is not None and arity == 2:
+            # Cross-type fixed-output ops (DIV/CORR): product of the
+            # per-argument continuous sets.
+            for first_type in order:
+                if first_type not in arg_sets[0]:
+                    continue
+                for second_type in order:
+                    if second_type not in arg_sets[1]:
+                        continue
+                    pset.addPrimitive(
+                        _op_placeholder(name),
+                        [_type_class(first_type), _type_class(second_type)],
+                        _type_class(fixed),
+                        name=name,
+                    )
+        else:
+            for semantic_type in [t for t in order if t in arg_sets[0]]:
+                pset.addPrimitive(
+                    _op_placeholder(name),
+                    [_type_class(semantic_type)] * arity,
+                    _type_class(fixed)
+                    if fixed is not None
+                    else _type_class(semantic_type),
+                    name=name,
+                )
     return pset
+
+
+# Root families a typed tree may produce (the VM z-scores any family, so
+# every continuous root is a legal formula result).
+ROOT_TYPES = tuple(t for t in SemanticType if t is not SemanticType.BOOLEAN_EVENT_SIGNAL)
+
+
+def _typed_expr(pset, min_: int, max_: int):
+    """Generate one typed tree, retrying DEAP's explicit no-terminal
+    failure for feature-restricted primitive sets.
+
+    With the full vocabulary the first draw chooses uniformly from all five
+    continuous root families.  A restricted research domain can make a
+    drawn family impossible at the sampled depth; retrying conditions on a
+    tree that can actually be expressed without opening out-of-domain
+    terminals.  The retry stream is seed-deterministic and bounded.
+    """
+
+    error: IndexError | None = None
+    for _ in range(100):
+        type_ = _type_class(py_random.choice(ROOT_TYPES))
+        try:
+            return gp.genHalfAndHalf(
+                pset, min_=min_, max_=max_, type_=type_
+            )
+        except IndexError as exc:
+            error = exc
+    raise ValueError(
+        "typed GP could not generate an expressible tree in 100 attempts"
+    ) from error
+
+
+def _typed_mutation_expr(pset, min_: int, max_: int, type_):
+    """Generate a type-compatible mutation subtree without silently
+    widening a feature-restricted terminal set."""
+
+    error: IndexError | None = None
+    for _ in range(100):
+        try:
+            return gp.genFull(pset, min_=min_, max_=max_, type_=type_)
+        except IndexError as exc:
+            error = exc
+    raise ValueError(
+        "typed GP could not generate a mutation subtree in 100 attempts"
+    ) from error
+
+
+_PLACEHOLDERS: dict[str, callable] = {}
 
 
 def _op_placeholder(name: str):
     """Placeholder callable for a primitive (DEAP never invokes it: tree
-    evaluation is our token mapping, not DEAP's compiled evaluator)."""
+    evaluation is our token mapping, not DEAP's compiled evaluator).
 
-    def _unused(*args):
-        raise RuntimeError(f"DEAP evaluator must not run; operator {name}")
+    Memoized per name: DEAP registers each signature variant under the
+    same operator name and requires the stored callable to be identical
+    (``context[name] is primitive``), so every variant shares one object.
+    """
 
-    return _unused
+    fn = _PLACEHOLDERS.get(name)
+    if fn is None:
+        def _unused(*args):
+            raise RuntimeError(f"DEAP evaluator must not run; operator {name}")
+
+        _PLACEHOLDERS[name] = _unused
+        return _unused
+    return fn
 
 
 def tree_to_tokens(tree, vocab: FormulaVocab) -> list[int]:
@@ -219,7 +362,9 @@ def run_gp_baseline(
     node_cap = _max_nodes(max_formula_len)
 
     toolbox = base.Toolbox()
-    toolbox.register("expr", gp.genHalfAndHalf, pset=pset, min_=1, max_=2)
+    toolbox.register(
+        "expr", _typed_expr, pset=pset, min_=1, max_=2
+    )
     toolbox.register(
         "individual", tools.initIterate, creator.IndividualFormula, toolbox.expr
     )
@@ -228,7 +373,7 @@ def run_gp_baseline(
         "select", tools.selTournament, tournsize=tournsize
     )
     toolbox.register("mate", gp.cxOnePoint)
-    toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
+    toolbox.register("expr_mut", _typed_mutation_expr, min_=0, max_=2)
     toolbox.register(
         "mutate",
         gp.mutUniform,

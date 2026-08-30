@@ -40,12 +40,15 @@ def test_feature_version_pinned():
     # Changing the feature/operator name lists or the grammar generation
     # must change this version; the test pins the released vocabulary
     # generation so accidental edits are caught in review, not silently
-    # in production.
-    assert FORMULA_VOCAB.feature_version == "29ac4001dd3c"
+    # in production.  v3 (P7-E): the type-aware action mask changes the
+    # sampling grammar, hence the hash (contract:
+    # docs/p7_semantic_types_contract.md §4 -- requirement-change path;
+    # saved formulas still resolve by name).
+    assert FORMULA_VOCAB.feature_version == "5cc784570b1f"
     assert len(FORMULA_VOCAB.feature_version) == 12
-    # v2 grammar: the independent EOS token and the stack-only postfix
-    # rules (v1 was the open_slots era without EOS).
-    assert GRAMMAR_VERSION == 2
+    # v3 grammar: the independent EOS token, the stack-only postfix rules
+    # and the semantic-type-aware action mask.
+    assert GRAMMAR_VERSION == 3
     # A grammar bump changes the version even with identical name lists.
     legacy = FormulaVocab(
         feature_names=FORMULA_VOCAB.feature_names,

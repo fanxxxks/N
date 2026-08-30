@@ -186,6 +186,13 @@ the (frequency, horizon) execution point must be a legal point of the
 domain, and the window id carries the domain.  Artifacts record
 ``research_domain`` and ``research_domain_version``; rewards from
 different domains are never comparable.
+
+v25 (P7-E) narrows the sampled candidate pool with semantic-type
+legality (``docs/p7_semantic_types_contract.md``): the action mask and
+the typed GP primitive set only admit formulas whose operator
+applications satisfy the registered semantic signatures.  Measurement
+semantics (engine, reward, corrections, gates) are unchanged; results
+from pre-v25 candidate pools are not matched comparisons.
 """
 
 from __future__ import annotations
@@ -277,7 +284,7 @@ from .reward import REWARD_VERSION
 from .search_contract import SearchResult
 from .vocab import FEATURE_NAMES
 
-PROTOCOL_VERSION = "24"
+PROTOCOL_VERSION = "25"
 
 
 def run_protocol(

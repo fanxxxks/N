@@ -14,6 +14,10 @@ Grammar generations:
   ``PAD`` is legal only after ``EOS``; postfix legality is stack-only
   (see :mod:`ashare_model.ir`).  ``EOS`` sits at the end of the token
   space so pre-v2 feature/operator ids never shift.
+* v3 (P7-E): sampling legality gains the semantic-type dimension — the
+  action mask is type-aware (see
+  ``docs/p7_semantic_types_contract.md``).  Execution, canonicalization
+  and by-name remapping of saved formulas are unchanged.
 """
 
 from __future__ import annotations
@@ -161,10 +165,11 @@ LEGACY_OPERATOR_NAMES = (
 
 # Grammar generation of the current vocabulary.  v1 was the open_slots-era
 # layout (PAD only, no EOS); v2 adds the independent EOS token and the
-# stack-only postfix grammar.  Bumping this constant changes
+# stack-only postfix grammar; v3 (P7-E) makes the action mask type-aware.
+# Bumping this constant changes
 # ``feature_version`` and therefore invalidates the token layout recorded
 # in older training artifacts (which resolve by name, so they still load).
-GRAMMAR_VERSION = 2
+GRAMMAR_VERSION = 3
 
 
 @dataclass(frozen=True)

@@ -22,10 +22,12 @@ from ashare_model.searcher_bench import SEARCHER_BENCH_VERSION
 
 
 def test_p4_semantic_versions_are_pinned_by_contract():
-    # P6 contract §5 bumps PROTOCOL_VERSION 23 -> 24 (research-domain
-    # dimension); the P4 search-contract generations stay pinned.
-    assert SEARCH_CONTRACT_VERSION == 1
-    assert PROTOCOL_VERSION == "24"
+    # P6 contract §5 bumped PROTOCOL_VERSION 23 -> 24; P7-E contract §4
+    # bumps 24 -> 25 and SEARCH_CONTRACT_VERSION 1 -> 2 (semantic-type
+    # sampling legality narrows the effective search space; pre/post
+    # results are not matched comparisons).
+    assert SEARCH_CONTRACT_VERSION == 2
+    assert PROTOCOL_VERSION == "25"
     assert MODEL_VERSION == 3
     assert SEARCHER_BENCH_VERSION == 2
 

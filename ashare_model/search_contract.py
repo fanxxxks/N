@@ -13,7 +13,10 @@ from typing import Any, Protocol, runtime_checkable
 
 from .candidates import CandidateScore
 
-SEARCH_CONTRACT_VERSION = 1
+# v2 (P7-E): the effective search space (legal formula set) is narrowed by
+# semantic-type sampling legality (docs/p7_semantic_types_contract.md);
+# results from different contract versions are never matched comparisons.
+SEARCH_CONTRACT_VERSION = 2
 
 TERMINATION_REASONS = frozenset(
     {
