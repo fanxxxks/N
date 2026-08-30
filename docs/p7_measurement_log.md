@@ -54,3 +54,26 @@ monkeypatch 面保持不变量（测试直接验证）：
   `_write_artifact`/`_build_rl_search_result` 与 15+ 实例状态紧耦合，位移
   不产生边界。trainer artifact 写入侧的类型化边界归 Phase C 处理。
 - 契约测试新增 `tests/test_train_module_split.py`（面 + 身份 2 个测试）。
+
+## Phase C：类型化产物（C0–C2）
+
+契约：`docs/p7_artifact_schema_contract.md`（预注册，先于代码）。
+
+| PR | 内容 | 全量结果 | 墙钟 |
+|---|---|---|---|
+| C0 | requirements.in += pydantic（必要性说明见提交）；**requirements.lock 有意不重生成**——它是单机快照（freeze_lock.py 文档），本机重生成会夹带 torch cu128→cpu 等环境漂移进 PR | freeze_lock --check 通过；test_lock_files 7 passed | — |
+| C1 | `artifact_schemas.py`（ARTIFACT_SCHEMA_VERSION=1、Strategy/Protocol 模型顶层 forbid、classify_schema_version/apply_schema_matrix 单一入口）；写入侧 `_write_artifact`/`build_result` stamp+validate；读取侧 run_sim/backtest/load_trial_rows 接矩阵 | 1143 / 5 / 618 | 559s |
+| C2 | BacktestResultArtifact / PaperStateArtifact(+Position/Equity)；portfolio save stamp+validate、load fail-closed（损坏/未知版本 raise 且不覆盖；legacy 宽容读入、下次 save 迁移） | 1157 / 5 / 618 | 614s |
+
+- C1 RED 过程：28 个契约测试先红（模块不存在）；其中 1 处测试自身笔误
+  修正（`SimulationRunner` 类名，非 `AshoreSim`——引用 run_sim.py:85 实现，
+  属白名单"测试笔误"）。
+- C2 前置检查：grep 确认无既有测试依赖旧的 `except Exception → reset()`
+  fail-open 行为（只有显式 `reset()` 调用，保持合法）。
+- 产物证据（契约 §7）：`data/best_ashare_strategy.json`（已打 legacy 戳）与
+  `data/protocol_result.json`（无版本键）在实现后经
+  `classify_schema_version` 判定为 legacy、读取路径不变
+  （`test_on_disk_artifacts_classify_legacy`）。
+- 运行态变更声明（契约 §5 已预注册）：模拟 resume 语义 fail-closed 化。
+  warnings 全程 618 未增长；skipped 全程 5。
+- 未运行项：无。研究结论：本阶段无研究语义变化，不产生研究结论。
