@@ -42,9 +42,15 @@ model:
   # Default formula searcher (T2-03 admission verdict: RL was NOT admitted
   # — best-so-far area 0.899 vs GP 0.975 / random 0.938 / TPE 0.916 median
   # under identical unique-semantic-evaluation budgets across 5 independent
-  # seeds).  "gp" is the production default; RL stays available as an
-  # experimental opt-in via "rl".
+  # seeds).  "gp" is the production default; "tpe" and "random" are formal
+  # alternatives/baselines, while RL stays an experimental opt-in via "rl".
   searcher: gp
+  # Formal RL first imitates data/search_elite_archive.json.  "random" is
+  # reserved for the explicit random-initialization admission arm.
+  rl_initialization: imitation
+  imitation_epochs: 20
+  imitation_batch_size: 32
+  imitation_learning_rate: 0.001
   # Defaults match the smallest documented machine (6 GB VRAM / 16 GB RAM,
   # torch 2.11.0+cu128 on Windows): batch 4096 crashed step 0 with a
   # c10.dll access violation, and the policy converges within ~50 steps,

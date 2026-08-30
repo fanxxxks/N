@@ -51,6 +51,11 @@ from .reward import (
     REWARD_VERSION,
     batched_basket_rewards,
 )
+from .rl_diagnostics import (
+    aggregate_rl_run,
+    gradient_l2_norm,
+    summarize_rl_step,
+)
 from .targets import causal_target_returns
 from .semantic_cache import (
     SEMANTIC_CACHE_VERSION,
@@ -59,6 +64,12 @@ from .semantic_cache import (
     SemanticCacheKey,
     make_calibration_execute,
 )
+from .search_backends import (
+    get_search_backend,
+    log_search_start,
+    log_search_stop,
+)
+from .search_contract import SearchRequest, SearchResult
 from .time_contract import TrainingTimeContract
 from .vm import StackVM, formula_decode
 from .vocab import FORMULA_VOCAB, GRAMMAR_VERSION
@@ -264,7 +275,7 @@ class AshareTrainer:
         self.best_direction = 1
         self.best_tokens: list[int] | None = None
         self.best_formula = ""
-        self.history: list[dict[str, float]] = []
+        self.history: list[dict[str, object]] = []
         self._collapse_streak = 0
         self.candidate_scorer = CandidateScorer(
             self.backtest_config,
@@ -290,6 +301,22 @@ class AshareTrainer:
         # Operators observed across the whole run's executed formulas; the
         # run hard-fails when this stays empty (bare-factor screening).
         self._run_operator_coverage: set[str] = set()
+        self.search_result: SearchResult | None = None
+        self.rl_initialization = "random"
+        self.imitation_result = None
+
+    @staticmethod
+    def _normalized_advantages(
+        rewards: torch.Tensor,
+        baseline: torch.Tensor,
+        advantage_clip: float,
+    ) -> torch.Tensor:
+        """The single advantage definition used by both loss and metrics."""
+
+        advantages = (rewards - baseline.detach()) / (
+            rewards.std(unbiased=False) + 1e-6
+        )
+        return advantages.clamp(-float(advantage_clip), float(advantage_clip))
 
     @staticmethod
     def _policy_update_loss(
@@ -311,10 +338,11 @@ class AshareTrainer:
         inputs so the numerics are unit-testable.
         """
 
-        adv = (rewards - baseline.detach()) / (
-            rewards.std(unbiased=False) + 1e-6
+        adv = AshareTrainer._normalized_advantages(
+            rewards,
+            baseline,
+            advantage_clip,
         )
-        adv = adv.clamp(-advantage_clip, advantage_clip)
         policy_loss = -(
             torch.stack(log_probs, dim=1).sum(dim=1) * adv
         ).mean()
@@ -417,6 +445,14 @@ class AshareTrainer:
             : factor_tensor.shape[1], : target_ret.shape[1]
         ]
 
+        run_reward_values: list[float] = []
+        run_rejection_reasons: dict[str, int] = {}
+        run_formula_lengths: list[int] = []
+        run_step_summaries: list[dict[str, object]] = []
+        run_semantic_duplicates = 0
+        run_best_so_far: list[tuple[int, float]] = []
+        run_best_reward = -float("inf")
+
         pbar = tqdm(range(steps))
         for step in pbar:
             # The policy and sampling stay on CPU (the model's device): its
@@ -474,6 +510,7 @@ class AshareTrainer:
             canonical_share: dict[SemanticCacheKey, tuple[int, ...]] = {}
             cache_hits = 0
             semantic_dedups = 0
+            semantic_duplicate_proposals = 0
             # Grammar stats are accumulated at execution time, so only
             # formulas the VM actually executed and produced a signal for
             # count toward length/operator coverage (a formula the VM
@@ -515,11 +552,13 @@ class AshareTrainer:
                     # Same canonical formula already handled this step
                     # (identical tokens or a commuted form): share its
                     # evaluation; no new work, no budget.
+                    semantic_duplicate_proposals += 1
                     continue
                 canonical_share[ckey] = key
                 score = self.semantic_cache.get(ckey)
                 if score is not None:
                     cache_hits += 1
+                    semantic_duplicate_proposals += 1
                     step_results[key] = score
                     continue
                 # A new canonical formula: check semantic equivalence on the
@@ -540,6 +579,7 @@ class AshareTrainer:
                 )
                 if score is not None:
                     semantic_dedups += 1
+                    semantic_duplicate_proposals += 1
                     self.semantic_cache.put(ckey, score, fingerprint, bill)
                     step_results[key] = score
                     continue
@@ -609,8 +649,21 @@ class AshareTrainer:
                 adv,
             )
             for key, ckey, fingerprint, bill in evaluated:
+                budget_before_put = int(self.semantic_cache.budget_used)
                 self.semantic_cache.put(ckey, step_results[key], fingerprint, bill)
+                budget_after_put = int(self.semantic_cache.budget_used)
+                if budget_after_put > budget_before_put:
+                    run_best_reward = max(
+                        run_best_reward, float(step_results[key].val_reward)
+                    )
+                    run_best_so_far.append((budget_after_put, run_best_reward))
+                else:
+                    # A same-batch numerical equivalent is only discovered
+                    # when the first result is committed to the ledger.  It
+                    # consumed compute but not semantic-evaluation budget.
+                    semantic_duplicate_proposals += 1
 
+            batch_scores: list[CandidateScore] = []
             for i in range(batch_size):
                 key = tuple(sequences[i].tolist())
                 score = step_results.get(key)
@@ -631,6 +684,7 @@ class AshareTrainer:
                 # policy (test_policy_gradient_reward_window_excludes_
                 # validation_tail pins this contract).
                 rewards[i] = score.train_reward
+                batch_scores.append(score)
                 self._candidate_scores[key] = score
 
             previous_key = (
@@ -690,6 +744,11 @@ class AshareTrainer:
 
             # Actor-critic update: REINFORCE with the learned value as
             # baseline, advantage clipping, and an entropy bonus.
+            advantages = self._normalized_advantages(
+                rewards,
+                values[-1],
+                float(self.model_config.advantage_clip),
+            )
             loss, _, value_loss, entropy = self._policy_update_loss(
                 log_probs,
                 rewards,
@@ -701,7 +760,28 @@ class AshareTrainer:
             )
             self.optimizer.zero_grad()
             loss.backward()
+            gradient_norm = gradient_l2_norm(self.model.parameters())
+            step_diagnostics = summarize_rl_step(
+                rewards=rewards,
+                advantages=advantages,
+                entropy=float(entropy.detach()),
+                gradient_norm=gradient_norm,
+                scores=batch_scores,
+                formula_lengths=lengths,
+                operator_names=step_op_coverage,
+                semantic_duplicates=semantic_duplicate_proposals,
+                proposal_count=batch_size,
+            )
             self.optimizer.step()
+
+            run_reward_values.extend(float(value) for value in rewards.detach().cpu())
+            for reason, count in step_diagnostics["rejection_reasons"].items():
+                run_rejection_reasons[reason] = (
+                    run_rejection_reasons.get(reason, 0) + int(count)
+                )
+            run_formula_lengths.extend(lengths)
+            run_step_summaries.append(step_diagnostics)
+            run_semantic_duplicates += semantic_duplicate_proposals
 
             self.history.append(
                 {
@@ -723,7 +803,25 @@ class AshareTrainer:
                     # evaluations and this step's semantic-dedup rate.
                     "unique_semantic_evals": float(unique_semantic_evals),
                     "semantic_dedup_frac": semantic_dedup_frac,
+                    "semantic_duplicate_count": semantic_duplicate_proposals,
+                    "semantic_duplicate_rate": float(
+                        semantic_duplicate_proposals / max(batch_size, 1)
+                    ),
+                    "rl_diagnostics": step_diagnostics,
                 }
+            )
+            logger.info(
+                "rl.metrics step={} reward_mean={} reward_std={} entropy={} "
+                "advantage_variance={} gradient_norm={} semantic_duplicates={} "
+                "operator_coverage={}",
+                step,
+                step_diagnostics["reward_distribution"]["mean"],
+                step_diagnostics["reward_distribution"]["std"],
+                step_diagnostics["entropy"],
+                step_diagnostics["advantage_variance"],
+                step_diagnostics["gradient_norm"],
+                step_diagnostics["semantic_duplicates"],
+                len(step_diagnostics["operator_coverage"]),
             )
             pbar.set_postfix(
                 {
@@ -754,6 +852,18 @@ class AshareTrainer:
             len(self.history),
         )
 
+        self.search_result = self._build_rl_search_result(
+            seed=seed,
+            requested_budget=int(steps) * int(batch_size),
+            proposal_count=int(steps) * int(batch_size),
+            reward_values=run_reward_values,
+            step_summaries=run_step_summaries,
+            run_rejection_reasons=run_rejection_reasons,
+            formula_lengths=run_formula_lengths,
+            semantic_duplicates=run_semantic_duplicates,
+            best_so_far=run_best_so_far,
+        )
+
         selection_path = self.data_config.data_dir / "training_selection.json"
         if save_artifacts:
             selection_path.parent.mkdir(parents=True, exist_ok=True)
@@ -765,6 +875,9 @@ class AshareTrainer:
                 **execution_provenance(self.backtest_config),
                 "semantic_cache_version": SEMANTIC_CACHE_VERSION,
                 "dataset_id": self.loader.dataset_id,
+                "search_result": (
+                    self.search_result.to_dict() if self.search_result else None
+                ),
                 "train_end": contract.train_end,
                 "train_anchor_end_exclusive": contract.train_anchor_end_exclusive,
                 "train_signal_start": contract.train_signal_start,
@@ -804,6 +917,74 @@ class AshareTrainer:
 
         return self._write_artifact(
             contract=contract, vm_device=vm_device, searcher="rl"
+        )
+
+    def _build_rl_search_result(
+        self,
+        *,
+        seed: int,
+        requested_budget: int,
+        proposal_count: int,
+        reward_values: list[float],
+        step_summaries: list[dict[str, object]],
+        run_rejection_reasons: dict[str, int],
+        formula_lengths: list[int],
+        semantic_duplicates: int,
+        best_so_far: list[tuple[int, float]],
+    ) -> SearchResult:
+        """Shape the legacy REINFORCE loop into the shared result schema.
+
+        The curve is sampled at RL step boundaries but its x-axis is the
+        same cumulative unique-semantic budget used by every other backend.
+        Repeated x coordinates (a fully duplicate step) collapse without
+        inventing budget consumption.
+        """
+
+        scores = tuple(self._candidate_scores.values())
+        rejections: dict[str, int] = {}
+        for score in scores:
+            for reason in score.rejection_reasons:
+                rejections[reason] = rejections.get(reason, 0) + 1
+        consumed_budget = int(self.semantic_cache.budget_used)
+        if self.selection_result.selected is None:
+            termination_reason = "no_eligible_candidate"
+        elif consumed_budget >= requested_budget:
+            termination_reason = "budget_exhausted"
+        else:
+            termination_reason = "steps_exhausted"
+        run_diagnostics = aggregate_rl_run(
+            reward_values=reward_values,
+            step_summaries=step_summaries,
+            rejection_reasons=run_rejection_reasons,
+            formula_lengths=formula_lengths,
+            operator_names={
+                name
+                for summary in step_summaries
+                for name in summary["operator_coverage"]
+            },
+            semantic_duplicates=semantic_duplicates,
+            proposal_count=proposal_count,
+        )
+        run_diagnostics["initialization"] = self.rl_initialization
+        run_diagnostics["imitation"] = (
+            self.imitation_result.to_dict()
+            if self.imitation_result is not None
+            else None
+        )
+        return SearchResult(
+            backend="rl",
+            seed=int(seed),
+            requested_budget=int(requested_budget),
+            consumed_budget=consumed_budget,
+            termination_reason=termination_reason,
+            best_so_far=tuple(best_so_far),
+            scores=scores,
+            selected=self.selection_result.selected,
+            rejection_reasons=rejections,
+            proposal_count=int(proposal_count),
+            invalid_proposals=len(self._invalid_cache),
+            semantic_duplicates=semantic_duplicates,
+            diagnostics=run_diagnostics,
         )
 
     def _write_artifact(
@@ -852,6 +1033,12 @@ class AshareTrainer:
             "semantic_cache_version": SEMANTIC_CACHE_VERSION,
             "unique_semantic_evals": self.semantic_cache.budget_used,
             "semantic_cache_stats": self.semantic_cache.stats(),
+            "search_contract_version": (
+                self.search_result.contract_version if self.search_result else None
+            ),
+            "search_result": (
+                self.search_result.to_dict() if self.search_result else None
+            ),
             # P2-02: the strategy formula traces back to the credibility
             # tiers of its features (``None`` when nothing is traceable).
             "data_tier": formula_data_tier_report(tokens=self.best_tokens),
@@ -859,8 +1046,28 @@ class AshareTrainer:
             # was selected on (None for pre-T1-01 databases).
             "dataset_id": self.loader.dataset_id,
         }
+        if searcher == "rl":
+            output.update(
+                {
+                    "rl_initialization": self.rl_initialization,
+                    "imitation": (
+                        self.imitation_result.to_dict()
+                        if self.imitation_result is not None
+                        else None
+                    ),
+                    "experimental": self.rl_initialization == "random",
+                }
+            )
         out_path = self.data_config.data_dir / "best_ashare_strategy.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.search_result is not None and self.search_result.elite_archive is not None:
+            from .elite_archive import write_elite_archive  # noqa: PLC0415
+
+            archive_path = write_elite_archive(
+                self.data_config.data_dir / "search_elite_archive.json",
+                self.search_result.elite_archive,
+            )
+            logger.info("search.elite_archive path={}", archive_path)
         out_path.write_text(
             json.dumps(output, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -1035,6 +1242,130 @@ class AshareTrainer:
             reward_chunk=reward_chunk,
         )
 
+    def search(
+        self,
+        *,
+        searcher: str,
+        steps: int | None = None,
+        batch_size: int | None = None,
+        seed: int = 42,
+        train_end_date: str | None = None,
+        save_artifacts: bool = True,
+        device: str | None = None,
+        window_cap: tuple[int, int] | None = None,
+        rl_initialization: str | None = None,
+        elite_archive=None,
+    ) -> SearchResult:
+        """Run any registered backend and return the common result schema.
+
+        ``train`` and ``train_search`` remain compatibility entry points for
+        existing callers, while production and experiment orchestration use
+        this method as the single backend boundary.
+        """
+
+        resolved_steps = int(steps or self.model_config.train_steps)
+        resolved_batch = int(batch_size or self.model_config.batch_size)
+        request = SearchRequest(
+            seed=int(seed),
+            budget=resolved_steps * resolved_batch,
+            max_formula_len=int(self.model_config.max_formula_len),
+            steps=resolved_steps,
+            batch_size=resolved_batch,
+        )
+        backend = get_search_backend(searcher)
+        if searcher == "rl":
+            initialization = str(
+                rl_initialization or self.model_config.rl_initialization
+            )
+            if initialization not in {"imitation", "random"}:
+                raise ValueError(
+                    "rl_initialization must be 'imitation' or 'random'"
+                )
+            if initialization == "imitation":
+                if self.imitation_result is not None:
+                    raise RuntimeError(
+                        "this trainer was already imitation-pretrained; use a fresh "
+                        "trainer for an independent run"
+                    )
+                if elite_archive is None:
+                    from .elite_archive import load_elite_archive  # noqa: PLC0415
+
+                    elite_archive = load_elite_archive(
+                        self.data_config.data_dir / "search_elite_archive.json"
+                    )
+                self.pretrain_from_archive(elite_archive, seed=request.seed)
+            else:
+                if self.imitation_result is not None:
+                    raise RuntimeError(
+                        "random-initialized RL requires a fresh unpretrained trainer"
+                    )
+                self.rl_initialization = "random"
+            log_search_start(searcher, request)
+
+            def runner(req: SearchRequest, _evaluator) -> SearchResult:
+                self.train(
+                    steps=req.steps,
+                    batch_size=req.batch_size,
+                    seed=req.seed,
+                    save_artifacts=save_artifacts,
+                    train_end_date=train_end_date,
+                    device=device,
+                    window_cap=window_cap,
+                )
+                if self.search_result is None:
+                    raise RuntimeError("RL run completed without SearchResult")
+                return self.search_result
+
+            result = backend.search(request, None, runner=runner)
+            log_search_stop(result)
+            return result
+
+        self.train_search(
+            searcher=searcher,
+            steps=resolved_steps,
+            batch_size=resolved_batch,
+            seed=seed,
+            train_end_date=train_end_date,
+            save_artifacts=save_artifacts,
+            device=device,
+            window_cap=window_cap,
+        )
+        if self.search_result is None:
+            raise RuntimeError(f"{searcher} run completed without SearchResult")
+        return self.search_result
+
+    def pretrain_from_archive(self, archive, *, seed: int = 42):
+        """Imitate baseline elites, then reset the optimizer for RL."""
+
+        from .imitation import pretrain_on_elites  # noqa: PLC0415
+
+        result = pretrain_on_elites(
+            self.model,
+            archive,
+            max_formula_len=int(self.model_config.max_formula_len),
+            epochs=int(self.model_config.imitation_epochs),
+            batch_size=int(self.model_config.imitation_batch_size),
+            learning_rate=float(self.model_config.imitation_learning_rate),
+            seed=int(seed),
+        )
+        # The supervised optimizer state is not part of the RL comparison.
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(), lr=self.model_config.learning_rate
+        )
+        self.rl_initialization = "imitation"
+        self.imitation_result = result
+        logger.info(
+            "rl.imitation samples={} tokens={} initial_loss={} final_loss={} "
+            "initial_accuracy={} final_accuracy={}",
+            result.sample_count,
+            result.token_count,
+            result.initial_loss,
+            result.final_loss,
+            result.initial_token_accuracy,
+            result.final_token_accuracy,
+        )
+        return result
+
     def train_search(
         self,
         *,
@@ -1067,14 +1398,10 @@ class AshareTrainer:
         window = self.prepare_window(train_end_date, vm_device, window_cap)
         budget = steps * batch_size
 
-        # Lazily imported: baseline_harness/gp_search import this module at
-        # module level, so the cycle is broken at call time.
-        from .baseline_harness import (  # noqa: PLC0415
-            SemanticBudgetEvaluator,
-            canonical_form_pool,
-        )
+        # Lazily imported: baseline_harness imports this module for uniform
+        # random formula sampling, so the cycle is broken at call time.
+        from .baseline_harness import SemanticBudgetEvaluator  # noqa: PLC0415
         from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
-        from .gp_search import run_gp_baseline  # noqa: PLC0415
 
         def execute(tokens) -> np.ndarray | None:
             signal = self.vm.execute(tokens, window.factor_tensor)
@@ -1122,31 +1449,18 @@ class AshareTrainer:
             # protocol's trained rows record exactly this number).
             cache=self.semantic_cache,
         )
-        if searcher == "gp":
-            result = run_gp_baseline(
-                seed=seed,
-                evaluator=evaluator,
-                max_formula_len=self.model_config.max_formula_len,
-            )
-        elif searcher == "tpe":
-            from .tpe_search import run_tpe_baseline  # noqa: PLC0415
-
-            result = run_tpe_baseline(
-                seed=seed,
-                evaluator=evaluator,
-                max_formula_len=self.model_config.max_formula_len,
-            )
-        else:
-            for key in canonical_form_pool(
-                seed,
-                self.vocab,
-                self.model_config.max_formula_len,
-                budget,
-            ):
-                evaluator.propose(key)
-                if evaluator.budget_used >= budget:
-                    break
-            result = evaluator.finish()
+        request = SearchRequest(
+            seed=int(seed),
+            budget=int(budget),
+            max_formula_len=int(self.model_config.max_formula_len),
+            steps=int(steps),
+            batch_size=int(batch_size),
+        )
+        backend = get_search_backend(searcher)
+        log_search_start(searcher, request)
+        result = backend.search(request, evaluator, vocab=self.vocab)
+        self.search_result = result
+        log_search_stop(result)
 
         selected = result.selected
         if selected is None:
@@ -1322,22 +1636,13 @@ def main() -> None:
         trainer = AshareTrainer(
             data_config, model_config, backtest_config, loader, reward_config
         )
-        if model_config.searcher == "rl":
-            tokens = trainer.train(
-                steps=args.steps, batch_size=args.batch_size, device=args.device
-            )
-        else:
-            # T2-03 searcher backend: the configured default searcher (gp /
-            # random) replaces RL; the budget is the same steps x batch_size
-            # unique semantic evaluations and the artifact contract is
-            # unchanged (RL stays available via model.searcher: rl).
-            tokens = trainer.train_search(
-                searcher=model_config.searcher,
-                steps=args.steps,
-                batch_size=args.batch_size,
-                device=args.device,
-            )
-        if tokens is None:
+        result = trainer.search(
+            searcher=model_config.searcher,
+            steps=args.steps,
+            batch_size=args.batch_size,
+            device=args.device,
+        )
+        if result.selected is None:
             # No formula met the validation-quality floor: fail loudly so
             # scripts and CI never mistag a no-artifact run as success.
             raise SystemExit(2)

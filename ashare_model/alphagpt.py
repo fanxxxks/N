@@ -5,6 +5,9 @@ vocabulary plus a scalar critic.  The former multi-task head (MTPHead)
 was removed in MODEL_VERSION 2 — it had no multi-task supervision and
 the trainer discarded its router probabilities, so it was dead
 complexity; the model keeps exactly one head with real training signal.
+MODEL_VERSION 3 adds the audited elite-imitation initialization contract;
+the tensor architecture is unchanged, but v2 checkpoints cannot establish
+whether this required initialization occurred and are therefore not promoted.
 """
 
 from __future__ import annotations
@@ -17,9 +20,10 @@ from .ops import OPS_BY_NAME
 from .vocab import FORMULA_VOCAB
 
 # Model architecture generation.  v1 shipped the multi-task head (MTPHead);
-# v2 removed it (no supervision existed).  Recorded in training artifacts so
-# a checkpoint is never silently interpreted under the wrong architecture.
-MODEL_VERSION = 2
+# v2 removed it (no supervision existed); v3 requires an explicit, recorded
+# random or elite-imitation initialization.  Recorded in training artifacts so
+# a checkpoint is never silently interpreted under the wrong training contract.
+MODEL_VERSION = 3
 
 
 class RMSNorm(nn.Module):

@@ -16,7 +16,7 @@ import pytest
 from ashare_model.admission import (
     ADMISSION_BATCH,
     ADMISSION_STEPS,
-    INIT_SEEDS,
+    PAIR_SEEDS,
     WIN_FRACTION,
     best_so_far_area,
     best_so_far_curve_values,
@@ -25,8 +25,8 @@ from ashare_model.admission import (
 )
 
 
-def test_init_seeds_are_at_least_five_independent_values():
-    assert len(set(INIT_SEEDS)) >= 5
+def test_pair_seeds_are_at_least_five_independent_values():
+    assert len(set(PAIR_SEEDS)) >= 5
     assert ADMISSION_STEPS > 0 and ADMISSION_BATCH > 0
     assert 0.5 < WIN_FRACTION <= 1.0
 

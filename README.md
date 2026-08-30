@@ -55,17 +55,36 @@ dropout 跨设备一致），因此同一 `(init_seed, seed)` 在任何机器上
 ```bash
 python -m ashare_data.sync
 python -m ashare_model.diagnostics   # 因子质量报告（覆盖率/IC/相关性 → data/factor_report.json）
-python -m ashare_model.train        # 默认 GP 搜索器（model.searcher: gp；RL/random 为实验/基线选项）
+python -m ashare_model.train        # 默认 GP（model.searcher: gp；tpe/random/rl 为正式可选后端）
 python -m ashare_model.backtest
 python -m ashare_model.evaluation --tier screening  # 测量协议（见下）
 python -m ashare_model.cost_matrix                 # 资金×持仓数×换手率费用矩阵（P1-02）
 python -m ashare_model.bare_factor_backtest        # 裸因子固定四象限（v3，不做搜索）
 python -m ashare_model.p3_measurement              # P3 真实可复现验收测量
 python -m ashare_model.searcher_bench --budget 128 # 四搜索器成本测量/小预算 smoke（P1-04/05）
+python scripts/admission_experiment.py             # P4 五组配对种子准入（含 random/imitation RL）
 python -m ashare_trading.run_sim
 python scripts/analyze_sim.py               # 模拟盘费用拖累/毛盈亏/现金核对
 streamlit run dashboard/app.py
 ```
+
+GP、TPE、Random 搜索会在统一 `SearchResult` 中生成确定性去重的 eligible
+elite archive；保存正式策略时同时写入 `data/search_elite_archive.json`
+（`ELITE_ARCHIVE_VERSION=1`）。未知 archive 版本会被明确拒绝，不做猜测迁移。
+
+实验 RL 的每步与 run-level `SearchResult.diagnostics` 记录 reward 分布、拒绝
+原因、entropy、semantic duplicate、advantage 方差、更新前 gradient norm、
+公式长度和算子覆盖；关键数值同时写入 `rl.metrics` 日志。
+
+正式 `model.searcher: rl` 会先读取 baseline elite archive 做 teacher-forcing
+next-token imitation，再重新创建 optimizer 进入 REINFORCE；archive 缺失、为空
+或版本不符会明确失败，不会静默退化成随机初始化。随机初始化 RL 只用于配对
+实验，相关产物标记 `experimental=true`（`MODEL_VERSION=3`）。
+
+P4 准入按五个独立 pair 预注册：同一 pair 的 GP/TPE/Random、随机 RL、
+imitation RL 使用同一 seed 和请求预算。只有 imitation RL 同时相对随机 RL 与
+GP 在 best-so-far area、OOS active IR 的中位数严格更高，且每项至少赢 4/5，
+才允许 RL 晋级及继续研究 PPO/辅助价值/AST embedding；否则默认保持 GP。
 
 ### 因子诊断与家族消融
 
@@ -361,8 +380,8 @@ python scripts/archive_run.py --mode sim --commit
   5,000 元、目标权重变化至少 1%、已有组合单次 L1 换手预算 20%；首次注资不算
   换手。旧调用若只传 `top_n`，保持买卖排名相同的无缓冲语义。
 - **涨跌停事件因子**：`LIMIT_UP_EVENT`/`LIMIT_DOWN_EVENT` 由一字板真实计算（创业板/科创板 20%，其余 10%）。
-- **搜索与训练**：默认强类型 GP（`model.searcher: gp`；RL/random 为实验与
-  基线选项，RL 路径为 REINFORCE + value baseline + 熵正则、advantage 裁剪
+- **搜索与训练**：默认强类型 GP（`model.searcher: gp`；TPE/random/RL 为正式
+  可选后端，RL 路径为 REINFORCE + value baseline + 熵正则、advantage 裁剪
   防数值爆炸）；训练奖励为**组合主动 IR 减去精确年化执行成本**
   （`reward.py` v14：稀疏因果标签仅驱动 IC/质量门，逐日资金曲线消费相邻 open
   收益；basket 在 signal-date 与 entry-date 双重 PIT eligible

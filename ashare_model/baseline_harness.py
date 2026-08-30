@@ -26,7 +26,6 @@ shared production measurement path (scorer + engine), not a proxy:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
@@ -44,6 +43,7 @@ from .complexity import complexity_bill
 from .ir import FormulaSyntaxError, canonical_ast, canonical_tokens
 from .reward import REWARD_VERSION
 from .semantic_cache import SemanticCache
+from .search_contract import SearchResult
 from .train import sample_random_formulas
 from .vm import formula_decode
 from .vocab import FormulaVocab, FORMULA_VOCAB
@@ -172,42 +172,6 @@ def reward_oos_correlation(
     }
 
 
-@dataclass(frozen=True)
-class BaselineHarnessResult:
-    """One matched-budget baseline run plus its validity statistics.
-
-    ``budget`` is the requested evaluation budget; ``n_evaluated`` is the
-    number of evaluations actually performed (unique semantic evaluations
-    in semantic mode, unique canonical evaluations otherwise);
-    ``n_semantic_dedups`` counts formulas that reused a numerically
-    equivalent evaluation without billing; ``best_so_far`` is the
-    ``(cumulative budget, best validation reward)`` curve of the search.
-    """
-
-    budget: int
-    n_evaluated: int
-    n_invalid: int
-    scores: tuple[CandidateScore, ...]
-    selected: CandidateScore | None
-    reward_oos: dict[str, float] | None = None
-    rejections: dict[str, int] | None = None
-    n_semantic_dedups: int = 0
-    best_so_far: tuple[tuple[float, float], ...] = ()
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "budget": self.budget,
-            "n_evaluated": self.n_evaluated,
-            "n_invalid": self.n_invalid,
-            "n_semantic_dedups": self.n_semantic_dedups,
-            "selected": self.selected.to_dict() if self.selected else None,
-            "reward_oos": self.reward_oos,
-            "rejections": self.rejections,
-            "n_scores": len(self.scores),
-            "best_so_far": list(self.best_so_far),
-        }
-
-
 class SemanticBudgetEvaluator:
     """Shared evaluation core of the Phase-2 searchers (T2-02).
 
@@ -299,6 +263,7 @@ class SemanticBudgetEvaluator:
         self._n_evaluated = 0
         self._n_invalid = 0
         self._n_semantic_dedups = 0
+        self._proposal_count = 0
 
     # --- proposal pipeline -------------------------------------------------
 
@@ -314,8 +279,10 @@ class SemanticBudgetEvaluator:
         next :meth:`flush`.
         """
 
+        self._proposal_count += 1
         ckey = self._cache.key_for(tokens)
         if ckey is None:
+            self._n_invalid += 1
             return None, False  # invalid or degenerate: never evaluated
         score = self._cache.get(ckey)
         if score is not None:
@@ -446,7 +413,17 @@ class SemanticBudgetEvaluator:
             "n_semantic_dedups": self._n_semantic_dedups,
         }
 
-    def finish(self) -> BaselineHarnessResult:
+    def finish(
+        self,
+        *,
+        backend: str | None = None,
+        seed: int = 0,
+        termination_reason: str | None = None,
+        stagnation_reason: str | None = None,
+        diagnostics: dict[str, object] | None = None,
+    ) -> SearchResult:
+        """Flush and return the versioned result shared by all backends."""
+
         self.flush()
         selection = self._selector.select(
             self._scores,
@@ -461,15 +438,40 @@ class SemanticBudgetEvaluator:
         for score in self._scores:
             for reason in score.rejection_reasons:
                 rejections[reason] = rejections.get(reason, 0) + 1
-        return BaselineHarnessResult(
-            budget=self._budget,
-            n_evaluated=self._n_evaluated,
-            n_invalid=self._n_invalid,
+        if termination_reason is None:
+            termination_reason = (
+                "budget_exhausted"
+                if self.budget_used >= self._budget
+                else "candidate_pool_exhausted"
+            )
+        result_backend = backend or self._source
+        elite_archive = None
+        if result_backend in {"gp", "tpe", "random"}:
+            from .elite_archive import build_elite_archive  # noqa: PLC0415
+
+            elite_archive = build_elite_archive(
+                result_backend, self._scores, vocab=self._vocab
+            )
+        return SearchResult(
+            backend=result_backend,
+            seed=int(seed),
+            requested_budget=self._budget,
+            consumed_budget=self.budget_used,
+            termination_reason=termination_reason,
+            stagnation_reason=stagnation_reason,
             scores=tuple(self._scores),
             selected=selection.selected,
-            rejections=rejections,
-            n_semantic_dedups=self._n_semantic_dedups,
-            best_so_far=tuple(self._best_so_far),
+            rejection_reasons=rejections,
+            proposal_count=self._proposal_count,
+            invalid_proposals=self._n_invalid,
+            semantic_duplicates=self._n_semantic_dedups,
+            elite_archive=elite_archive,
+            best_so_far=tuple((int(x), reward) for x, reward in self._best_so_far),
+            diagnostics={
+                **(diagnostics or {}),
+                "evaluator": self.stats(),
+                "full_evaluations": self._n_evaluated,
+            },
         )
 
 
@@ -491,7 +493,7 @@ def run_matched_baseline(
     protocol_version: int | str | None = None,
     window_id: str | None = None,
     fingerprint_execute: Callable[[tuple[int, ...]], np.ndarray | None] | None = None,
-) -> BaselineHarnessResult:
+) -> SearchResult:
     """Score ``budget`` unique formulas with the shared candidate scorer
     and select the best under the Pareto objectives — the budget-matched
     random-search baseline.
@@ -558,7 +560,16 @@ def run_matched_baseline(
             evaluator.propose(key)
             if evaluator.budget_used >= budget:
                 break
-        return evaluator.finish()
+        reason = (
+            "budget_exhausted"
+            if evaluator.budget_used >= budget
+            else "candidate_pool_exhausted"
+        )
+        return evaluator.finish(
+            backend="random",
+            seed=seed,
+            termination_reason=reason,
+        )
 
     scorer = CandidateScorer(backtest_config, reward_config)
     selector = CandidateSelector()
@@ -608,11 +619,28 @@ def run_matched_baseline(
     for score in scores:
         for reason in score.rejection_reasons:
             rejections[reason] = rejections.get(reason, 0) + 1
-    return BaselineHarnessResult(
-        budget=budget,
-        n_evaluated=n_evaluated,
-        n_invalid=n_invalid,
+    best = -float("inf")
+    curve: list[tuple[int, float]] = []
+    for index, score in enumerate(scores, start=1):
+        best = max(best, float(score.val_reward))
+        curve.append((index, best))
+    from .elite_archive import build_elite_archive  # noqa: PLC0415
+
+    return SearchResult(
+        backend="random",
+        seed=seed,
+        requested_budget=budget,
+        consumed_budget=n_evaluated,
+        termination_reason=(
+            "budget_exhausted"
+            if n_evaluated >= budget
+            else "candidate_pool_exhausted"
+        ),
         scores=tuple(scores),
         selected=selection.selected,
-        rejections=rejections,
+        rejection_reasons=rejections,
+        proposal_count=len(canonical_forms),
+        invalid_proposals=n_invalid,
+        elite_archive=build_elite_archive("random", scores, vocab=vocab),
+        best_so_far=tuple(curve),
     )

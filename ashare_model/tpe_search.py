@@ -31,8 +31,9 @@ import torch
 import optuna
 
 from .alphagpt import build_action_mask
-from .baseline_harness import BaselineHarnessResult, SemanticBudgetEvaluator
+from .baseline_harness import SemanticBudgetEvaluator
 from .ops import OPS_CONFIG
+from .search_contract import SearchResult
 from .vocab import FormulaVocab
 
 _OPERATOR_ARITY = {name: arity for name, _, arity in OPS_CONFIG}
@@ -78,7 +79,7 @@ def run_tpe_baseline(
     n_startup_trials: int = 10,
     stall_limit: int = 50,
     tell_batch: int = 16,
-) -> BaselineHarnessResult:
+) -> SearchResult:
     """TPE search over mask-legal token sequences under the semantic budget.
 
     ``n_startup_trials`` keeps Optuna's default random-startup phase
@@ -146,4 +147,15 @@ def run_tpe_baseline(
         evaluator.flush()
         for trial, tokens in batch:
             tell(trial, tokens)
-    return evaluator.finish()
+    stalled = evaluator.budget_used < evaluator.budget
+    return evaluator.finish(
+        backend="tpe",
+        seed=seed,
+        termination_reason=(
+            "proposal_stagnation" if stalled else "budget_exhausted"
+        ),
+        stagnation_reason=(
+            f"{stall_limit}_trials_without_new_semantic_class" if stalled else None
+        ),
+        diagnostics={"consecutive_stalled_trials": stall},
+    )

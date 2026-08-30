@@ -1,37 +1,26 @@
-"""RL admission experiment logic (T2-03).
+"""Pre-registered paired admission rules for the experimental RL searcher.
 
-The admission question: does RL (REINFORCE policy) beat the search
-baselines — uniform random and strongly-typed GP — under **identical
-unique-semantic-evaluation budgets**, across at least five independent
-initializations?  The pre-registered rule (recorded in the Phase-2
-measurement log):
-
-* per seed, every baseline receives exactly the RL run's actual
-  ``unique_semantic_evals`` (the v18 budget ledger), so the comparisons
-  are budget-fair;
-* two metrics per seed: the normalized best-so-far area (average of the
-  best validation reward over the whole budget) and the OOS active IR of
-  the selected formula;
-* RL is **admitted** when, against *both* random and GP, RL's median is
-  strictly better on *both* metrics and RL wins at least
-  ``win_fraction`` of the seeds on each metric (default 4 of 5).
-
-If RL is not admitted, the default searcher flips to ``gp`` and RL stays
-an opt-in experimental backend (``model.searcher: rl``).
+P4 compares imitation-initialized RL with random-initialized RL and GP under
+the same unique-semantic-evaluation request in at least five independent seed
+pairs.  Both best-so-far area and OOS active IR must dominate by the fixed
+median and paired-win rule.  Missing evidence rejects admission; it is never
+dropped, imputed, or replaced by another pair.
 """
 
 from __future__ import annotations
 
 import math
 
-# Independent policy initializations (>= 5): init_seed re-initializes the
-# weights; the sampling seed stays fixed, so the runs differ only in the
-# starting policy.
-INIT_SEEDS = (42, 7, 2024, 1337, 999)
+# P4 pairs: the same seed initializes and samples every arm within one pair;
+# different rows use different seeds.  This replaces T2's fixed baseline
+# seeds, which repeated one GP/TPE/Random result five times.
+PAIR_SEEDS = (42, 7, 2024, 1337, 999)
+ADMISSION_RULE_VERSION = 2
+_PAIRED_BACKENDS = ("gp", "tpe", "random", "rl_random", "rl_imitation")
 
 # Admission tier: a fraction of the protocol screening tier, run on a
 # fixed window cap (the head slice of the fold's training window) so the
-# five seeds × four searchers stay tractable.  Every searcher measures
+# five seeds × five searchers stay tractable.  Every searcher measures
 # the exact same capped window with the exact same per-seed budget — the
 # comparison is internal to the admission, so the cap is fair by
 # construction.  The full-window screening tier would cost ~3 s per
@@ -43,6 +32,26 @@ ADMISSION_WINDOW = (300, 400)  # (stocks, dates) head slice of the fold window
 
 # Fraction of seeds RL must win on each metric against each baseline.
 WIN_FRACTION = 0.8
+
+
+def paired_seed_plan(
+    seeds: tuple[int, ...] = PAIR_SEEDS,
+) -> tuple[dict[str, object], ...]:
+    """Auditable seed plan: one common seed per independent pair."""
+
+    normalized = tuple(int(seed) for seed in seeds)
+    if len(normalized) < 5:
+        raise ValueError("paired admission requires at least five seeds")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("paired admission seeds must be unique")
+    return tuple(
+        {
+            "pair_index": index,
+            "pair_seed": seed,
+            "backend_seeds": {backend: seed for backend in _PAIRED_BACKENDS},
+        }
+        for index, seed in enumerate(normalized)
+    )
 
 
 def best_so_far_curve_values(
@@ -102,10 +111,14 @@ def decide_admission(
     lists by seed.  Returns the verdict with the per-baseline evidence.
     """
 
+    if set(baseline_areas) != set(baseline_oos_irs):
+        raise ValueError("baseline metric names must be aligned")
     if len(set(map(len, [rl_areas, rl_oos_irs, *baseline_areas.values(),
                          *baseline_oos_irs.values()]))) != 1:
         raise ValueError("all per-seed lists must be aligned")
     n_seeds = len(rl_areas)
+    if n_seeds == 0:
+        raise ValueError("per-seed lists must not be empty")
     min_wins = math.ceil(win_fraction * n_seeds)
     rl_med_area = float(sorted(rl_areas)[n_seeds // 2])
     rl_med_ir = float(sorted(rl_oos_irs)[n_seeds // 2])
@@ -143,6 +156,118 @@ def decide_admission(
         "default_searcher": "rl" if admitted else "gp",
         "evidence": evidence,
     }
+
+
+def decide_p4_admission(
+    *,
+    imitation_areas: list[float | None],
+    imitation_oos_irs: list[float | None],
+    random_rl_areas: list[float | None],
+    random_rl_oos_irs: list[float | None],
+    gp_areas: list[float | None],
+    gp_oos_irs: list[float | None],
+    win_fraction: float = WIN_FRACTION,
+) -> dict:
+    """P4 rule: imitation RL must dominate random-init RL and GP.
+
+    Missing/non-finite measurements are an automatic, explicit rejection;
+    they are never dropped from a pair or imputed from another backend.
+    """
+
+    series = {
+        "imitation_areas": imitation_areas,
+        "imitation_oos_irs": imitation_oos_irs,
+        "random_rl_areas": random_rl_areas,
+        "random_rl_oos_irs": random_rl_oos_irs,
+        "gp_areas": gp_areas,
+        "gp_oos_irs": gp_oos_irs,
+    }
+    lengths = {len(values) for values in series.values()}
+    if len(lengths) != 1:
+        raise ValueError("all paired metric lists must be aligned")
+    n_pairs = next(iter(lengths), 0)
+    if n_pairs < 5:
+        raise ValueError("P4 admission requires at least five aligned pairs")
+    invalid_metrics = [
+        f"{name}[{index}]"
+        for name, values in series.items()
+        for index, value in enumerate(values)
+        if value is None or not math.isfinite(float(value))
+    ]
+    if invalid_metrics:
+        return {
+            "rule_version": ADMISSION_RULE_VERSION,
+            "n_pairs": n_pairs,
+            "win_fraction": win_fraction,
+            "min_wins": math.ceil(win_fraction * n_pairs),
+            "rl_admitted": False,
+            "advanced_rl_allowed": False,
+            "default_searcher": "gp",
+            "invalid_metrics": invalid_metrics,
+            "evidence": {},
+        }
+
+    generic = decide_admission(
+        rl_areas=[float(value) for value in imitation_areas],
+        rl_oos_irs=[float(value) for value in imitation_oos_irs],
+        baseline_areas={
+            "random_rl": [float(value) for value in random_rl_areas],
+            "gp": [float(value) for value in gp_areas],
+        },
+        baseline_oos_irs={
+            "random_rl": [float(value) for value in random_rl_oos_irs],
+            "gp": [float(value) for value in gp_oos_irs],
+        },
+        win_fraction=win_fraction,
+    )
+    admitted = bool(generic["admitted"])
+    return {
+        "rule_version": ADMISSION_RULE_VERSION,
+        "n_pairs": n_pairs,
+        "win_fraction": win_fraction,
+        "min_wins": generic["min_wins"],
+        "rl_admitted": admitted,
+        "advanced_rl_allowed": admitted,
+        "default_searcher": "rl" if admitted else "gp",
+        "invalid_metrics": [],
+        "evidence": generic["evidence"],
+    }
+
+
+def apply_p4_tier_gate(
+    metric_verdict: dict,
+    *,
+    steps: int,
+    batch_size: int,
+    window: tuple[int, int],
+) -> dict:
+    """Prevent budget/window overrides from becoming promotion evidence."""
+
+    registered = (
+        int(steps) == ADMISSION_STEPS
+        and int(batch_size) == ADMISSION_BATCH
+        and tuple(int(value) for value in window) == ADMISSION_WINDOW
+    )
+    metric_rule_passed = bool(metric_verdict.get("rl_admitted", False))
+    blockers: list[str] = []
+    if not registered:
+        blockers.append("non_registered_admission_tier")
+    if not metric_rule_passed:
+        blockers.append("metric_rule_failed")
+
+    verdict = dict(metric_verdict)
+    verdict.update(
+        metric_rule_passed=metric_rule_passed,
+        registered_tier=registered,
+        promotion_blockers=blockers,
+    )
+    if blockers:
+        verdict.update(
+            rl_admitted=False,
+            advanced_rl_allowed=False,
+            default_searcher="gp",
+        )
+    return verdict
 
 
 def default_searcher(verdict: dict) -> str:

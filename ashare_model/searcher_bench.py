@@ -23,7 +23,7 @@ allocations (conservative; comparisons are within-process relative).
 The smoke acceptance (P1-05): all four searchers complete under the
 same small budget on the 300x400 capped window, one fold, one seed.
 
-See docs/phase5_measurement_log.md §2 (SEARCHER_BENCH_VERSION 1).
+See docs/p4_search_transformer_contract.md (SEARCHER_BENCH_VERSION 2).
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ from .data_loader import AshareDataLoader
 from .semantic_cache import SEMANTIC_CACHE_VERSION
 from .train import AshareTrainer, resolve_device
 
-SEARCHER_BENCH_VERSION = 1
+SEARCHER_BENCH_VERSION = 2
 
 SEARCHERS = ("gp", "tpe", "random", "rl")
 DEFAULT_WINDOW_CAP = (300, 400)
@@ -212,34 +212,22 @@ def benchmark_searchers(
             loader=loader,
             reward_config=reward_config,
         )
-        if searcher == "rl":
-            steps, batch = rl_steps, rl_batch
+        steps, batch = (rl_steps, rl_batch) if searcher == "rl" else (budget, 1)
 
-            def run() -> list[int] | None:
-                return trainer.train(
-                    steps=steps,
-                    batch_size=batch,
-                    seed=seed,
-                    save_artifacts=False,
-                    train_end_date=train_end_date,
-                    window_cap=window_cap,
-                    device=str(vm_device),
-                )
-
-        else:
-            steps, batch = budget, 1
-
-            def run() -> list[int] | None:
-                return trainer.train_search(
-                    searcher=searcher,
-                    steps=steps,
-                    batch_size=batch,
-                    seed=seed,
-                    save_artifacts=False,
-                    train_end_date=train_end_date,
-                    window_cap=window_cap,
-                    device=str(vm_device),
-                )
+        def run():
+            return trainer.search(
+                searcher=searcher,
+                steps=steps,
+                batch_size=batch,
+                seed=seed,
+                save_artifacts=False,
+                train_end_date=train_end_date,
+                window_cap=window_cap,
+                device=str(vm_device),
+                # The benchmark's RL row is the explicitly named random-init
+                # arm; imitation is compared separately by P4 admission.
+                rl_initialization="random" if searcher == "rl" else None,
+            )
 
         logger.info(
             "benchmark searcher={} budget={} seed={} window_cap={}",
@@ -252,14 +240,19 @@ def benchmark_searchers(
         wall = 0.0
         peak = None
         started = time.perf_counter()
+        search_result = None
         try:
-            _, peak = measure_peak_rss(run)
+            search_result, peak = measure_peak_rss(run)
         except Exception as exc:  # a failed row is a measurement too
             error = f"{type(exc).__name__}: {exc}"
             logger.error("searcher {} failed: {}", searcher, error)
         wall = time.perf_counter() - started
         cache = getattr(trainer, "semantic_cache", None)
-        evals = int(cache.budget_used) if cache is not None else 0
+        evals = (
+            int(search_result.consumed_budget)
+            if search_result is not None
+            else int(cache.budget_used) if cache is not None else 0
+        )
         best = getattr(trainer, "best_val_reward", None)
         if best is None:
             best = getattr(trainer, "best_reward", None)
@@ -267,6 +260,8 @@ def benchmark_searchers(
         rows[searcher] = {
             "searcher": searcher,
             "budget": budget,
+            "requested_budget": budget,
+            "consumed_budget": evals,
             "steps": steps,
             "batch_size": batch,
             "unique_semantic_evals": evals,
@@ -280,6 +275,24 @@ def benchmark_searchers(
                 float(best) if best is not None and math.isfinite(best) else None
             ),
             "error": error,
+            "termination_reason": (
+                search_result.termination_reason
+                if search_result is not None
+                else "backend_error"
+            ),
+            "stagnation_reason": (
+                search_result.stagnation_reason
+                if search_result is not None
+                else None
+            ),
+            "best_so_far": (
+                [[x, reward] for x, reward in search_result.best_so_far]
+                if search_result is not None
+                else []
+            ),
+            "search_result": (
+                search_result.to_dict() if search_result is not None else None
+            ),
         }
         logger.info(
             "benchmark searcher={} evals={} wall={:.1f}s "

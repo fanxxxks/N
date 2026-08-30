@@ -13,6 +13,7 @@ import json
 
 from ashare_data.config import BacktestConfig
 from ashare_model.alphagpt import MODEL_VERSION
+from ashare_model.imitation import IMITATION_VERSION
 from ashare_model.bare_factor_backtest import BARE_FACTOR_BACKTEST_VERSION
 from ashare_model.evaluation import PROTOCOL_VERSION
 from ashare_model.reward import REWARD_VERSION
@@ -125,9 +126,11 @@ def test_current_strategy_is_not_legacy():
     assert verdict == {"legacy": False, "reasons": []}
 
 
-def test_p3_semantic_versions_are_bumped_together():
+def test_current_semantic_versions_are_pinned():
+    # P4 contract §6 changes search comparison/result semantics only; reward
+    # and execution semantics remain at their P3 generations.
     assert REWARD_VERSION == "14"
-    assert PROTOCOL_VERSION == "22"
+    assert PROTOCOL_VERSION == "23"
     assert EXECUTION_SPEC_VERSION == 2
     assert BARE_FACTOR_BACKTEST_VERSION == 3
 
@@ -157,6 +160,41 @@ def test_strategy_without_reward_version_is_legacy():
     verdict = classify_strategy(payload)
     assert verdict["legacy"] is True
     assert "no reward_version" in "; ".join(verdict["reasons"])
+
+
+def test_v2_checkpoint_and_random_rl_artifacts_cannot_claim_current():
+    v2 = _current_strategy()
+    v2["model_version"] = 2
+    verdict = classify_strategy(v2)
+    assert verdict["legacy"] is True
+    assert f"model_version 2 != current {MODEL_VERSION}" in verdict["reasons"]
+
+    random_rl = _current_strategy()
+    random_rl.update(
+        {
+            "searcher": "rl",
+            "rl_initialization": "random",
+            "imitation": None,
+            "experimental": True,
+        }
+    )
+    verdict = classify_strategy(random_rl)
+    assert verdict["legacy"] is True
+    assert "RL strategy is not elite-imitation initialized" in verdict["reasons"]
+    assert "RL strategy has no imitation provenance" in verdict["reasons"]
+
+
+def test_v3_imitation_rl_artifact_has_current_provenance():
+    imitation_rl = _current_strategy()
+    imitation_rl.update(
+        {
+            "searcher": "rl",
+            "rl_initialization": "imitation",
+            "imitation": {"version": IMITATION_VERSION},
+            "experimental": False,
+        }
+    )
+    assert classify_strategy(imitation_rl) == {"legacy": False, "reasons": []}
 
 
 def test_v10_strategy_is_legacy_with_reasons():

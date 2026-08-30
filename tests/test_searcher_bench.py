@@ -1,13 +1,15 @@
 """Tests for the searcher cost benchmark (P1-04/P1-05).
 
-Contract (docs/phase5_measurement_log.md §2, SEARCHER_BENCH_VERSION 1):
+Contract (docs/p4_search_transformer_contract.md §3,
+SEARCHER_BENCH_VERSION 2):
 
 * Four searchers (gp / tpe / random / rl) run on the SAME capped window
   (``prepare_window`` window_cap), same nominal budget, same seed.
 * Budget unit = unique semantic evaluation (T2-01 ledger).  Non-RL
   searchers get (steps=budget, batch_size=1); RL gets
   (steps=4, batch=budget/4) — budget >= 16 and budget % 4 == 0.
-* Each row records unique_semantic_evals, wall_seconds,
+* Each row records requested/consumed budget, termination/stagnation,
+  best-so-far, unique_semantic_evals, wall_seconds,
   wall_per_1000_evals (= wall / evals * 1000), peak_rss_mb (stdlib RSS
   polling; None only on unsupported platforms), completed and the
   selected validation reward.  The smoke acceptance (P1-05): all four
@@ -106,6 +108,18 @@ def test_all_four_searchers_complete_under_small_budget(populated_db: DataConfig
         row = payload["rows"][searcher]
         assert row["completed"] is True, searcher
         assert row["unique_semantic_evals"] >= 1, searcher
+        assert row["requested_budget"] == 16, searcher
+        assert row["consumed_budget"] == row["unique_semantic_evals"], searcher
+        assert row["consumed_budget"] <= row["requested_budget"], searcher
+        assert row["termination_reason"] in {
+            "budget_exhausted",
+            "steps_exhausted",
+            "proposal_stagnation",
+            "candidate_pool_exhausted",
+            "no_eligible_candidate",
+        }, searcher
+        assert isinstance(row["best_so_far"], list), searcher
+        assert row["search_result"]["backend"] == searcher
         assert row["wall_seconds"] >= 0.0, searcher
         per_1000 = row["wall_per_1000_evals"]
         assert per_1000 == pytest.approx(

@@ -136,10 +136,16 @@ def test_make_model_config_v3_training_fields(tmp_path: Path):
     assert model.entropy_coef == ModelConfig().entropy_coef == 0.01
     assert model.advantage_clip == ModelConfig().advantage_clip == 10.0
     assert model.collapse_warn_fraction == ModelConfig().collapse_warn_fraction
+    assert model.rl_initialization == "imitation"
+    assert model.imitation_epochs == 20
+    assert model.imitation_batch_size == 32
+    assert model.imitation_learning_rate == pytest.approx(0.001)
     raw = {"model": {"validation_splits": 2, "entropy_coef": 0.05}}
     overridden = make_model_config(raw)
     assert overridden.validation_splits == 2
     assert overridden.entropy_coef == 0.05
+    with pytest.raises(ValueError, match="rl_initialization"):
+        make_model_config({"model": {"rl_initialization": "silent_fallback"}})
 
 
 def test_make_model_config_searcher_validated(tmp_path: Path):

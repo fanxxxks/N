@@ -491,7 +491,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 核心 | [vocab.py](../ashare_model/vocab.py) | feature/operator token 布局、EOS/PAD、feature_version、旧词表按名迁移 |
 | 核心 | [ir.py](../ashare_model/ir.py) | 公式 AST、解析、规范化、canonical hash；公式语义事实来源 |
 | 核心 | [vm.py](../ashare_model/vm.py) | StackVM；执行后缀 token、PIT 截面算子和最终按日 z-score |
-| 核心 | [alphagpt.py](../ashare_model/alphagpt.py) | Looped Transformer、RMSNorm、QK norm、SwiGLU、actor/critic heads；MODEL_VERSION=2 |
+| 核心 | [alphagpt.py](../ashare_model/alphagpt.py)、[imitation.py](../ashare_model/imitation.py) | Looped Transformer、actor/critic；v3 先做 baseline-elite teacher forcing，随后重建 optimizer 进入 RL |
 | 核心 | [train.py](../ashare_model/train.py) | RL/GP/random 统一训练窗口、语义预算、候选选择、策略/模型产物写入 |
 | 核心 | [reward.py](../ashare_model/reward.py) | reward v14；稀疏因果标签用于 IC/质量门，相邻 open 逐日收益用于资金曲线，统一 constructor 与精确费用 |
 | 核心 | [candidates.py](../ashare_model/candidates.py) | CandidateSpec/Score、方向对称评分、质量/复杂度/容量门禁、选择 |
@@ -499,11 +499,14 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 核心 | [signal_quality.py](../ashare_model/signal_quality.py) | HAC 有效样本 ICIR、block bootstrap、覆盖率/活跃度/符号稳定性 |
 | 核心 | [semantic_cache.py](../ashare_model/semantic_cache.py) | 规范 AST + 校准切片数值指纹；按 dataset/reward/protocol/window 隔离预算 |
 | 搜索 | [gp_search.py](../ashare_model/gp_search.py) | DEAP 强类型 GP |
-| 搜索 | [tpe_search.py](../ashare_model/tpe_search.py) | Optuna TPE |
+| 搜索 | [search_contract.py](../ashare_model/search_contract.py)、[search_backends.py](../ashare_model/search_backends.py) | GP/TPE/Random/RL 统一 `SearchBackend`、预算与 `SearchResult` 契约 |
+| 搜索 | [elite_archive.py](../ashare_model/elite_archive.py) | GP/TPE/Random eligible elite 的 v1 确定性归档、合并、读写与版本拒绝 |
+| RL 诊断 | [rl_diagnostics.py](../ashare_model/rl_diagnostics.py) | reward/拒绝/entropy/duplicate/advantage/gradient/公式长度/算子覆盖的 v1 纯观测指标 |
+| 搜索 | [tpe_search.py](../ashare_model/tpe_search.py) | Optuna TPE（正式 `model.searcher` 后端） |
 | 搜索 | [baseline_harness.py](../ashare_model/baseline_harness.py) | matched unique-semantic-evaluation 预算和统一搜索评价适配器 |
-| 搜索治理 | [admission.py](../ashare_model/admission.py) | RL 与 random/GP/TPE 的预注册准入裁决 |
+| 搜索治理 | [admission.py](../ashare_model/admission.py) | v2 配对种子规则：imitation RL 必须在 area/OOS IR 同时胜 random RL 与 GP；失败时禁用高级 RL |
 | 评价 | [backtest.py](../ashare_model/backtest.py) | 消费统一 PortfolioConstructor 的连续权重回测、基准、费用、持仓快照和指标 |
-| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v22 nested walk-forward、全局调仓日历、稀疏因果标签、拼接 OOS、DSR、max-t、自检 |
+| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v23 nested walk-forward + P4 四搜索器统一比较语义、全局日历/稀疏标签/拼接 OOS/DSR/max-t |
 | 评价 | [pareto.py](../ashare_model/pareto.py) | 多目标 Pareto frontier 辅助 |
 | 治理 | [ledger.py](../ashare_model/ledger.py) | append-only JSONL 试验账本、序列和 SHA-256 hash chain |
 | 治理 | [regime.py](../ashare_model/regime.py) | dev cutoff、预锁 final slice、dataset 绑定和违规拒绝 |
@@ -516,7 +519,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 分层报告 | [tier_reports.py](../ashare_model/tier_reports.py) | TIER_REPORT_VERSION=1；A/A+B/all 分层诊断与消融报告（P2 新增） |
 | 测量 | [cost_matrix.py](../ashare_model/cost_matrix.py) | FEE_MATRIX_VERSION=1；资金×持仓数×换手率费用矩阵（P1 新增） |
 | 测量 | [bare_factor_backtest.py](../ashare_model/bare_factor_backtest.py) | BARE_FACTOR_BACKTEST_VERSION=3；固定 daily/weekly × equal_weight/optimizer 四象限，逐象限记录 P3 provenance、收益、风险、换手、订单与成本 |
-| 测量 | [searcher_bench.py](../ashare_model/searcher_bench.py) | SEARCHER_BENCH_VERSION=1；gp/tpe/random/rl 时间与峰值内存成本测量（P1 新增） |
+| 测量 | [searcher_bench.py](../ashare_model/searcher_bench.py) | SEARCHER_BENCH_VERSION=2；四后端请求/实耗预算、终止/停滞、best-so-far、时间与峰值内存 |
 | 诊断 | [research_doctor.py](../ashare_model/research_doctor.py) | 只读研究医生：门禁、依赖与运行量估算，输出 data/research_doctor.json（P0 新增） |
 | 兼容 | [ir.py](../ashare_model/ir.py)、[vocab.py](../ashare_model/vocab.py) | 旧 token/裸因子迁移和别名解析 |
 | 包入口 | [__init__.py](../ashare_model/__init__.py) | 包标识 |
@@ -525,9 +528,9 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 
 | 组件 | 版本 |
 |---|---:|
-| 模型 | <code>MODEL_VERSION = 2</code> |
+| 模型 | <code>MODEL_VERSION = 3</code>（v3 记录 elite-imitation 初始化；v2 checkpoint 明确拒绝晋级并重训） |
 | 奖励 | <code>REWARD_VERSION = 14</code>（v14 分离稀疏研究标签与逐日组合收益） |
-| 评价协议 | <code>PROTOCOL_VERSION = 22</code>（v21 起逐行记录 data_tier；v22 固定 P3 日历/标签与执行 provenance） |
+| 评价协议 | <code>PROTOCOL_VERSION = 23</code>（v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
 | 公式语法 | <code>GRAMMAR_VERSION = 2</code> |
 | feature registry | 2（v2 起逐特征记录 data_tier） |
 | data tier | 1（ashare_model/data_tier.py，P2 新增） |
@@ -615,7 +618,7 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | [check_production_gates.py](../scripts/check_production_gates.py) | 运行 G1-G7 并输出 JSON；检查本身只读 |
 | [baseline_harness.py](../scripts/baseline_harness.py) | 在统一预算下跑裸因子/随机基线 |
 | [ablate_families.py](../scripts/ablate_families.py) | 同 seed 因子家族消融 |
-| [admission_experiment.py](../scripts/admission_experiment.py) | RL 与 random/GP/TPE 五 seed 准入实验 |
+| [admission_experiment.py](../scripts/admission_experiment.py) | 五个独立 pair 同 seed/同请求预算比较 GP/TPE/Random、random RL、imitation RL；失败行不丢弃 |
 | [analyze_sim.py](../scripts/analyze_sim.py) | 汇总模拟盘日文件和交易表现 |
 | [archive_run.py](../scripts/archive_run.py) | 归档公式、配置、指标、模型 hash 和 commit；带 <code>--commit</code> 会创建 Git commit |
 | [freeze_lock.py](../scripts/freeze_lock.py) | 从当前解释器已安装包生成 pin/完整 lock；无参数会改写依赖文件，<code>--check</code> 才是只读核对 |
@@ -643,7 +646,7 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 |---|---|
 | [config](../config) | [ashare_config.yaml](../config/ashare_config.yaml) 是版本化基线；[.env.example](../config/.env.example) 只列三个数据路径变量；真实 <code>.env</code>、<code>.webapi_token</code> 和 <code>runtime_overrides.yaml</code> 被忽略 |
 | [docs](.) | 本指南、P2 契约（[p2_data_tier_contract.md](p2_data_tier_contract.md)）与 Phase 0-6 七份测量日志；旧评估报告 evaluation_20260823.md 已删除（74f833e） |
-| [experiments](../experiments) | 只增不改的研究快照；当前有多个 2026-08-15 至 2026-08-23 归档和 [admission_experiment.json](../experiments/admission_experiment.json) |
+| [experiments](../experiments) | 只增不改的研究快照；T2 固定-baseline-seed admission 仅为历史证据，P4 晋级必须使用配对独立种子 |
 | [assets](../assets) | 两张无 provenance 的旧回测图片 |
 | [paper](../paper) | 一篇与 A 股主线无关的 Uniswap V4 论文 |
 | [.github](../.github) | 单一 Python CI workflow |
