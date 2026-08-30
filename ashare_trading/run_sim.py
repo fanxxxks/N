@@ -120,8 +120,15 @@ class SimulationRunner:
         if not path.exists():
             raise FileNotFoundError(f"Strategy file not found: {path}")
         payload = json.loads(path.read_text(encoding="utf-8"))
+        from ashare_model.artifact_schemas import (
+            StrategyArtifact,
+            apply_schema_matrix,
+        )
         from ashare_model.artifact_versions import classify_strategy
 
+        # P7-C §4: unknown/future schema versions are hard-rejected;
+        # current payloads validate; legacy flows to the pre-contract path.
+        apply_schema_matrix(payload, artifact="strategy", model=StrategyArtifact)
         verdict = classify_strategy(payload)
         if verdict["legacy"]:
             logger.warning(

@@ -20,6 +20,7 @@ import math
 from ashare_data.config import BacktestConfig, ProtocolConfig
 from ashare_portfolio.execution_spec import execution_provenance
 
+from .artifact_schemas import ARTIFACT_SCHEMA_VERSION, ProtocolResultArtifact
 from .data_loader import AshareDataLoader
 from .data_tier import DATA_TIER_VERSION, formula_data_tier_report
 from .eval_corrections import dsr_from_rows, max_t_from_rows
@@ -197,8 +198,9 @@ def build_result(
     top = top_trial(rows)
     if top is not None:
         top["data_tier"] = _data_tier_block(None, top.get("formula_text"))
-    return _sanitize(
+    result = _sanitize(
         {
+            "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
             "protocol_version": _facade.PROTOCOL_VERSION,
             "data_tier_version": DATA_TIER_VERSION,
             "reward_version": _facade.REWARD_VERSION,
@@ -242,6 +244,11 @@ def build_result(
             "dsr_extra_trials": len(stitch_oos_series(extra_trial_rows or [])),
         }
     )
+    # Fail-closed (P7-C §2.1): an artifact that does not satisfy the
+    # schema raises ValidationError here and is never persisted by the
+    # caller.
+    ProtocolResultArtifact.model_validate(result)
+    return result
 
 
 def _run_recorded(ledger, fn, *, algorithm: str, candidate: str, seed=None,
