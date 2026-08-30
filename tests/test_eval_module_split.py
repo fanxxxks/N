@@ -127,3 +127,19 @@ def test_eval_corrections_reexport_identity():
         "selfcheck_rows",
     ):
         assert getattr(evaluation, name) is getattr(eval_corrections, name), name
+
+
+def test_eval_search_reexport_identity():
+    """A4: search-backend runners moved to eval_search; the facade
+    re-exports the same objects (no second copy, no drift)."""
+    evaluation = importlib.import_module("ashare_model.evaluation")
+    eval_search = importlib.import_module("ashare_model.eval_search")
+    for name in (
+        "_build_trainer",
+        "baseline_candidates",
+        "run_fold",
+        "run_random_search",
+        "run_gp_search",
+        "run_tpe_search",
+    ):
+        assert getattr(evaluation, name) is getattr(eval_search, name), name
