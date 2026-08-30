@@ -24,13 +24,29 @@ import numpy as np
 from ashare_data.capital_flow import EXTERNAL_FACTOR_NAMES
 from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 
+from .feature_metadata import (
+    ComputeCost,
+    RecommendedHorizon,
+    SemanticType,
+    authored_metadata_of,
+    resolve_cost,
+    resolve_depends_on,
+    resolve_expected_horizon,
+)
 from .factors import FACTOR_REGISTRY, NEUTRAL_FEATURE_NAMES
 from .semantic_cache import CalibrationSlice
 from .vocab import FEATURE_NAMES
 
 # Bump when the metadata schema, the tier mapping or the clustering
 # semantics change.
-FEATURE_REGISTRY_VERSION = 2
+#
+# v3 (P7 D1, docs/p7_maintainability_plan.md §6.1): records additionally
+# carry authored research metadata (availability rule, economic
+# hypothesis, expected direction, semantic type, promotion permission)
+# plus the horizon/cost/depends_on triple derived from the P6 research
+# domains and FACTOR_REGISTRY.  Descriptive only — no search, scoring or
+# promotion semantics change.
+FEATURE_REGISTRY_VERSION = 3
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9
@@ -64,6 +80,15 @@ class FeatureRecord:
     correlation_cluster: str
     deprecated: bool
     deprecation_reason: str | None
+    # P7 D1 authored research metadata (descriptive; contract §6.1).
+    availability_rule: str
+    hypothesis: str
+    expected_direction: int
+    semantic_type: SemanticType
+    expected_horizon: RecommendedHorizon | None
+    promotion_allowed: bool
+    compute_cost: ComputeCost
+    depends_on: tuple[str, ...]
 
 
 def _family_of(name: str) -> str:
@@ -176,6 +201,16 @@ def _correlation_clusters(
     return ids
 
 
+def _counts_by(records, key) -> dict[str, int]:
+    """Deterministic value counts over records (summary helper)."""
+
+    out: dict[str, int] = {}
+    for record in records:
+        name = key(record)
+        out[name] = out.get(name, 0) + 1
+    return dict(sorted(out.items()))
+
+
 @dataclass
 class FeatureRegistry:
     """Deterministic per-feature metadata derived from the factor tensor."""
@@ -208,6 +243,13 @@ class FeatureRegistry:
             "n_clusters": len(
                 {r.correlation_cluster for r in self._records.values()}
             ),
+            "by_semantic_type": _counts_by(
+                self._records.values(), lambda r: r.semantic_type.value
+            ),
+            "by_expected_horizon": _counts_by(
+                self._records.values(),
+                lambda r: r.expected_horizon.value if r.expected_horizon else "none",
+            ),
         }
 
     def to_dict(self) -> dict[str, object]:
@@ -229,6 +271,17 @@ class FeatureRegistry:
                     "correlation_cluster": r.correlation_cluster,
                     "deprecated": r.deprecated,
                     "deprecation_reason": r.deprecation_reason,
+                    # P7 D1 research metadata (additive; contract §6.1).
+                    "availability_rule": r.availability_rule,
+                    "hypothesis": r.hypothesis,
+                    "expected_direction": r.expected_direction,
+                    "semantic_type": r.semantic_type.value,
+                    "expected_horizon": (
+                        r.expected_horizon.value if r.expected_horizon else None
+                    ),
+                    "promotion_allowed": r.promotion_allowed,
+                    "compute_cost": r.compute_cost.value,
+                    "depends_on": list(r.depends_on),
                 }
                 for r in self._records.values()
             ],
@@ -280,13 +333,29 @@ class FeatureRegistry:
             family = (
                 families.get(name, "") if families is not None else _family_of(name)
             )
+            # Authored research metadata (P7 D1): fails closed when a
+            # vocabulary feature was added without its declaration.
+            authored = authored_metadata_of(name)
+            deprecated = name in _DEPRECATION_REASONS
+            if deprecated and authored.promotion_allowed:
+                raise ValueError(
+                    f"deprecated feature {name} must set promotion_allowed=False"
+                )
             records[name] = FeatureRecord(
                 name=name,
                 family=family,
                 pit_level=_pit_level_of(name, family),
                 coverage=coverage[name],
                 correlation_cluster=clusters[name],
-                deprecated=name in _DEPRECATION_REASONS,
+                deprecated=deprecated,
                 deprecation_reason=_DEPRECATION_REASONS.get(name),
+                availability_rule=authored.availability_rule,
+                hypothesis=authored.hypothesis,
+                expected_direction=authored.expected_direction,
+                semantic_type=authored.semantic_type,
+                expected_horizon=resolve_expected_horizon(name),
+                promotion_allowed=authored.promotion_allowed,
+                compute_cost=resolve_cost(name, authored),
+                depends_on=resolve_depends_on(name, authored),
             )
         return cls(records, str(calibration_slice), source="factor_tensor")

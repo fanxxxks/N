@@ -164,6 +164,42 @@ legacy、current round-trip"的红测试。
 - **D1** 扩展 `FeatureRecord` 九字段，`FEATURE_REGISTRY_VERSION` 2→3，默认值与
   unknown 显式策略；62 个特征的元数据逐一著录（内容工作，机械但需逐条核对
   数据源文档）；artifact 中 registry 版本引用同步。
+
+#### 6.1 D1 轻量契约（预注册，实现前）
+
+**版本**：`FEATURE_REGISTRY_VERSION` 2→3。**不 bump**：`PROTOCOL_VERSION`、
+`GRAMMAR_VERSION`、`SEARCH_CONTRACT_VERSION`、`DATA_TIER_VERSION`——新增字段
+全部是描述性 metadata，不进入搜索合法性、评分、晋级判定（Phase E 才把
+semantic_type 接入搜索合法性，届时另立契约并 bump 对应版本）。
+
+**新字段**（`FeatureRecord` 与 `to_dict()` 逐特征新增，加性）：
+
+| 字段 | 类型 | 来源 |
+|---|---|---|
+| `availability_rule` | `str` | 逐特征著录（PIT 可用时间与滞后声明） |
+| `hypothesis` | `str` | 逐特征著录（经济假设，对照 `FactorSpec.description` 的计算定义） |
+| `expected_direction` | `int`（-1/0/+1） | 逐特征著录；0 = 无明确预期（如实声明，不硬造） |
+| `semantic_type` | `SemanticType` 枚举 | 著录：`price_like`/`return_like`/`volume_like`/`fundamental_like`/`cross_sectional_signal`/`boolean_event_signal` |
+| `expected_horizon` | `RecommendedHorizon` 枚举 short/medium/slow 或 `None` | **派生**自 `research_domain.RESEARCH_DOMAINS` 成员（short_price_volume→short、medium_cross_section→medium、slow_fundamental→slow）；不在任何域的（仅 deprecated NORTHBOUND_CHG）为 `None`——不建第二份周期表 |
+| `promotion_allowed` | `bool` | 著录；deprecated 必须 False |
+| `compute_cost` | `ComputeCost` 枚举 low/medium/high | 本地因子**派生**自 `FactorSpec.warmup`（≤5 low、≤30 medium、>30 high）；非本地著录 |
+| `depends_on` | `tuple[str, ...]` | 本地因子**派生**自 `FactorSpec.required_columns`；行业相对/行业动量追加 `industry_membership_snapshot`；基本面 `fundamental_pit`、两融 `capital_flow_pit`、neutral `()` |
+
+**单一权威与复用**：`expected_horizon` 读 P6 域、`compute_cost`/`depends_on`
+读 `FACTOR_REGISTRY`，均不复制；新著录只覆盖派生不出的内容
+（availability/hypothesis/direction/semantic_type/promotion）。著录模块
+`ashare_model/feature_metadata.py`（`AuthoredFeatureMeta` + `FEATURE_METADATA`）；
+`feature_registry.build()` 合并 measured + authored，**任何 FEATURE_NAMES
+成员缺著录即 `ValueError`**（fail-closed 完整性）。
+
+**迁移/拒绝策略**：`to_dict()` 只增键；v2 registry 产物仍为有效历史，不重写；
+既有测试仅 `test_registry_version_is_pinned` 的 2→3 钉死断言按本契约修订
+（需求变更路径），其余断言不动。
+
+**预期 RED 测试**：完整性（著录集合 == FEATURE_NAMES）、版本钉死 3、
+deprecated → promotion_allowed=False、direction ∈ {-1,0,1}、expected_horizon
+派生一致性（每个非 deprecated 特征恰属一个域）、to_dict/summary 新字段、
+`records()` 确定性不受影响（既有测试继续绿）。
 - **D2** `operator_registry.py`：算子元数据单一来源（输入/输出语义类型、成本、
   数值稳定性备注）；`OPS_CONFIG` 保持实现/arity 来源，注册表只加描述性元数据，
   不复制实现参数（防第二权威）。
