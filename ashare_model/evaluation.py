@@ -203,7 +203,6 @@ from loguru import logger
 from ashare_data.config import (
     BacktestConfig,
     DataConfig,
-    FoldConfig,
     ModelConfig,
     ProtocolConfig,
     RewardConfig,
@@ -236,6 +235,13 @@ from .candidates import (
 from .data_loader import AshareDataLoader
 from .data_tier import DATA_TIER_VERSION, formula_data_tier_report
 from .diagnostics import rank_ic_stats
+from .eval_folds import (
+    Fold,
+    FoldData,
+    epoch_slice,
+    resolve_folds,
+    search_window_id,
+)
 from .gp_search import run_gp_baseline
 from .ir import FormulaSyntaxError, canonical_tokens
 from .ledger import ExperimentLedger
@@ -285,170 +291,6 @@ METRIC_KEYS = (
     "ic_abs_mean",
     "icir",
 )
-
-@dataclass(frozen=True)
-class Fold:
-    """A walk-forward fold resolved against a concrete date axis."""
-
-    contract: FoldTimeContract
-    frequency: str = "daily"
-
-    @property
-    def policy(self) -> RebalancePolicy:
-        return RebalancePolicy(self.frequency, self.contract.horizon)
-
-    @property
-    def train_end(self) -> str:
-        return self.contract.train_end
-
-    @property
-    def test_end(self) -> str:
-        return self.contract.test_end
-
-    # Compatibility accessors for consumers of pre-v7 Fold. New code uses
-    # the explicit contract fields so anchor, signal and price ends cannot be
-    # confused.
-    @property
-    def train_end_idx(self) -> int:
-        return self.contract.train_anchor_end_exclusive
-
-    @property
-    def test_end_idx(self) -> int:
-        return self.contract.test_price_end
-
-
-def search_window_id(
-    fold: Fold, seed: int, domain_id: str | None = None
-) -> str:
-    """Deterministic search-window id for one (fold, seed) evaluation.
-
-    A non-unified research domain (P6 §4.3) appends ``domain:<id>`` so
-    semantic-cache scores of one domain never mix with unified or
-    other-domain scores; the default id stays pre-P6 byte-identical.
-    """
-
-    domain = (
-        f":domain:{str(domain_id)}"
-        if domain_id is not None and str(domain_id) != UNIFIED_DOMAIN_ID
-        else ""
-    )
-    return (
-        f"fold:{fold.train_end}:{fold.test_end}:"
-        f"frequency:{fold.policy.frequency}:horizon:{fold.policy.horizon}:"
-        f"seed:{seed}{domain}"
-    )
-
-
-@dataclass(frozen=True)
-class FoldData:
-    """Price-context slice plus the contract that declares executable columns."""
-
-    factors: np.ndarray
-    raw: dict[str, np.ndarray]
-    target: np.ndarray
-    realized_ret: np.ndarray
-    rebalance_mask: np.ndarray
-    dates: list[str]
-    universe_mask: np.ndarray
-    contract: FoldTimeContract
-
-    @property
-    def signal_count(self) -> int:
-        return self.contract.test_signal_count
-
-    @property
-    def local_signal_range(self) -> range:
-        return range(self.signal_count)
-
-    def __iter__(self):
-        # Preserve the established four-value unpacking API while exposing
-        # the contract to new callers as an explicit attribute.
-        yield self.factors
-        yield self.raw
-        yield self.target
-        yield self.dates
-
-
-def resolve_folds(
-    fold_cfgs: list[FoldConfig],
-    dates: list[str],
-    *,
-    frequency: str = "daily",
-    horizon: int = 1,
-) -> list[Fold]:
-    """Resolve fold configs to column indices and check data availability.
-
-    Configured anchors are inclusive. Test data retains the exact
-    ``1 + horizon`` price-context columns needed to exit its final executable
-    signal, while neither train nor test scoring can observe a price beyond
-    its anchor.
-    """
-
-    policy = RebalancePolicy(frequency, horizon)
-    folds: list[Fold] = []
-    for cfg in fold_cfgs:
-        contract = FoldTimeContract.resolve(
-            dates,
-            train_end=cfg.train_end,
-            test_end=cfg.test_end,
-            horizon=policy.horizon,
-        )
-        if (
-            contract.test_price_end == len(dates)
-            and dates[-1].replace("-", "") < cfg.test_end.replace("-", "")
-        ):
-            logger.warning(
-                f"fold {cfg.train_end} -> {cfg.test_end}: test_end is past the "
-                f"data range; test window truncated at {dates[-1]}"
-            )
-        folds.append(Fold(contract, frequency=policy.frequency))
-    return folds
-
-
-def epoch_slice(
-    loader: AshareDataLoader,
-    fold: Fold,
-) -> FoldData:
-    """Factor stack, raw OHLCV cache, forward targets and dates of the test
-    window.  Factor columns carry their own lookback, so slicing the test
-    window loses no history (VM execution must still happen on the full
-    tensor and be sliced afterwards).
-
-    The sparse forward target is recomputed from the sliced opens using the
-    fold's global schedule slice. Passing the pre-resolved mask prevents a
-    5/10-day cadence from restarting at the fold boundary.
-    """
-
-    contract = fold.contract
-    s0, s1 = contract.test_signal_start, contract.test_price_end
-    if loader.universe_mask is None:
-        raise ValueError(
-            "loader carries no universe mask; production evaluation "
-            "requires the PIT eligibility mask"
-        )
-    factors = loader.factor_tensor[:, :, s0:s1].numpy()
-    raw = {k: v[:, s0:s1].numpy() for k, v in loader.raw_data_cache.items()}
-    universe_mask = loader.universe_mask[:, s0:s1]
-    rebalance_mask = fold.policy.rebalance_mask(loader.dates)[s0:s1]
-    target = causal_target_returns(
-        raw["open"],
-        loader.dates[s0:s1],
-        fold.policy,
-        rebalance_mask=rebalance_mask,
-    )
-    target = loader.mask_by_universe(target, start=s0)
-    realized_ret = open_to_open_returns(raw["open"])
-    return FoldData(
-        factors=factors,
-        raw=raw,
-        target=target,
-        realized_ret=realized_ret,
-        rebalance_mask=rebalance_mask,
-        dates=loader.dates[s0:s1],
-        universe_mask=universe_mask,
-        contract=contract,
-    )
-
 
 def _tradable_ic_mask(
     universe_mask: np.ndarray,
