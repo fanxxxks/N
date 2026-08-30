@@ -143,3 +143,16 @@ def test_eval_search_reexport_identity():
         "run_tpe_search",
     ):
         assert getattr(evaluation, name) is getattr(eval_search, name), name
+
+
+def test_eval_artifacts_reexport_identity():
+    """A5: artifact-assembly names moved to eval_artifacts; the facade
+    re-exports the same objects (no second copy, no drift)."""
+    evaluation = importlib.import_module("ashare_model.evaluation")
+    eval_artifacts = importlib.import_module("ashare_model.eval_artifacts")
+    for name in (
+        "_run_recorded",
+        "build_result",
+        "universe_policy_payload",
+    ):
+        assert getattr(evaluation, name) is getattr(eval_artifacts, name), name
