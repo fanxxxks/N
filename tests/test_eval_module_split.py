@@ -90,3 +90,22 @@ def test_eval_folds_reexport_identity():
         "epoch_slice",
     ):
         assert getattr(evaluation, name) is getattr(eval_folds, name), name
+
+
+def test_eval_metrics_reexport_identity():
+    """A2: metric/stitching names moved to eval_metrics; the facade
+    re-exports the same objects (no second copy, no drift)."""
+    evaluation = importlib.import_module("ashare_model.evaluation")
+    eval_metrics = importlib.import_module("ashare_model.eval_metrics")
+    for name in (
+        "METRIC_KEYS",
+        "_tradable_ic_mask",
+        "evaluate_signal",
+        "evaluate_formula",
+        "benchmark_row",
+        "aggregate_results",
+        "stitch_oos_series",
+        "stitched_metrics",
+        "top_trial",
+    ):
+        assert getattr(evaluation, name) is getattr(eval_metrics, name), name
