@@ -696,20 +696,7 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 
 当前稳定顺序和 feature version 来自 [ashare_model/feature_registry.py](../ashare_model/feature_registry.py) 与 [ashare_model/vocab.py](../ashare_model/vocab.py#L213)。当前 <code>feature_version = 29ac4001dd3c</code>。
 
-| 家族 | 因子 |
-|---|---|
-| 收益/动量/反转 | RET_1、RET_5、RET_10、MOMENTUM_20、MOMENTUM_60、REVERSAL_5、HIGH_52W、RET_120、REVERSAL_60、REVERSAL_120 |
-| 波动/分布 | VOL_20、VOL_60、SKEW_20、KURT_20 |
-| 量价/换手 | TURNOVER、TURNOVER_CHG、VOLUME_RATIO、VOLUME_IMPACT、AMPLITUDE、CLOSE_POSITION、TURNOVER_MA5、TURNOVER_MA20、TURNOVER_STD20 |
-| 基本面/估值 | PE_TTM、PB、PS_TTM、ROE、ROA、GROSS_MARGIN、NET_MARGIN、REVENUE_YOY、PROFIT_YOY、DEBT_RATIO、MARKET_CAP、DIVIDEND_YIELD |
-| 外部资金/行业 | NORTHBOUND_CHG、MARGIN_BALANCE_CHG、INDUSTRY_MOMENTUM |
-| 涨跌停事件 | LIMIT_UP_EVENT、LIMIT_DOWN_EVENT、LIMIT_STREAK、LIMIT_UP_CNT_20、LIMIT_BREAK |
-| 日内分解 | OVERNIGHT_RET、INTRADAY_RET |
-| 流动性/彩票 | ILLIQ_20、AMOUNT_SHARE、MAX_20 |
-| 风险回归 | BETA_60、IVOL_60、RSQ_60 |
-| 技术指标 | BIAS_20、RSI_14、ATR_14、MACD_DIF、MACD_DEA |
-| 微观结构 | SUSPEND_DAYS_60、LIST_AGE |
-| 行业相对 | IND_REL_RET_5、IND_REL_RET_20、IND_REL_VOL_20、IND_REL_TURNOVER |
+逐特征元数据（家族、Tier、PIT 级别、语义类型、推荐周期、预期方向、计算成本、依赖、可用时间规则、经济假设）**由注册表生成**，见 [docs/feature_registry.md](feature_registry.md)——P7 D3 起手工名单已退役，禁止在文档中重建第二份名单（漂移守卫测试会拒绝）。
 
 特殊语义：
 
@@ -718,20 +705,9 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 - 财报可见日使用法定披露季末近似，不是逐股首发公告日；重述只保留当前最新值。
 - <code>PS_TTM</code> 为近似口径，<code>MARKET_CAP</code> 为成交额/换手率得到的流通市值近似。
 
-### 5.2 39 个公式算子
+### 5.2 公式算子
 
-| 类型 | 算子 |
-|---|---|
-| 二元算术 | ADD、SUB、MUL、DIV |
-| 一元变换 | NEG、ABS、SIGN |
-| 条件/动态 | GATE、JUMP、DECAY、DELAY1、MAX3 |
-| 差分 | DELTA5、DELTA10、DELTA20 |
-| 移动均值 | MA5、MA10、MA20、MA60 |
-| 移动标准差 | STD5、STD10、STD20、STD60 |
-| 时序排名 | TS_RANK5、TS_RANK10、TS_RANK20、TS_RANK60 |
-| 滚动相关 | CORR5、CORR10、CORR20、CORR60 |
-| 下行波动 | DOWNVOL5、DOWNVOL10、DOWNVOL20、DOWNVOL60 |
-| 横截面 | CS_RANK、CS_ZSCORE、CS_DEMEAN、CS_NEUTRALIZE |
+全部算子（39 个）的 arity、类别、输入/输出语义类型、计算成本与数值稳定性备注同样**由注册表生成**，见 [docs/feature_registry.md](feature_registry.md) §2。
 
 除零和非有限值有保护；窗口算子只使用当前及过去；JUMP 在 v8 修复为 trailing 60 日基线，见 [ashare_model/reward.py](../ashare_model/reward.py#L63) 和 [ashare_model/ops.py](../ashare_model/ops.py#L117)。
 

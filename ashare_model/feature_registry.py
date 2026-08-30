@@ -133,6 +133,13 @@ def pit_level_of(name: str) -> PitLevel:
     return _pit_level_of(name, _family_of(name))
 
 
+def family_of(name: str) -> str:
+    """Public family derivation (single path; shared with the generated
+    registry docs, which must not keep a second copy)."""
+
+    return _family_of(name)
+
+
 def _zscore_per_date(tensor: np.ndarray, eligible: np.ndarray) -> np.ndarray:
     """Per-date cross-sectional z-score of every feature over eligible
     cells; non-eligible cells become 0 (the neutral convention)."""
