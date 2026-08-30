@@ -109,3 +109,21 @@ def test_eval_metrics_reexport_identity():
         "top_trial",
     ):
         assert getattr(evaluation, name) is getattr(eval_metrics, name), name
+
+
+def test_eval_corrections_reexport_identity():
+    """A3: statistical-correction names moved to eval_corrections; the
+    facade re-exports the same objects (no second copy, no drift)."""
+    evaluation = importlib.import_module("ashare_model.evaluation")
+    eval_corrections = importlib.import_module("ashare_model.eval_corrections")
+    for name in (
+        "norm_ppf",
+        "norm_cdf",
+        "psr",
+        "expected_max_sr",
+        "deflated_sharpe",
+        "dsr_from_rows",
+        "max_t_from_rows",
+        "selfcheck_rows",
+    ):
+        assert getattr(evaluation, name) is getattr(eval_corrections, name), name
