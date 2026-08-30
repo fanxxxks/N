@@ -184,6 +184,30 @@ production、champion 或 admitted。
 足够定位上下文，但不得泄露密钥或敏感数据。新增关键分支时必须有日志/指标契约测试；console
 日志和 dashboard 数字只能帮助诊断，不能替代 append-only ledger 和类型化 artifact 证据。
 
+### 4.6 研究生命周期（统一契约：`docs/p8_research_lifecycle_contract.md`；待 lifecycle v1 激活）
+
+正式研究运行的生命周期状态（`IDEA`、`SPEC_LOCKED`、`DATA_QUALIFIED`、
+`FACTOR_SET_QUALIFIED`、`SEARCH_PLAN_ADMITTED`、`OOS_QUALIFIED`、
+`PAPER_OBSERVING`、`PROMOTED`、`REJECTED`、`FAILED`、`RETIRED`）及其证据
+矩阵由 `docs/p8_research_lifecycle_contract.md` 唯一定义。以下约束在该契
+约的 lifecycle v1（P8-06+）逐阶段激活完成前不改变任何现行行为；全部激活
+后（P8-15）为强制：
+
+1. 状态只能由 append-only、hash-chained lifecycle 事件重放得出；禁止直接
+   写/改 status JSON，禁止以"人工看 JSON"判定状态。
+2. 每次状态转换必须消费证据矩阵规定的机器证据；跳级、未注册转换、身份
+   错配、degraded 门禁一律 fail-closed 拒绝。
+3. `spec_id`/`run_id`/`candidate_id`/`artifact_id`/`account_id` 由唯一身
+   份实现派生；禁止第二套 hash/canonicalization/身份路径。
+4. 受保护 OOS 不得进入任何 PR 开发反馈；OOS 结果只允许进入 lifecycle-
+   bound 的 research/promotion evidence。
+5. paper 观察数据只允许机器证明为单调追加；历史分区改写即拒绝并冻结。
+6. v1/v0 产物与 paper account 默认只读拒绝；仅允许显式、可审计的精确重
+   建迁移；禁止自动/隐式迁移。
+7. `REJECTED`（研究门完整证据但未通过）、`FAILED`（基础设施/资源/运行故
+   障，未形成研究裁决）、`RETIRED`（被替代或停止使用）含义不可互换，不
+   得互相冒充。
+
 ## 5. 数据与时间因果
 
 1. `AshareDataLoader` 和既有 universe contract 是 PIT eligibility 的唯一正式路径；不得复制
