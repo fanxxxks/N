@@ -216,6 +216,7 @@ from ashare_data.gates import ProductionGateRunner
 from ashare_data.manifest import DatasetIdMismatch, check_dataset_id
 from ashare_logging import export_log_txt, setup_run_logging
 
+from .artifact_schemas import ProtocolResultArtifact, apply_schema_matrix
 # CandidateScorer is re-exported (not used by facade code): the pre-split
 # monkeypatch surface patches ``evaluation.CandidateScorer`` (see
 # tests/test_eval_module_split.py FACADE_SURFACE).
@@ -571,6 +572,11 @@ def load_trial_rows(
         if not path:
             continue
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        # P7-C §4: unknown/future schema versions are hard-rejected;
+        # current payloads validate; legacy flows to the pre-contract path.
+        apply_schema_matrix(
+            payload, artifact="protocol", model=ProtocolResultArtifact
+        )
         check_dataset_id(payload.get("dataset_id"), expected_dataset_id)
         rows.extend(payload.get("rows", []))
     return rows

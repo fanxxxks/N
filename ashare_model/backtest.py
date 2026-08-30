@@ -462,8 +462,12 @@ def main() -> None:
         if not formula_file.exists():
             raise SystemExit(f"Formula file not found: {formula_file}")
         payload = json.loads(formula_file.read_text(encoding="utf-8"))
+        from .artifact_schemas import StrategyArtifact, apply_schema_matrix
         from .artifact_versions import classify_strategy
 
+        # P7-C §4: unknown/future schema versions are hard-rejected;
+        # current payloads validate; legacy flows to the pre-contract path.
+        apply_schema_matrix(payload, artifact="strategy", model=StrategyArtifact)
         verdict = classify_strategy(payload)
         if verdict["legacy"]:
             logger.warning(

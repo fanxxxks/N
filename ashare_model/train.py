@@ -33,6 +33,7 @@ from ashare_data.gates import ProductionGateRunner
 from ashare_data.processor import open_to_open_returns
 
 from .alphagpt import MODEL_VERSION, AlphaGPTModel, build_action_mask
+from .artifact_schemas import ARTIFACT_SCHEMA_VERSION, StrategyArtifact
 from .candidates import (
     PARETO_OBJECTIVES,
     CandidateScore,
@@ -884,6 +885,10 @@ class AshareTrainer:
         score_payload = selected.to_dict()
         score_payload.pop("tokens", None)
         output = {
+            # P7-C typed-artifact schema (docs/p7_artifact_schema_contract.md):
+            # stamped and validated fail-closed below, before anything is
+            # written to disk.
+            "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
             "formula": self.best_tokens,
             **score_payload,
             "history": self.history,
@@ -943,6 +948,9 @@ class AshareTrainer:
             )
         out_path = self.data_config.data_dir / "best_ashare_strategy.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Fail-closed (P7-C §2.1): an artifact that does not satisfy the
+        # schema raises ValidationError here and never reaches disk.
+        StrategyArtifact.model_validate(output)
         if self.search_result is not None and self.search_result.elite_archive is not None:
             from .elite_archive import write_elite_archive  # noqa: PLC0415
 
