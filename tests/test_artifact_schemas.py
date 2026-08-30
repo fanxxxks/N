@@ -20,6 +20,8 @@ from pydantic import ValidationError
 from ashare_model.artifact_schemas import (
     ARTIFACT_SCHEMA_VERSION,
     ArtifactSchemaError,
+    BacktestResultArtifact,
+    PaperStateArtifact,
     ProtocolResultArtifact,
     StrategyArtifact,
     classify_schema_version,
@@ -372,3 +374,161 @@ class TestReadPath:
         if protocol.exists():
             payload = json.loads(protocol.read_text(encoding="utf-8"))
             assert classify_schema_version(payload) == "legacy"
+
+
+# --- C2: backtest result + paper state --------------------------------------
+
+
+def _backtest_payload() -> dict:
+    return {
+        "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "formula": [4, 45, 3],
+        "formula_text": "(VOL_20 CORR60 ATR_14)",
+        "direction": -1,
+        "dataset_id": "abc123",
+        "metrics": {"total_return": 0.1, "sharpe": 1.2},
+        "dates": ["2024-01-02", "2024-01-03"],
+        "equity_curve": [1.0, 1.1],
+        "benchmark": "equal_weight",
+        "benchmark_equity": [1.0, 1.05],
+        "positions": [{"date": "2024-01-03", "weights": {"000001.SZ": 0.5}}],
+        "universe_policy": None,
+    }
+
+
+def _paper_payload() -> dict:
+    return {
+        "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "initial_capital": 100000.0,
+        "cash": 95000.0,
+        "trade_count": 1,
+        "last_exec_date": "20240105",
+        "positions": {
+            "000001.SZ": {
+                "ts_code": "000001.SZ",
+                "name": "PingAn",
+                "quantity": 100.0,
+                "available_quantity": 100.0,
+                "avg_cost": 10.0,
+                "last_price": 10.5,
+                "last_date": "20240105",
+            }
+        },
+        "equity_history": [{"trade_date": "20240105", "equity": 100500.0}],
+    }
+
+
+class TestBacktestSchema:
+    def test_round_trip(self):
+        artifact = BacktestResultArtifact.validate_payload(_backtest_payload())
+        assert artifact.direction == -1
+
+    def test_missing_dataset_id_key_fails(self):
+        payload = _backtest_payload()
+        del payload["dataset_id"]
+        with pytest.raises(ValidationError):
+            BacktestResultArtifact.model_validate(payload)
+
+    def test_unknown_top_level_key_forbidden(self):
+        payload = _backtest_payload()
+        payload["surprise"] = 1
+        with pytest.raises(ValidationError):
+            BacktestResultArtifact.model_validate(payload)
+
+    def test_unknown_schema_version_rejected(self):
+        payload = _backtest_payload()
+        payload["artifact_schema_version"] = 99
+        with pytest.raises(ArtifactSchemaError):
+            BacktestResultArtifact.validate_payload(payload)
+
+
+class TestPaperStateSchema:
+    def test_round_trip(self):
+        artifact = PaperStateArtifact.validate_payload(_paper_payload())
+        assert artifact.positions["000001.SZ"].quantity == 100.0
+
+    def test_missing_cash_key_fails(self):
+        payload = _paper_payload()
+        del payload["cash"]
+        with pytest.raises(ValidationError):
+            PaperStateArtifact.model_validate(payload)
+
+    def test_unknown_top_level_key_forbidden(self):
+        payload = _paper_payload()
+        payload["surprise"] = 1
+        with pytest.raises(ValidationError):
+            PaperStateArtifact.model_validate(payload)
+
+    def test_bad_position_shape_fails(self):
+        payload = _paper_payload()
+        del payload["positions"]["000001.SZ"]["avg_cost"]
+        with pytest.raises(ValidationError):
+            PaperStateArtifact.model_validate(payload)
+
+
+class TestPaperStateIO:
+    """§5 fail-closed runtime semantics of SimulationPortfolio."""
+
+    def test_save_stamps_and_validates(self, tmp_path):
+        from ashare_trading.portfolio import SimulationPortfolio
+
+        portfolio = SimulationPortfolio(100000.0, tmp_path / "state.json")
+        portfolio.save()
+        payload = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+        assert payload["artifact_schema_version"] == ARTIFACT_SCHEMA_VERSION
+        PaperStateArtifact.validate_payload(payload)
+
+    def test_load_corrupt_file_raises_and_never_overwrites(self, tmp_path):
+        from ashare_trading.portfolio import SimulationPortfolio
+
+        path = tmp_path / "state.json"
+        path.write_text("{not json", encoding="utf-8")
+        before = path.read_bytes()
+        with pytest.raises(ArtifactSchemaError):
+            SimulationPortfolio(100000.0, path)
+        assert path.read_bytes() == before
+
+    def test_load_unknown_version_raises_and_never_overwrites(self, tmp_path):
+        from ashare_trading.portfolio import SimulationPortfolio
+
+        path = tmp_path / "state.json"
+        payload = _paper_payload()
+        payload["artifact_schema_version"] = 99
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        before = path.read_bytes()
+        with pytest.raises(ArtifactSchemaError):
+            SimulationPortfolio(100000.0, path)
+        assert path.read_bytes() == before
+
+    def test_load_non_dict_raises(self, tmp_path):
+        from ashare_trading.portfolio import SimulationPortfolio
+
+        path = tmp_path / "state.json"
+        path.write_text("[1, 2, 3]", encoding="utf-8")
+        with pytest.raises(ArtifactSchemaError):
+            SimulationPortfolio(100000.0, path)
+
+    def test_load_legacy_then_save_migrates_on_write(self, tmp_path):
+        """§4: legacy (no version key) loads through the pre-contract path;
+        the next save carries the schema version (migration only on a
+        normal write, never as a standalone rewrite)."""
+        from ashare_trading.portfolio import SimulationPortfolio
+
+        path = tmp_path / "state.json"
+        legacy = _paper_payload()
+        del legacy["artifact_schema_version"]
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+        portfolio = SimulationPortfolio(100000.0, path)
+        assert portfolio.cash == 95000.0
+        assert portfolio.trade_count == 1
+        portfolio.save()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["artifact_schema_version"] == ARTIFACT_SCHEMA_VERSION
+        PaperStateArtifact.validate_payload(payload)
+
+    def test_missing_file_is_fresh_state(self, tmp_path):
+        from ashare_trading.portfolio import SimulationPortfolio
+
+        portfolio = SimulationPortfolio(100000.0, tmp_path / "state.json")
+        assert portfolio.cash == 100000.0
+        assert portfolio.trade_count == 0
