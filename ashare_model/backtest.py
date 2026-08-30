@@ -462,7 +462,12 @@ def main() -> None:
         if not formula_file.exists():
             raise SystemExit(f"Formula file not found: {formula_file}")
         payload = json.loads(formula_file.read_text(encoding="utf-8"))
-        from .artifact_schemas import StrategyArtifact, apply_schema_matrix
+        from .artifact_schemas import (
+            ARTIFACT_SCHEMA_VERSION,
+            BacktestResultArtifact,
+            StrategyArtifact,
+            apply_schema_matrix,
+        )
         from .artifact_versions import classify_strategy
 
         # P7-C §4: unknown/future schema versions are hard-rejected;
@@ -536,6 +541,10 @@ def main() -> None:
         # makes two results comparable.
         policy = getattr(loader, "universe_policy", None)
         output = {
+            # P7-C typed-artifact schema (docs/p7_artifact_schema_contract.md):
+            # stamped and validated fail-closed below, before anything is
+            # written to disk.
+            "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
             "formula": tokens,
             "formula_text": formula_decode(tokens, FORMULA_VOCAB),
             "direction": direction,
@@ -565,6 +574,9 @@ def main() -> None:
         }
         out_path = root / args.output
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Fail-closed (P7-C §2.1): an artifact that does not satisfy the
+        # schema raises ValidationError here and never reaches disk.
+        BacktestResultArtifact.model_validate(output)
         out_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(result.metrics, ensure_ascii=False, indent=2))
         print(f"Result saved to {out_path}")

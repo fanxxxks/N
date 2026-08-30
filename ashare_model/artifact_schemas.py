@@ -230,3 +230,53 @@ class ProtocolResultArtifact(_SchemaBase):
     dsr: dict | None
     max_t: dict | None
     dsr_extra_trials: int
+
+
+class BacktestResultArtifact(_SchemaBase):
+    """``backtest_result.json`` spine (writer: backtest.py CLI)."""
+
+    formula: list[int]
+    formula_text: str
+    direction: int
+    dataset_id: str | None
+    metrics: dict
+    dates: list[str]
+    equity_curve: list[float]
+    benchmark: str
+    benchmark_equity: list[float]
+    positions: list[dict]
+    universe_policy: dict | None
+
+
+class PositionStateModel(BaseModel):
+    """One open simulated position (``positions`` values; contract §3)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ts_code: str
+    name: str
+    quantity: float
+    available_quantity: float
+    avg_cost: float
+    last_price: float
+    last_date: str
+
+
+class EquityPointModel(BaseModel):
+    """One daily equity snapshot (``equity_history`` entries)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trade_date: str
+    equity: float
+
+
+class PaperStateArtifact(_SchemaBase):
+    """``sim_portfolio_state.json`` spine (writer: ashare_trading.portfolio)."""
+
+    initial_capital: float
+    cash: float
+    trade_count: int
+    last_exec_date: str | None
+    positions: dict[str, PositionStateModel]
+    equity_history: list[EquityPointModel]

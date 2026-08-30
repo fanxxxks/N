@@ -1,13 +1,29 @@
-"""Simulated A-share portfolio state."""
+"""Simulated A-share portfolio state.
+
+Persistence is a typed-artifact boundary (P7-C,
+docs/p7_artifact_schema_contract.md §5): saves are stamped with
+``artifact_schema_version`` and validated fail-closed; loads run the
+schema matrix — a corrupt or unknown-version state file raises
+:class:`ashare_model.artifact_schemas.ArtifactSchemaError` and is *never*
+overwritten by a fresh state (the pre-contract ``except Exception ->
+reset()`` path could destroy the only copy of an account).  Legacy
+version-less state files load through the pre-contract tolerant path and
+migrate on the next normal save.
+"""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+import json
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from loguru import logger
-
-from ashare_data.io_utils import atomic_write_json, read_json_safe
+from ashare_data.io_utils import atomic_write_json
+from ashare_model.artifact_schemas import (
+    ARTIFACT_SCHEMA_VERSION,
+    ArtifactSchemaError,
+    PaperStateArtifact,
+    apply_schema_matrix,
+)
 
 
 @dataclass
@@ -60,10 +76,27 @@ class SimulationPortfolio:
     def load(self) -> None:
         if not self.state_path.exists():
             return
+        # Fail-closed (P7-C §5): a corrupt, non-dict or unknown/future
+        # version state file raises and is never overwritten by reset();
+        # resume stops for manual disposition with the backup intact.
         try:
-            payload = read_json_safe(self.state_path)
-            if not isinstance(payload, dict):
-                raise ValueError("state payload is not a dict")
+            payload = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise ArtifactSchemaError(
+                f"paper state {self.state_path} is corrupt or unreadable; "
+                f"refusing to resume or overwrite it ({exc})"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ArtifactSchemaError(
+                f"paper state {self.state_path} is not a JSON object; "
+                "refusing to resume or overwrite it"
+            )
+        # Version matrix: unknown/future hard-rejects, current validates,
+        # legacy (no version key) flows through the pre-contract path.
+        apply_schema_matrix(
+            payload, artifact="paper state", model=PaperStateArtifact
+        )
+        try:
             self.cash = float(payload.get("cash", self.initial_capital))
             self.trade_count = int(payload.get("trade_count", 0))
             self.positions = {
@@ -76,12 +109,15 @@ class SimulationPortfolio:
                 # equity history is the best available resume watermark.
                 last = self.equity_history[-1].get("trade_date")
             self.last_exec_date = last
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"Could not load portfolio state: {exc}")
-            self.reset()
+        except (TypeError, ValueError, KeyError, AttributeError) as exc:
+            raise ArtifactSchemaError(
+                f"paper state {self.state_path} has malformed fields; "
+                f"refusing to resume or overwrite it ({exc})"
+            ) from exc
 
     def save(self) -> None:
         payload = {
+            "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
             "initial_capital": self.initial_capital,
             "cash": self.cash,
             "trade_count": self.trade_count,
@@ -89,6 +125,9 @@ class SimulationPortfolio:
             "positions": {k: asdict(v) for k, v in self.positions.items()},
             "equity_history": self.equity_history,
         }
+        # Fail-closed (P7-C §2.1): a state that does not satisfy the
+        # schema raises ValidationError here and never reaches disk.
+        PaperStateArtifact.model_validate(payload)
         # Atomic write: a crash mid-save can never leave a truncated state.
         atomic_write_json(self.state_path, payload)
 
