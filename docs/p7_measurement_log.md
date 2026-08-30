@@ -40,3 +40,17 @@ monkeypatch 面保持不变量（测试直接验证）：
 
 未运行项：无（每片均完成全量 pytest + compileall + diff check）。
 研究结论：本阶段为纯工程变更，不产生也不声称任何研究结论。
+
+## Phase B：train.py 拆分（B1）
+
+| PR | 内容 | 全量结果 | 墙钟 | train.py 行数 |
+|---|---|---|---|---|
+| B1 | train_windows.py（窗口/采样自由函数） | 1115 / 5 / 618 | 603s | 1688 → 1540 |
+
+- B1 前置检查：tests 对 `train_module.batched_basket_rewards` 的 patch 面不动，
+  `AshareTrainer` 留 facade；聚焦 111 passed / 2 skipped（test_train 等 6 文件）。
+- **B2 放弃**（计划 §4 已记录）：`_training_contract`/`prepare_window`/
+  `_policy_update_loss` 被 tests 直接调用（方法面即测试面）；
+  `_write_artifact`/`_build_rl_search_result` 与 15+ 实例状态紧耦合，位移
+  不产生边界。trainer artifact 写入侧的类型化边界归 Phase C 处理。
+- 契约测试新增 `tests/test_train_module_split.py`（面 + 身份 2 个测试）。

@@ -129,10 +129,15 @@ import 行）。
   `validation_windows`、`sample_random_formulas`、`resolve_device`、`_project_root`。
   facade re-export；`tests/test_train.py` 等对 `train_module` 的 patch 面
   （`batched_basket_rewards`）不动——`AshareTrainer` 留在 `train.py`。
-- **B2** 评估后决定（先 grep 测试对私有方法的直接调用）：若 `_write_artifact`/
-  `_build_rl_search_result`/`_training_contract` 无外部直接调用，抽为
-  `train_artifacts.py` 模块函数 + 类内薄包装；有调用则放弃 B2 并记录理由
-  （不允许为拆分破坏测试面）。B2 动代码前在本文件补一节切分清单。
+- **B2** ~~抽 `train_artifacts.py`~~ **放弃（证据：grep 测试面直接调用）**。
+  `_training_contract`（tests 直接调用 ~25 处）、`prepare_window`（3 处）、
+  `_policy_update_loss`（2 处静态调用）的方法面即测试面，按计划规则禁止为
+  拆分破坏测试面；`_write_artifact`/`_build_rl_search_result` 虽无外部直接
+  调用，但与 `selection_result`/`semantic_cache`/`history` 等 15+ 实例状态
+  紧耦合，抽出仅是位移、不产生真实边界。trainer 的 strategy JSON 写入侧将在
+  **Phase C** 由类型化 artifact writer 按 schema 契约重写，届时形成真实
+  边界；现在机械位移属于无意义膨胀。`AshareTrainer`（~1300 行）作为 RL
+  内核保持单一内聚单元。
 
 验证同 Phase A。`AshareTrainer` 的 RL 内核不拆（内聚单元，"按变化原因"而非
 按行数）。
