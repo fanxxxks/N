@@ -24,6 +24,12 @@ plotly
 loguru
 tqdm
 
+# Typed artifact schemas (P7-C, docs/p7_artifact_schema_contract.md):
+# strategy/protocol/backtest/paper-state boundary artifacts are validated
+# with Pydantic at write/read time; pinned directly instead of relying on
+# FastAPI's transitive dependency.
+pydantic
+
 fastapi
 uvicorn
 psutil
