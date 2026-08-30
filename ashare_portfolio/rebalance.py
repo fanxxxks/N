@@ -1,4 +1,4 @@
-"""Causal rebalance calendars (P3-01/P3-02)."""
+"""Causal rebalance calendars (P3-01/P3-02, P6 §2)."""
 
 from __future__ import annotations
 
@@ -9,13 +9,19 @@ from typing import Sequence
 import numpy as np
 
 
-REBALANCE_POLICY_VERSION = 1
+REBALANCE_POLICY_VERSION = 2
 
+# Static non-overlapping-horizon maxima per frequency.  ``monthly`` (P6)
+# has no static maximum: monthly signal gaps depend on the calendar, so
+# the gap >= horizon rule is validated against the concrete date axis in
+# :meth:`RebalancePolicy.rebalance_mask`.
 _MAX_NON_OVERLAPPING_HORIZON = {
     "daily": 1,
     "weekly": 1,
     "every_5_days": 5,
     "every_10_days": 10,
+    "every_20_days": 20,
+    "monthly": None,
 }
 
 
@@ -37,7 +43,9 @@ class RebalancePolicy:
 
     The schedule is always resolved on the complete date axis. Consumers
     slice the returned mask; they must never restart a 5/10-day cadence at a
-    fold boundary.
+    fold boundary.  ``monthly`` (P6 §2) rebalances on the last trading
+    session of each calendar month and validates the gap >= horizon rule
+    against the concrete date axis (fail-fast, never silent overlap).
     """
 
     frequency: str = "daily"
@@ -54,7 +62,7 @@ class RebalancePolicy:
         if horizon < 1:
             raise ValueError(f"horizon must be a positive integer, got {horizon}")
         maximum = _MAX_NON_OVERLAPPING_HORIZON[frequency]
-        if horizon > maximum:
+        if maximum is not None and horizon > maximum:
             raise ValueError(
                 f"frequency={frequency!r}, horizon={horizon} would create "
                 f"overlapping labels; maximum non-overlapping horizon is {maximum}"
@@ -102,6 +110,30 @@ class RebalancePolicy:
             mask[::5] = True
         elif self.frequency == "every_10_days":
             mask[::10] = True
+        elif self.frequency == "every_20_days":
+            mask[::20] = True
+        elif self.frequency == "monthly":
+            # P6 §2: last trading session of each calendar month.  The
+            # month key is the leading six digits of the YYYYMMDD date.
+            previous_month: str | None = None
+            previous_index = -1
+            for index, value in enumerate(values):
+                month = value[:6]
+                if previous_month is not None and month != previous_month:
+                    mask[previous_index] = True
+                previous_month = month
+                previous_index = index
+            mask[previous_index] = True
+            if self.horizon > 1:
+                signals = np.flatnonzero(mask)
+                gaps = np.diff(signals)
+                if gaps.size and int(gaps.min()) < self.horizon:
+                    raise ValueError(
+                        f"monthly rebalance with horizon={self.horizon} would "
+                        f"create overlapping labels on this date axis: some "
+                        f"adjacent monthly signals are only {int(gaps.min())} "
+                        "sessions apart (P3 non-overlap rule, P6 §2)"
+                    )
         else:
             previous_week: tuple[int, int] | None = None
             previous_index = -1

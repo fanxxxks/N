@@ -370,6 +370,9 @@ def _label_measurements(
         RebalancePolicy("weekly", 1),
         RebalancePolicy("every_5_days", 5),
         RebalancePolicy("every_10_days", 10),
+        # P6: the every_20_days cadence joins the audit (monthly is
+        # excluded: its legality is calendar-gated by the policy itself).
+        RebalancePolicy("every_20_days", 20),
     )
     rows: list[dict[str, Any]] = []
     overall = 0

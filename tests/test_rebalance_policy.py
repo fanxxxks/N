@@ -8,6 +8,7 @@ declared signal/entry/exit relationship, never from implementation output.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from ashare_data.config import make_backtest_config, make_protocol_config
@@ -52,6 +53,7 @@ DATES = [
         ("weekly", 1, [2, 5, 10, 15, 20, 24]),
         ("every_5_days", 5, [0, 5, 10, 15, 20]),
         ("every_10_days", 10, [0, 10, 20]),
+        ("every_20_days", 20, [0, 20]),
     ],
 )
 def test_rebalance_policy_schedule_is_exact(
@@ -59,6 +61,17 @@ def test_rebalance_policy_schedule_is_exact(
 ):
     policy = RebalancePolicy(frequency, horizon=horizon)
     assert np.flatnonzero(policy.rebalance_mask(DATES)).tolist() == expected
+
+
+def test_every_20_days_schedule_is_global():
+    # P6 contract §2: the every_20_days cadence is anchored to the global
+    # session indices 0, 20, 40, ... exactly like every_5/every_10.
+    policy = RebalancePolicy("every_20_days", horizon=20)
+    assert np.flatnonzero(policy.rebalance_mask(DATES)).tolist() == [0, 20]
+    # t=20 exits at index 42, outside this 25-session axis.
+    assert policy.executable_signal_indices(DATES) == [0]
+    assert policy.entry_index(0) == 1
+    assert policy.exit_index(0) == 21
 
 
 def test_executable_indices_require_the_declared_exit_open():
@@ -80,6 +93,7 @@ def test_executable_indices_require_the_declared_exit_open():
         ("weekly", 2),
         ("every_5_days", 6),
         ("every_10_days", 11),
+        ("every_20_days", 21),
     ],
 )
 def test_overlap_prone_frequency_horizon_pairs_are_rejected(
@@ -91,9 +105,50 @@ def test_overlap_prone_frequency_horizon_pairs_are_rejected(
 
 def test_unknown_frequency_and_non_positive_horizon_are_rejected():
     with pytest.raises(ValueError, match="frequency"):
-        RebalancePolicy("monthly", horizon=1)
+        RebalancePolicy("hourly", horizon=1)
     with pytest.raises(ValueError, match="horizon"):
         RebalancePolicy("daily", horizon=0)
+
+
+def test_monthly_schedule_is_last_session_of_month():
+    # P6 contract (docs/p6_research_domain_contract.md §2): the monthly
+    # cadence rebalances on the last trading session of each calendar
+    # month, resolved on the complete date axis.
+    policy = RebalancePolicy("monthly", horizon=1)
+    # DATES spans 2024-01-02 .. 2024-02-08: last session of January is
+    # index 18 (20240131), last session of February is index 24 (20240208).
+    assert np.flatnonzero(policy.rebalance_mask(DATES)).tolist() == [18, 24]
+    assert policy.executable_signal_indices(DATES) == [18]
+
+
+def test_monthly_overlap_prone_axis_rejected():
+    # P6 contract §2: monthly legality is calendar-dependent; a horizon
+    # that exceeds some adjacent monthly signal gap is rejected at mask
+    # resolution (fail-fast), never silently overlapped.
+    policy = RebalancePolicy("monthly", horizon=20)
+    # January -> February gap here is 6 sessions (< 20).
+    with pytest.raises(ValueError, match="monthly"):
+        policy.rebalance_mask(DATES)
+    # horizon=1 is always gap-safe.
+    RebalancePolicy("monthly", horizon=1).rebalance_mask(DATES)
+
+    # A full 2024 business-day axis supports horizon=20 (every month has
+    # at least 20 sessions): the mask resolves and labels stay
+    # non-overlapping.
+    long_dates = (
+        pd.bdate_range("2024-01-01", "2024-12-31")
+        .strftime("%Y%m%d")
+        .tolist()
+    )
+    mask = RebalancePolicy("monthly", horizon=20).rebalance_mask(long_dates)
+    signals = np.flatnonzero(mask)
+    assert signals.size >= 12
+    assert int(np.diff(signals).min()) >= 20
+    spans = [
+        (policy.entry_index(t), policy.exit_index(t))
+        for t in policy.executable_signal_indices(long_dates)
+    ]
+    assert all(left[1] <= right[0] for left, right in zip(spans, spans[1:]))
 
 
 @pytest.mark.parametrize(
@@ -103,6 +158,7 @@ def test_unknown_frequency_and_non_positive_horizon_are_rejected():
         ("weekly", 1),
         ("every_5_days", 5),
         ("every_10_days", 10),
+        ("every_20_days", 20),
     ],
 )
 def test_all_effective_label_intervals_are_non_overlapping(

@@ -54,14 +54,22 @@ def test_build_p3_measurement_covers_acceptance_metrics(
 
     labels = payload["labels"]
     assert labels["max_overlap_sessions"] == 0
+    # P6 contract §2 grows the frequency table with every_20_days; the
+    # P3 audit covers every registered cadence (monthly is calendar-gated
+    # inside the policy itself and stays out of the audit).
     assert {row["frequency"] for row in labels["policies"]} == {
         "daily",
         "weekly",
         "every_5_days",
         "every_10_days",
+        "every_20_days",
     }
     policies = {row["frequency"]: row for row in labels["policies"]}
-    for frequency, stride in (("every_5_days", 5), ("every_10_days", 10)):
+    for frequency, stride in (
+        ("every_5_days", 5),
+        ("every_10_days", 10),
+        ("every_20_days", 20),
+    ):
         row = policies[frequency]
         assert all(index % stride == 0 for index in row["rebalance_indices"])
         assert row["sample_rebalance_indices"] == [
