@@ -101,3 +101,62 @@ monkeypatch 面保持不变量（测试直接验证）：
 - `test_registry_version_is_pinned` 2→3：需求变更路径，引用 §6.1。
 - 未运行项：无。研究结论：本阶段全部为描述性元数据与文档，无搜索/评分/
   晋级语义变化，不产生研究结论。
+
+## Phase E：搜索采样语义类型（E1–E3，研究语义变更）
+
+预注册契约：`docs/p7_semantic_types_contract.md`（先于实现提交）。测量基线为
+Phase D3 的 **1181 / 5 / 618**；E1 基线提交为 `df0e340`。本次 E2/E3 在
+`codex/p7-e2-typed-sampling-completion` 的待提交工作树测量；用户未跟踪草稿
+`docs/p5_implementation_plan.md` 始终排除在修改、暂存和提交之外。
+
+| 片段 | 内容 | 契约测试增量 | 验证结果 |
+|---|---|---:|---|
+| E1 | `semantic_sampling.py`：六类类型格、注册表驱动签名/输出解析、共享序列校验器 | 17 | E1 聚焦 17 passed（提交 `df0e340`） |
+| E2/E3 | RL/Random/TPE 类型栈与掩码；开布尔 d1/d2/d3 逃生界；GP typed pset/受限域确定性生成；无合法 token fail-closed；v3/v2/v25 版本与 legacy 拒绝 | 14 | 最终全量 **1212 passed / 5 skipped / 614 warnings** |
+
+RED 证据与修复裁决：
+
+- 继承工作树聚焦命令（下列 11 个文件）最初为 **52 failed / 160 passed /
+  2 skipped / 16 warnings，103.64s**；首因是 `build_action_mask` 的未定义
+  `feasible` 与死代码，失败随后扩散到 grammar、Random/TPE、trainer 和
+  evaluation。
+- 新增的布尔深度/预算边界测试先为 **2 failed / 13 deselected**：事件生产者
+  必须能沿 `event, x, y, GATE, EOS` 的最短五-token 路径完成；d1/d2/d3 的
+  post-action 紧致预留分别为 `s+2` / `s` / `s-2`。交接草稿中把 d2 重复写成
+  d1 的界会在等号边界制造空合法集，因此按“契约不变量 > 测试 > 实现”以
+  可终止性属性为仲裁，未照抄该笔误。
+- Random 的空合法集测试先红（旧实现退回全词表均匀采样），现改为带 step/row
+  诊断的显式 `RuntimeError`；无 skip/xfail/retry、无弱断言、无 warning filter。
+- 测试白名单修正 1 处：`py_random` 原本只在前一个测试函数内导入，后一个
+  测试直接引用而 `NameError`；提升为模块导入，seed、样本数和断言均不变。
+
+最终命令与结果：
+
+- 聚焦：
+  `python -m pytest -q tests/test_semantic_sampling.py tests/test_alphagpt.py
+  tests/test_grammar.py tests/test_vocab.py tests/test_gp_search.py
+  tests/test_tpe_search.py tests/test_searcher_bench.py tests/test_train.py
+  tests/test_artifact_versions.py tests/test_p4_search_contract.py
+  tests/test_evaluation.py` → **215 passed / 2 skipped / 40 warnings，330.77s**
+  （随后仅增加契约测试并抽取共享状态推进；最终态由下述全量覆盖）。
+- 最终全量：`python -m pytest -q tests` → **1212 passed / 5 skipped /
+  614 warnings，562.68s**。相对 D3：passed +31（E1 +17，E2/E3 +14），
+  skipped 不变；warnings 实际减少 4、未增长，且未增加过滤器。警告类别均为
+  既有 OSQP/NumPy/reward/development-universe 警告。
+- `python -m compileall -q ashare_data ashare_model ashare_portfolio
+  ashare_trading scripts webapi` → exit 0；`git diff --check` → exit 0。
+- 资源：全量墙钟如上；未单独采集峰值内存（未声称内存测量通过）。本阶段无
+  训练、真实 DuckDB、research 或 promotion 运行；dataset ID / config hash /
+  研究 artifact 路径均不适用，测试仅使用固定 seed 的 engineering fixtures。
+
+版本与迁移不变量：`GRAMMAR_VERSION 2→3`、
+`SEARCH_CONTRACT_VERSION 1→2`、`PROTOCOL_VERSION "24"→"25"`；Reward、
+Model、Feature Registry、Data Tier、Execution、Constructor 均未 bump。旧公式
+仍按名解析且 VM 可执行；v24 strategy/protocol 由既有 artifact classifier
+明确判 legacy，不能冒充 current。四搜索器的输出均经共享类型规则验证，GP
+保持 `len(tree_to_tokens(tree)) == len(tree)` 与统一长度上限。
+
+研究裁决：这是搜索合法空间的预注册收缩，只证明软件不变量与工程可运行性。
+类型化前后的搜索结果**不可宣称 matched comparison**；未运行 OOS、成本压力、
+统计校正或未来 paper window，因此不产生 alpha、晋级、production 或实盘就绪
+结论。

@@ -278,13 +278,22 @@ def test_build_action_mask_restricts_feature_ids():
     the mask matches the pre-P6 behavior (every feature open)."""
     vocab = FORMULA_VOCAB
     stack = torch.zeros(2, dtype=torch.long)
+    stack_types = torch.zeros(2, 8, dtype=torch.long)
     done = torch.zeros(2, dtype=torch.bool)
     ids = [
         vocab.feature_offset + vocab.feature_names.index("RET_1"),
         vocab.feature_offset + vocab.feature_names.index("ROE"),
     ]
 
-    mask = build_action_mask(stack, done, 0, 8, vocab, feature_ids=ids)
+    mask = build_action_mask(
+        stack,
+        done,
+        0,
+        8,
+        vocab,
+        feature_ids=ids,
+        stack_types=stack_types,
+    )
     feature_tokens = [
         token
         for token in range(vocab.size)
@@ -293,7 +302,9 @@ def test_build_action_mask_restricts_feature_ids():
     ]
     assert set(feature_tokens) == set(ids)
 
-    mask_all = build_action_mask(stack, done, 0, 8, vocab)
+    mask_all = build_action_mask(
+        stack, done, 0, 8, vocab, stack_types=stack_types
+    )
     feature_tokens_all = [
         token
         for token in range(vocab.size)

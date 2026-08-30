@@ -132,13 +132,30 @@ def test_current_strategy_is_not_legacy():
 
 
 def test_current_semantic_versions_are_pinned():
-    # P6 contract §5 bumps PROTOCOL_VERSION 23 -> 24 (research-domain
-    # dimension); reward and execution semantics stay at their P3
+    # P6 contract §5 bumped PROTOCOL_VERSION 23 -> 24 (research-domain
+    # dimension); P7-E contract §4 bumps 24 -> 25 (semantic-type sampling
+    # legality narrows the candidate pool; measurement semantics
+    # unchanged).  Reward and execution semantics stay at their P3
     # generations, and the bare-factor schema stays at P3 v3.
     assert REWARD_VERSION == "14"
-    assert PROTOCOL_VERSION == "24"
+    assert PROTOCOL_VERSION == "25"
     assert EXECUTION_SPEC_VERSION == 2
     assert BARE_FACTOR_BACKTEST_VERSION == 3
+
+
+def test_pre_p7e_strategy_is_legacy_by_protocol_generation():
+    """P7-E migration policy: old formulas remain readable/executable,
+    but a v24 candidate-pool artifact cannot claim current status."""
+    payload = _current_strategy()
+    payload["protocol_version"] = "24"
+
+    verdict = classify_strategy(payload)
+
+    assert verdict["legacy"] is True
+    assert (
+        f"protocol_version 24 != current {PROTOCOL_VERSION}"
+        in verdict["reasons"]
+    )
 
 
 def test_strategy_without_execution_provenance_is_legacy():

@@ -7,10 +7,8 @@ and device resolution.  It changes when window/sampling *contracts* change
 — not when the RL update rule, artifact schemas or the CLI change.
 
 The module is import-leaf-ward of the ``train`` facade: it never imports
-``ashare_model.train`` at module level.  ``sample_random_formulas`` needs
-the trainer's static stack-state update (the single implementation lives
-on ``AshareTrainer``, called directly by existing tests), so it resolves
-the class lazily inside the function body.
+``ashare_model.train``.  Random and RL sampling share the vocabulary-aware
+state transition in :mod:`ashare_model.semantic_sampling`.
 """
 
 from __future__ import annotations
@@ -22,6 +20,7 @@ import numpy as np
 import torch
 
 from .alphagpt import build_action_mask
+from .semantic_sampling import advance_stack_state
 from .time_contract import TrainingTimeContract
 
 
@@ -130,31 +129,40 @@ def sample_random_formulas(
     tokens; ``None`` keeps the pre-P6 full-vocabulary search space.
     """
 
-    # Late import: the stack-state update's single implementation lives on
-    # the trainer (existing tests call it there); a module-level import
-    # would cycle through the train facade's re-export of this module.
-    from .train import AshareTrainer  # noqa: PLC0415
-
     torch.manual_seed(seed)
     stack_sizes = torch.zeros(n, dtype=torch.long)
+    # P7-E: the sampling state carries one semantic-type id per stack slot
+    # so the action mask can enforce operator signature legality.
+    stack_types = torch.zeros(n, max_len, dtype=torch.long)
     done = torch.zeros(n, dtype=torch.bool)
     seqs: list[torch.Tensor] = []
     for pos in range(max_len):
         mask = build_action_mask(
-            stack_sizes, done, pos, max_len, vocab, feature_ids=feature_ids
+            stack_sizes, done, pos, max_len, vocab, feature_ids=feature_ids,
+            stack_types=stack_types,
         )
         allowed = (mask == 0.0).float()
         totals = allowed.sum(dim=1, keepdim=True)
-        # The legal mask guarantees at least one allowed token per row; the
-        # uniform fallback keeps sampling total even if that invariant is
-        # ever violated by a vocabulary change.
-        safe = torch.where(
-            totals > 0, allowed, torch.full_like(allowed, 1.0 / vocab.size)
-        )
-        probs = safe / safe.sum(dim=1, keepdim=True)
+        no_legal = torch.nonzero(
+            totals.squeeze(1) == 0, as_tuple=False
+        ).flatten()
+        if no_legal.numel():
+            rows = no_legal[:16].tolist()
+            suffix = "" if no_legal.numel() <= 16 else f" (+{no_legal.numel() - 16} more)"
+            raise RuntimeError(
+                f"no legal token at step {pos} for rows {rows}{suffix}; "
+                "typed sampling fails closed"
+            )
+        probs = allowed / totals
         action = torch.multinomial(probs, 1).squeeze(1)
         seqs.append(action)
-        AshareTrainer._update_stack_state(action, stack_sizes, done)
+        advance_stack_state(
+            action,
+            stack_sizes,
+            stack_types,
+            done,
+            vocab=vocab,
+        )
     return [tuple(int(t) for t in row) for row in torch.stack(seqs, dim=1).tolist()]
 
 

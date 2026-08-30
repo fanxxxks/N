@@ -49,11 +49,25 @@ def _op_id(vocab, name: str) -> int:
 
 
 def _toy_vocab() -> FormulaVocab:
-    """Two features and one operator of each arity (unary/binary/ternary)."""
+    """Two registered same-family features and one operator of each arity.
+
+    P7-E requires real feature metadata at mask construction, so the toy
+    vocabulary uses a real return-like subset while preserving the exact
+    pre-P7 structural decision tree.
+    """
     return FormulaVocab(
-        feature_names=("F1", "F2"),
+        feature_names=("RET_1", "RET_5"),
         operator_names=("NEG", "ADD", "GATE"),
     )
+
+
+def _toy_stack_types(stack: int, capacity: int) -> torch.Tensor:
+    from ashare_model.feature_metadata import SemanticType
+    from ashare_model.semantic_sampling import type_id
+
+    state = torch.zeros(1, capacity, dtype=torch.long)
+    state[0, :stack] = type_id(SemanticType.RETURN_LIKE)
+    return state
 
 
 def _toy_asts(node_budget: int):
@@ -64,7 +78,7 @@ def _toy_asts(node_budget: int):
     def all_asts(budget: int):
         if budget < 1:
             return
-        for name in ("F1", "F2"):
+        for name in ("RET_1", "RET_5"):
             yield Feature(name)
         if budget < 2:
             return
@@ -122,7 +136,12 @@ def test_toy_vocab_mask_exhaustive_dfs_never_admits_illegal_sequences():
 
     def legal(stack: int, done: bool, step: int):
         mask = build_action_mask(
-            torch.tensor([stack]), torch.tensor([done]), step, max_len, vocab
+            torch.tensor([stack]),
+            torch.tensor([done]),
+            step,
+            max_len,
+            vocab,
+            stack_types=_toy_stack_types(stack, max_len),
         )
         return [t for t in range(vocab.size) if mask[0, t] == 0.0]
 
@@ -168,7 +187,12 @@ def test_toy_vocab_pad_only_after_eos_in_admitted_sequences():
 
     def legal(stack: int, done: bool, step: int):
         mask = build_action_mask(
-            torch.tensor([stack]), torch.tensor([done]), step, max_len, vocab
+            torch.tensor([stack]),
+            torch.tensor([done]),
+            step,
+            max_len,
+            vocab,
+            stack_types=_toy_stack_types(stack, max_len),
         )
         return [t for t in range(vocab.size) if mask[0, t] == 0.0]
 

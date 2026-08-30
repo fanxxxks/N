@@ -142,12 +142,55 @@ def test_prepare_window_separates_causal_target_from_daily_realized_returns(
 
 
 def test_update_stack_state_feature_and_operator():
+    # P7-E: the sampling state also carries one semantic-type id per slot.
     action = torch.tensor([1, FORMULA_VOCAB.operator_offset], dtype=torch.long)
     stack_sizes = torch.zeros(2, dtype=torch.long)
+    stack_types = torch.zeros(2, 8, dtype=torch.long)
     done = torch.zeros(2, dtype=torch.bool)
-    AshareTrainer._update_stack_state(action, stack_sizes, done)
+    AshareTrainer._update_stack_state(action, stack_sizes, stack_types, done)
     assert stack_sizes[0].item() == 1
+    assert stack_types[0, 0].item() > 0  # the feature pushed its type
+    assert stack_types[1, 0].item() == 0  # ADD needs two values; mask gates it
     assert done[0].item() is False
+
+
+def test_update_stack_state_resolves_operator_output_types():
+    """P7-E contract §1: the trainer's tensor state follows the shared
+    family-preserving, fixed-output and GATE branch-output rules."""
+    from ashare_model.feature_metadata import SemanticType
+    from ashare_model.semantic_sampling import type_id
+
+    def op(name: str) -> int:
+        return (
+            FORMULA_VOCAB.operator_offset
+            + FORMULA_VOCAB.operator_names.index(name)
+        )
+
+    ret = type_id(SemanticType.RETURN_LIKE)
+    price = type_id(SemanticType.PRICE_LIKE)
+    volume = type_id(SemanticType.VOLUME_LIKE)
+    fundamental = type_id(SemanticType.FUNDAMENTAL_LIKE)
+    cross = type_id(SemanticType.CROSS_SECTIONAL_SIGNAL)
+    event = type_id(SemanticType.BOOLEAN_EVENT_SIGNAL)
+    action = torch.tensor(
+        [op("ADD"), op("DIV"), op("GATE"), op("JUMP")],
+        dtype=torch.long,
+    )
+    stack_sizes = torch.tensor([2, 2, 3, 1], dtype=torch.long)
+    stack_types = torch.zeros(4, 4, dtype=torch.long)
+    stack_types[0, :2] = torch.tensor([ret, ret])
+    stack_types[1, :2] = torch.tensor([price, volume])
+    stack_types[2, :3] = torch.tensor([event, fundamental, fundamental])
+    stack_types[3, 0] = ret
+    done = torch.zeros(4, dtype=torch.bool)
+
+    AshareTrainer._update_stack_state(
+        action, stack_sizes, stack_types, done
+    )
+
+    assert stack_sizes.tolist() == [1, 1, 1, 1]
+    assert stack_types[:, 0].tolist() == [ret, cross, fundamental, event]
+    assert not done.any()
 
 
 def test_update_stack_state_eos_terminates_and_pad_latches_done():
@@ -156,14 +199,16 @@ def test_update_stack_state_eos_terminates_and_pad_latches_done():
     # Row 0 samples a feature (stack 0 -> 1); row 1 samples EOS on an
     # already-complete stack.
     stack_sizes = torch.tensor([0, 1], dtype=torch.long)
+    stack_types = torch.zeros(2, 8, dtype=torch.long)
+    stack_types[1, 0] = 1  # a live value of some semantic type
     done = torch.zeros(2, dtype=torch.bool)
-    AshareTrainer._update_stack_state(action, stack_sizes, done)
+    AshareTrainer._update_stack_state(action, stack_sizes, stack_types, done)
     assert stack_sizes[0].item() == 1
     assert done[1].item() is True  # row 1 sampled EOS
     assert done[0].item() is False  # row 0 sampled a feature
     # PAD after EOS keeps the done latch and never touches the stack.
     AshareTrainer._update_stack_state(
-        torch.tensor([0, 0], dtype=torch.long), stack_sizes, done
+        torch.tensor([0, 0], dtype=torch.long), stack_sizes, stack_types, done
     )
     assert done.all() and (stack_sizes == 1).all()
 

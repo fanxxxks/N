@@ -46,12 +46,12 @@ from .candidates import (
 from .complexity import complexity_bill
 from .data_loader import AshareDataLoader
 from .data_tier import formula_data_tier_report
-from .ops import OPS_CONFIG
 from .reward import (
     REWARD_VERSION,
     batched_basket_rewards,
 )
 from .research_domain import RESEARCH_DOMAIN_VERSION
+from .semantic_sampling import advance_stack_state
 from .rl_diagnostics import (
     aggregate_rl_run,
     gradient_l2_norm,
@@ -86,16 +86,6 @@ from ashare_portfolio.rebalance import RebalancePolicy
 from ashare_portfolio.execution_spec import execution_provenance
 from . import ir as ir_module
 from ashare_logging import export_log_txt, setup_run_logging
-
-# Sampling-state tables, built once at import: the arity of every operator
-# token and the feature-token id range, so the per-position stack update
-# never rebuilds tensors inside the sampling loop (the policy and sampling
-# always run on CPU, matching these tensors).
-_OPERATOR_ARITY = torch.zeros(FORMULA_VOCAB.size)
-for _i, (_, _, _arity) in enumerate(OPS_CONFIG):
-    _OPERATOR_ARITY[FORMULA_VOCAB.operator_offset + _i] = _arity
-_FEATURE_IDS = torch.arange(FORMULA_VOCAB.feature_offset, FORMULA_VOCAB.operator_offset)
-
 
 class AshareTrainer:
     # Bounded LRU of evaluated formulas: rewards are a deterministic function
@@ -342,6 +332,11 @@ class AshareTrainer:
             stack_sizes = torch.zeros(
                 batch_size, dtype=torch.long, device=policy_device
             )
+            # P7-E: one semantic-type id per stack slot (0 = empty), so the
+            # action mask can enforce operator signature legality.
+            stack_types = torch.zeros(
+                batch_size, max_len, dtype=torch.long, device=policy_device
+            )
             done = torch.zeros(batch_size, dtype=torch.bool, device=policy_device)
             log_probs: list[torch.Tensor] = []
             sampled_tokens: list[torch.Tensor] = []
@@ -354,6 +349,7 @@ class AshareTrainer:
                 mask = build_action_mask(
                     stack_sizes, done, pos, max_len, self.vocab,
                     feature_ids=self.feature_ids,
+                    stack_types=stack_types,
                 )
                 dist = Categorical(logits=logits + mask)
                 action = dist.sample()
@@ -361,7 +357,9 @@ class AshareTrainer:
                 entropies.append(dist.entropy())
                 sampled_tokens.append(action)
                 inp = torch.cat([inp, action.unsqueeze(1)], dim=1)
-                self._update_stack_state(action, stack_sizes, done)
+                self._update_stack_state(
+                    action, stack_sizes, stack_types, done
+                )
 
             sequences = torch.stack(sampled_tokens, dim=1)
             rewards = torch.zeros(batch_size, device=policy_device)
@@ -1473,37 +1471,32 @@ class AshareTrainer:
     def _update_stack_state(
         action: torch.Tensor,
         stack_sizes: torch.Tensor,
+        stack_types: torch.Tensor,
         done: torch.Tensor,
     ) -> None:
-        """Advance the stack-only sampling state by one sampled action.
+        """Advance the sampling state by one sampled action.
 
         Postfix rules (see :mod:`ashare_model.ir`): a feature pushes one
         value, an operator of arity ``a`` pops ``a`` and pushes one
         (``stack - a + 1``), EOS terminates at ``stack == 1``, and PAD is
         only ever sampled after EOS.  ``done`` latches once EOS (or a
         legacy padding termination) is sampled.
+
+        P7-E: ``stack_types`` ([batch, capacity] long tensor, 0 = empty)
+        advances in lockstep — features push their semantic-type id,
+        operators pop their arguments and push the resolved output id
+        (rules from :mod:`ashare_model.semantic_sampling`, single source).
+        The caller's mask guarantees the operator's signature was legal,
+        so the output resolution here never sees an illegal application.
         """
 
-        is_pad = action == FORMULA_VOCAB.pad_token_id
-        eos_id = FORMULA_VOCAB.eos_token_id
-        is_eos = (
-            action == eos_id
-            if eos_id is not None
-            else torch.zeros_like(action, dtype=torch.bool)
+        advance_stack_state(
+            action,
+            stack_sizes,
+            stack_types,
+            done,
+            vocab=FORMULA_VOCAB,
         )
-        is_feature = (action.unsqueeze(1) == _FEATURE_IDS).any(dim=1)
-
-        # Precomputed per-token arity table (module level, built once).
-        arity = _OPERATOR_ARITY[action]
-
-        new_stack = stack_sizes.clone()
-        new_stack = torch.where(is_feature, stack_sizes + 1, new_stack)
-        new_stack = torch.where(
-            ~is_feature & ~is_pad & ~is_eos, stack_sizes - arity + 1, new_stack
-        )
-        new_stack = torch.clamp(new_stack, min=0)
-        stack_sizes.copy_(new_stack)
-        done.copy_(done | is_eos | is_pad)
 
 
 def main() -> None:

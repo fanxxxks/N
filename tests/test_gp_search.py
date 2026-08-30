@@ -116,11 +116,20 @@ def test_tree_maps_to_valid_bounded_tokens():
 
 
 def test_typed_primitive_set_covers_vocabulary():
-    from ashare_model.gp_search import Signal, build_pset
+    from ashare_model.gp_search import build_pset
 
     pset = build_pset(FORMULA_VOCAB)
-    terminals = {t.name for t in pset.terminals[Signal]}
-    primitives = {p.name: p.arity for p in pset.primitives[Signal]}
+    # P7-E: terminals and primitives are keyed by semantic-type class, and
+    # every operator appears once per legal signature (same name, same
+    # arity); the vocabulary coverage is aggregated over the type keys.
+    terminals = {
+        t.name for entries in pset.terminals.values() for t in entries
+    }
+    primitives = {
+        p.name: p.arity
+        for entries in pset.primitives.values()
+        for p in entries
+    }
     assert terminals == set(FORMULA_VOCAB.feature_names)
     assert set(primitives) == set(FORMULA_VOCAB.operator_names)
     from ashare_model.ops import OPS_CONFIG

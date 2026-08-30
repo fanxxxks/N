@@ -10,6 +10,8 @@ follow).
 
 from __future__ import annotations
 
+import random as py_random
+
 import pytest
 
 from ashare_model.feature_metadata import SemanticType
@@ -118,9 +120,25 @@ def test_checker_is_registry_driven(monkeypatch):
     argument types from the registry, so widening a signature there flips
     the verdict (contract §3.4)."""
     from ashare_model.operator_registry import OPERATOR_REGISTRY
+    from ashare_model.alphagpt import build_action_mask
+    from ashare_model.semantic_sampling import type_id
+    import torch
 
     seq = _seq("PE_TTM", "CS_NEUTRALIZE", "EOS")
     assert not formula_types_legal(seq)
+    neutralize = _seq("CS_NEUTRALIZE")[0]
+    stack_sizes = torch.ones(1, dtype=torch.long)
+    stack_types = torch.zeros(1, 4, dtype=torch.long)
+    stack_types[0, 0] = type_id(SemanticType.FUNDAMENTAL_LIKE)
+    before = build_action_mask(
+        stack_sizes,
+        torch.zeros(1, dtype=torch.bool),
+        0,
+        4,
+        FORMULA_VOCAB,
+        stack_types=stack_types,
+    )
+    assert not torch.isfinite(before[0, neutralize])
     meta = OPERATOR_REGISTRY["CS_NEUTRALIZE"]
     monkeypatch.setitem(
         OPERATOR_REGISTRY,
@@ -134,3 +152,171 @@ def test_checker_is_registry_driven(monkeypatch):
         ),
     )
     assert formula_types_legal(seq)
+    after = build_action_mask(
+        stack_sizes,
+        torch.zeros(1, dtype=torch.bool),
+        0,
+        4,
+        FORMULA_VOCAB,
+        stack_types=stack_types,
+    )
+    assert after[0, neutralize] == 0.0
+
+
+# --- contract §6: end-to-end sampling properties (P7-E) ----------------------
+
+
+def _eos():
+    return FORMULA_VOCAB.eos_token_id
+
+
+def test_random_sampling_is_type_legal():
+    """§6.3: the shared mask path (random baseline / RL / TPE) only
+    produces type-legal formulas."""
+    from ashare_model.train_windows import sample_random_formulas
+
+    samples = sample_random_formulas(seed=11, vocab=FORMULA_VOCAB, max_len=12, n=200)
+    for seq in samples:
+        assert formula_types_legal(seq), seq
+
+
+def test_random_sampling_is_deterministic():
+    from ashare_model.train_windows import sample_random_formulas
+
+    first = sample_random_formulas(seed=3, vocab=FORMULA_VOCAB, max_len=10, n=64)
+    second = sample_random_formulas(seed=3, vocab=FORMULA_VOCAB, max_len=10, n=64)
+    assert first == second
+
+
+def test_random_sampling_fails_closed_when_no_token_is_legal():
+    """Contract §5: an empty effective feature domain must not trigger the
+    legacy all-vocabulary uniform fallback (which emitted garbage tokens)."""
+    from ashare_model.train_windows import sample_random_formulas
+
+    with pytest.raises(RuntimeError, match=r"no legal token.*step 0.*rows \[0\]"):
+        sample_random_formulas(
+            seed=1,
+            vocab=FORMULA_VOCAB,
+            max_len=4,
+            n=1,
+            feature_ids=[],
+        )
+
+
+def test_action_mask_rejects_feature_without_authored_type():
+    """Contract §5/§6.3: toy vocabularies must use registered feature
+    names; missing metadata is an explicit boundary error."""
+    import torch
+
+    from ashare_model.alphagpt import build_action_mask
+    from ashare_model.vocab import FormulaVocab
+
+    vocab = FormulaVocab(
+        feature_names=("NOT_IN_FEATURE_METADATA",),
+        operator_names=("NEG",),
+    )
+    with pytest.raises(ValueError, match="has no authored semantic type"):
+        build_action_mask(
+            torch.zeros(1, dtype=torch.long),
+            torch.zeros(1, dtype=torch.bool),
+            0,
+            4,
+            vocab,
+            stack_types=torch.zeros(1, 4, dtype=torch.long),
+        )
+
+
+def test_random_sampling_supports_registered_toy_vocabulary():
+    """Contract §6.3: token-state advancement is vocabulary-local; a toy
+    vocabulary made from real metadata must not be interpreted with the
+    production vocabulary's offsets."""
+    from ashare_model.train_windows import sample_random_formulas
+    from ashare_model.vocab import FormulaVocab
+
+    vocab = FormulaVocab(
+        feature_names=("RET_1", "RET_5"),
+        operator_names=("NEG", "ADD", "GATE"),
+    )
+    samples = sample_random_formulas(
+        seed=19, vocab=vocab, max_len=8, n=100
+    )
+
+    assert len(samples) == 100
+    for sequence in samples:
+        assert formula_types_legal(sequence, vocab), sequence
+
+
+def test_gp_typed_trees_are_type_legal_and_length_bounded():
+    """§6.2: typed-GP trees satisfy the signature lattice and the
+    ``len(tree_to_tokens(tree)) == len(tree)`` invariant."""
+    from ashare_model.gp_search import _typed_expr, build_pset, tree_to_tokens
+
+    pset = build_pset(FORMULA_VOCAB)
+    py_random.seed(5)
+    for _ in range(200):
+        tree = _typed_expr(pset, 1, 2)
+        tokens = tree_to_tokens(tree, FORMULA_VOCAB)
+        assert len(tokens) == len(tree)
+        assert formula_types_legal(tokens + [_eos()]), tokens
+
+
+def test_feature_id_restriction_still_applies():
+    from ashare_model.gp_search import _typed_expr, build_pset, tree_to_tokens
+    from ashare_model.vocab import FEATURE_NAMES
+
+    allowed = [FEATURE_NAMES.index("ROE"), FEATURE_NAMES.index("PE_TTM")]
+    ids = [FORMULA_VOCAB.feature_offset + i for i in allowed]
+    pset = build_pset(FORMULA_VOCAB, feature_ids=ids)
+    py_random.seed(9)
+    for _ in range(50):
+        tree = _typed_expr(pset, 1, 2)
+        for token in tree_to_tokens(tree, FORMULA_VOCAB):
+            if token < FORMULA_VOCAB.operator_offset:
+                assert token in ids
+
+
+def test_version_pins():
+    """§4: the coordinated generation bumps (requirement-change path,
+    arbitration source: docs/p7_semantic_types_contract.md)."""
+    from ashare_model.evaluation import PROTOCOL_VERSION
+    from ashare_model.search_contract import SEARCH_CONTRACT_VERSION
+    from ashare_model.vocab import GRAMMAR_VERSION
+
+    assert GRAMMAR_VERSION == 3
+    assert SEARCH_CONTRACT_VERSION == 2
+    assert PROTOCOL_VERSION == "25"
+
+
+def test_legacy_formula_resolution_unaffected():
+    """§5: a type-violating pre-P7E formula still resolves by name (and
+    would execute); only *sampling* is constrained."""
+    import torch
+
+    from ashare_model.vocab import resolve_formula_tokens
+    from ashare_model.vm import StackVM
+
+    # LIMIT_UP_EVENT LIMIT_DOWN_EVENT DIV is type-illegal now, but it is a
+    # structurally valid postfix formula a legacy artifact could carry.
+    names = ["LIMIT_UP_EVENT", "LIMIT_DOWN_EVENT", "DIV"]
+    tokens = [
+        FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index(n)
+        for n in names[:2]
+    ]
+    tokens.append(
+        FORMULA_VOCAB.operator_offset + FORMULA_VOCAB.operator_names.index(names[2])
+    )
+    payload = {
+        "formula": tokens,
+        "feature_names": list(FORMULA_VOCAB.feature_names),
+        "operator_names": list(FORMULA_VOCAB.operator_names),
+        "grammar_version": 2,
+    }
+    resolved = resolve_formula_tokens(payload, FORMULA_VOCAB)
+    assert resolved
+    assert not formula_types_legal(resolved + [_eos()])
+    factor = torch.randn(FORMULA_VOCAB.feature_count, 2, 4)
+    vm = StackVM(
+        FORMULA_VOCAB,
+        universe_mask=torch.ones(2, 4, dtype=torch.bool),
+    )
+    assert vm.execute(resolved, factor) is not None

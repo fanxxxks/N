@@ -32,8 +32,10 @@ import optuna
 
 from .alphagpt import build_action_mask
 from .baseline_harness import SemanticBudgetEvaluator
+from .feature_metadata import FEATURE_METADATA, SemanticType
 from .ops import OPS_CONFIG
 from .search_contract import SearchResult
+from .semantic_sampling import from_id, resolve_output, type_id
 from .vocab import FormulaVocab
 
 _OPERATOR_ARITY = {name: arity for name, _, arity in OPS_CONFIG}
@@ -46,10 +48,17 @@ def _legal_tokens(
     step: int,
     max_len: int,
     feature_ids: list[int] | None = None,
+    stack_types: list[int] | None = None,
 ) -> list[int]:
     """Legal token ids at one position of the mask-legal sampling walk.
     ``feature_ids`` (P6 §4.2) restricts the open feature tokens."""
 
+    capacity = max(max_len, len(stack_types or []) + 1)
+    types_tensor = torch.zeros(1, capacity, dtype=torch.long)
+    if stack_types:
+        types_tensor[0, : len(stack_types)] = torch.tensor(
+            stack_types, dtype=torch.long
+        )
     mask = build_action_mask(
         torch.tensor([stack], dtype=torch.long),
         torch.tensor([done], dtype=torch.bool),
@@ -57,24 +66,39 @@ def _legal_tokens(
         max_len,
         vocab,
         feature_ids=feature_ids,
+        stack_types=types_tensor,
     )
     return [t for t in range(vocab.size) if mask[0, t] == 0.0]
 
 
-def _advance(vocab: FormulaVocab, token: int, stack: int, done: bool):
-    """Advance the sampling state by one token (stack-only postfix rules)."""
+def _advance(
+    vocab: FormulaVocab,
+    token: int,
+    stack: int,
+    types: list[int],
+    done: bool,
+):
+    """Advance the sampling state by one token (stack-only postfix rules
+    plus the P7-E semantic-type state, rules from
+    :mod:`ashare_model.semantic_sampling`)."""
 
     if done:
-        return stack, done
+        return stack, types, done
     if token == vocab.pad_token_id:
-        return stack, True
+        return stack, types, True
     if vocab.eos_token_id is not None and token == vocab.eos_token_id:
-        return stack, True
+        return stack, types, True
     if token < vocab.operator_offset:
-        return stack + 1, done
+        name = vocab.feature_names[token - vocab.feature_offset]
+        types.append(type_id(FEATURE_METADATA[name].semantic_type))
+        return stack + 1, types, done
     op_index = token - vocab.operator_offset
-    arity = _OPERATOR_ARITY[vocab.operator_names[op_index]]
-    return stack - arity + 1, done
+    name = vocab.operator_names[op_index]
+    arity = _OPERATOR_ARITY[name]
+    arg_types = tuple(from_id(i) for i in types[len(types) - arity :])
+    del types[len(types) - arity :]
+    types.append(type_id(resolve_output(name, arg_types)))
+    return stack - arity + 1, types, done
 
 
 def run_tpe_baseline(
@@ -112,16 +136,18 @@ def run_tpe_baseline(
     def propose(trial) -> tuple[int, ...]:
         tokens: list[int] = []
         stack, done = 0, False
+        types: list[int] = []
         for step in range(int(max_formula_len)):
             legal = _legal_tokens(
-                vocab, stack, done, step, max_formula_len, feature_ids
+                vocab, stack, done, step, max_formula_len, feature_ids,
+                stack_types=types,
             )
             if not legal:
                 break  # the mask contract guarantees at least one legal token
             index = int(trial.suggest_categorical(f"pos_{step}", choices))
             token = legal[index % len(legal)]
             tokens.append(token)
-            stack, done = _advance(vocab, token, stack, done)
+            stack, types, done = _advance(vocab, token, stack, types, done)
         return tuple(tokens)
 
     def tell(trial, tokens) -> None:
