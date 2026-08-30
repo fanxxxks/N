@@ -1,6 +1,6 @@
 # P4 四搜索器统一与 Transformer 改造契约
 
-状态：预注册（实现前）  
+状态：预注册（实现前）
 适用版本：`SEARCH_CONTRACT_VERSION = 1`、`ELITE_ARCHIVE_VERSION = 1`、
 `RL_DIAGNOSTICS_VERSION = 1`、`IMITATION_VERSION = 1`、
 `ADMISSION_RULE_VERSION = 2`、`PROTOCOL_VERSION = 23`、
