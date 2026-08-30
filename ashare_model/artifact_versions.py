@@ -172,6 +172,10 @@ def classify_protocol(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if mismatch:
         reasons.append(mismatch)
+    # P6: current-generation protocol artifacts record the research domain;
+    # a payload without it predates the domain dimension (v24 schema).
+    if payload.get("research_domain") is None:
+        reasons.append("no research_domain (pre-P6)")
     if "dataset_id" not in payload:
         reasons.append("no dataset_id (pre-T1-01)")
     if "stitched" not in payload:

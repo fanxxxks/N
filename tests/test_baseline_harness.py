@@ -236,7 +236,9 @@ def test_semantic_budget_skips_degenerate_and_canonical_duplicates(
     monkeypatch.setattr(
         harness_module,
         "sample_random_formulas",
-        lambda seed, vocab, max_len, n: crafted * (n // len(crafted) + 1),
+        # P6: canonical_form_pool forwards feature_ids (None in unified
+        # runs); the fake accepts and ignores it.
+        lambda seed, vocab, max_len, n, **kwargs: crafted * (n // len(crafted) + 1),
     )
     kwargs = _semantic_kwargs()
     target = kwargs["target"]
@@ -275,7 +277,9 @@ def test_semantic_budget_dedups_equivalent_classes(monkeypatch):
     monkeypatch.setattr(
         harness_module,
         "sample_random_formulas",
-        lambda seed, vocab, max_len, n: crafted * (n // len(crafted) + 1),
+        # P6: canonical_form_pool forwards feature_ids (None in unified
+        # runs); the fake accepts and ignores it.
+        lambda seed, vocab, max_len, n, **kwargs: crafted * (n // len(crafted) + 1),
     )
     kwargs = _semantic_kwargs()
     target = kwargs["target"]

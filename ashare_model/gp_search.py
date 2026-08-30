@@ -59,16 +59,29 @@ class Signal:
     """Type token of the strongly-typed formula tree (one per node)."""
 
 
-def build_pset(vocab: FormulaVocab):
+def build_pset(vocab: FormulaVocab, feature_ids: list[int] | None = None):
     """Strongly-typed primitive set over the formula vocabulary.
 
     Every feature is a terminal of type :class:`Signal` and every operator
     is a primitive ``Signal^arity -> Signal``, so any tree generated from
-    the set is a well-typed formula.
+    the set is a well-typed formula.  ``feature_ids`` (P6 §4.2) restricts
+    the terminal set to the given feature tokens; ``None`` keeps every
+    vocabulary feature.
     """
 
     pset = gp.PrimitiveSetTyped("FORMULA", [], Signal)
-    for name in vocab.feature_names:
+    if feature_ids is None:
+        feature_names = list(vocab.feature_names)
+    else:
+        allowed = {int(token) for token in feature_ids}
+        feature_names = [
+            name
+            for token, name in enumerate(
+                vocab.feature_names, start=vocab.feature_offset
+            )
+            if token in allowed
+        ]
+    for name in feature_names:
         pset.addTerminal(name, Signal)
     for name, _, arity in OPS_CONFIG:
         pset.addPrimitive(
@@ -183,6 +196,7 @@ def run_gp_baseline(
     evaluator: SemanticBudgetEvaluator,
     max_formula_len: int,
     vocab: FormulaVocab | None = None,
+    feature_ids: list[int] | None = None,
     pop_size: int = 40,
     cxpb: float = 0.6,
     mutpb: float = 0.3,
@@ -194,13 +208,14 @@ def run_gp_baseline(
     claimed classes) receive the current best reward as a neutral fitness;
     only full evaluations consume budget.  The search stops when the
     budget is exhausted or a generation produced no new evaluation.
+    ``feature_ids`` (P6 §4.2) restricts the terminal set.
     """
 
     _ensure_creator()
     vocab = vocab or evaluator.vocab
     py_random.seed(seed)
     np.random.seed(seed)
-    pset = build_pset(vocab)
+    pset = build_pset(vocab, feature_ids=feature_ids)
     node_cap = _max_nodes(max_formula_len)
 
     toolbox = base.Toolbox()

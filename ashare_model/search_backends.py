@@ -34,6 +34,7 @@ class GPSearchBackend:
             evaluator=evaluator,
             max_formula_len=request.max_formula_len,
             vocab=backend_context.get("vocab"),
+            feature_ids=backend_context.get("feature_ids"),
         )
 
 
@@ -53,6 +54,7 @@ class TPESearchBackend:
             evaluator=evaluator,
             max_formula_len=request.max_formula_len,
             vocab=backend_context.get("vocab"),
+            feature_ids=backend_context.get("feature_ids"),
         )
 
 
@@ -72,6 +74,7 @@ class RandomSearchBackend:
             backend_context.get("vocab") or evaluator.vocab,
             request.max_formula_len,
             request.budget * 8,
+            feature_ids=backend_context.get("feature_ids"),
         )
         for key in pool:
             evaluator.propose(key)

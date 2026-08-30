@@ -51,6 +51,7 @@ from .reward import (
     REWARD_VERSION,
     batched_basket_rewards,
 )
+from .research_domain import RESEARCH_DOMAIN_VERSION
 from .rl_diagnostics import (
     aggregate_rl_run,
     gradient_l2_norm,
@@ -180,7 +181,7 @@ def validation_windows(
 
 
 def sample_random_formulas(
-    seed: int, vocab, max_len: int, n: int
+    seed: int, vocab, max_len: int, n: int, feature_ids: list[int] | None = None
 ) -> list[tuple[int, ...]]:
     """Sample ``n`` structurally valid postfix formulas under a uniform
     prior over the legal action mask (the exact legality rules the policy
@@ -188,6 +189,9 @@ def sample_random_formulas(
     one search space).  Deterministic in ``seed``; pins torch's CPU RNG
     exactly like the trainer does.  Every sequence is EOS-terminated, so
     its effective (non-padded) length is always >= 2.
+
+    ``feature_ids`` (P6 §4.2) restricts sampling to the given feature
+    tokens; ``None`` keeps the pre-P6 full-vocabulary search space.
     """
 
     torch.manual_seed(seed)
@@ -195,7 +199,9 @@ def sample_random_formulas(
     done = torch.zeros(n, dtype=torch.bool)
     seqs: list[torch.Tensor] = []
     for pos in range(max_len):
-        mask = build_action_mask(stack_sizes, done, pos, max_len, vocab)
+        mask = build_action_mask(
+            stack_sizes, done, pos, max_len, vocab, feature_ids=feature_ids
+        )
         allowed = (mask == 0.0).float()
         totals = allowed.sum(dim=1, keepdim=True)
         # The legal mask guarantees at least one allowed token per row; the
@@ -242,12 +248,21 @@ class AshareTrainer:
         loader: AshareDataLoader | None = None,
         reward_config: RewardConfig | None = None,
         init_seed: int = 42,
+        # P6: research-domain identity and search-space restriction.
+        # ``domain_id`` defaults to the reserved compatible semantic
+        # "unified"; ``feature_ids`` (global vocab token ids, None = all)
+        # restricts every sampling mask (docs/p6_research_domain_contract
+        # .md §4.2).
+        domain_id: str = "unified",
+        feature_ids: list[int] | None = None,
     ):
         self.data_config = data_config
         self.model_config = model_config
         self.backtest_config = backtest_config
         self.reward_config = reward_config or RewardConfig()
         self.init_seed = init_seed
+        self.domain_id = str(domain_id)
+        self.feature_ids = feature_ids
         self.loader = loader or AshareDataLoader(data_config, model_config)
         if self.loader.factor_tensor is None:
             self.loader.load_data()
@@ -474,7 +489,8 @@ class AshareTrainer:
                 logits, value = self.model(inp)
                 values.append(value.squeeze(-1))
                 mask = build_action_mask(
-                    stack_sizes, done, pos, max_len, self.vocab
+                    stack_sizes, done, pos, max_len, self.vocab,
+                    feature_ids=self.feature_ids,
                 )
                 dist = Categorical(logits=logits + mask)
                 action = dist.sample()
@@ -1029,6 +1045,11 @@ class AshareTrainer:
             # T2-01 provenance: the evaluation-budget ledger generation and
             # the unique semantic evaluations this run actually performed.
             "protocol_version": PROTOCOL_VERSION,
+            # P6 provenance: the research domain this strategy was searched
+            # in (reserved compatible semantic "unified" by default) and
+            # the registry generation its defaults resolve from.
+            "research_domain": self.domain_id,
+            "research_domain_version": RESEARCH_DOMAIN_VERSION,
             **execution_provenance(self.backtest_config),
             "semantic_cache_version": SEMANTIC_CACHE_VERSION,
             "unique_semantic_evals": self.semantic_cache.budget_used,
@@ -1209,7 +1230,9 @@ class AshareTrainer:
             dataset_id=self.loader.dataset_id,
             reward_version=REWARD_VERSION,
             protocol_version=PROTOCOL_VERSION,
-            window_id=self._window_id(contract, val_windows, policy),
+            window_id=self._window_id(
+                contract, val_windows, policy, domain_id=self.domain_id
+            ),
             cap=self._REWARD_CACHE_CAP,
         )
         calibration_slice = CalibrationSlice.of(factor_tensor.shape[2])
@@ -1427,6 +1450,7 @@ class AshareTrainer:
                 window.contract,
                 window.val_windows,
                 RebalancePolicy.from_config(self.backtest_config),
+                domain_id=self.domain_id,
             ),
             # Selection tie-break keys and the capacity-audit dollar volume
             # are sliced to the measured window (a capped admission window
@@ -1458,7 +1482,9 @@ class AshareTrainer:
         )
         backend = get_search_backend(searcher)
         log_search_start(searcher, request)
-        result = backend.search(request, evaluator, vocab=self.vocab)
+        result = backend.search(
+            request, evaluator, vocab=self.vocab, feature_ids=self.feature_ids
+        )
         self.search_result = result
         log_search_stop(result)
 
@@ -1504,15 +1530,23 @@ class AshareTrainer:
         contract,
         val_windows: list[tuple[int, int]],
         policy: RebalancePolicy,
+        domain_id: str = "unified",
     ) -> str:
         """Deterministic id of the training window: the exact columns the
-        semantic-cache key binds scores to."""
+        semantic-cache key binds scores to.  A non-unified research domain
+        (P6 §4.3) appends its id so domain scores never mix with unified
+        or other-domain scores."""
 
         val = "|".join(f"{a}:{b}" for a, b in val_windows)
+        domain = (
+            ""
+            if str(domain_id) == "unified"
+            else f":domain:{str(domain_id)}"
+        )
         return (
             f"train:{contract.train_signal_start}:{contract.train_signal_end}:"
             f"label:{contract.train_label_end}:frequency:{policy.frequency}:"
-            f"horizon:{policy.horizon}:val:{val}"
+            f"horizon:{policy.horizon}:val:{val}{domain}"
         )
 
     def _sync_best_from_selection(self) -> None:

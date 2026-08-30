@@ -506,7 +506,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 搜索 | [baseline_harness.py](../ashare_model/baseline_harness.py) | matched unique-semantic-evaluation 预算和统一搜索评价适配器 |
 | 搜索治理 | [admission.py](../ashare_model/admission.py) | v2 配对种子规则：imitation RL 必须在 area/OOS IR 同时胜 random RL 与 GP；失败时禁用高级 RL |
 | 评价 | [backtest.py](../ashare_model/backtest.py) | 消费统一 PortfolioConstructor 的连续权重回测、基准、费用、持仓快照和指标 |
-| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v23 nested walk-forward + P4 四搜索器统一比较语义、全局日历/稀疏标签/拼接 OOS/DSR/max-t |
+| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v24 nested walk-forward + P4 四搜索器统一比较语义、P6 研究域维度、全局日历/稀疏标签/拼接 OOS/DSR/max-t |
 | 评价 | [pareto.py](../ashare_model/pareto.py) | 多目标 Pareto frontier 辅助 |
 | 治理 | [ledger.py](../ashare_model/ledger.py) | append-only JSONL 试验账本、序列和 SHA-256 hash chain |
 | 治理 | [regime.py](../ashare_model/regime.py) | dev cutoff、预锁 final slice、dataset 绑定和违规拒绝 |
@@ -515,6 +515,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 诊断 | [diagnostics.py](../ashare_model/diagnostics.py) | 因子覆盖率、rank-IC、相关性报告 |
 | 实验 | [experiment_tracking.py](../ashare_model/experiment_tracking.py) | 可选 MLflow；无 URI/无包时结构化 no-op |
 | 版本 | [artifact_versions.py](../ashare_model/artifact_versions.py) | MODEL/REWARD/PROTOCOL/DATA_TIER/TIER_REPORT 等版本常量唯一来源（P0 新增） |
+| 研究域 | [research_domain.py](../ashare_model/research_domain.py) | RESEARCH_DOMAIN_VERSION=1；按预测周期拆分研究域：特征全量划分（24/25/12）、每域目标周期/执行周期/Reward 参数/换手约束、域限制张量与采样 token 集（P6 新增） |
 | 数据分层 | [data_tier.py](../ashare_model/data_tier.py) | DATA_TIER_VERSION=1；PitLevel→DataTier 映射、各档可用时间规则、<code>formula_data_tier_report</code> 公式追溯 API（P2 新增） |
 | 分层报告 | [tier_reports.py](../ashare_model/tier_reports.py) | TIER_REPORT_VERSION=1；A/A+B/all 分层诊断与消融报告（P2 新增） |
 | 测量 | [cost_matrix.py](../ashare_model/cost_matrix.py) | FEE_MATRIX_VERSION=1；资金×持仓数×换手率费用矩阵（P1 新增） |
@@ -530,7 +531,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 |---|---:|
 | 模型 | <code>MODEL_VERSION = 3</code>（v3 记录 elite-imitation 初始化；v2 checkpoint 明确拒绝晋级并重训） |
 | 奖励 | <code>REWARD_VERSION = 14</code>（v14 分离稀疏研究标签与逐日组合收益） |
-| 评价协议 | <code>PROTOCOL_VERSION = 23</code>（v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
+| 评价协议 | <code>PROTOCOL_VERSION = 24</code>（v24 增加研究域维度并记录 research_domain；v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
 | 公式语法 | <code>GRAMMAR_VERSION = 2</code> |
 | feature registry | 2（v2 起逐特征记录 data_tier） |
 | data tier | 1（ashare_model/data_tier.py，P2 新增） |
@@ -538,6 +539,8 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | fee matrix / searcher bench | 1（P1 新增测量模块） |
 | bare factor backtest | 3（v2 记录完整执行 provenance；v3 固定四象限 schema） |
 | portfolio constructor | 1（ashare_portfolio/constructor.py） |
+| rebalance policy | 2（v2 新增 every_20_days 与 monthly 频率，P6） |
+| research domain | 1（ashare_model/research_domain.py，P6 新增） |
 | execution spec | 2（ashare_portfolio/execution_spec.py） |
 | semantic cache | 1 |
 | dataset manifest | 1 |
@@ -548,7 +551,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 |---|---|---|
 | 核心 | [constructor.py](../ashare_portfolio/constructor.py) | 信号到目标权重的唯一生产实现；排名缓冲、equal_weight/optimizer、阻断、阈值、最小金额与换手预算 |
 | 核心 | [optimizer.py](../ashare_portfolio/optimizer.py) | constructor 的可选 CVXPY/OSQP 长仓 QP 后端；alpha、风险、换手、冲击、行业/beta/size 暴露、ADV 容量约束 |
-| 契约 | [rebalance.py](../ashare_portfolio/rebalance.py) | 全局 daily/weekly/every-N 调仓日历及 frequency/horizon 非重叠约束 |
+| 契约 | [rebalance.py](../ashare_portfolio/rebalance.py) | 全局 daily/weekly/every-N/monthly 调仓日历及 frequency/horizon 非重叠约束（v2 起含 every_20_days 与 monthly，P6） |
 | provenance | [execution_spec.py](../ashare_portfolio/execution_spec.py) | execution v2、constructor 版本和完整组合配置的统一记录/校验 |
 | 集成测试 | [golden.py](../ashare_portfolio/golden.py) | 将当前 constructor 权重通过 lot-free/whole-lot 撮合重放，分解费用、阻塞、手数残差；外部权重必须携带匹配 provenance |
 | 包入口 | [__init__.py](../ashare_portfolio/__init__.py) | 公开 constructor/optimizer/golden/provenance 类型 |

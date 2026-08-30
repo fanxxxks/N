@@ -183,6 +183,8 @@ def build_action_mask(
     step: int,
     max_len: int,
     vocab=None,
+    *,
+    feature_ids: list[int] | None = None,
 ) -> torch.Tensor:
     """Mask tokens so sampled sequences remain legal postfix formulas.
 
@@ -203,6 +205,10 @@ def build_action_mask(
     before its padding.  The feasibility bound is conservative (binary-only
     reductions: finishing from stack ``s`` needs at least ``s`` tokens), so
     the mask never admits a sequence that cannot terminate.
+
+    ``feature_ids`` (P6 §4.2) restricts the open feature tokens to the
+    given global vocab ids (research-domain search spaces); ``None`` keeps
+    the pre-P6 behavior of opening every feature token.
     """
 
     vocab = vocab or FORMULA_VOCAB
@@ -225,7 +231,24 @@ def build_action_mask(
     # A feature pushes one value; from stack s the formula needs at least
     # s+1 more tokens (s binary reductions + EOS) to terminate.
     can_feature = active & (stack_sizes + 1 <= remaining - 1)
-    mask[can_feature, vocab.feature_offset : vocab.operator_offset] = 0.0
+    if feature_ids is None:
+        mask[can_feature, vocab.feature_offset : vocab.operator_offset] = 0.0
+    else:
+        # Fancy indexing pairs a row mask with a column list element-wise,
+        # so the open set is built as a column mask first and combined
+        # with the row mask via broadcasting (every open row gets every
+        # allowed feature token).
+        allowed = torch.zeros(
+            vocab.size, dtype=torch.bool, device=mask.device
+        )
+        allowed[
+            torch.as_tensor(
+                [int(token) for token in feature_ids],
+                dtype=torch.long,
+                device=mask.device,
+            )
+        ] = True
+        mask[can_feature.unsqueeze(1) & allowed.unsqueeze(0)] = 0.0
 
     # Operators are resolved by name through OPS_BY_NAME so the mask stays
     # correctly aligned for any vocabulary whose operator names are a

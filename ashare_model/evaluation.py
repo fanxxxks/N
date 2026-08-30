@@ -175,6 +175,17 @@ v23 (P4) makes GP/TPE/Random/RL return one versioned ``SearchResult`` with
 truthful requested/consumed budgets, termination/stagnation and
 per-evaluation best-so-far curves.  This changes comparison and artifact
 semantics, not the candidate reward itself.
+
+v24 (P6) adds the research-domain dimension
+(``docs/p6_research_domain_contract.md``): a run declares one of
+``short_price_volume`` / ``medium_cross_section`` / ``slow_fundamental``
+(or the reserved compatible semantic ``unified``).  In domain mode the
+out-of-domain factor rows are neutral (zeroed), every searcher samples
+only the domain's feature tokens, baselines must lie inside the domain,
+the (frequency, horizon) execution point must be a legal point of the
+domain, and the window id carries the domain.  Artifacts record
+``research_domain`` and ``research_domain_version``; rewards from
+different domains are never comparable.
 """
 
 from __future__ import annotations
@@ -229,6 +240,13 @@ from .gp_search import run_gp_baseline
 from .ir import FormulaSyntaxError, canonical_tokens
 from .ledger import ExperimentLedger
 from .regime import RegimeRegistry
+from .research_domain import (
+    RESEARCH_DOMAIN_VERSION,
+    UNIFIED_DOMAIN_ID,
+    feature_token_ids,
+    restrict_tensor,
+    resolve_domain,
+)
 from .reward import REWARD_VERSION
 from .semantic_cache import (
     SEMANTIC_CACHE_VERSION,
@@ -250,7 +268,7 @@ from .train import (
 from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
-PROTOCOL_VERSION = "23"
+PROTOCOL_VERSION = "24"
 
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
@@ -297,6 +315,28 @@ class Fold:
     @property
     def test_end_idx(self) -> int:
         return self.contract.test_price_end
+
+
+def search_window_id(
+    fold: Fold, seed: int, domain_id: str | None = None
+) -> str:
+    """Deterministic search-window id for one (fold, seed) evaluation.
+
+    A non-unified research domain (P6 §4.3) appends ``domain:<id>`` so
+    semantic-cache scores of one domain never mix with unified or
+    other-domain scores; the default id stays pre-P6 byte-identical.
+    """
+
+    domain = (
+        f":domain:{str(domain_id)}"
+        if domain_id is not None and str(domain_id) != UNIFIED_DOMAIN_ID
+        else ""
+    )
+    return (
+        f"fold:{fold.train_end}:{fold.test_end}:"
+        f"frequency:{fold.policy.frequency}:horizon:{fold.policy.horizon}:"
+        f"seed:{seed}{domain}"
+    )
 
 
 @dataclass(frozen=True)
@@ -757,6 +797,8 @@ def _build_trainer(
     backtest_config: BacktestConfig,
     loader: AshareDataLoader,
     reward_config: RewardConfig | None,
+    domain_id: str = "unified",
+    feature_ids: list[int] | None = None,
 ) -> AshareTrainer:
     """Trainer factory seam (tests inject a fake trainer through this)."""
 
@@ -766,6 +808,8 @@ def _build_trainer(
         backtest_config,
         loader=loader,
         reward_config=reward_config,
+        domain_id=domain_id,
+        feature_ids=feature_ids,
     )
 
 
@@ -778,15 +822,24 @@ def run_fold(
     tier,
     fold: Fold,
     seed: int,
+    domain_id: str = "unified",
+    feature_ids: list[int] | None = None,
 ) -> dict:
     """Train one candidate on one fold with one seed, then score it OOS.
 
     The trainer never saves artifacts (the protocol must not clobber the
     working strategy files); training-side values are archived only.
+    ``domain_id`` / ``feature_ids`` (P6 §4.2) restrict the search space.
     """
 
     trainer = _build_trainer(
-        data_config, model_config, backtest_config, loader, reward_config
+        data_config,
+        model_config,
+        backtest_config,
+        loader,
+        reward_config,
+        domain_id=domain_id,
+        feature_ids=feature_ids,
     )
     if model_config.searcher == "rl":
         tokens = trainer.train(
@@ -1015,12 +1068,14 @@ def _search_evaluator(
     source: str,
     candidate_prefix: str,
     chunk: int | None = None,
+    domain_id: str | None = None,
 ) -> SemanticBudgetEvaluator:
     """Shared semantic-budget evaluator for one search run (v18/v19).
 
     ``chunk`` defaults to the memory-bounded batch size (random baseline);
     sequential searchers (GP/TPE) pass ``chunk=1`` so every proposal is
-    scored eagerly.
+    scored eagerly.  ``domain_id`` (P6 §4.3) enters the window id so
+    domain scores never mix with other domains.
     """
 
     return SemanticBudgetEvaluator(
@@ -1037,11 +1092,7 @@ def _search_evaluator(
         fingerprint_execute=window.fingerprint_execute,
         dataset_id=loader.dataset_id,
         protocol_version=PROTOCOL_VERSION,
-        window_id=(
-            f"fold:{fold.train_end}:{fold.test_end}:"
-            f"frequency:{fold.policy.frequency}:horizon:{fold.policy.horizon}:"
-            f"seed:{seed}"
-        ),
+        window_id=search_window_id(fold, seed, domain_id=domain_id),
         tie_break_keys=window.tie_break_keys,
         adv=window.adv,
         blocked_buy=window.blocked_buy,
@@ -1143,6 +1194,8 @@ def run_random_search(
     n_samples: int,
     seed: int,
     budget: int | None = None,
+    feature_ids: list[int] | None = None,
+    domain_id: str | None = None,
 ) -> dict:
     """Uniform random-search baseline over structurally valid formulas.
 
@@ -1184,11 +1237,16 @@ def run_random_search(
         return _search_failed_row(base, "degenerate window or budget")
     window = _build_search_window(loader, model_config, fold)
     formulas = canonical_form_pool(
-        seed, window.vocab, model_config.max_formula_len, target_count
+        seed,
+        window.vocab,
+        model_config.max_formula_len,
+        target_count,
+        feature_ids=feature_ids,
     )
     evaluator = _search_evaluator(
         window, loader, backtest_config, reward_config, fold, seed,
         target_count, "random_search", "random",
+        domain_id=domain_id,
     )
     for key in formulas:
         evaluator.propose(key)
@@ -1220,9 +1278,12 @@ def run_gp_search(
     fold: Fold,
     seed: int,
     budget: int,
+    feature_ids: list[int] | None = None,
+    domain_id: str | None = None,
 ) -> dict:
     """Strongly-typed GP baseline (DEAP, T2-02) under the matched
-    unique-semantic-evaluation budget; row shaped like a trained row."""
+    unique-semantic-evaluation budget; row shaped like a trained row.
+    ``feature_ids`` (P6 §4.2) restricts the terminal set."""
 
     base = {
         "candidate": "gp_search",
@@ -1238,12 +1299,14 @@ def run_gp_search(
     evaluator = _search_evaluator(
         window, loader, backtest_config, reward_config, fold, seed,
         int(budget), "gp_search", "gp",
+        domain_id=domain_id,
     )
     result = run_gp_baseline(
         seed=seed,
         evaluator=evaluator,
         max_formula_len=model_config.max_formula_len,
         vocab=window.vocab,
+        feature_ids=feature_ids,
     )
     return _search_row(base, result, loader, fold, backtest_config)
 
@@ -1256,9 +1319,12 @@ def run_tpe_search(
     fold: Fold,
     seed: int,
     budget: int,
+    feature_ids: list[int] | None = None,
+    domain_id: str | None = None,
 ) -> dict:
     """TPE baseline (Optuna, T2-02) under the matched unique-semantic-
-    evaluation budget; row shaped like a trained row."""
+    evaluation budget; row shaped like a trained row.  ``feature_ids``
+    (P6 §4.2) restricts the open feature tokens."""
 
     base = {
         "candidate": "tpe_search",
@@ -1274,12 +1340,14 @@ def run_tpe_search(
     evaluator = _search_evaluator(
         window, loader, backtest_config, reward_config, fold, seed,
         int(budget), "tpe_search", "tpe",
+        domain_id=domain_id,
     )
     result = run_tpe_baseline(
         seed=seed,
         evaluator=evaluator,
         max_formula_len=model_config.max_formula_len,
         vocab=window.vocab,
+        feature_ids=feature_ids,
     )
     return _search_row(base, result, loader, fold, backtest_config)
 
@@ -1946,6 +2014,10 @@ def build_result(
             "protocol_version": PROTOCOL_VERSION,
             "data_tier_version": DATA_TIER_VERSION,
             "reward_version": REWARD_VERSION,
+            # P6 §4.4: the research domain this campaign ran in and the
+            # registry generation its defaults resolve from.
+            "research_domain": proto_cfg.domain,
+            "research_domain_version": RESEARCH_DOMAIN_VERSION,
             **artifact_provenance,
             "dataset_id": dataset_id,
             "frequency": proto_cfg.frequency,
@@ -2041,6 +2113,54 @@ def run_protocol(
         raise ValueError(f"unknown tier: {tier_name}")
     tier = getattr(proto_cfg, tier_name)
     validate_baseline_signals(proto_cfg.baseline_signals, FEATURE_NAMES)
+
+    # P6: research-domain semantics.  In domain mode the execution point
+    # must be a legal point of the domain, baselines must stay inside the
+    # domain, the out-of-domain factor rows become neutral, and the
+    # searchers sample only the domain's feature tokens.  ``unified``
+    # (the default) is byte-identical to pre-P6 behavior.
+    feature_ids: list[int] | None = None
+    domain = None
+    if proto_cfg.domain != UNIFIED_DOMAIN_ID:
+        domain = resolve_domain(proto_cfg.domain)
+        if not domain.is_legal_execution(
+            proto_cfg.frequency, proto_cfg.horizon
+        ):
+            raise ValueError(
+                f"protocol (frequency={proto_cfg.frequency!r}, "
+                f"horizon={proto_cfg.horizon}) is not a legal execution "
+                f"point of domain {domain.id!r} "
+                "(docs/p6_research_domain_contract.md §1.2)"
+            )
+        out_of_domain = [
+            name
+            for name in proto_cfg.baseline_signals
+            if name not in domain.features
+        ]
+        if out_of_domain:
+            raise ValueError(
+                f"baseline signals {out_of_domain} are outside domain "
+                f"{domain.id!r} (docs/p6_research_domain_contract.md §3.2)"
+            )
+        feature_ids = feature_token_ids(proto_cfg.domain)
+        if loader.factor_tensor is None:
+            raise ValueError(
+                "the loader must be loaded before a domain protocol run"
+            )
+        loader.factor_tensor = torch.tensor(
+            restrict_tensor(loader.factor_tensor.numpy(), proto_cfg.domain),
+            dtype=torch.float32,
+        )
+        logger.info(
+            "protocol.domain domain={} features={} frequency={} horizon={} "
+            "turnover_budget={} cost_weight={}",
+            domain.id,
+            len(domain.features),
+            proto_cfg.frequency,
+            proto_cfg.horizon,
+            backtest_config.turnover_budget,
+            reward_config.cost_weight if reward_config is not None else None,
+        )
     if fold_indices is not None:
         unknown = [i for i in fold_indices if not 0 <= i < len(proto_cfg.folds)]
         if unknown:
@@ -2107,6 +2227,8 @@ def run_protocol(
                         proto_cfg.random_samples,
                         proto_cfg.random_seed,
                         budget=random_budget,
+                        feature_ids=feature_ids,
+                        domain_id=proto_cfg.domain,
                     ),
                     algorithm="random_search",
                     candidate="random_search",
@@ -2138,6 +2260,8 @@ def run_protocol(
                         fold,
                         seed=proto_cfg.gp_seed,
                         budget=matched_budget,
+                        feature_ids=feature_ids,
+                        domain_id=proto_cfg.domain,
                     ),
                     algorithm="gp_search",
                     candidate="gp_search",
@@ -2162,6 +2286,8 @@ def run_protocol(
                         fold,
                         seed=proto_cfg.tpe_seed,
                         budget=matched_budget,
+                        feature_ids=feature_ids,
+                        domain_id=proto_cfg.domain,
                     ),
                     algorithm="tpe_search",
                     candidate="tpe_search",
@@ -2187,6 +2313,8 @@ def run_protocol(
                         tier,
                         fold,
                         seed,
+                        domain_id=proto_cfg.domain,
+                        feature_ids=feature_ids,
                     ),
                     algorithm="trained",
                     candidate="trained",

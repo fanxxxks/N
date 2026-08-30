@@ -204,6 +204,12 @@ class ProtocolConfig:
 
     frequency: str = "daily"
     horizon: int = 1
+    # P6: research domain (one of short_price_volume /
+    # medium_cross_section / slow_fundamental, or the reserved
+    # compatible semantic "unified").  Domain runs resolve their default
+    # frequency/horizon/baseline ladder from the versioned registry
+    # (docs/p6_research_domain_contract.md §3).
+    domain: str = "unified"
     seeds: list[int] = field(default_factory=lambda: [42, 7, 2024])
     folds: list[FoldConfig] = field(
         default_factory=lambda: [
@@ -471,6 +477,11 @@ def make_reward_config(raw: dict[str, Any]) -> RewardConfig:
         k: reward_raw.get(k, getattr(defaults, k))
         for k in RewardConfig.__dataclass_fields__
     }
+    # P6 §3.4: the reward cost weight defaults to the research domain's
+    # declared value when not overridden.
+    _, domain = _resolve_protocol_domain(raw.get("protocol", {}) or {})
+    if domain is not None and "cost_weight" not in reward_raw:
+        data["cost_weight"] = domain.cost_weight
     return RewardConfig(**data)
 
 
@@ -480,6 +491,23 @@ def _make_tier(tier_raw: dict[str, Any] | None, defaults: TierConfig) -> TierCon
         steps=int(tier_raw.get("steps", defaults.steps)),
         batch_size=int(tier_raw.get("batch_size", defaults.batch_size)),
     )
+
+
+def _resolve_protocol_domain(
+    proto_raw: dict[str, Any],
+) -> tuple[str, object | None]:
+    """Resolve ``protocol.domain``; returns ``(domain_id, domain|None)``.
+
+    ``unified`` (the default) resolves to ``None``: no domain defaults are
+    applied and pre-P6 behavior is preserved byte-for-byte.
+    """
+
+    domain_id = str(proto_raw.get("domain", "unified"))
+    if domain_id == "unified":
+        return domain_id, None
+    from ashare_model.research_domain import resolve_domain
+
+    return domain_id, resolve_domain(domain_id)
 
 
 def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
@@ -493,15 +521,47 @@ def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
         folds = [FoldConfig(**dict(f)) for f in folds_raw]
     folds = validate_folds(folds)
 
-    cfg = ProtocolConfig(
-        frequency=str(proto_raw.get("frequency", defaults.frequency)),
-        horizon=int(proto_raw.get("horizon", defaults.horizon)),
-        seeds=[int(s) for s in proto_raw.get("seeds", defaults.seeds)],
-        folds=folds,
-        baseline_signals=[
+    domain_id, domain = _resolve_protocol_domain(proto_raw)
+    if domain is not None:
+        frequency = str(proto_raw.get("frequency", domain.default_frequency))
+        horizon = int(proto_raw.get("horizon", domain.default_horizon))
+        baseline_signals = [
+            str(name)
+            for name in proto_raw.get("baseline_signals", domain.baseline_signals)
+        ]
+        if not domain.is_legal_execution(frequency, horizon):
+            raise ValueError(
+                f"protocol (frequency={frequency!r}, horizon={horizon}) is "
+                f"not a legal execution point of domain {domain.id!r} "
+                "(docs/p6_research_domain_contract.md §1.2)"
+            )
+        from ashare_model.research_domain import domain_of_feature
+
+        out_of_domain = [
+            name
+            for name in baseline_signals
+            if name not in domain.features
+        ]
+        if out_of_domain:
+            raise ValueError(
+                f"baseline signals {out_of_domain} are outside domain "
+                f"{domain.id!r} (docs/p6_research_domain_contract.md §3.2)"
+            )
+    else:
+        frequency = str(proto_raw.get("frequency", defaults.frequency))
+        horizon = int(proto_raw.get("horizon", defaults.horizon))
+        baseline_signals = [
             str(name)
             for name in proto_raw.get("baseline_signals", defaults.baseline_signals)
-        ],
+        ]
+
+    cfg = ProtocolConfig(
+        frequency=frequency,
+        horizon=horizon,
+        domain=domain_id,
+        seeds=[int(s) for s in proto_raw.get("seeds", defaults.seeds)],
+        folds=folds,
+        baseline_signals=baseline_signals,
         screening=_make_tier(proto_raw.get("screening"), defaults.screening),
         confirmation=_make_tier(proto_raw.get("confirmation"), defaults.confirmation),
         random_samples=int(
@@ -534,14 +594,30 @@ def make_backtest_config(raw: dict[str, Any]) -> BacktestConfig:
         for k in BacktestConfig.__dataclass_fields__
     }
     proto_raw = raw.get("protocol", {}) or {}
+    # P6 §3: the backtest execution point and the L1 turnover budget
+    # default to the research domain's declared values when not overridden,
+    # so protocol and backtest stay aligned on the same cadence.
+    _, domain = _resolve_protocol_domain(proto_raw)
     if "rebalance_frequency" not in bt_raw:
         data["rebalance_frequency"] = str(
-            proto_raw.get("frequency", defaults.rebalance_frequency)
+            proto_raw.get(
+                "frequency",
+                domain.default_frequency
+                if domain is not None
+                else defaults.rebalance_frequency,
+            )
         )
     if "target_horizon" not in bt_raw:
         data["target_horizon"] = int(
-            proto_raw.get("horizon", defaults.target_horizon)
+            proto_raw.get(
+                "horizon",
+                domain.default_horizon
+                if domain is not None
+                else defaults.target_horizon,
+            )
         )
+    if domain is not None and "turnover_budget" not in bt_raw:
+        data["turnover_budget"] = domain.turnover_budget
     cfg = BacktestConfig(**data)
     from ashare_portfolio.rebalance import RebalancePolicy
 

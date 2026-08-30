@@ -40,9 +40,15 @@ _OPERATOR_ARITY = {name: arity for name, _, arity in OPS_CONFIG}
 
 
 def _legal_tokens(
-    vocab: FormulaVocab, stack: int, done: bool, step: int, max_len: int
+    vocab: FormulaVocab,
+    stack: int,
+    done: bool,
+    step: int,
+    max_len: int,
+    feature_ids: list[int] | None = None,
 ) -> list[int]:
-    """Legal token ids at one position of the mask-legal sampling walk."""
+    """Legal token ids at one position of the mask-legal sampling walk.
+    ``feature_ids`` (P6 §4.2) restricts the open feature tokens."""
 
     mask = build_action_mask(
         torch.tensor([stack], dtype=torch.long),
@@ -50,6 +56,7 @@ def _legal_tokens(
         step,
         max_len,
         vocab,
+        feature_ids=feature_ids,
     )
     return [t for t in range(vocab.size) if mask[0, t] == 0.0]
 
@@ -76,6 +83,7 @@ def run_tpe_baseline(
     evaluator: SemanticBudgetEvaluator,
     max_formula_len: int,
     vocab: FormulaVocab | None = None,
+    feature_ids: list[int] | None = None,
     n_startup_trials: int = 10,
     stall_limit: int = 50,
     tell_batch: int = 16,
@@ -89,6 +97,7 @@ def run_tpe_baseline(
     evaluation instead of paying per-proposal scoring overhead.  The
     search stops when the evaluation budget is exhausted or
     ``stall_limit`` consecutive trials produced no new evaluation.
+    ``feature_ids`` (P6 §4.2) restricts the open feature tokens.
     """
 
     vocab = vocab or evaluator.vocab
@@ -104,7 +113,9 @@ def run_tpe_baseline(
         tokens: list[int] = []
         stack, done = 0, False
         for step in range(int(max_formula_len)):
-            legal = _legal_tokens(vocab, stack, done, step, max_formula_len)
+            legal = _legal_tokens(
+                vocab, stack, done, step, max_formula_len, feature_ids
+            )
             if not legal:
                 break  # the mask contract guarantees at least one legal token
             index = int(trial.suggest_categorical(f"pos_{step}", choices))

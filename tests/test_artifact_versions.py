@@ -27,6 +27,7 @@ from ashare_model.artifact_versions import (
     classify_strategy,
     stamp_legacy_artifacts,
 )
+from ashare_model.research_domain import RESEARCH_DOMAIN_VERSION
 from ashare_model import research_doctor as doctor
 
 
@@ -59,6 +60,10 @@ def _current_protocol() -> dict:
         "dataset_id": "d1",
         "stitched": {"x": 1},
         "ledger": {"path": "data/experiment_ledger.jsonl"},
+        # P6: current-generation protocol artifacts record the research
+        # domain (docs/p6_research_domain_contract.md §4.4).
+        "research_domain": "unified",
+        "research_domain_version": RESEARCH_DOMAIN_VERSION,
         **execution_provenance(BacktestConfig()),
     }
 
@@ -127,10 +132,11 @@ def test_current_strategy_is_not_legacy():
 
 
 def test_current_semantic_versions_are_pinned():
-    # P4 contract §6 changes search comparison/result semantics only; reward
-    # and execution semantics remain at their P3 generations.
+    # P6 contract §5 bumps PROTOCOL_VERSION 23 -> 24 (research-domain
+    # dimension); reward and execution semantics stay at their P3
+    # generations, and the bare-factor schema stays at P3 v3.
     assert REWARD_VERSION == "14"
-    assert PROTOCOL_VERSION == "23"
+    assert PROTOCOL_VERSION == "24"
     assert EXECUTION_SPEC_VERSION == 2
     assert BARE_FACTOR_BACKTEST_VERSION == 3
 
@@ -235,6 +241,17 @@ def test_protocol_without_semantic_versions_is_legacy():
     reasons = "; ".join(verdict["reasons"])
     assert "no protocol_version" in reasons
     assert "no reward_version" in reasons
+
+
+def test_protocol_missing_domain_is_legacy():
+    # P6 contract §4.4: a current-generation protocol artifact without the
+    # research_domain field predates the domain dimension and is legacy.
+    payload = _current_protocol()
+    assert classify_protocol(payload)["legacy"] is False
+    payload.pop("research_domain")
+    verdict = classify_protocol(payload)
+    assert verdict["legacy"] is True
+    assert any("research_domain" in reason for reason in verdict["reasons"])
 
 
 def test_current_bare_factor_with_full_provenance_is_not_legacy():

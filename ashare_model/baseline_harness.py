@@ -57,6 +57,7 @@ def canonical_form_pool(
     vocab: FormulaVocab,
     max_formula_len: int,
     target_count: int,
+    feature_ids: list[int] | None = None,
 ) -> list[tuple[int, ...]]:
     """Uniform mask-legal samples, canonically deduplicated.
 
@@ -64,10 +65,13 @@ def canonical_form_pool(
     dropped; commuted and otherwise identical canonical forms collapse to
     one entry.  Returns at most ``target_count`` canonical token
     sequences.  The random baseline's proposal pool, shared by the
-    harness, the protocol row and the train entry.
+    harness, the protocol row and the train entry.  ``feature_ids``
+    (P6 §4.2) restricts sampling to the given feature tokens.
     """
 
-    sampled = sample_random_formulas(seed, vocab, max_formula_len, target_count * 8)
+    sampled = sample_random_formulas(
+        seed, vocab, max_formula_len, target_count * 8, feature_ids=feature_ids
+    )
     canonical_forms: list[tuple[int, ...]] = []
     seen: set[tuple[int, ...]] = set()
     for key in sampled:

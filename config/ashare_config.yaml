@@ -100,9 +100,21 @@ reward:
 # P3: frequency/horizon drive the shared rebalance calendar and causal target.
 # Allowed non-overlapping pairs are daily/1, weekly/1, every_5_days/1..5,
 # and every_10_days/1..10.
+# P6: research-domain split by prediction horizon
+# (docs/p6_research_domain_contract.md).  domain selects one of
+#   short_price_volume   (1-5 日目标, daily/every_5_days, 价格/成交/涨跌停/流动性)
+#   medium_cross_section (5-20 日目标, every_5/every_10_days, 动量/反转/波动/行业相对)
+#   slow_fundamental     (20+ 日目标, monthly, 估值/质量/增长/规模)
+# or the reserved compatible semantic "unified" (pre-P6 behavior, the
+# default).  Domain runs resolve their default frequency/horizon/baseline
+# ladder/turnover_budget/cost_weight from the versioned registry when the
+# corresponding keys are absent; rewards of different domains are not
+# comparable.  The production default below stays unified and is
+# byte-identical to pre-P6 behavior.
 # batch_size must stay >= 256: below that the advantage normalization
 # (rewards.std) risks degenerating.
 protocol:
+  domain: unified
   frequency: daily
   horizon: 1
   seeds: [42, 7, 2024]
