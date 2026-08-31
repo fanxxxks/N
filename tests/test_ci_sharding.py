@@ -182,6 +182,54 @@ def test_warning_merge_requires_every_shard_log(tmp_path: Path) -> None:
         module.compare({}, baseline)
 
 
+def test_warning_merge_ignores_group_count_headers(tmp_path: Path) -> None:
+    """Regression (2026-08-31 principle-7 gate): instance-count headers are
+    not comparable across xdist and serial shapes.
+
+    The once-per-process warning duplication documented in PR3 manifests
+    ONLY as a group-count header delta (serial '7 warnings' vs xdist
+    '8 warnings') while every location/message line - the actual warning
+    kinds - stays identical.  The comparator implements the registered
+    criterion (deduplicated category/message/location set), so count
+    headers must be excluded from both sides; otherwise every local
+    `-n auto` gate fails on the documented delta.
+    """
+
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    location_lines = [
+        "  C:/env/osqp/interface.py:405: PendingDeprecationWarning: boom",
+        "    warnings.warn(",
+    ]
+    serial_text = "\n".join(
+        [
+            "============================== warnings summary ===============================",
+            "tests/test_evaluation.py: 7 warnings",
+            *location_lines,
+            "1347 passed, 5 skipped, 614 warnings in 730.02s (0:12:10)",
+        ]
+    )
+    xdist_text = "\n".join(
+        [
+            "============================== warnings summary ===============================",
+            "tests/test_evaluation.py: 8 warnings",
+            *location_lines,
+            "1347 passed, 5 skipped, 615 warnings in 386.87s (0:06:26)",
+        ]
+    )
+    baseline = {
+        "total_warnings": 614,
+        "section_lines": sorted(module.parse_warnings_section(serial_text)),
+    }
+    run = module.compare(
+        {"pytest-xdist.log": module.parse_warnings_section(xdist_text)}, baseline
+    )
+    assert run.net_new == [], (
+        "count-header-only deltas must not be net-new (instance multiplicity "
+        "is documented as non-comparable)"
+    )
+    assert run.disappeared == []
+
+
 def test_committed_baseline_is_structurally_valid() -> None:
     payload = json.loads(BASELINE.read_text(encoding="utf-8"))
     assert payload["total_warnings"] > 0

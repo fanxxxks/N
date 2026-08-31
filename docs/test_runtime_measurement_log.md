@@ -319,3 +319,19 @@ message 与评审记录（测量日志只承载测量与门禁命令矩阵本身
   `test-warning-merge` job）、web job、compileall -j 0、freeze_lock
   --check、git diff --check、干净环境 pip/--check-full；结果记入 merge
   commit 与评审记录。
+
+## 追加运行（2026-08-31，principle-7 候选 9600160 + D2 比较器精化）
+
+- 命令：`python -m pytest -q tests -n auto`（完整 stdout+stderr →
+  `logs/pytest_gate_9600160.txt`）。
+- 结果：**1347 passed / 5 skipped / 615 warnings / 386.87s（6:26）**
+  （机器负载高于 parity 时段；墙钟波动，计数不变量成立）。
+- D2 比较器精化（R3-F1 后续）：对 xdist 日志的本地检查按设计命中
+  PR3 已口径化的组计数头差异（7→8），暴露比较器与"去重
+  (类别, 消息模板, 调用位置) 集合"口径的偏差 → RED
+  `test_warning_merge_ignores_group_count_headers` → 修复：组计数头行
+  （`tests/...: N warnings`）自两侧排除，位置/消息行（warning 种类
+  载体）保留；基线同口径重生成（614 warnings，38 行归一化种类集合，
+  provenance 不变）。
+- 复核：修复后同一 xdist 日志 D2 检查 = 0 net-new（exit 0）——本地
+  `-n auto` 门禁与 warning 基线完全兼容；CI 串行分片形态同理。

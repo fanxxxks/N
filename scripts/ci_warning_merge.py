@@ -32,6 +32,11 @@ from pathlib import Path
 START_MARK = "warnings summary"
 END_MARKS = ("slowest", "durations:", "short test summary")
 SUMMARY_RE = re.compile(r"(\d+) passed(?:, (\d+) skipped)?(?:, (\d+) warnings)? in ")
+# Group-count headers ("tests/test_x.py: 500 warnings") carry instance
+# multiplicity, which is documented as non-comparable across xdist and
+# serial shapes (PR3 criterion); the location/message lines carry the
+# actual warning kinds and stay in the section.
+COUNT_HEADER_RE = re.compile(r"^tests/\S*: \d+ warnings$")
 
 # In-repo package/tool anchors: a warnings-summary location is normalized
 # to start at the last of these, so a Windows dev tree (D:\...\),
@@ -90,7 +95,11 @@ def parse_warnings_section(text: str) -> list[str]:
         if any(mark in lines[i] for mark in END_MARKS) or SUMMARY_RE.search(lines[i]):
             end = i
             break
-    return [_normalize_line(line) for line in lines[start:end] if line.strip()]
+    return [
+        _normalize_line(line)
+        for line in lines[start:end]
+        if line.strip() and not COUNT_HEADER_RE.match(line.strip())
+    ]
 
 
 def parse_summary_totals(text: str) -> tuple[int, int, int]:
