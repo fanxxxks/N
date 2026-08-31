@@ -1145,18 +1145,28 @@ python -m uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 
 ### 9.2 推荐验证命令
 
+验证分层遵循 AGENTS §10.2：开发迭代先跑聚焦测试（内环）；首次 push 前在精确候选
+commit 上完整复现 CI-equivalent job；合并后在精确 merge commit 上组合复验。
+
 ~~~powershell
 & D:\minequant\.venv\Scripts\Activate.ps1
+
+# 开发迭代内环：聚焦测试优先；失败用 --lf/--ff 优先重跑
+python -m pytest -q tests/test_<related>.py
+python -m pytest -q --lf
+
+# 首次 push 前：CI-equivalent Python job（对应 ci.yml test job + §10.2 本地门禁）
 python -m pip check
 python scripts/freeze_lock.py --check
-
-# 当前环境可运行的全量测试（httpx2 已入 pin，P0 起无需排除 test_webapi）
 python -m pytest -q tests
+python -m compileall -j 0 -q ashare_data ashare_model ashare_portfolio ashare_trading scripts webapi
+git diff --check
 
+# 首次 push 前：CI-equivalent web job（对应 ci.yml web job）
 Set-Location webui
 npm ci
-.\node_modules\.bin\tsc --noEmit
-npm run build
+npm ls --depth=0
+npm run build   # build 内含 tsc -b；CI 无独立 tsc 步骤，保持一致
 ~~~
 
 

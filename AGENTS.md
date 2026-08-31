@@ -363,7 +363,7 @@ Python 改动通常按以下顺序验证：
 1. 最小相关测试文件；
 2. 相邻契约/golden/parity 测试；
 3. `python -m pytest -q tests`；
-4. `python -m compileall -q ashare_data ashare_model ashare_portfolio ashare_trading scripts webapi`；
+4. `python -m compileall -j 0 -q ashare_data ashare_model ashare_portfolio ashare_trading scripts webapi`；
 5. `git diff --check`。
 
 数据/universe 改动另需：
