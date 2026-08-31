@@ -135,6 +135,41 @@ def test_sim_config_patch_validation(tmp_path: Path):
     assert service.get_sim_config(root=root)["overrides"] == {}
 
 
+def test_sim_config_not_degraded_on_healthy_config(tmp_path: Path):
+    root = _make_root(tmp_path)
+    result = service.get_sim_config(root=root)
+    assert result["config_degraded"] is False
+    assert result["degraded_reason"] is None
+
+
+def test_sim_config_marks_corrupted_baseline_as_degraded(tmp_path: Path):
+    """A corrupted YAML baseline must not be presented as healthy factory
+    defaults (§9 UI clause): the response must carry an explicit
+    config_degraded marker and the reason, while still returning a
+    defensively-shaped effective block."""
+    root = _make_root(tmp_path)
+    (tmp_path / "config" / "ashare_config.yaml").write_text(
+        "backtest: [unclosed\n  : :", encoding="utf-8"
+    )
+    result = service.get_sim_config(root=root)
+    assert result["config_degraded"] is True
+    assert isinstance(result["degraded_reason"], str)
+    assert result["degraded_reason"]
+    # The defensive fallback keeps the response shape consumable, but the
+    # caller can now see that these are defaults, not the real baseline.
+    for key in (
+        "initial_capital",
+        "max_positions",
+        "single_weight_cap",
+        "commission_rate",
+        "min_commission",
+        "stamp_tax_rate",
+        "transfer_fee_rate",
+        "slippage_rate",
+    ):
+        assert key in result["effective"]
+
+
 def test_sim_start_enforces_production_universe_before_spawn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

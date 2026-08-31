@@ -477,13 +477,23 @@ def write_sim_config(patch: SimConfigPatch, root: Path = ROOT) -> dict:
 
 def get_sim_config(root: Path = ROOT) -> dict:
     """Effective sim/fee config (YAML baseline + runtime overrides) and the
-    initial-capital reset pendency."""
+    initial-capital reset pendency.
+
+    Defensive degradation (AGENTS.md §9 UI clause): when the YAML baseline
+    cannot be loaded, factory defaults are still returned so the dashboard
+    stays alive, but the response is explicitly marked
+    ``config_degraded=True`` with ``degraded_reason`` — it must not be
+    presented as the healthy effective configuration.
+    """
 
     config_path, overrides_path = _config_paths(root)
+    degraded_reason: str | None = None
     try:
         raw = load_config(config_path, project_root=root)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - dashboard must survive bad config,
+        # but the degradation must be visible, not silent.
         raw = {}
+        degraded_reason = f"{type(exc).__name__}: {exc}"
     sim = make_sim_config(raw, root)
     backtest = make_backtest_config(raw)
 
@@ -505,6 +515,8 @@ def get_sim_config(root: Path = ROOT) -> dict:
     mismatches = execution_config_mismatches(backtest, sim)
     return {
         "effective": effective,
+        "config_degraded": degraded_reason is not None,
+        "degraded_reason": degraded_reason,
         "overrides_path": str(overrides_path),
         "overrides": _read_overrides(overrides_path),
         "state_initial_capital": state_initial,
