@@ -1,9 +1,11 @@
 """Portfolio construction and execution-parity package.
 
 Package-level exports stay lazy so low-level configuration code can import
-``ashare_portfolio.rebalance`` without importing the backtest/golden stack and
-creating a dependency cycle. Direct submodule imports remain the preferred
-internal style.
+``ashare_portfolio.rebalance`` without importing the optimizer stack.
+Direct submodule imports remain the preferred internal style.  The golden
+execution spec lives in ``ashare_trading.golden`` (arch-review F6): it
+depends on the backtest and trading layers, so it belongs to the top
+layer and this bottom package no longer re-exports it.
 """
 
 from __future__ import annotations
@@ -41,12 +43,6 @@ _EXPORTS = {
         "ashare_portfolio.execution_spec",
         "validate_execution_provenance",
     ),
-    "DayParityRecord": ("ashare_portfolio.golden", "DayParityRecord"),
-    "FillRecord": ("ashare_portfolio.golden", "FillRecord"),
-    "GoldenParity": ("ashare_portfolio.golden", "GoldenParity"),
-    "GoldenParityViolation": ("ashare_portfolio.golden", "GoldenParityViolation"),
-    "ParityReport": ("ashare_portfolio.golden", "ParityReport"),
-    "apply_blocking_rule": ("ashare_portfolio.golden", "apply_blocking_rule"),
     "PORTFOLIO_OPTIMIZER_VERSION": (
         "ashare_portfolio.optimizer",
         "PORTFOLIO_OPTIMIZER_VERSION",

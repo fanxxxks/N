@@ -3,7 +3,7 @@ matcher golden parity.
 
 The fast vectorized research engine (``AshareBacktestEngine``) and the
 paper-trading whole-lot matcher (``SimBroker``) execute the **same
-signals** through the golden harness (``ashare_portfolio.golden``):
+signals** through the golden harness (``ashare_trading.golden``):
 
 * **Lot-free mode is exact**: the matcher with ``lot_size=0`` (continuous
   shares, engine-aligned funding) reproduces the vectorized engine's
@@ -36,7 +36,7 @@ import numpy as np
 import pytest
 
 from ashare_data.config import BacktestConfig
-from ashare_portfolio.golden import EXECUTION_SPEC_VERSION, GoldenParity
+from ashare_trading.golden import EXECUTION_SPEC_VERSION, GoldenParity
 from ashare_portfolio.execution_spec import execution_provenance
 from ashare_portfolio.optimizer import (
     PortfolioConstraints,
