@@ -13,7 +13,12 @@ Contract (see docs/phase5_measurement_log.md §2, FEE_MATRIX_VERSION 1):
 * One round trip of one position costs: buy commission + sell commission +
   stamp tax (sell side) + 2 x transfer fee + 2 x slippage; each commission
   leg is ``max(per_order * commission_rate, min_commission)`` — the
-  minimum-commission floor applies per order.
+  minimum-commission floor applies per order.  The arithmetic is NOT
+  re-derived here: ``round_trip_cost`` delegates to the project's single
+  fee authority, ``ashare_execution.ExecutionCostModel``
+  (``buy_cost(n).total + sell_cost(n).total``).  A zero-notional position
+  (outside the report domain — ``build_fee_matrix`` rejects capital <= 0)
+  therefore costs zero: no order, no minimum commission.
 * T is the annual round trips per position, so the total annual traded
   notional is ``T * capital``.
 * ``annual_drag`` returns (annual yuan, percent of capital).
@@ -36,6 +41,7 @@ from pathlib import Path
 from loguru import logger
 
 from ashare_data.config import BacktestConfig, load_config, make_backtest_config
+from ashare_execution import ExecutionCostModel
 from ashare_logging import export_log_txt, setup_run_logging
 
 FEE_MATRIX_VERSION = 1
@@ -52,15 +58,18 @@ DEFAULT_BUDGET_PCT = 1.5  # pre-registered annual cost-drag budget (%)
 def round_trip_cost(
     capital: float, positions: int, bt_cfg: BacktestConfig
 ) -> float:
-    """Yuan cost of one full buy-and-sell round trip of one position."""
+    """Yuan cost of one full buy-and-sell round trip of one position.
+
+    Delegates to the single fee authority ``ExecutionCostModel``: the cost
+    is ``buy_cost(per_order).total + sell_cost(per_order).total`` — per-leg
+    commission floor, sell-side stamp tax, two-sided transfer fee and
+    slippage.  A zero-notional position costs zero (no order is placed).
+    """
 
     per_order = capital / positions
-    commission_leg = max(per_order * bt_cfg.commission_rate, bt_cfg.min_commission)
-    return (
-        2 * commission_leg
-        + per_order * bt_cfg.stamp_tax_rate
-        + 2 * per_order * bt_cfg.transfer_fee_rate
-        + 2 * per_order * bt_cfg.slippage_rate
+    model = ExecutionCostModel.from_config(bt_cfg)
+    return float(model.buy_cost(per_order).total) + float(
+        model.sell_cost(per_order).total
     )
 
 
