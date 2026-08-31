@@ -174,13 +174,16 @@ def test_cache_invalidated_by_row_count_change(populated_db):
     assert after.table("daily_bar").row_count == before.table("daily_bar").row_count + 1
 
 
-def test_save_latest_and_resolve_roundtrip(populated_db):
-    with AshareDB(populated_db.duckdb_path) as db:
-        manifest = _manifest(db, populated_db)
-        save_manifest(db, populated_db, manifest)
-        save_manifest(db, populated_db, manifest)  # idempotent
-        assert latest_manifest(db, populated_db) == manifest
-        assert resolve_dataset_id(db, populated_db) == manifest.dataset_id
+def test_save_latest_and_resolve_roundtrip(populated_db_without_manifest):
+    # P8-05: the shared populated_db fixture now persists a manifest, so
+    # this save/resolve round-trip runs against the manifest-free variant.
+    config = populated_db_without_manifest
+    with AshareDB(config.duckdb_path) as db:
+        manifest = _manifest(db, config)
+        save_manifest(db, config, manifest)
+        save_manifest(db, config, manifest)  # idempotent
+        assert latest_manifest(db, config) == manifest
+        assert resolve_dataset_id(db, config) == manifest.dataset_id
         rows = db.query("SELECT COUNT(*) AS n FROM dataset_manifest").iloc[0]["n"]
         assert rows == 1
 
@@ -262,11 +265,13 @@ def test_sync_records_dataset_id(tmp_path):
     assert loader.dataset_id == dataset_id
 
 
-def test_loader_exposes_dataset_id_when_absent(populated_db):
+def test_loader_exposes_dataset_id_when_absent(populated_db_without_manifest):
+    # P8-05: the shared populated_db fixture now persists a manifest; the
+    # "no manifest saved" case uses the manifest-free variant.
     from ashare_data.config import ModelConfig
     from ashare_model.data_loader import AshareDataLoader
 
-    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader = AshareDataLoader(populated_db_without_manifest, ModelConfig())
     loader.load_data()
     assert loader.dataset_id is None  # no manifest saved yet
 

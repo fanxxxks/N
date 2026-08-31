@@ -29,6 +29,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from ashare_data.io_utils import atomic_write_json
 
 from .artifact_schemas import (
@@ -37,13 +39,16 @@ from .artifact_schemas import (
     _LineageBase,
     assert_consistent_lineage,
     classify_schema_version,
+    require_current_schema,
 )
 from .identity import content_hash
-from .run_store import ArtifactRecord, RunHandle
+from .run_store import ArtifactRecord, RunHandle, RunStore, RunStoreError
+from .runspec import RunSpec
 
 __all__ = [
     "artifact_id_of",
     "read_boundary_artifact",
+    "reconstruct_runspec_from_lineage",
     "write_boundary_artifact",
 ]
 
@@ -58,6 +63,52 @@ def artifact_id_of(payload: dict[str, Any]) -> str:
     """
 
     return content_hash("artifact", payload)
+
+
+def reconstruct_runspec_from_lineage(
+    store: RunStore, payload: dict[str, Any]
+) -> RunSpec:
+    """Rebuild the exact frozen RunSpec named by a current artifact.
+
+    Lineage followers (backtest and paper simulation) never derive a new
+    spec from their runtime defaults. They resolve the source artifact's
+    ``(spec_id, run_id)`` in the RunStore, validate the stored payload as a
+    strict :class:`RunSpec`, require a lossless model round-trip, and verify
+    that its content identity is exactly the referenced ``spec_id``.
+    Missing, corrupt, coerced or mismatched evidence is rejected.
+    """
+
+    if not isinstance(store, RunStore):
+        raise ArtifactSchemaError(
+            "lineage reconstruction requires the source RunStore"
+        )
+    require_current_schema(payload, artifact="lineage source")
+    spec_id, run_id = assert_consistent_lineage(payload)
+    try:
+        stored = store.read_runspec_payload(spec_id, run_id)
+    except (OSError, UnicodeError, ValueError, RunStoreError) as exc:
+        raise ArtifactSchemaError(
+            "cannot reconstruct the source RunSpec for lineage "
+            f"{spec_id}/{run_id}: {exc}"
+        ) from exc
+    try:
+        spec = RunSpec.model_validate(stored)
+    except ValidationError as exc:
+        raise ArtifactSchemaError(
+            "cannot reconstruct the source RunSpec exactly for lineage "
+            f"{spec_id}/{run_id}: {exc}"
+        ) from exc
+    if spec.to_payload() != stored:
+        raise ArtifactSchemaError(
+            "cannot reconstruct the source RunSpec exactly: validation "
+            f"coerced the stored payload for lineage {spec_id}/{run_id}"
+        )
+    if spec.spec_id != spec_id:
+        raise ArtifactSchemaError(
+            "source RunSpec spec_id mismatch: reconstructed "
+            f"{spec.spec_id!r} != artifact reference {spec_id!r}"
+        )
+    return spec
 
 
 def write_boundary_artifact(

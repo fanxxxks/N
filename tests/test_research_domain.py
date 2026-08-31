@@ -35,6 +35,8 @@ from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 from ashare_portfolio.rebalance import RebalancePolicy
 
 DOMAIN_IDS = ("short_price_volume", "medium_cross_section", "slow_fundamental")
+TEST_SPEC_ID = "a" * 64
+TEST_RUN_ID = "b" * 32
 
 
 def test_domains_partition_vocabulary_exhaustively():
@@ -380,7 +382,13 @@ def test_protocol_artifact_records_research_domain():
         domain="slow_fundamental", frequency="every_20_days", horizon=20
     )
     result = build_result(
-        proto, "screening", TierConfig(), rows=[], data_end_date="20240201"
+        proto,
+        "screening",
+        TierConfig(),
+        rows=[],
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
+        data_end_date="20240201",
     )
     assert result["research_domain"] == "slow_fundamental"
     assert result["research_domain_version"] == RESEARCH_DOMAIN_VERSION
@@ -388,7 +396,13 @@ def test_protocol_artifact_records_research_domain():
     assert result["horizon"] == 20
 
     unified = build_result(
-        ProtocolConfig(), "screening", TierConfig(), rows=[], data_end_date="20240201"
+        ProtocolConfig(),
+        "screening",
+        TierConfig(),
+        rows=[],
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
+        data_end_date="20240201",
     )
     assert unified["research_domain"] == UNIFIED_DOMAIN_ID
 
@@ -426,6 +440,8 @@ def test_run_protocol_domain_restricts_tensor_and_rows(
         None,
         proto,
         "screening",
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
     )
     assert result["research_domain"] == "short_price_volume"
     rows = result["rows"]
@@ -471,4 +487,6 @@ def test_run_protocol_rejects_illegal_domain_execution(
             None,
             proto,
             "screening",
+            spec_id=TEST_SPEC_ID,
+            run_id=TEST_RUN_ID,
         )

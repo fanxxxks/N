@@ -10,13 +10,19 @@ import pytest
 
 from ashare_data.config import BacktestConfig, DataConfig, ModelConfig, SimConfig
 from ashare_data.db import AshareDB
+from ashare_data.manifest import build_dataset_manifest, save_manifest
 from ashare_data.universe import UniverseReason
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.data_loader import AshareDataLoader
 from ashare_portfolio.constructor import PortfolioConstructor
 from ashare_portfolio.rebalance import RebalancePolicy
 from ashare_trading.run_sim import SimulationRunner
-from tests.conftest import make_bars
+from tests.conftest import (
+    make_bars,
+    make_test_spec,
+    open_test_handle,
+    write_current_strategy,
+)
 
 
 def _write_sim_db(
@@ -62,6 +68,7 @@ def _write_sim_db(
             ],
             data_config,
         )
+        save_manifest(db, data_config, build_dataset_manifest(db, data_config))
 
 
 def _make_runner(
@@ -103,9 +110,6 @@ def _make_runner(
     model_config = ModelConfig(max_formula_len=6)
     loader = AshareDataLoader(data_config, model_config)
     loader.load_data(ts_codes=ts_codes, dates=dates)
-    (data_config.data_dir / "best_ashare_strategy.json").write_text(
-        json.dumps({"formula": [1], "formula_text": "RET_1"}), encoding="utf-8"
-    )
 
     position_count = max_positions if max_positions is not None else top_n
     sim_config = SimConfig(
@@ -125,10 +129,17 @@ def _make_runner(
         "train_end_date": "2024-01-20",
     }
     backtest_values.update(backtest_overrides or {})
+    backtest_config = BacktestConfig(**backtest_values)
+    assert loader.dataset_id is not None
+    write_current_strategy(
+        data_config.data_dir,
+        dataset_id=loader.dataset_id,
+        backtest_config=backtest_config,
+    )
     runner = SimulationRunner(
         data_config,
         model_config,
-        BacktestConfig(**backtest_values),
+        backtest_config,
         sim_config,
         loader,
         today=today,
@@ -210,6 +221,16 @@ def test_simulation_runner_end_to_end(tmp_path: Path):
     assert list(runner.sim_config.orders_dir.glob("*.json"))
     assert list(runner.sim_config.trades_dir.glob("*.json"))
     assert runner.sim_config.state_path.exists()
+    from ashare_model.artifact_schemas import PaperStateArtifact
+    from ashare_model.artifact_writer import artifact_id_of
+    from ashare_model.run_store import RunStore
+
+    state = json.loads(runner.sim_config.state_path.read_text(encoding="utf-8"))
+    PaperStateArtifact.validate_payload(state)
+    index = RunStore(runner.data_config.data_dir).load_index(
+        state["spec_id"], state["run_id"]
+    )
+    assert index["artifacts"][-1]["artifact_id"] == artifact_id_of(state)
 
     # Persisted orders must carry their final execution status (filled /
     # skipped), not the pre-execution "pending" placeholder.
@@ -259,10 +280,45 @@ def test_simulation_runner_resume_matches_full_run(tmp_path: Path):
     # First chunk: signals through dates[15], executions through dates[16].
     resume_runner.run(end_date=dates[15])
     assert resume_runner.portfolio.last_exec_date == dates[16]
+    first_state = json.loads(
+        resume_runner.sim_config.state_path.read_text(encoding="utf-8")
+    )
     resume_runner.run(resume=True)
+    resumed_state = json.loads(
+        resume_runner.sim_config.state_path.read_text(encoding="utf-8")
+    )
     resume_snapshot = _snapshot(resume_runner)
 
     assert resume_snapshot == full_snapshot
+    assert resumed_state["run_id"] != first_state["run_id"]
+    assert resumed_state["spec_id"] == first_state["spec_id"]
+    assert resumed_state["candidate_id"] == first_state["candidate_id"]
+    assert resumed_state["account_id"] == first_state["account_id"]
+
+
+def test_simulation_cross_process_resume_inherits_account_id(tmp_path: Path):
+    runner, dates = _make_runner(tmp_path, n_dates=16)
+    runner.run(end_date=dates[7])
+    first_state = json.loads(
+        runner.sim_config.state_path.read_text(encoding="utf-8")
+    )
+
+    resumed = SimulationRunner(
+        runner.data_config,
+        runner.model_config,
+        runner.backtest_config,
+        runner.sim_config,
+        runner.loader,
+        today=runner.today,
+    )
+    resumed.run(resume=True)
+    resumed_state = json.loads(
+        resumed.sim_config.state_path.read_text(encoding="utf-8")
+    )
+    assert resumed_state["account_id"] == first_state["account_id"]
+    assert resumed_state["spec_id"] == first_state["spec_id"]
+    assert resumed_state["candidate_id"] == first_state["candidate_id"]
+    assert resumed_state["run_id"] != first_state["run_id"]
 
 
 def test_simulation_runner_plain_run_on_history_fails(tmp_path: Path):
@@ -301,16 +357,11 @@ def test_simulation_runner_honors_artifact_direction(tmp_path: Path):
     runner, _ = _make_runner(tmp_path, n_dates=12)
     # Record a negative direction in the strategy artifact: the runner must
     # use it verbatim instead of inferring from the training window.
-    path = runner.data_config.data_dir / "best_ashare_strategy.json"
-    path.write_text(
-        json.dumps(
-            {
-                "formula": [1],
-                "formula_text": "RET_1",
-                "direction": -1,
-            }
-        ),
-        encoding="utf-8",
+    write_current_strategy(
+        runner.data_config.data_dir,
+        dataset_id=runner.loader.dataset_id,
+        backtest_config=runner.backtest_config,
+        direction=-1,
     )
     runner.load_formula()
     assert runner.direction == -1
@@ -323,8 +374,13 @@ def test_simulation_runner_honors_artifact_direction(tmp_path: Path):
         for p in sorted(runner.sim_config.orders_dir.glob("*.json"))
     }
     runner.portfolio.reset()
-    runner.direction = 1
-    runner._has_recorded_direction = True
+    write_current_strategy(
+        runner.data_config.data_dir,
+        dataset_id=runner.loader.dataset_id,
+        backtest_config=runner.backtest_config,
+        direction=1,
+    )
+    runner.load_formula()
     runner.run()
     replay_orders = {
         p.name: p.read_text(encoding="utf-8")
@@ -339,6 +395,11 @@ def test_simulation_warns_when_strategy_has_no_execution_version(
     import ashare_trading.run_sim as run_sim
 
     runner, _ = _make_runner(tmp_path, n_dates=12)
+    path = runner.data_config.data_dir / "best_ashare_strategy.json"
+    path.write_text(
+        json.dumps({"formula": [1], "formula_text": "RET_1"}),
+        encoding="utf-8",
+    )
     warnings: list[str] = []
 
     def capture(message, *args):
@@ -347,6 +408,105 @@ def test_simulation_warns_when_strategy_has_no_execution_version(
     monkeypatch.setattr(run_sim.logger, "warning", capture)
     runner.load_formula()
     assert any("no execution_version (pre-P3)" in item for item in warnings)
+
+
+def test_simulation_binding_rejects_legacy_strategy(tmp_path: Path):
+    from ashare_model.artifact_schemas import ArtifactSchemaError
+
+    runner, _ = _make_runner(tmp_path, n_dates=8)
+    path = runner.data_config.data_dir / "best_ashare_strategy.json"
+    path.write_text(
+        json.dumps({"formula": [1], "formula_text": "RET_1"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ArtifactSchemaError, match="audit-only"):
+        runner.run()
+    assert not runner.sim_config.state_path.exists()
+
+
+@pytest.mark.parametrize("mismatch", ["spec", "candidate"])
+def test_simulation_resume_rejects_state_strategy_lineage_mismatch(
+    tmp_path: Path, mismatch: str
+):
+    from ashare_model.artifact_schemas import ArtifactSchemaError
+    from ashare_model.identity import candidate_id
+    from ashare_model.run_store import RunStore
+    from ashare_model.runspec import RunSpec
+    from ashare_trading.portfolio import SimulationPortfolio
+
+    runner, dates = _make_runner(tmp_path, n_dates=10)
+    strategy = json.loads(
+        (runner.data_config.data_dir / "best_ashare_strategy.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    store = RunStore(runner.data_config.data_dir)
+    source_spec = RunSpec.model_validate(
+        store.read_runspec_payload(strategy["spec_id"], strategy["run_id"])
+    )
+    state_spec = (
+        make_test_spec(
+            dataset_id=runner.loader.dataset_id,
+            requested_budget=source_spec.requested_budget + 1,
+        )
+        if mismatch == "spec"
+        else source_spec
+    )
+    state_candidate = (
+        candidate_id(state_spec.spec_id, [1], 1)
+        if mismatch == "spec"
+        else "e" * 64
+    )
+    portfolio = SimulationPortfolio(
+        runner.sim_config.initial_capital, runner.sim_config.state_path
+    )
+    portfolio.last_exec_date = dates[3]
+    portfolio.record_equity(dates[3], {})
+    with open_test_handle(
+        runner.data_config.data_dir, spec=state_spec
+    ) as handle:
+        portfolio.bind_lineage(
+            handle, candidate_id=state_candidate, account_id="d" * 32
+        )
+        portfolio.save()
+    runner.portfolio = SimulationPortfolio(
+        runner.sim_config.initial_capital, runner.sim_config.state_path
+    )
+
+    with pytest.raises(ArtifactSchemaError, match="lineage mismatch"):
+        runner.run(resume=True)
+
+
+def test_simulation_refuses_strategy_when_runspec_cannot_be_reconstructed(
+    tmp_path: Path,
+):
+    from ashare_model.artifact_schemas import ArtifactSchemaError
+
+    runner, _ = _make_runner(tmp_path, n_dates=8)
+    strategy = json.loads(
+        (runner.data_config.data_dir / "best_ashare_strategy.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    runspec_path = (
+        runner.data_config.data_dir
+        / "runs"
+        / strategy["spec_id"]
+        / strategy["run_id"]
+        / "runspec.json"
+    )
+    runspec_path.unlink()
+    with pytest.raises(ArtifactSchemaError, match="reconstruct"):
+        runner.run()
+
+
+def test_simulation_rejects_strategy_dataset_mismatch(tmp_path: Path):
+    from ashare_data.manifest import DatasetIdMismatch
+
+    runner, _ = _make_runner(tmp_path, n_dates=8)
+    runner.loader.dataset_id = "different-dataset"
+    with pytest.raises(DatasetIdMismatch):
+        runner.load_formula()
 
 
 # --- PIT eligibility in daily selection + current-ST isolation ---------------

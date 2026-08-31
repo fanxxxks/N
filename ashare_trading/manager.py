@@ -482,15 +482,19 @@ class SimJobManager:
         portfolio = SimulationPortfolio(
             self.sim_config.initial_capital, self.sim_config.state_path
         )
-        if portfolio.has_history:
+        allow_legacy_reset = False
+        if portfolio.has_history or portfolio.legacy_read_only:
             ok, message = self._archive_run()
             if not ok:
                 return {"ok": False, "reason": f"archive failed: {message}"}
             archive_note = message
+            # P8 §8: manager reset is the sole legacy-delete path, and only
+            # after the archival command has succeeded.
+            allow_legacy_reset = portfolio.legacy_read_only
         else:
             archive_note = "no history to archive"
 
-        portfolio.reset()
+        portfolio.reset(allow_legacy=allow_legacy_reset)
         # Park the per-day paper trail so stale dates can never be mistaken
         # for the new run's output.
         self._backup_dir(self.sim_config.orders_dir)

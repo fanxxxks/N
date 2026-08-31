@@ -30,6 +30,7 @@ from ashare_model.artifact_schemas import (
 from ashare_model.artifact_writer import (
     artifact_id_of,
     read_boundary_artifact,
+    reconstruct_runspec_from_lineage,
     write_boundary_artifact,
 )
 from ashare_model.identity import candidate_id, formula_hash
@@ -351,6 +352,48 @@ def test_lineage_consistency_matrix(handle):
     forged["run_id"] = "not-a-uuid"
     with pytest.raises(ArtifactSchemaError):
         assert_consistent_lineage(forged)
+
+
+def test_reconstruct_runspec_from_registered_lineage(handle, tmp_path):
+    cand = candidate_id(handle.spec.spec_id, [4, 45, 3], -1)
+    record = write_boundary_artifact(
+        handle,
+        artifact_type="strategy",
+        model_cls=StrategyArtifact,
+        payload=_strategy_input(),
+        candidate_id=cand,
+    )
+    payload = handle.read_artifact(record.artifact_id)
+    rebuilt = reconstruct_runspec_from_lineage(
+        RunStore(tmp_path / "store"), payload
+    )
+    assert rebuilt == handle.spec
+    assert rebuilt.spec_id == payload["spec_id"]
+
+
+def test_reconstruct_runspec_rejects_missing_or_inexact_source(handle, tmp_path):
+    cand = candidate_id(handle.spec.spec_id, [4, 45, 3], -1)
+    record = write_boundary_artifact(
+        handle,
+        artifact_type="strategy",
+        model_cls=StrategyArtifact,
+        payload=_strategy_input(),
+        candidate_id=cand,
+    )
+    payload = handle.read_artifact(record.artifact_id)
+    store = RunStore(tmp_path / "store")
+
+    missing = dict(payload)
+    missing["run_id"] = "f" * 32
+    with pytest.raises(ArtifactSchemaError, match="reconstruct"):
+        reconstruct_runspec_from_lineage(store, missing)
+
+    runspec_path = handle.run_dir / "runspec.json"
+    runspec_payload = json.loads(runspec_path.read_text(encoding="utf-8"))
+    runspec_payload["requested_budget"] += 1
+    runspec_path.write_text(json.dumps(runspec_payload), encoding="utf-8")
+    with pytest.raises(ArtifactSchemaError, match="spec_id"):
+        reconstruct_runspec_from_lineage(store, payload)
 
 
 # -- legacy is audit-only; formal consumption rejects -------------------------

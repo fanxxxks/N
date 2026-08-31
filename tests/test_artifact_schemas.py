@@ -33,8 +33,11 @@ from ashare_model.artifact_schemas import (
 def _strategy_payload() -> dict:
     return {
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "spec_id": "a" * 64,
+        "run_id": "b" * 32,
+        "candidate_id": "c" * 64,
         "formula": [4, 45, 3],
-        "candidate_id": "rl:4,45,3",
+        "searcher_candidate_label": "rl:4,45,3",
         "formula_text": "(VOL_20 CORR60 ATR_14)",
         "source": "rl",
         "direction": -1,
@@ -83,6 +86,9 @@ def _strategy_payload() -> dict:
 def _protocol_payload() -> dict:
     return {
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "spec_id": "a" * 64,
+        "run_id": "b" * 32,
+        "candidate_id": "c" * 64,
         "protocol_version": "24",
         "data_tier_version": 1,
         "reward_version": "14",
@@ -134,7 +140,7 @@ class TestClassifyMatrix:
             == "current"
         )
 
-    @pytest.mark.parametrize("bad", [2, 0, -1, "1", 1.0, True, [1]])
+    @pytest.mark.parametrize("bad", [3, 0, -1, "1", 1.0, True, [1]])
     def test_unknown_versions(self, bad):
         assert (
             classify_schema_version({"artifact_schema_version": bad}) == "unknown"
@@ -220,7 +226,7 @@ class TestProtocolSchema:
 class TestStrategyWritePath:
     def _fake_trainer(self, tmp_path):
         """Minimal AshareTrainer instance for _write_artifact (no __init__)."""
-        from ashare_data.config import BacktestConfig
+        from ashare_data.config import BacktestConfig, DataConfig, ModelConfig
         from ashare_model.candidates import CandidateScore
         from ashare_model.train import AshareTrainer
         from ashare_model.vocab import FORMULA_VOCAB
@@ -246,11 +252,19 @@ class TestStrategyWritePath:
         trainer.init_seed = 42
         trainer.vocab = FORMULA_VOCAB
         trainer.domain_id = "unified"
+        trainer.model_config = ModelConfig(max_formula_len=6)
         trainer.backtest_config = BacktestConfig()
         trainer.semantic_cache = SimpleNamespace(budget_used=0, stats=lambda: {})
         trainer.search_result = None
-        trainer.loader = SimpleNamespace(dataset_id="abc123")
-        trainer.data_config = SimpleNamespace(data_dir=tmp_path)
+        trainer.loader = SimpleNamespace(
+            dataset_id="abc123", dates=["20240102", "20241231"]
+        )
+        trainer.data_config = DataConfig(
+            data_dir=tmp_path,
+            duckdb_path=tmp_path / "ashare.duckdb",
+            parquet_dir=tmp_path / "parquet",
+            start_date="20150101",
+        )
         trainer.rl_initialization = "random"
         trainer.imitation_result = None
         trainer.model = SimpleNamespace(state_dict=lambda: {})
@@ -262,13 +276,23 @@ class TestStrategyWritePath:
         trainer = self._fake_trainer(tmp_path)
         import torch
 
-        out = trainer._write_artifact(contract=None, vm_device=torch.device("cpu"))
+        out = trainer._write_artifact(
+            contract=None,
+            vm_device=torch.device("cpu"),
+            seed=42,
+            requested_budget=100,
+        )
         assert out == [4, 45, 3]
         payload = json.loads(
             (tmp_path / "best_ashare_strategy.json").read_text(encoding="utf-8")
         )
         assert payload["artifact_schema_version"] == ARTIFACT_SCHEMA_VERSION
         StrategyArtifact.validate_payload(payload)
+        from ashare_model.artifact_writer import artifact_id_of
+        from ashare_model.run_store import RunStore
+
+        index = RunStore(tmp_path).load_index(payload["spec_id"], payload["run_id"])
+        assert index["artifacts"][0]["artifact_id"] == artifact_id_of(payload)
 
     def test_write_artifact_fail_closed(self, tmp_path, monkeypatch):
         """§2.1: a payload that fails validation must never reach disk."""
@@ -276,13 +300,18 @@ class TestStrategyWritePath:
         import torch
 
         def _boom(payload):
-            raise ValidationError.from_exception_data("StrategyArtifact", [])
+            raise ArtifactSchemaError("deliberate strategy validation failure")
 
         monkeypatch.setattr(
-            StrategyArtifact, "model_validate", staticmethod(_boom)
+            StrategyArtifact, "validate_payload", staticmethod(_boom)
         )
-        with pytest.raises(ValidationError):
-            trainer._write_artifact(contract=None, vm_device=torch.device("cpu"))
+        with pytest.raises(ArtifactSchemaError):
+            trainer._write_artifact(
+                contract=None,
+                vm_device=torch.device("cpu"),
+                seed=42,
+                requested_budget=100,
+            )
         assert not (tmp_path / "best_ashare_strategy.json").exists()
 
 
@@ -296,6 +325,8 @@ class TestProtocolWritePath:
             "screening",
             TierConfig(0, 0),
             [],
+            spec_id="a" * 64,
+            run_id="b" * 32,
             dataset_id="abc123",
         )
         assert result["artifact_schema_version"] == ARTIFACT_SCHEMA_VERSION
@@ -345,6 +376,7 @@ class TestReadPath:
         )
         sim = SimulationRunner.__new__(SimulationRunner)
         sim.data_config = SimpleNamespace(data_dir=tmp_path)
+        sim.loader = SimpleNamespace(dataset_id="abc123")
         with pytest.raises(ArtifactSchemaError):
             sim.load_formula()
 
@@ -358,6 +390,7 @@ class TestReadPath:
         )
         sim = SimulationRunner.__new__(SimulationRunner)
         sim.data_config = SimpleNamespace(data_dir=tmp_path)
+        sim.loader = SimpleNamespace(dataset_id=None)
         sim.load_formula()
         assert sim.formula_tokens == [1]
 
@@ -382,6 +415,9 @@ class TestReadPath:
 def _backtest_payload() -> dict:
     return {
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "spec_id": "a" * 64,
+        "run_id": "b" * 32,
+        "candidate_id": "c" * 64,
         "formula": [4, 45, 3],
         "formula_text": "(VOL_20 CORR60 ATR_14)",
         "direction": -1,
@@ -399,6 +435,10 @@ def _backtest_payload() -> dict:
 def _paper_payload() -> dict:
     return {
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "spec_id": "a" * 64,
+        "run_id": "b" * 32,
+        "candidate_id": "c" * 64,
+        "account_id": "d" * 32,
         "initial_capital": 100000.0,
         "cash": 95000.0,
         "trade_count": 1,
@@ -469,11 +509,25 @@ class TestPaperStateSchema:
 class TestPaperStateIO:
     """§5 fail-closed runtime semantics of SimulationPortfolio."""
 
-    def test_save_stamps_and_validates(self, tmp_path):
+    def test_unbound_save_is_rejected_without_creating_state(self, tmp_path):
         from ashare_trading.portfolio import SimulationPortfolio
 
+        path = tmp_path / "state.json"
+        portfolio = SimulationPortfolio(100000.0, path)
+        with pytest.raises(ArtifactSchemaError, match="not bound"):
+            portfolio.save()
+        assert not path.exists()
+
+    def test_save_stamps_and_validates(self, tmp_path):
+        from ashare_trading.portfolio import SimulationPortfolio
+        from tests.conftest import open_test_handle
+
         portfolio = SimulationPortfolio(100000.0, tmp_path / "state.json")
-        portfolio.save()
+        with open_test_handle(tmp_path / "store") as handle:
+            portfolio.bind_lineage(
+                handle, candidate_id="c" * 64, account_id="d" * 32
+            )
+            portfolio.save()
         payload = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
         assert payload["artifact_schema_version"] == ARTIFACT_SCHEMA_VERSION
         PaperStateArtifact.validate_payload(payload)
@@ -508,23 +562,50 @@ class TestPaperStateIO:
         with pytest.raises(ArtifactSchemaError):
             SimulationPortfolio(100000.0, path)
 
-    def test_load_legacy_then_save_migrates_on_write(self, tmp_path):
-        """§4: legacy (no version key) loads through the pre-contract path;
-        the next save carries the schema version (migration only on a
-        normal write, never as a standalone rewrite)."""
+    @pytest.mark.parametrize("legacy_version", [None, 1])
+    def test_load_legacy_is_read_only_and_save_preserves_bytes(
+        self, tmp_path, legacy_version
+    ):
+        """P8 §8: v0/v1 paper state is audit-only and never auto-migrated."""
         from ashare_trading.portfolio import SimulationPortfolio
 
         path = tmp_path / "state.json"
         legacy = _paper_payload()
-        del legacy["artifact_schema_version"]
+        for key in ("spec_id", "run_id", "candidate_id", "account_id"):
+            legacy.pop(key)
+        if legacy_version is None:
+            legacy.pop("artifact_schema_version")
+        else:
+            legacy["artifact_schema_version"] = legacy_version
         path.write_text(json.dumps(legacy), encoding="utf-8")
+        before = path.read_bytes()
         portfolio = SimulationPortfolio(100000.0, path)
         assert portfolio.cash == 95000.0
         assert portfolio.trade_count == 1
-        portfolio.save()
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["artifact_schema_version"] == ARTIFACT_SCHEMA_VERSION
-        PaperStateArtifact.validate_payload(payload)
+        assert portfolio.legacy_read_only
+        with pytest.raises(ArtifactSchemaError, match="legacy"):
+            portfolio.save()
+        assert path.read_bytes() == before
+
+    def test_legacy_reset_requires_explicit_archival_authority(self, tmp_path):
+        from ashare_trading.portfolio import SimulationPortfolio
+
+        path = tmp_path / "state.json"
+        legacy = _paper_payload()
+        for key in (
+            "artifact_schema_version",
+            "spec_id",
+            "run_id",
+            "candidate_id",
+            "account_id",
+        ):
+            legacy.pop(key)
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+        before = path.read_bytes()
+        portfolio = SimulationPortfolio(100000.0, path)
+        with pytest.raises(ArtifactSchemaError, match="archive/retire"):
+            portfolio.reset()
+        assert path.read_bytes() == before
 
     def test_missing_file_is_fresh_state(self, tmp_path):
         from ashare_trading.portfolio import SimulationPortfolio

@@ -133,7 +133,7 @@ def resolve_runtime_runspec(
 
     def _d8(value: str) -> str:
         text = str(value).replace("-", "")
-        if not _DATE_RE.match(text):
+        if re.fullmatch(_DATE_RE, text) is None:
             raise ValueError(f"invalid date {value!r} (expected YYYYMMDD-ish)")
         return text
 

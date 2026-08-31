@@ -23,6 +23,8 @@ import time
 import pytest
 
 from ashare_data.config import BacktestConfig, DataConfig, ModelConfig, RewardConfig
+from ashare_data.db import AshareDB
+from ashare_data.manifest import resolve_dataset_id
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.searcher_bench import (
     SEARCHER_BENCH_VERSION,
@@ -166,7 +168,9 @@ def test_benchmark_payload_is_json_serializable(populated_db: DataConfig):
 def test_benchmark_records_provenance(populated_db: DataConfig):
     payload = _bench(populated_db, budget=16)
     prov = payload["provenance"]
-    assert prov["dataset_id"] is None  # synthetic DB has no manifest
+    with AshareDB(populated_db.duckdb_path) as db:
+        expected_dataset_id = resolve_dataset_id(db, populated_db)
+    assert prov["dataset_id"] == expected_dataset_id
     assert prov["train_end_date"] == "2024-02-01"
     assert prov["device"] == "cpu"
     assert prov["searchers"] == list(SEARCHERS)

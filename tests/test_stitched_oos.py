@@ -54,6 +54,9 @@ from ashare_model.regime import (
 
 from test_evaluation import _FakeTrainer, _loader  # noqa: F401
 
+TEST_SPEC_ID = "a" * 64
+TEST_RUN_ID = "b" * 32
+
 
 def _row(
     candidate="trained",
@@ -239,6 +242,8 @@ def test_build_result_v20_schema_with_stitched_block():
     rows = _two_fold_rows("trained", 42)
     result = build_result(
         ProtocolConfig(), "screening", TierConfig(150, 256), rows,
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
         data_end_date="2026-01-01",
     )
     assert result["protocol_version"] == PROTOCOL_VERSION
@@ -267,6 +272,8 @@ def test_build_result_v21_records_data_tiers():
     rows[0]["formula"] = [_tok("RET_1")]
     result = build_result(
         ProtocolConfig(), "screening", TierConfig(150, 256), rows,
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
         data_end_date="2026-01-01",
     )
     assert result["data_tier_version"] == DATA_TIER_VERSION
@@ -286,6 +293,8 @@ def test_build_result_untraceable_rows_record_null_tier():
         row.pop("formula", None)
     result = build_result(
         ProtocolConfig(), "screening", TierConfig(150, 256), rows,
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
         data_end_date="2026-01-01",
     )
     assert result["rows"][0]["data_tier"] is None
@@ -300,6 +309,8 @@ def test_build_result_records_ledger_and_regime():
     )
     result = build_result(
         ProtocolConfig(), "screening", TierConfig(150, 256), rows,
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
         data_end_date="2026-01-01",
         ledger={"path": "data/ledger.jsonl", "run_id": "run-1", "tainted": False,
                 "n_trials": 4},
@@ -348,6 +359,8 @@ def test_run_protocol_records_every_trial_in_ledger(
         None,
         _small_proto_config(),
         "screening",
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
         ledger=ledger,
     )
     # 1 benchmark (not a trial) + 1 baseline batch + 1 trained trial.
@@ -382,6 +395,8 @@ def test_run_protocol_ledger_records_crash_as_failed(
             None,
             _small_proto_config(),
             "screening",
+            spec_id=TEST_SPEC_ID,
+            run_id=TEST_RUN_ID,
             ledger=ledger,
         )
     # The crashed trial is recorded as failed — never silently dropped —
@@ -420,6 +435,8 @@ def test_run_protocol_rejects_locked_holdout_before_any_trial(
             None,
             _small_proto_config(),
             "screening",
+            spec_id=TEST_SPEC_ID,
+            run_id=TEST_RUN_ID,
             ledger=ledger,
             regime=regime,
         )

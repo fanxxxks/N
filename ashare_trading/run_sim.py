@@ -17,6 +17,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 import torch
@@ -114,6 +115,7 @@ class SimulationRunner:
         self.formula_text = ""
         self.direction = 1
         self._has_recorded_direction = False
+        self._strategy_identity: dict[str, object] | None = None
 
     def load_formula(self) -> None:
         path = self.data_config.data_dir / "best_ashare_strategy.json"
@@ -128,16 +130,31 @@ class SimulationRunner:
 
         # P7-C §4: unknown/future schema versions are hard-rejected;
         # current payloads validate; legacy flows to the pre-contract path.
-        apply_schema_matrix(payload, artifact="strategy", model=StrategyArtifact)
+        schema_verdict = apply_schema_matrix(
+            payload, artifact="strategy", model=StrategyArtifact
+        )
         verdict = classify_strategy(payload)
-        if verdict["legacy"]:
+        legacy_reasons = list(verdict["reasons"])
+        if schema_verdict == "legacy":
+            legacy_reasons.append(
+                "artifact schema v0/v1 has no lifecycle identity"
+            )
+        self._strategy_identity = None
+        if legacy_reasons:
             logger.warning(
                 "LEGACY strategy artifact: {} — {}; the paper account is "
                 "replaying an old generation, not the current champion",
                 path,
-                "; ".join(verdict["reasons"]),
+                "; ".join(legacy_reasons),
             )
         else:
+            self._strategy_identity = {
+                key: str(payload[key])
+                for key in ("spec_id", "run_id", "candidate_id")
+            }
+            self._strategy_identity["artifact_schema_version"] = payload[
+                "artifact_schema_version"
+            ]
             runtime_portfolio_config = portfolio_config_provenance(
                 self.backtest_config
             )
@@ -147,6 +164,9 @@ class SimulationRunner:
                     "simulation config; replay remains readable but is not "
                     "the strategy's recorded execution evidence"
                 )
+        from ashare_data.manifest import check_dataset_id
+
+        check_dataset_id(payload.get("dataset_id"), self.loader.dataset_id)
         self.formula_tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
         self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
         # The trainer records the trade direction it learned on its
@@ -215,6 +235,36 @@ class SimulationRunner:
             logger.info(f"Trade direction from artifact: {self.direction}")
         return float(self.direction) * signals
 
+    def _bind_lineage_run(self):
+        """Open a fresh follower run under the strategy's exact RunSpec."""
+
+        from ashare_model.artifact_schemas import ArtifactSchemaError
+        from ashare_model.artifact_writer import reconstruct_runspec_from_lineage
+        from ashare_model.run_store import RunStore
+
+        if self._strategy_identity is None:
+            raise ArtifactSchemaError(
+                "legacy strategy is audit-only; paper simulation cannot "
+                "mint schema-v2 lineage or resume from it"
+            )
+        store = RunStore(self.data_config.data_dir)
+        spec = reconstruct_runspec_from_lineage(store, self._strategy_identity)
+        handle = store.open_run(spec)
+        loaded = self.portfolio.loaded_lineage
+        account_id = loaded["account_id"] if loaded else uuid4().hex
+        bound = False
+        try:
+            self.portfolio.bind_lineage(
+                handle,
+                candidate_id=str(self._strategy_identity["candidate_id"]),
+                account_id=account_id,
+            )
+            bound = True
+        finally:
+            if not bound:
+                handle.close()
+        return handle
+
     def run(
         self,
         start_date: str | None = None,
@@ -270,161 +320,202 @@ class SimulationRunner:
                 (i for i, d in enumerate(dates) if d > end_date), len(dates) - 1
             )
 
-        self.sim_config.orders_dir.mkdir(parents=True, exist_ok=True)
-        self.sim_config.trades_dir.mkdir(parents=True, exist_ok=True)
-        rebalance_mask = RebalancePolicy.from_config(
-            self.backtest_config
-        ).rebalance_mask(dates)
+        return self._run_bound_loop(
+            signals=signals,
+            raw=raw,
+            dates=dates,
+            ts_codes=ts_codes,
+            universe_mask=universe_mask,
+            stock_names=stock_names,
+            start_idx=start_idx,
+            end_idx=end_idx,
+        )
 
-        self._write_progress("executing", current_date=self.portfolio.last_exec_date)
-        last_equity: float | None = None
-        stopped = False
-        portfolio_diagnostics: list[dict[str, object]] = []
-        actual_order_count = 0
-        for signal_idx in range(start_idx, end_idx):
-            if self._handle_stop_signal():
-                stopped = True
-                break
-            exec_idx = signal_idx + 1
-            exec_date = dates[exec_idx]
-            # Same-day execution is the only reliable as-of use of the
-            # current ST snapshot; historical dates get board rates only.
-            same_day = exec_date == self.today
-            st_codes = self.loader.current_st_codes if same_day else None
-            st_mask = (
-                np.asarray([code in st_codes for code in ts_codes], dtype=bool)
-                if st_codes
-                else None
-            )
-            eligible = universe_mask[:, signal_idx] & universe_mask[:, exec_idx]
-            buy_blocked = tradability_blocked(
-                raw["open"][:, exec_idx],
-                raw["high"][:, exec_idx],
-                raw["low"][:, exec_idx],
-                raw["pre_close"][:, exec_idx],
-                raw["volume"][:, exec_idx],
-                ts_codes,
-                "buy",
-                st_mask=st_mask,
-            )
-            sell_blocked = tradability_blocked(
-                raw["open"][:, exec_idx],
-                raw["high"][:, exec_idx],
-                raw["low"][:, exec_idx],
-                raw["pre_close"][:, exec_idx],
-                raw["volume"][:, exec_idx],
-                ts_codes,
-                "sell",
-                st_mask=st_mask,
-            )
-            prev_weights, equity = self._portfolio_weights(
-                ts_codes, raw["open"][:, exec_idx]
-            )
-            output = self.portfolio_constructor.construct(
-                signals[:, signal_idx],
-                prev_weights,
-                capital=equity,
-                eligible=eligible,
-                buy_blocked=buy_blocked,
-                sell_blocked=sell_blocked,
-                stable_keys=np.asarray(ts_codes),
-                rebalance_due=bool(rebalance_mask[signal_idx]),
-                adv=raw["volume"][:, exec_idx] * raw["open"][:, exec_idx],
-            )
-            portfolio_diagnostics.append(dict(output.diagnostics))
-            if not rebalance_mask[signal_idx]:
-                # P3: a non-rebalance day is a true hold.  Recomputing
-                # target shares from price-drifted weights would create a
-                # spurious alignment order even though the constructor
-                # correctly returned the previous book.
-                orders = []
-            else:
-                orders = self._make_orders(
-                    np.asarray(output.weights),
-                    ts_codes,
-                    exec_idx,
-                    exec_date,
-                    raw,
-                    equity=equity,
-                )
-            actual_order_count += len(orders)
+    def _run_bound_loop(
+        self,
+        *,
+        signals: np.ndarray,
+        raw: dict[str, np.ndarray],
+        dates: list[str],
+        ts_codes: list[str],
+        universe_mask: np.ndarray,
+        stock_names: dict[str, str],
+        start_idx: int,
+        end_idx: int,
+    ) -> dict[str, object]:
+        """Execute the prepared date loop under one fresh lineage run."""
 
-            bars = self.loader.bars
-            trades = self.broker.execute_orders(
-                orders,
-                bars,
-                exec_date,
-                self.portfolio,
-                stock_names,
-                self.backtest_config,
-                st_codes=st_codes,
-            )
-            # Persist orders after execution so their final status/reason
-            # (filled, skipped, limit_up, ...) is part of the paper-trail.
-            atomic_write_json(
-                self.sim_config.orders_dir / f"{exec_date}.json",
-                [o.__dict__ for o in orders],
-            )
-            atomic_write_json(
-                self.sim_config.trades_dir / f"{exec_date}.json",
-                [t.__dict__ for t in trades],
-            )
-            close_prices = {
-                ts_codes[i]: float(raw["close"][i, exec_idx]) for i in range(len(ts_codes))
-            }
-            last_equity = self.portfolio.record_equity(exec_date, close_prices)
-            # Advance the resume watermark only now: orders/trades files are
-            # on disk and the equity snapshot is about to be saved, so a crash
-            # before this save replays the whole day cleanly instead of
-            # leaving a half-processed day behind.
-            self.portfolio.last_exec_date = exec_date
-            self.portfolio.save()
+        handle = self._bind_lineage_run()
+        try:
+            self.sim_config.orders_dir.mkdir(parents=True, exist_ok=True)
+            self.sim_config.trades_dir.mkdir(parents=True, exist_ok=True)
+            rebalance_mask = RebalancePolicy.from_config(
+                self.backtest_config
+            ).rebalance_mask(dates)
+
             self._write_progress(
-                "executing", current_date=exec_date, equity=last_equity
+                "executing", current_date=self.portfolio.last_exec_date
             )
+            last_equity: float | None = None
+            stopped = False
+            portfolio_diagnostics: list[dict[str, object]] = []
+            actual_order_count = 0
+            for signal_idx in range(start_idx, end_idx):
+                if self._handle_stop_signal():
+                    stopped = True
+                    break
+                exec_idx = signal_idx + 1
+                exec_date = dates[exec_idx]
+                # Same-day execution is the only reliable as-of use of the
+                # current ST snapshot; historical dates get board rates only.
+                same_day = exec_date == self.today
+                st_codes = self.loader.current_st_codes if same_day else None
+                st_mask = (
+                    np.asarray(
+                        [code in st_codes for code in ts_codes], dtype=bool
+                    )
+                    if st_codes
+                    else None
+                )
+                eligible = (
+                    universe_mask[:, signal_idx] & universe_mask[:, exec_idx]
+                )
+                buy_blocked = tradability_blocked(
+                    raw["open"][:, exec_idx],
+                    raw["high"][:, exec_idx],
+                    raw["low"][:, exec_idx],
+                    raw["pre_close"][:, exec_idx],
+                    raw["volume"][:, exec_idx],
+                    ts_codes,
+                    "buy",
+                    st_mask=st_mask,
+                )
+                sell_blocked = tradability_blocked(
+                    raw["open"][:, exec_idx],
+                    raw["high"][:, exec_idx],
+                    raw["low"][:, exec_idx],
+                    raw["pre_close"][:, exec_idx],
+                    raw["volume"][:, exec_idx],
+                    ts_codes,
+                    "sell",
+                    st_mask=st_mask,
+                )
+                prev_weights, equity = self._portfolio_weights(
+                    ts_codes, raw["open"][:, exec_idx]
+                )
+                output = self.portfolio_constructor.construct(
+                    signals[:, signal_idx],
+                    prev_weights,
+                    capital=equity,
+                    eligible=eligible,
+                    buy_blocked=buy_blocked,
+                    sell_blocked=sell_blocked,
+                    stable_keys=np.asarray(ts_codes),
+                    rebalance_due=bool(rebalance_mask[signal_idx]),
+                    adv=raw["volume"][:, exec_idx]
+                    * raw["open"][:, exec_idx],
+                )
+                portfolio_diagnostics.append(dict(output.diagnostics))
+                if not rebalance_mask[signal_idx]:
+                    # P3: a non-rebalance day is a true hold. Recomputing
+                    # target shares from price-drifted weights would create a
+                    # spurious alignment order even though the constructor
+                    # correctly returned the previous book.
+                    orders = []
+                else:
+                    orders = self._make_orders(
+                        np.asarray(output.weights),
+                        ts_codes,
+                        exec_idx,
+                        exec_date,
+                        raw,
+                        equity=equity,
+                    )
+                actual_order_count += len(orders)
 
-        phase = "stopped" if stopped else "finished"
-        self._write_progress(
-            phase,
-            current_date=self.portfolio.last_exec_date,
-            equity=last_equity,
-        )
-        metrics = {
-            "processed_periods": len(portfolio_diagnostics),
-            "rebalance_due_count": sum(
-                bool(item["rebalance_due"]) for item in portfolio_diagnostics
-            ),
-            "rebalance_count": sum(
-                bool(item["rebalance_executed"]) for item in portfolio_diagnostics
-            ),
-            "constructor_order_count": sum(
-                int(item["order_count"]) for item in portfolio_diagnostics
-            ),
-            "actual_order_count": actual_order_count,
-            "suppressed_trade_count": sum(
-                int(item.get("suppressed_trade_count", 0))
-                for item in portfolio_diagnostics
-            ),
-        }
-        logger.info(
-            "simulation portfolio path method={} frequency={} periods={} "
-            "due={} rebalanced={} constructor_orders={} actual_orders={} "
-            "suppressed={}",
-            self.backtest_config.portfolio_method,
-            self.backtest_config.rebalance_frequency,
-            metrics["processed_periods"],
-            metrics["rebalance_due_count"],
-            metrics["rebalance_count"],
-            metrics["constructor_order_count"],
-            metrics["actual_order_count"],
-            metrics["suppressed_trade_count"],
-        )
-        return {
-            "final_cash": self.portfolio.cash,
-            "trade_count": self.portfolio.trade_count,
-            "equity_history": self.portfolio.equity_history,
-            "portfolio_metrics": metrics,
-        }
+                bars = self.loader.bars
+                trades = self.broker.execute_orders(
+                    orders,
+                    bars,
+                    exec_date,
+                    self.portfolio,
+                    stock_names,
+                    self.backtest_config,
+                    st_codes=st_codes,
+                )
+                # Persist orders after execution so their final status/reason
+                # (filled, skipped, limit_up, ...) is part of the paper-trail.
+                atomic_write_json(
+                    self.sim_config.orders_dir / f"{exec_date}.json",
+                    [o.__dict__ for o in orders],
+                )
+                atomic_write_json(
+                    self.sim_config.trades_dir / f"{exec_date}.json",
+                    [t.__dict__ for t in trades],
+                )
+                close_prices = {
+                    ts_codes[i]: float(raw["close"][i, exec_idx])
+                    for i in range(len(ts_codes))
+                }
+                last_equity = self.portfolio.record_equity(
+                    exec_date, close_prices
+                )
+                # Advance the resume watermark only now: orders/trades are
+                # durable and the equity snapshot is about to be saved.
+                self.portfolio.last_exec_date = exec_date
+                self.portfolio.save()
+                self._write_progress(
+                    "executing", current_date=exec_date, equity=last_equity
+                )
+
+            phase = "stopped" if stopped else "finished"
+            self._write_progress(
+                phase,
+                current_date=self.portfolio.last_exec_date,
+                equity=last_equity,
+            )
+            metrics = {
+                "processed_periods": len(portfolio_diagnostics),
+                "rebalance_due_count": sum(
+                    bool(item["rebalance_due"])
+                    for item in portfolio_diagnostics
+                ),
+                "rebalance_count": sum(
+                    bool(item["rebalance_executed"])
+                    for item in portfolio_diagnostics
+                ),
+                "constructor_order_count": sum(
+                    int(item["order_count"])
+                    for item in portfolio_diagnostics
+                ),
+                "actual_order_count": actual_order_count,
+                "suppressed_trade_count": sum(
+                    int(item.get("suppressed_trade_count", 0))
+                    for item in portfolio_diagnostics
+                ),
+            }
+            logger.info(
+                "simulation portfolio path method={} frequency={} periods={} "
+                "due={} rebalanced={} constructor_orders={} actual_orders={} "
+                "suppressed={}",
+                self.backtest_config.portfolio_method,
+                self.backtest_config.rebalance_frequency,
+                metrics["processed_periods"],
+                metrics["rebalance_due_count"],
+                metrics["rebalance_count"],
+                metrics["constructor_order_count"],
+                metrics["actual_order_count"],
+                metrics["suppressed_trade_count"],
+            )
+            return {
+                "final_cash": self.portfolio.cash,
+                "trade_count": self.portfolio.trade_count,
+                "equity_history": self.portfolio.equity_history,
+                "portfolio_metrics": metrics,
+            }
+        finally:
+            self.portfolio.detach_handle()
+            handle.close()
 
     def _write_progress(
         self,

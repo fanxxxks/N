@@ -30,7 +30,24 @@ from .eval_metrics import (
     stitched_metrics,
     top_trial,
 )
+from .identity import candidate_id
 from .research_domain import RESEARCH_DOMAIN_VERSION
+
+
+def _protocol_candidate_id(spec_id: str, top: dict | None) -> str:
+    """The protocol artifact's lifecycle candidate identity (P8-05).
+
+    A protocol campaign evaluates many candidates; the artifact binds to
+    the adjudicated top trial's candidate identity.  A run with no top
+    trial (empty screening, selfcheck, all-failed) carries the explicit
+    empty-candidate sentinel identity — never a fabricated formula.
+    """
+
+    if top is not None and top.get("formula"):
+        return candidate_id(
+            spec_id, top["formula"], int(top.get("direction") or 1)
+        )
+    return candidate_id(spec_id, [], 0)
 
 
 def _sanitize(value):
@@ -38,7 +55,7 @@ def _sanitize(value):
 
     if isinstance(value, dict):
         return {k: _sanitize(v) for k, v in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_sanitize(v) for v in value]
     if isinstance(value, float) and not math.isfinite(value):
         return None
@@ -125,6 +142,8 @@ def build_result(
     tier_name: str,
     tier,
     rows: list[dict],
+    spec_id: str,
+    run_id: str,
     data_end_date: str | None = None,
     extra_trial_rows: list[dict] | None = None,
     max_t_perms: int = 5000,
@@ -158,6 +177,12 @@ def build_result(
     free-data credibility tier (``data_tier`` block, resolved from the
     formula's features); ``data_tier_version`` pins the mapping at the
     artifact level.
+
+    P8-05: every protocol artifact carries the lifecycle identity block —
+    ``spec_id``/``run_id`` of the evaluating run (required; the CLI
+    resolves them from the frozen RunSpec and the open RunStore run) plus
+    the adjudicated top trial's ``candidate_id`` (the empty-candidate
+    sentinel identity when no trial was adjudicated).
     """
 
     # Late binding through the facade: tests pin versions via
@@ -201,6 +226,10 @@ def build_result(
     result = _sanitize(
         {
             "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+            # P8-05 lifecycle identity block.
+            "spec_id": spec_id,
+            "run_id": run_id,
+            "candidate_id": _protocol_candidate_id(spec_id, top),
             "protocol_version": _facade.PROTOCOL_VERSION,
             "data_tier_version": DATA_TIER_VERSION,
             "reward_version": _facade.REWARD_VERSION,

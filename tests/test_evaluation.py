@@ -47,6 +47,9 @@ from ashare_model.reward import REWARD_VERSION, rank_ic_series
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
 from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
+
+TEST_SPEC_ID = "a" * 64
+TEST_RUN_ID = "b" * 32
 from tests.conftest import make_bars
 
 
@@ -540,6 +543,8 @@ def test_run_protocol_records_universe_policy(
         None,
         proto,
         "screening",
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
     )
     policy = result["universe_policy"]
     assert policy["index_codes"] == ["000300.SH"]
@@ -667,9 +672,18 @@ def test_build_result_schema_and_sanitization():
             "sharpe": float("nan"),
             "failed": False,
             "formula_text": "X",
+            "best_so_far": [(1, float("-inf"))],
         }
     ]
-    result = build_result(proto, "screening", tier, rows, data_end_date="20240201")
+    result = build_result(
+        proto,
+        "screening",
+        tier,
+        rows,
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
+        data_end_date="20240201",
+    )
     assert result["protocol_version"] == PROTOCOL_VERSION
     assert result["reward_version"] == REWARD_VERSION
     assert result["execution_version"] == EXECUTION_SPEC_VERSION
@@ -691,8 +705,12 @@ def test_build_result_schema_and_sanitization():
     assert result["n_candidates"] == 1
     # Non-finite floats are sanitized so the artifact stays valid JSON.
     assert result["rows"][0]["sharpe"] is None
+    assert result["rows"][0]["best_so_far"] == [[1, None]]
     assert result["top_trial"] is None
     assert result["dsr"] is None and result["max_t"] is None
+    from ashare_model.identity import candidate_id
+
+    assert result["candidate_id"] == candidate_id(TEST_SPEC_ID, [], 0)
 
 
 # --- fold-level runs --------------------------------------------------------
@@ -885,6 +903,8 @@ def test_run_protocol_rows_and_determinism(populated_db: DataConfig, monkeypatch
         None,
         proto,
         "screening",
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
     )
     rows = result["rows"]
     # 1 benchmark + 7 baselines + random/gp/tpe searches + 2 trained seeds.
@@ -922,6 +942,8 @@ def test_run_protocol_rows_and_determinism(populated_db: DataConfig, monkeypatch
         None,
         proto,
         "screening",
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
     )
     assert again == result
 
@@ -931,7 +953,15 @@ def test_run_protocol_validates_tier_and_fold_indices(populated_db: DataConfig):
     proto = ProtocolConfig()
     with pytest.raises(ValueError, match="unknown tier"):
         run_protocol(
-            loader, populated_db, ModelConfig(), BacktestConfig(), None, proto, "nope"
+            loader,
+            populated_db,
+            ModelConfig(),
+            BacktestConfig(),
+            None,
+            proto,
+            "nope",
+            spec_id=TEST_SPEC_ID,
+            run_id=TEST_RUN_ID,
         )
     with pytest.raises(ValueError, match="out of range"):
         run_protocol(
@@ -943,6 +973,8 @@ def test_run_protocol_validates_tier_and_fold_indices(populated_db: DataConfig):
             proto,
             "screening",
             fold_indices=[99],
+            spec_id=TEST_SPEC_ID,
+            run_id=TEST_RUN_ID,
         )
 
 
@@ -951,7 +983,15 @@ def test_run_protocol_rejects_unknown_baseline(populated_db: DataConfig):
     proto = ProtocolConfig(baseline_signals=["NOT_A_FACTOR"])
     with pytest.raises(ValueError, match="NOT_A_FACTOR"):
         run_protocol(
-            loader, populated_db, ModelConfig(), BacktestConfig(), None, proto, "screening"
+            loader,
+            populated_db,
+            ModelConfig(),
+            BacktestConfig(),
+            None,
+            proto,
+            "screening",
+            spec_id=TEST_SPEC_ID,
+            run_id=TEST_RUN_ID,
         )
 
 
@@ -1014,6 +1054,13 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
     # T2-03 baseline ladder rows run in the CLI protocol too.
     assert any(r["candidate"] == "gp_search" for r in payload["rows"])
     assert any(r["candidate"] == "tpe_search" for r in payload["rows"])
+    from ashare_model.artifact_writer import artifact_id_of
+    from ashare_model.run_store import RunStore
+
+    index = RunStore(populated_db.data_dir).load_index(
+        payload["spec_id"], payload["run_id"]
+    )
+    assert index["artifacts"][0]["artifact_id"] == artifact_id_of(payload)
     # The protocol must never clobber the working strategy artifacts.
     assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
 
@@ -1162,7 +1209,14 @@ def test_selfcheck_rows_insignificant_on_synthetic(populated_db: DataConfig):
     )
     rows = selfcheck_rows(loader, proto, BacktestConfig())
     assert [r["candidate"] for r in rows] == ["selfcheck:noise"] * 2
-    result = build_result(proto, "selfcheck", TierConfig(0, 0), rows)
+    result = build_result(
+        proto,
+        "selfcheck",
+        TierConfig(0, 0),
+        rows,
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
+    )
     assert result["tier"] == "selfcheck" and result["steps"] == 0
     assert result["dsr"] is not None and result["dsr"]["dsr"] < 0.95
     assert result["max_t"] is not None and result["max_t"]["p_value"] > 0.05
@@ -1176,6 +1230,8 @@ def test_build_result_includes_extra_trial_rows():
     extra = _noise_rows(n=2, seed=7)
     result = build_result(
         ProtocolConfig(), "screening", TierConfig(50, 256), rows,
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
         extra_trial_rows=extra,
     )
     assert result["dsr"]["n_trials"] == 5
@@ -1293,3 +1349,6 @@ def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
     assert payload["steps"] == 0 and payload["batch_size"] == 0
     assert all(r["candidate"] == "selfcheck:noise" for r in payload["rows"])
     assert payload["dsr"] is not None and payload["max_t"] is not None
+    from ashare_model.identity import candidate_id
+
+    assert payload["candidate_id"] == candidate_id(payload["spec_id"], [], 0)
