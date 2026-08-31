@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -120,6 +121,29 @@ def test_warning_merge_script_exists() -> None:
     assert MERGE_SCRIPT.exists(), "CI warning merge script is missing"
 
 
+def test_parse_excludes_final_summary_line() -> None:
+    """Regression (PR4 final-candidate verification): the summary line
+    (\"N passed, ... in T\") is run-varying and must never enter the
+    warnings section, or every comparison would be net-new by
+    construction."""
+
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    text = "\n".join(
+        [
+            "============================== warnings summary ===============================",
+            "tests/test_a.py: 1 warning",
+            "  C:/env/osqp/interface.py:405: PendingDeprecationWarning: boom",
+            "    warnings.warn(",
+            "1342 passed, 5 skipped, 615 warnings in 272.18s (0:04:32)",
+        ]
+    )
+    section = module.parse_warnings_section(text)
+    assert section, "warnings summary must be parsed"
+    assert not any("passed," in line for line in section), (
+        "the run-varying totals line must be excluded from the section"
+    )
+
+
 def test_warning_merge_detects_net_new_warning_lines(tmp_path: Path) -> None:
     module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
     text = "\n".join(
@@ -163,3 +187,59 @@ def test_committed_baseline_is_structurally_valid() -> None:
     assert payload["total_warnings"] > 0
     assert payload["section_lines"], "baseline warnings section is empty"
     assert "provenance" in payload and "4156de4" in payload["provenance"]
+
+
+def test_baseline_lines_are_environment_independent() -> None:
+    """R3-F1: baseline lines carry no machine-specific path prefixes."""
+
+    payload = json.loads(BASELINE.read_text(encoding="utf-8"))
+    for line in payload["section_lines"]:
+        assert not re.match(r"^[A-Za-z]:", line), f"drive-letter path leaked: {line}"
+        assert "miniconda" not in line, f"interpreter path leaked: {line}"
+        assert not line.startswith("D:/") and not line.startswith("/home/"), line
+
+
+def test_parse_normalizes_location_prefixes() -> None:
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    windows_local = (
+        "  D:\\minequant\\AlphaGPT\\ashare_model\\reward.py:615: "
+        "RuntimeWarning: All-NaN slice encountered"
+    )
+    third_party = (
+        "  C:\\ProgramData\\miniconda3\\Lib\\site-packages\\osqp\\interface.py:405: "
+        "PendingDeprecationWarning: boom"
+    )
+    linux_ci = (
+        "  /home/runner/work/N/N/ashare_model/data_loader.py:86: "
+        "UniverseDevelopmentFallbackWarning: dev fallback"
+    )
+    assert module._normalize_line(windows_local) == (
+        "ashare_model/reward.py:615: RuntimeWarning: All-NaN slice encountered"
+    )
+    assert module._normalize_line(third_party) == (
+        "site-packages/osqp/interface.py:405: PendingDeprecationWarning: boom"
+    )
+    assert module._normalize_line(linux_ci) == (
+        "ashare_model/data_loader.py:86: UniverseDevelopmentFallbackWarning: dev fallback"
+    )
+    assert module._normalize_line("tests/test_a.py: 2 warnings") == "tests/test_a.py: 2 warnings"
+
+
+def test_discover_is_recursive(tmp_path: Path) -> None:
+    module = _load_script(SHARD_SCRIPT, "check_test_shards")
+    (tmp_path / "tests").mkdir(parents=True)
+    (tmp_path / "tests" / "test_top.py").write_text("", encoding="utf-8")
+    (tmp_path / "tests" / "sub").mkdir()
+    (tmp_path / "tests" / "sub" / "test_nested.py").write_text("", encoding="utf-8")
+    files = module.discover_test_files(root=tmp_path)
+    assert files == {"test_top.py", "sub/test_nested.py"}
+
+
+def test_check_expect_mismatch_fails_closed(tmp_path: Path) -> None:
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"total_warnings": 0, "section_lines": []}), encoding="utf-8")
+    log = tmp_path / "pytest-shard-a.log"
+    log.write_text("nothing", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        module.check(baseline, [log], expect=4)

@@ -33,9 +33,51 @@ START_MARK = "warnings summary"
 END_MARKS = ("slowest", "durations:", "short test summary")
 SUMMARY_RE = re.compile(r"(\d+) passed(?:, (\d+) skipped)?(?:, (\d+) warnings)? in ")
 
+# In-repo package/tool anchors: a warnings-summary location is normalized
+# to start at the last of these, so a Windows dev tree (D:\...\),
+# a Linux CI checkout (/home/runner/work/...) and any other machine
+# produce identical lines (R3-F1).
+_REPO_ANCHORS = (
+    "ashare_data",
+    "ashare_model",
+    "ashare_portfolio",
+    "ashare_trading",
+    "tests",
+    "scripts",
+    "webapi",
+    "webui",
+)
+
+
+def _normalize_line(line: str) -> str:
+    """Make a warnings-summary line environment-independent (R3-F1).
+
+    Separators are unified to '/', third-party locations are anchored at
+    their ``site-packages`` segment, and in-repo locations are re-anchored
+    at their package/tool prefix.  Both the committed baseline and every
+    compared run go through this function, so the comparison is exact yet
+    machine-independent.
+    """
+
+    out = line.strip().replace("\\", "/")
+    idx = out.find("site-packages/")
+    if idx != -1:
+        return "site-packages/" + out[idx + len("site-packages/"):]
+    for anchor in _REPO_ANCHORS:
+        idx = out.rfind(anchor + "/")
+        if idx != -1:
+            return out[idx:]
+    return out
+
 
 def parse_warnings_section(text: str) -> list[str]:
-    """Stripped lines of the pytest warnings-summary section (may be empty)."""
+    """Normalized lines of the pytest warnings-summary section.
+
+    The section excludes the run-varying totals line (\"N passed, ... in
+    T\") — it must never enter the comparison (PR4 final-candidate
+    verification regression) — and every line is environment-normalized
+    (R3-F1), so the committed baseline is machine-independent.
+    """
 
     lines = text.splitlines()
     start = next((i for i, line in enumerate(lines) if START_MARK in line), None)
@@ -43,10 +85,12 @@ def parse_warnings_section(text: str) -> list[str]:
         return []
     end = len(lines)
     for i in range(start + 1, len(lines)):
-        if any(mark in lines[i] for mark in END_MARKS):
+        # Stop at the next section separator, a duration table, the short
+        # summary - and in particular at the run-varying totals line.
+        if any(mark in lines[i] for mark in END_MARKS) or SUMMARY_RE.search(lines[i]):
             end = i
             break
-    return [line.strip() for line in lines[start:end] if line.strip()]
+    return [_normalize_line(line) for line in lines[start:end] if line.strip()]
 
 
 def parse_summary_totals(text: str) -> tuple[int, int, int]:
@@ -86,8 +130,13 @@ def compare(runs: dict[str, list[str]], baseline: dict) -> CompareResult:
     )
 
 
-def check(baseline_path: Path, log_paths: list[Path]) -> int:
+def check(baseline_path: Path, log_paths: list[Path], expect: int | None = None) -> int:
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    if expect is not None and len(log_paths) != expect:
+        raise SystemExit(
+            f"expected {expect} shard log(s) but got {len(log_paths)} - "
+            "a matrix leg is missing its artifact; fail closed"
+        )
     runs = {p.name: parse_warnings_section(p.read_text(encoding="utf-8")) for p in log_paths}
     missing = [p.name for p in log_paths if not runs[p.name]]
     if missing:
@@ -158,6 +207,11 @@ def main(argv=None) -> int:
     parser.add_argument("--write-baseline", type=Path, metavar="OUT")
     parser.add_argument("--from", dest="from_log", type=Path, metavar="LOG")
     parser.add_argument("--provenance", default="")
+    parser.add_argument(
+        "--expect",
+        type=int,
+        help="required number of shard logs (matrix leg count); fail closed otherwise",
+    )
     args = parser.parse_args(argv)
 
     if args.write_baseline:
@@ -167,7 +221,7 @@ def main(argv=None) -> int:
     if args.check:
         if not args.logs or not args.baseline:
             parser.error("--check requires --baseline and --logs")
-        return check(args.baseline, args.logs)
+        return check(args.baseline, args.logs, expect=args.expect)
     parser.error("nothing to do: pass --check or --write-baseline")
     return 2
 

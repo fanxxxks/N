@@ -132,11 +132,18 @@ SHARDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def discover_test_files() -> set[str]:
-    """File names of every ``tests/test_*.py`` in the repository."""
+def discover_test_files(root: Path | None = None) -> set[str]:
+    """Relative posix paths of every ``tests/**/test_*.py`` (recursive).
 
-    tests_dir = ROOT / "tests"
-    return {p.name for p in tests_dir.glob("test_*.py")}
+    Recursion matters (R3-F3a): a test file placed in a future ``tests/``
+    subdirectory must still be covered by the shard union, both for the
+    guard and for the CI legs.
+    """
+
+    tests_dir = (root or ROOT) / "tests"
+    return {
+        p.relative_to(tests_dir).as_posix() for p in tests_dir.rglob("test_*.py")
+    }
 
 
 def validate(shards: dict[str, tuple[str, ...]], files: set[str]) -> list[str]:

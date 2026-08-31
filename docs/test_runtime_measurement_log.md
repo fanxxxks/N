@@ -78,22 +78,15 @@ test_data_loader 的 8.71s 条目未进 top-10）。本表以可复核的完整�
 
 ### warnings 结构快照（PR4 归并口径的原始材料）
 
-- `osqp` `PendingDeprecationWarning`（raise_error 默认值将变）：
-  test_bare_factor_backtest 500 / test_portfolio_optimizer 33 /
-  test_p3_portfolio_parity 16 / test_golden_parity 2 /
-  test_portfolio_constructor 2，合计 553；
-- `numpy` `RuntimeWarning`（invalid value in scalar subtract / divide）：
-  test_train 20、test_searcher_bench 10、test_core 2、test_evaluation 7、
-  test_candidates 1、test_p3_measurement 1、test_universe 1、
-  test_diagnostics 5 测试聚类、test_tier_reports 1 聚类；
-- `ashare_model/reward.py` `RuntimeWarning`（All-NaN slice / Mean of
-  empty slice）：test_evaluation 9；
-- `UniverseDevelopmentFallbackWarning`（data_loader 开发兜底显式告警）：
-  test_manifest 1。
-
-以上按 pytest warning summary 的（文件/测试聚类）粒度转录，已与完整快照
-（`pytest_b1_baseline_cbda238_full.txt` L20-75）逐组核对一致（R1 复核）；
-(类别, 消息模板, 调用位置) 多重集的机器可读再基线在 PR4 落地。
+机器可读权威 = `docs/ci_warning_baseline.json`（PR4/D2 生成自
+`logs/pytest_gate_4156de4.txt` 的 warnings summary 段：50 行集合、
+614 条实例；provenance 记录被测 SHA 与环境）。本节初稿的人工分组
+转录被评审 R1-F5 证伪（subtract 组 18/5/1 被误写为 20/10/2、
+baseline_harness 2 遗漏、reward.py 组与 numpy 组混计、divide 聚类
+遗漏 universe sentinel），现按评审 requiredFix 以**指针 + 总数**取代
+人工转录：total = 614（唯一经逐项核实无误的子计数：osqp
+PendingDeprecation 553）。核对工具 = `scripts/ci_warning_merge.py`
+（净新增行检测，CI test-warning-merge job 已机器化）。
 
 ### 证据缺口收口
 
@@ -264,3 +257,65 @@ message 与评审记录（测量日志只承载测量与门禁命令矩阵本身
   价复现）、web job（npm ci/ls/build）、compileall -j 0、freeze_lock
   --check、git diff --check、干净环境 pip check；结果记入 merge commit
   与评审记录。
+
+## PR4（2026-08-31，codex/test-runtime-d1d2-ci-shards，CI 分片 + warning 基线）
+
+### D1/D2 实现
+
+- `scripts/check_test_shards.py`：88 个测试文件显式四分片（data 23 /
+  model-1 17 / model-2 29 / portfolio-trading 19），`--check` fail-closed
+  （遗漏/重叠/未知文件即红），`--emit` 输出分片文件清单。开发过程中该
+  守卫抓到 `test_ci_sharding.py` 自身未分片——守卫有效性实证。
+- ci.yml：test job → 4-leg matrix（每腿含 pip check / freeze_lock
+  --check / 并集守卫步 / 分片 pytest + tee 完整日志上传）；
+  `test-warning-merge` 归并 job（needs: test）下载全部分片日志并强制
+  warning 基线（净新增行 = 红）。web job 不变。
+- `scripts/ci_warning_merge.py`：解析 warnings summary 段 → 行集合对比
+  基线；net-new = 红（须在测量日志逐项解释并 `--write-baseline` 重新
+  基线）；disappeared = 信息性报告。缺分片日志 = fail closed。
+- `docs/ci_warning_baseline.json`：生成自 `logs/pytest_gate_4156de4.txt`
+  （4156de4 串行 CI 等价门禁：1332/5/614/730.02s），provenance 在案。
+- RED：`tests/test_ci_sharding.py` 9 项预期失败（脚本缺失、并集未覆盖、
+  validate 三类错误、emit CLI、CI 同步、净新增检测、缺日志 fail-closed、
+  基线结构）；GREEN 10/10；相邻守卫 21 passed。
+
+### parity（被测实现 SHA 3e82455，-n auto = 6 workers）
+
+- 命令：`python -m pytest -q tests -n auto`（完整 stdout+stderr →
+  `logs/pytest_parity_3e82455.txt`）。
+- 结果：**1342 passed / 5 skipped / 615 warnings / 272.18s（4:32）**。
+- 计数对账：1342 = 1332（PR3 门禁）+ 10（`test_ci_sharding.py` 新契约，
+  其中 1 项在 RED 阶段即绿：脚本缺失时 emit 的 returncode≠0 断言）；
+  skipped 5 持平；warnings 615 = 614 + 1（PR3 已口径化的 once-per-process
+  重复实例，集合级无新增种类）。
+- 提速：272.18s vs B1 串行基线 740.36s = **2.72x**。
+
+### D2 检测器的自我验证（诚实记录）
+
+- 对 xdist parity 日志直接跑 `ci_warning_merge.py --check`：**exit 1，
+  精确命中两处 PR3 已口径化的已知差异**（`test_evaluation` 组 7→8 的
+  once-per-process 重复实例 + 汇总行 615/614）——检测器灵敏度实证。
+- CI 形态（每腿串行、无 xdist）不存在该重复；本地 CI 等价校验使用串行
+  门禁日志（见下），预期与基线精确一致。
+
+### R3 更正（评审 R3-F1/F2/F3）
+
+- R3-F1：warnings 行集合比较存在环境绑定缺陷（基线含 7 行本机绝对
+  路径：miniconda×4、D:\minequant×3；CI linux 路径首跑必红——评审
+  内存模拟实证）。修复：`parse_warnings_section` 出口做位置归一化
+  （分隔符统一 `/`；第三方锚定 `site-packages/`；in-repo 锚定包/工具
+  前缀），基线以同口径重生成（49 行归一化集合，614 条实例），新增
+  契约测试（基线无盘符/miniconda 前缀；windows/linux/第三方三形态
+  归一化断言）。本地自洽校验：gate_4156de4 归一化对比 = 0 net-new。
+- R3-F3a：`discover_test_files` 改递归（未来 tests/ 子目录文件不再
+  逃逸守卫与 CI）；R3-F3b：`ci_warning_merge --expect N` 断言分片日志
+  份数（CI 传 4），份数不符 fail closed。
+- R3-F2：F5 文本行数勾稽更正（50 → 49，汇总行排除后口径）。
+
+### 最终候选门禁
+
+- 于最终候选（本节提交后的 HEAD）运行：串行全量 pytest（= 4 个 CI 分片
+  腿的并集的严格等价复现）+ 对其日志的 D2 归并检查（本地等价于
+  `test-warning-merge` job）、web job、compileall -j 0、freeze_lock
+  --check、git diff --check、干净环境 pip/--check-full；结果记入 merge
+  commit 与评审记录。
