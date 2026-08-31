@@ -30,13 +30,14 @@ the ledger path and run id, and Champion/Challenger promotion (T4-01,
 
 from __future__ import annotations
 
-import hashlib
 import json
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
+
+from ashare_model.identity import canonical_json, sha256_hex
 
 
 class LedgerIntegrityError(Exception):
@@ -47,14 +48,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def canonical_json(value: Any) -> str:
-    """Deterministic JSON text (sorted keys, compact separators).
-
-    The same value always serializes to the same string, which is what
-    makes entry hashes reproducible across reloads.
-    """
-
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+# P8-02: canonical JSON and entry hashing live in the single identity module
+# (ashare_model.identity); ``canonical_json``/``sha256_hex`` are imported
+# above and re-exported so the historical import surface stays intact and
+# every existing ledger line re-hashes byte-identically.
 
 
 @dataclass(frozen=True)
@@ -113,7 +110,7 @@ class LedgerEntry:
                 name: getattr(entry, name)
                 for name in cls._fields_except("entry_hash")
             },
-            entry_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            entry_hash=sha256_hex(text),
         )
 
 
@@ -155,14 +152,14 @@ class ExperimentLedger:
                 raise LedgerIntegrityError(
                     f"hash chain broken at sequence {index} in {self.path}"
                 )
-            expected = hashlib.sha256(
+            expected = sha256_hex(
                 canonical_json(
                     {
                         name: getattr(entry, name)
                         for name in LedgerEntry._fields_except("entry_hash")
                     }
-                ).encode("utf-8")
-            ).hexdigest()
+                )
+            )
             if entry.entry_hash != expected:
                 raise LedgerIntegrityError(
                     f"entry hash mismatch at sequence {index} in {self.path}"
