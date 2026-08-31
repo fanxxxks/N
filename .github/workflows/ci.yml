@@ -7,6 +7,10 @@ on:
 
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [shard-data, shard-model-1, shard-model-2, shard-portfolio-trading]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,8 +35,50 @@ jobs:
       - name: Verify lock files are in sync
         run: python scripts/freeze_lock.py --check
 
-      - name: Run tests
-        run: python -m pytest -q tests
+      # PR4/D1: the shard union must equal the full tests/test_*.py set
+      # (fail-closed on omission/overlap) before any leg runs.
+      - name: Enforce shard union == full set
+        run: python scripts/check_test_shards.py --check
+
+      # PR4/D1: run this leg's shard; the full log is uploaded so the
+      # merge job can enforce the warning baseline.
+      - name: Run tests (shard ${{ matrix.shard }})
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q $(python scripts/check_test_shards.py --emit "${{ matrix.shard }}") 2>&1 | tee "pytest-${{ matrix.shard }}.log"
+
+      - name: Upload shard pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log-${{ matrix.shard }}
+          path: pytest-${{ matrix.shard }}.log
+
+  # PR4/D2: machine-enforce the warning accounting criterion fixed in
+  # PR3 - any net-new warnings-summary line versus the committed
+  # baseline fails CI until it is explained item-by-item in
+  # docs/test_runtime_measurement_log.md and the baseline is
+  # regenerated.
+  test-warning-merge:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download shard pytest logs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pytest-log-*
+          merge-multiple: true
+          path: shard-logs
+
+      - name: Enforce warning baseline (net-new = fail)
+        run: python scripts/ci_warning_merge.py --check --baseline docs/ci_warning_baseline.json --logs shard-logs/pytest-*.log
 
   web:
     runs-on: ubuntu-latest

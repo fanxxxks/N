@@ -368,6 +368,13 @@ Python 改动通常按以下顺序验证：
 4. `python -m compileall -j 0 -q ashare_data ashare_model ashare_portfolio ashare_trading scripts webapi`；
 5. `git diff --check`。
 
+CI 的 test job 按 `scripts/check_test_shards.py`（单一权威）分片并行，
+分片并集必须等于全集（fail-closed 守卫，新增测试文件未分片即红）；
+CI warnings 记账由归并 job 对比基线 `docs/ci_warning_baseline.json`
+（净新增 warning 必须先在测量日志逐项解释并重新基线）。本地/CI 命令
+清单由 `tests/test_validation_docs.py` 与 `tests/test_ci_sharding.py`
+双守卫锚定。
+
 数据/universe 改动另需：
 
 - `python scripts/check_production_gates.py`；
