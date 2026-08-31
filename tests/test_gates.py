@@ -2,13 +2,61 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
+import pandas as pd
 import pytest
 
 from ashare_data.db import AshareDB
-from ashare_data.gates import GateResult, ProductionGateRunner
-from ashare_data.universe import UniverseContractError, member_bar_coverage
+from ashare_data.gates import (
+    GateResult,
+    ProductionGateRunner,
+    _dev_membership_records,
+)
+from ashare_data.universe import (
+    ResolvedUniverse,
+    UniverseContractError,
+    UniverseContractStatus,
+    dev_fallback_membership_records,
+    member_bar_coverage,
+)
 from tests.conftest import DEFAULT_CODES, make_bars
+
+
+def test_dev_membership_records_delegates_to_shared_definition(data_config):
+    """F4: the gates' dev-fallback membership records come from the single
+    definition in ashare_data.universe, byte-identical in content, key
+    order, record order and string types."""
+    status = UniverseContractStatus(
+        mode="dev",
+        strict=False,
+        degraded=True,
+        membership_source="development-fallback",
+        session_source="trade_calendar",
+        warnings=("dev fallback active",),
+        constituent_rows=0,
+        stock_rows=0,
+        open_sessions=2,
+    )
+    contract = ResolvedUniverse(
+        constituents=pd.DataFrame(),
+        stocks=pd.DataFrame(),
+        sessions=["20200102", "20200103"],
+        codes=["600000.SH", "000001.SZ"],
+        status=status,
+    )
+    records = _dev_membership_records(data_config, contract)
+    shared = dev_fallback_membership_records(
+        data_config.index_codes[0], contract
+    )
+    assert json.dumps(records) == json.dumps(shared)
+    assert json.dumps(records) == (
+        '[{"index_code": "000300.SH", "ts_code": "600000.SH", '
+        '"in_date": "20200102", "out_date": "99991231"}, '
+        '{"index_code": "000300.SH", "ts_code": "000001.SZ", '
+        '"in_date": "20200102", "out_date": "99991231"}]'
+    )
 
 
 def _seed_zero_bar_member(data_config) -> None:

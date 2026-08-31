@@ -28,6 +28,7 @@ from ashare_data.universe import (
     UniverseMask,
     UniversePolicy,
     build_universe_mask,
+    dev_fallback_membership_records,
     resolve_universe_contract,
 )
 
@@ -141,18 +142,12 @@ class AshareDataLoader:
         if not contract.status.degraded:
             return contract.constituents.to_dict("records")
         # The explicit development fallback is an in-memory all-period
-        # membership only.  It is never persisted and its degraded provenance
-        # remains visible through ``universe_status``.
-        index_code = str(self.config.index_codes[0])
-        return [
-            {
-                "index_code": index_code,
-                "ts_code": code,
-                "in_date": contract.sessions[0],
-                "out_date": "99991231",
-            }
-            for code in contract.codes
-        ]
+        # membership only; single definition in ashare_data.universe
+        # (arch-review F4).  It is never persisted and its degraded
+        # provenance remains visible through ``universe_status``.
+        return dev_fallback_membership_records(
+            self.config.index_codes[0], contract
+        )
 
     def _build_universe(
         self,

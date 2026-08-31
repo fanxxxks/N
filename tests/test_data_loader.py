@@ -1,15 +1,79 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 
+from ashare_data import gates
 from ashare_data.config import DataConfig, ModelConfig
 from ashare_data.db import AshareDB
-from ashare_data.universe import UniverseContractError, UniverseReason
+from ashare_data.universe import (
+    ResolvedUniverse,
+    UniverseContractError,
+    UniverseContractStatus,
+    UniverseReason,
+    dev_fallback_membership_records,
+)
 from ashare_model.data_loader import AshareDataLoader, build_loader_from_config
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 from tests.conftest import make_bars
+
+
+def _degraded_contract() -> ResolvedUniverse:
+    """Synthetic degraded universe for the development-fallback path."""
+    status = UniverseContractStatus(
+        mode="dev",
+        strict=False,
+        degraded=True,
+        membership_source="development-fallback",
+        session_source="trade_calendar",
+        warnings=("dev fallback active",),
+        constituent_rows=0,
+        stock_rows=0,
+        open_sessions=2,
+    )
+    return ResolvedUniverse(
+        constituents=pd.DataFrame(),
+        stocks=pd.DataFrame(),
+        sessions=["20200102", "20200103"],
+        # Deliberately unsorted: record order must follow contract.codes.
+        codes=["600000.SH", "000001.SZ"],
+        status=status,
+    )
+
+
+_DEV_FALLBACK_GOLDEN = (
+    '[{"index_code": "000300.SH", "ts_code": "600000.SH", '
+    '"in_date": "20200102", "out_date": "99991231"}, '
+    '{"index_code": "000300.SH", "ts_code": "000001.SZ", '
+    '"in_date": "20200102", "out_date": "99991231"}]'
+)
+
+
+def test_dev_fallback_records_single_definition_golden():
+    """F4: the dev-fallback membership record is defined exactly once, in
+    ashare_data.universe; pin content, key order, record order and string
+    types byte-exactly (json.dumps preserves insertion order)."""
+    records = dev_fallback_membership_records("000300.SH", _degraded_contract())
+    assert json.dumps(records) == _DEV_FALLBACK_GOLDEN
+
+
+def test_dev_fallback_records_parity_loader_and_gates(data_config):
+    """F4 parity guard: the loader and the gates emit byte-identical
+    fallback records because both call the shared definition."""
+    contract = _degraded_contract()
+    loader = AshareDataLoader(data_config, ModelConfig())
+    via_loader = loader._membership_records(contract)
+    via_gates = gates._dev_membership_records(data_config, contract)
+    via_shared = dev_fallback_membership_records(
+        data_config.index_codes[0], contract
+    )
+    assert json.dumps(via_loader) == _DEV_FALLBACK_GOLDEN
+    assert json.dumps(via_gates) == _DEV_FALLBACK_GOLDEN
+    assert json.dumps(via_shared) == _DEV_FALLBACK_GOLDEN
 
 
 def _seed_loader_db(
