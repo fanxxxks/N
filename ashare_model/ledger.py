@@ -44,6 +44,21 @@ class LedgerIntegrityError(Exception):
     """The ledger file is missing entries, reordered, or tampered with."""
 
 
+LEDGER_SCHEMA_VERSION = 1
+"""Schema version of bound ledger entries (P8-04).
+
+Entries written with a ``spec_id`` binding carry
+``ledger_schema_version = 1`` and hash over the full field set. Entries
+written without a binding keep the historical v0 field set exactly
+(never serialized with the two P8-04 keys), so every pre-existing ledger
+line re-hashes byte-identically; v0 files stay read-only legacy and can
+never be bound to a spec. Unknown/future versions are rejected on load.
+"""
+
+# Fields introduced with schema version 1 (excluded from v0 serialization).
+_V1_FIELDS = ("spec_id", "ledger_schema_version")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -72,12 +87,28 @@ class LedgerEntry:
     error: str | None = None
     metrics: dict = field(default_factory=dict)
     payload: dict = field(default_factory=dict)
+    spec_id: str = ""
+    ledger_schema_version: int = 0
     prev_hash: str = ""
     entry_hash: str = ""
 
     @classmethod
-    def _fields_except(cls, *excluded: str) -> tuple:
-        return tuple(f.name for f in fields(cls) if f.name not in excluded)
+    def _fields_except(cls, *excluded: str, schema_version: int | None = None) -> tuple:
+        """Field names hashed/serialized for the given entry schema version.
+
+        ``schema_version=None`` means "current" (all fields); version 0
+        (legacy) excludes the v1-only fields so historical lines keep
+        their exact byte behavior.
+        """
+
+        excluded_all = set(excluded)
+        if schema_version is None or schema_version >= LEDGER_SCHEMA_VERSION:
+            return tuple(f.name for f in fields(cls) if f.name not in excluded_all)
+        return tuple(
+            f.name
+            for f in fields(cls)
+            if f.name not in excluded_all and f.name not in _V1_FIELDS
+        )
 
     @classmethod
     def from_json(cls, text: str) -> "LedgerEntry":
@@ -91,25 +122,29 @@ class LedgerEntry:
         """The full line as written to the file (including ``entry_hash``)."""
 
         return canonical_json(
-            {name: getattr(self, name) for name in self._fields_except()}
+            {
+                name: getattr(self, name)
+                for name in self._fields_except(
+                    schema_version=self.ledger_schema_version
+                )
+            }
         )
 
     @classmethod
     def with_hash(cls, entry: "LedgerEntry") -> "LedgerEntry":
         """Return ``entry`` with its ``entry_hash`` filled in.
 
-        The hash covers every field except ``entry_hash`` itself, so a
-        reload can recompute it from the line alone.
+        The hash covers every serialized field except ``entry_hash`` itself
+        (respecting the entry's schema version), so a reload can recompute
+        it from the line alone.
         """
 
-        text = canonical_json(
-            {name: getattr(entry, name) for name in cls._fields_except("entry_hash")}
+        names = cls._fields_except(
+            "entry_hash", schema_version=entry.ledger_schema_version
         )
+        text = canonical_json({name: getattr(entry, name) for name in names})
         return cls(
-            **{
-                name: getattr(entry, name)
-                for name in cls._fields_except("entry_hash")
-            },
+            **{name: getattr(entry, name) for name in names},
             entry_hash=sha256_hex(text),
         )
 
@@ -121,12 +156,23 @@ class ExperimentLedger:
     (auto-generated when omitted).  Opening an existing file verifies the
     hash chain and sequence continuity; any violation raises
     :class:`LedgerIntegrityError` before a single entry is trusted.
+
+    ``spec_id`` (P8-04) binds the whole ledger to one frozen RunSpec: bound
+    ledgers write schema-version 1 entries carrying ``spec_id``/``run_id``,
+    and refuse to bind files that contain legacy v0 entries. Unbound
+    ledgers keep the exact historical v0 byte behavior.
     """
 
-    def __init__(self, path: str | Path, run_id: str | None = None):
+    def __init__(
+        self,
+        path: str | Path,
+        run_id: str | None = None,
+        spec_id: str | None = None,
+    ):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id or f"run-{_now().replace(':', '').replace('-', '')}"
+        self.spec_id = spec_id
         self._entries: list[LedgerEntry] = []
         if self.path.exists():
             self._load()
@@ -143,6 +189,32 @@ class ExperimentLedger:
         previous_hash = ""
         for index, line in enumerate(lines, start=1):
             entry = LedgerEntry.from_json(line)
+            if entry.ledger_schema_version > LEDGER_SCHEMA_VERSION:
+                raise LedgerIntegrityError(
+                    f"unknown ledger schema version {entry.ledger_schema_version} "
+                    f"at sequence {index} in {self.path} "
+                    f"(this code understands <= {LEDGER_SCHEMA_VERSION})"
+                )
+            if (
+                entry.ledger_schema_version >= LEDGER_SCHEMA_VERSION
+                and not entry.spec_id
+            ):
+                raise LedgerIntegrityError(
+                    f"schema v{entry.ledger_schema_version} entry without "
+                    f"spec_id at sequence {index} in {self.path}"
+                )
+            if self.spec_id is not None:
+                if entry.ledger_schema_version == 0:
+                    raise LedgerIntegrityError(
+                        f"legacy (unversioned) ledger entries cannot be bound "
+                        f"to a spec: sequence {index} in {self.path} is v0"
+                    )
+                if entry.spec_id != self.spec_id:
+                    raise LedgerIntegrityError(
+                        f"entry spec_id mismatch at sequence {index} in "
+                        f"{self.path}: entry carries {entry.spec_id!r}, "
+                        f"ledger is bound to {self.spec_id!r}"
+                    )
             if entry.sequence != index:
                 raise LedgerIntegrityError(
                     f"sequence gap: expected {index}, found {entry.sequence} "
@@ -156,7 +228,9 @@ class ExperimentLedger:
                 canonical_json(
                     {
                         name: getattr(entry, name)
-                        for name in LedgerEntry._fields_except("entry_hash")
+                        for name in LedgerEntry._fields_except(
+                            "entry_hash", schema_version=entry.ledger_schema_version
+                        )
                     }
                 )
             )
@@ -173,7 +247,9 @@ class ExperimentLedger:
             LedgerEntry(
                 **{
                     name: getattr(entry, name)
-                    for name in LedgerEntry._fields_except("prev_hash", "entry_hash")
+                    for name in LedgerEntry._fields_except(
+                        "prev_hash", "entry_hash", schema_version=entry.ledger_schema_version
+                    )
                 },
                 prev_hash=previous_hash,
             )
@@ -217,6 +293,10 @@ class ExperimentLedger:
                 fold_test_end=fold_test_end,
                 started_at=_now(),
                 payload=dict(payload or {}),
+                spec_id=self.spec_id or "",
+                ledger_schema_version=(
+                    LEDGER_SCHEMA_VERSION if self.spec_id is not None else 0
+                ),
             )
         )
         return entry.trial_id
@@ -231,6 +311,7 @@ class ExperimentLedger:
         opening = next(e for e in self._entries if e.trial_id == trial_id)
         self._closed_trials.add(trial_id)
         sequence = len(self._entries) + 1
+        bound_spec = opening.spec_id or self.spec_id or ""
         self._append(
             LedgerEntry(
                 sequence=sequence,
@@ -247,6 +328,10 @@ class ExperimentLedger:
                 error=error,
                 metrics=dict(metrics or {}),
                 payload=opening.payload,
+                spec_id=bound_spec,
+                ledger_schema_version=(
+                    LEDGER_SCHEMA_VERSION if bound_spec else 0
+                ),
             )
         )
 

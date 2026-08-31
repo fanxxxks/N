@@ -79,7 +79,9 @@ def test_ledger_entry_hash_is_the_unified_hash_of_canonical_payload(tmp_path):
     entry = LedgerEntry.from_json(line)
     payload = {
         name: getattr(entry, name)
-        for name in LedgerEntry._fields_except("entry_hash")
+        for name in LedgerEntry._fields_except(
+            "entry_hash", schema_version=entry.ledger_schema_version
+        )
     }
     expected = hashlib.sha256(
         json.dumps(payload, **_LEGACY_ARGS).encode("utf-8")
