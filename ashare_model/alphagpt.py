@@ -350,6 +350,23 @@ def build_action_mask(
         if tokens.numel():
             allowed_features[tokens - vocab.feature_offset] = True
 
+    # P9 §4.2 (grammar v4): deprecated features leave the sampling space
+    # while keeping their token ids and computations — they are never
+    # legal to sample, with or without a domain feature_ids restriction.
+    # The policy rides the vocabulary object, so toy/legacy vocabularies
+    # (empty deprecated set) are unaffected.
+    deprecated_ids = torch.tensor(
+        [
+            index
+            for index, name in enumerate(vocab.feature_names)
+            if name in vocab.deprecated_names
+        ],
+        dtype=torch.long,
+        device=stack_sizes.device,
+    )
+    if deprecated_ids.numel():
+        allowed_features[deprecated_ids] = False
+
     mask = torch.full(
         (batch, vocab.size), float("-inf"), device=stack_sizes.device
     )

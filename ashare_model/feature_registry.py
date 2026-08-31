@@ -46,7 +46,10 @@ from .vocab import FEATURE_NAMES
 # plus the horizon/cost/depends_on triple derived from the P6 research
 # domains and FACTOR_REGISTRY.  Descriptive only — no search, scoring or
 # promotion semantics change.
-FEATURE_REGISTRY_VERSION = 3
+# v4 (P9, docs/p9_factor_family_contract.md APPROVED): the four orthogonal
+# families join the vocabulary, eight window variants are deprecated, and
+# the pending_data placeholders (family ⑤) are surfaced in the summary.
+FEATURE_REGISTRY_VERSION = 4
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9
@@ -62,11 +65,11 @@ class PitLevel(str, enum.Enum):
     NEUTRAL = "neutral"  # no live data source; stays neutral
 
 
-# Deprecated features with their reason.  Aliased features (FEATURE_ALIASES)
-# are not part of the live vocabulary and therefore not in the registry.
-_DEPRECATION_REASONS: dict[str, str] = {
-    "NORTHBOUND_CHG": "daily feed discontinued (2024-08); stays neutral",
-}
+# Deprecated features with their reason (single source: the vocabulary owns
+# which names are de-sampled; the reasons ride along for the registry).
+# Aliased features (FEATURE_ALIASES) are not part of the live vocabulary and
+# therefore not in the registry.
+from .vocab import DEPRECATION_REASONS as _DEPRECATION_REASONS  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -240,12 +243,19 @@ class FeatureRegistry:
             by_level[record.pit_level.value] = by_level.get(record.pit_level.value, 0) + 1
             tier = tier_of_pit_level(record.pit_level).value
             by_tier[tier] = by_tier.get(tier, 0) + 1
+        # P9 §6: pending_data placeholders (family ⑤) are documented gaps,
+        # never vocabulary members and never search-budget consumers.
+        from .feature_metadata import PENDING_DATA_FEATURES
+
         return {
             "n_features": len(self._records),
             "by_pit_level": by_level,
             "by_data_tier": by_tier,
             "deprecated": sorted(
                 name for name, r in self._records.items() if r.deprecated
+            ),
+            "pending_data": sorted(
+                entry.name for entry in PENDING_DATA_FEATURES
             ),
             "n_clusters": len(
                 {r.correlation_cluster for r in self._records.values()}

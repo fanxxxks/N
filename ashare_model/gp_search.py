@@ -95,8 +95,15 @@ def build_pset(vocab: FormulaVocab, feature_ids: list[int] | None = None):
     """
 
     pset = gp.PrimitiveSetTyped("FORMULA", [], Signal)
+    # P9 §4.2: deprecated features never enter the GP terminal set (they
+    # keep their token ids for legacy formula resolution, but they are not
+    # samplable — the same policy the action mask enforces for the other
+    # backends).
+    deprecated = vocab.deprecated_names
     if feature_ids is None:
-        feature_names = list(vocab.feature_names)
+        feature_names = [
+            name for name in vocab.feature_names if name not in deprecated
+        ]
     else:
         allowed = {int(token) for token in feature_ids}
         feature_names = [
@@ -104,7 +111,7 @@ def build_pset(vocab: FormulaVocab, feature_ids: list[int] | None = None):
             for token, name in enumerate(
                 vocab.feature_names, start=vocab.feature_offset
             )
-            if token in allowed
+            if token in allowed and name not in deprecated
         ]
     for name in feature_names:
         pset.addTerminal(name, _type_class(FEATURE_METADATA[name].semantic_type))

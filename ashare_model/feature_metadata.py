@@ -171,12 +171,14 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="One-week reversal: recent losers rebound as the overreaction unwinds.",
         expected_direction=-1,
         semantic_type=SemanticType.RETURN_LIKE,
+        promotion_allowed=False,  # P9 §4.1: mirror of REVERSAL_5
     ),
     "RET_10": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=11),
         hypothesis="Two-week reversal: extended-horizon overreaction correction.",
         expected_direction=-1,
         semantic_type=SemanticType.RETURN_LIKE,
+        promotion_allowed=False,  # P9 §4.1: covered by RET_1 + BIAS_20
     ),
     "VOL_20": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=20),
@@ -189,6 +191,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Low-vol anomaly at the quarterly horizon.",
         expected_direction=-1,
         semantic_type=SemanticType.RETURN_LIKE,
+        promotion_allowed=False,  # P9 §4.1: 0.907 correlated with IVOL_60
     ),
     "TURNOVER": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=1),
@@ -207,6 +210,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Abnormal volume signals speculative interest that mean-reverts.",
         expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
+        promotion_allowed=False,  # P9 §4.1: 0.977 correlated with VOLUME_IMPACT
     ),
     "VOLUME_IMPACT": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=20),
@@ -237,6 +241,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Quarterly momentum: trend persistence at the medium horizon.",
         expected_direction=1,
         semantic_type=SemanticType.RETURN_LIKE,
+        promotion_allowed=False,  # P9 §4.1: mirror of REVERSAL_60
     ),
     "REVERSAL_5": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=6),
@@ -478,6 +483,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Trend signal line: smoothed trend confirmation.",
         expected_direction=1,
         semantic_type=SemanticType.PRICE_LIKE,
+        promotion_allowed=False,  # P9 §4.1: 0.926 correlated with MACD_DIF
     ),
     # Microstructure.
     "SUSPEND_DAYS_60": AuthoredFeatureMeta(
@@ -498,6 +504,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Six-month momentum: intermediate-horizon trend persistence.",
         expected_direction=1,
         semantic_type=SemanticType.RETURN_LIKE,
+        promotion_allowed=False,  # P9 §4.1: mirror of REVERSAL_120
     ),
     "REVERSAL_60": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=61),
@@ -517,6 +524,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Smoothed crowding: elevated turnover predicts underperformance.",
         expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
+        promotion_allowed=False,  # P9 §4.1: TURNOVER + TURNOVER_MA20 cover it
     ),
     "TURNOVER_MA20": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=20),
@@ -574,6 +582,79 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         expected_direction=-1,
         semantic_type=SemanticType.CROSS_SECTIONAL_SIGNAL,
     ),
+    # --- P9 v4 additions (docs/p9_factor_family_contract.md §5, APPROVED) ---
+    # Family ①: industry-residualized medium-horizon momentum/reversal.
+    "IND_REL_RET_60": AuthoredFeatureMeta(
+        availability_rule=_INDUSTRY_REL.format(warmup=61),
+        hypothesis="Industry-neutral quarterly reversal: stock-specific deviation vs peers reverts at the medium horizon.",
+        expected_direction=-1,
+        semantic_type=SemanticType.CROSS_SECTIONAL_SIGNAL,
+    ),
+    "IND_REL_RET_120": AuthoredFeatureMeta(
+        availability_rule=_INDUSTRY_REL.format(warmup=121),
+        hypothesis="Industry-neutral semi-annual reversal: stock-specific deviation vs peers reverts.",
+        expected_direction=-1,
+        semantic_type=SemanticType.CROSS_SECTIONAL_SIGNAL,
+    ),
+    # Family ②: liquidity shock, volume shrinkage, price-volume divergence.
+    "LIQ_SHOCK_20": AuthoredFeatureMeta(
+        availability_rule=_BAR.format(warmup=20),
+        hypothesis="Liquidity shock: a one-day surge in market share marks attention-driven overpricing that reverses.",
+        expected_direction=-1,
+        semantic_type=SemanticType.VOLUME_LIKE,
+    ),
+    "VOLUME_SHRINK_5_20": AuthoredFeatureMeta(
+        availability_rule=_BAR.format(warmup=20),
+        hypothesis="Volume shrinkage precedes exhaustion of the prevailing move; shrinking volume flips the sign of the drift.",
+        expected_direction=-1,
+        semantic_type=SemanticType.VOLUME_LIKE,
+    ),
+    "PV_DIV_20": AuthoredFeatureMeta(
+        availability_rule=_BAR.format(warmup=20),
+        hypothesis="Price-volume divergence: returns unconfirmed by volume mean-revert.",
+        expected_direction=-1,
+        semantic_type=SemanticType.VOLUME_LIKE,
+    ),
+    # Family ③: limit-event conditioning (sparse-safe standardization).
+    "LIMIT_UP_CNT_5": AuthoredFeatureMeta(
+        availability_rule=_BAR.format(warmup=5),
+        hypothesis="Short-window limit-up clustering: speculative continuation within the week.",
+        expected_direction=1,
+        semantic_type=SemanticType.BOOLEAN_EVENT_SIGNAL,
+    ),
+    "LIMIT_DOWN_STREAK": AuthoredFeatureMeta(
+        availability_rule=_BAR.format(warmup=2),
+        hypothesis="Consecutive one-word limit-downs: forced-selling overhang continues over the streak.",
+        expected_direction=-1,
+        semantic_type=SemanticType.BOOLEAN_EVENT_SIGNAL,
+    ),
+    "LIMIT_BREAK_5": AuthoredFeatureMeta(
+        availability_rule=_BAR.format(warmup=5),
+        hypothesis="Repeated failed limit-ups (炸板): speculative churn, weak follow-through.",
+        expected_direction=-1,
+        semantic_type=SemanticType.BOOLEAN_EVENT_SIGNAL,
+    ),
+    # Family ④: per-stock crowding.
+    "CROWD_TURNOVER_60": AuthoredFeatureMeta(
+        availability_rule=_BAR.format(warmup=60),
+        hypothesis="Self-relative turnover crowding: turnover far above the stock's own baseline marks overpriced attention.",
+        expected_direction=-1,
+        semantic_type=SemanticType.VOLUME_LIKE,
+    ),
+    "CROWD_AMOUNT_60": AuthoredFeatureMeta(
+        availability_rule=_BAR.format(warmup=60),
+        hypothesis="Self-relative amount-share crowding: absorbing more market share than usual precedes underperformance.",
+        expected_direction=-1,
+        semantic_type=SemanticType.VOLUME_LIKE,
+    ),
+    "MARGIN_CROWD_60": AuthoredFeatureMeta(
+        availability_rule=_CAPITAL,
+        hypothesis="Margin crowding: a financing balance far above its own baseline marks leveraged crowding that unwinds.",
+        expected_direction=-1,
+        semantic_type=SemanticType.VOLUME_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("capital_flow_pit",),
+    ),
 }
 
 # Structural invariants checked at import: the table must cover exactly the
@@ -583,3 +664,44 @@ assert set(FEATURE_METADATA) == set(FEATURE_NAMES), (
     "FEATURE_METADATA must cover every FEATURE_NAMES member"
 )
 assert not (set(NEUTRAL_FEATURE_NAMES) & set(EXTERNAL_FACTOR_NAMES))
+
+
+# --- P9 §6: pending_data placeholders (family ⑤, NOT in the vocabulary) ----
+
+@dataclass(frozen=True)
+class PendingDataFeature:
+    """A pre-declared factor family member waiting for its data source.
+
+    Pending features never enter the vocabulary or the search budget
+    (``promotion_allowed=False``); they document the gap so a future data
+    contract can lift the placeholder without re-deriving the intent.
+    """
+
+    name: str
+    hypothesis: str
+    required_fields: tuple[str, ...]
+    promotion_allowed: bool = False
+
+
+PENDING_DATA_FEATURES: tuple[PendingDataFeature, ...] = (
+    PendingDataFeature(
+        name="CASHFLOW_QUALITY",
+        hypothesis="Cash-flow quality: operating cash flow that confirms reported earnings predicts durable outperformance.",
+        required_fields=("cash_flow_statement: net_operate_cash_flow", "income_statement: net_profit"),
+    ),
+    PendingDataFeature(
+        name="ACCRUALS",
+        hypothesis="Accruals: earnings backed by accruals rather than cash reverse.",
+        required_fields=("cash_flow_statement: net_operate_cash_flow", "income_statement: net_profit", "balance_sheet: total_assets"),
+    ),
+    PendingDataFeature(
+        name="ASSET_GROWTH",
+        hypothesis="Asset growth: aggressive balance-sheet expansion underperforms (investment factor).",
+        required_fields=("balance_sheet: total_assets",),
+    ),
+    PendingDataFeature(
+        name="EARNINGS_ACCEL",
+        hypothesis="Earnings acceleration: the second difference of TTM profit growth predicts continued fundamental momentum.",
+        required_fields=("income_statement: profit TTM history (derivable from fundamental_pit.profit_cum once scoped)",),
+    ),
+)

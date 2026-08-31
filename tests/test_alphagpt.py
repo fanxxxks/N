@@ -96,7 +96,25 @@ def test_build_action_mask_has_legal_feature_tokens():
         stack_sizes, done, 0, 6, FORMULA_VOCAB,
         stack_types=_stack_types([0] * 8, 6),
     )
-    assert (mask[:, FORMULA_VOCAB.feature_offset : FORMULA_VOCAB.operator_offset] == 0.0).all()
+    # P9 §4.2 (whitelist §10.1 case 2, contract APPROVED): deprecated
+    # features left the sampling space, so exactly the live features stay
+    # open and every deprecated feature token is closed.
+    from ashare_model.vocab import DEPRECATED_FEATURE_NAMES
+
+    live = [
+        FORMULA_VOCAB.feature_offset + i
+        for i, name in enumerate(FORMULA_VOCAB.feature_names)
+        if name not in DEPRECATED_FEATURE_NAMES
+    ]
+    for token in live:
+        assert (mask[:, token] == 0.0).all(), token
+    deprecated = [
+        FORMULA_VOCAB.feature_offset + i
+        for i, name in enumerate(FORMULA_VOCAB.feature_names)
+        if name in DEPRECATED_FEATURE_NAMES
+    ]
+    for token in deprecated:
+        assert not torch.isfinite(mask[:, token]).any(), token
     assert not torch.isfinite(mask[:, FORMULA_VOCAB.operator_offset]).any()
 
 
@@ -280,3 +298,23 @@ def test_build_action_mask_always_leaves_a_terminating_path():
             action, stack_sizes, stack_types, done
         )
     assert done.all()
+
+
+def test_p9_action_mask_excludes_deprecated_features():
+    """P9 §4.2: deprecated features leave the sampling space but stay in
+    the token space, so the action mask must never open them."""
+    stack_sizes = torch.zeros(4, dtype=torch.long)
+    done = torch.zeros(4, dtype=torch.bool)
+    mask = build_action_mask(
+        stack_sizes, done, 0, 6, FORMULA_VOCAB,
+        stack_types=_stack_types([0] * 4, 6),
+    )
+    from ashare_model.vocab import DEPRECATED_FEATURE_NAMES
+
+    assert DEPRECATED_FEATURE_NAMES
+    for name in DEPRECATED_FEATURE_NAMES:
+        token = FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index(name)
+        assert not torch.isfinite(mask[:, token]).any(), name
+    # A live feature stays open at the same step (the exclusion is targeted).
+    live = FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index("REVERSAL_5")
+    assert (mask[:, live] == 0.0).all()

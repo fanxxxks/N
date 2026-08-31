@@ -286,3 +286,20 @@ def test_run_spec_is_frozen_and_extra_forbid():
     payload = spec.to_payload()
     with pytest.raises(ValidationError):
         RunSpec(**{**payload, "unknown_field": 1})
+
+
+def test_p9_factor_compute_version_wired_into_the_version_registry():
+    """P9 §9: the new factor-compute semantic version rides the single
+    version-owner registry and lands on RunSpec additively (optional field,
+    always populated by the factory)."""
+    from ashare_model import runspec
+
+    assert runspec._VERSION_IMPORTS["factor_compute_version"] == (
+        "ashare_model.factors",
+        "FACTOR_COMPUTE_VERSION",
+    )
+    from ashare_model.factors import FACTOR_COMPUTE_VERSION
+
+    assert FACTOR_COMPUTE_VERSION == 1
+    assert "factor_compute_version" in RunSpec.model_fields
+    assert RunSpec.model_fields["factor_compute_version"].default is None

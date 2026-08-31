@@ -40,15 +40,15 @@ def test_feature_version_pinned():
     # Changing the feature/operator name lists or the grammar generation
     # must change this version; the test pins the released vocabulary
     # generation so accidental edits are caught in review, not silently
-    # in production.  v3 (P7-E): the type-aware action mask changes the
-    # sampling grammar, hence the hash (contract:
-    # docs/p7_semantic_types_contract.md §4 -- requirement-change path;
-    # saved formulas still resolve by name).
-    assert FORMULA_VOCAB.feature_version == "5cc784570b1f"
+    # in production.  v4 (P9, docs/p9_factor_family_contract.md §9 --
+    # requirement-change path, APPROVED 2026-09-01): the four orthogonal
+    # families append 11 feature names and the deprecated features leave
+    # the sampling space; saved formulas still resolve by name.
+    assert FORMULA_VOCAB.feature_version == "d89b0e43206f"
     assert len(FORMULA_VOCAB.feature_version) == 12
-    # v3 grammar: the independent EOS token, the stack-only postfix rules
-    # and the semantic-type-aware action mask.
-    assert GRAMMAR_VERSION == 3
+    # v4 grammar: the independent EOS token, the stack-only postfix rules,
+    # the semantic-type-aware action mask and the deprecation exclusion.
+    assert GRAMMAR_VERSION == 4
     # A grammar bump changes the version even with identical name lists.
     legacy = FormulaVocab(
         feature_names=FORMULA_VOCAB.feature_names,
@@ -241,3 +241,54 @@ def test_resolve_formula_tokens_rejects_out_of_range_tokens():
 def test_resolve_formula_tokens_rejects_missing_formula_field():
     with pytest.raises(ValueError, match="no 'formula' field"):
         resolve_formula_tokens({"feature_names": list(FEATURE_NAMES)})
+
+
+# --- P9 (docs/p9_factor_family_contract.md, APPROVED): v4 grammar, additive
+# feature generation, deprecation registry. RED tests written before impl. ---
+
+P9_NEW_FEATURES = (
+    "IND_REL_RET_60",
+    "IND_REL_RET_120",
+    "LIQ_SHOCK_20",
+    "VOLUME_SHRINK_5_20",
+    "PV_DIV_20",
+    "LIMIT_UP_CNT_5",
+    "LIMIT_DOWN_STREAK",
+    "LIMIT_BREAK_5",
+    "CROWD_TURNOVER_60",
+    "CROWD_AMOUNT_60",
+    "MARGIN_CROWD_60",
+)
+P9_DEPRECATED_FEATURES = (
+    "RET_5",
+    "RET_10",
+    "RET_120",
+    "MOMENTUM_60",
+    "VOLUME_RATIO",
+    "TURNOVER_MA5",
+    "MACD_DEA",
+    "VOL_60",
+)
+
+
+def test_p9_grammar_v4_with_additive_feature_generation():
+    assert GRAMMAR_VERSION == 4
+    for name in P9_NEW_FEATURES:
+        assert name in FEATURE_NAMES
+    # v4 names are appended, so every pre-v4 token id stays stable.
+    assert len(FEATURE_NAMES) == 73
+    assert list(FEATURE_NAMES[-len(P9_NEW_FEATURES):]) == list(P9_NEW_FEATURES)
+
+
+def test_p9_deprecated_names_stay_in_the_token_space():
+    from ashare_model.vocab import DEPRECATED_FEATURE_NAMES
+
+    # NORTHBOUND_CHG (the pre-P9 neutral deprecation) joins the P9 window
+    # variants: deprecated means "never sampled", uniformly.
+    assert set(P9_DEPRECATED_FEATURES) <= set(DEPRECATED_FEATURE_NAMES)
+    assert "NORTHBOUND_CHG" in DEPRECATED_FEATURE_NAMES
+    for name in P9_DEPRECATED_FEATURES:
+        # Deprecation never removes a name: legacy formulas must keep
+        # resolving by name (same policy as the RET_20 alias precedent).
+        assert name in FEATURE_NAMES
+        assert name in FORMULA_VOCAB.feature_names

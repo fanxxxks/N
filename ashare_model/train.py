@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections import OrderedDict
 from pathlib import Path
 
@@ -530,9 +531,20 @@ class AshareTrainer:
                 self.semantic_cache.put(ckey, step_results[key], fingerprint, bill)
                 budget_after_put = int(self.semantic_cache.budget_used)
                 if budget_after_put > budget_before_put:
-                    run_best_reward = max(
-                        run_best_reward, float(step_results[key].val_reward)
-                    )
+                    # P9 defect fix (exposed by the v4 sampling layout): a
+                    # NaN validation reward must not poison the best-so-far
+                    # curve — max(-inf, nan) keeps -inf, which the canonical
+                    # identity layer rejects fail-closed.  The search-result
+                    # invariant still requires the curve to start at consumed
+                    # budget 1 and stay non-decreasing, so a non-finite best
+                    # is recorded as the reward floor (bad_reward): finite,
+                    # and every scored reward clips to [clip_low, clip_high]
+                    # above it.
+                    reward_value = float(step_results[key].val_reward)
+                    if math.isfinite(reward_value):
+                        run_best_reward = max(run_best_reward, reward_value)
+                    if not math.isfinite(run_best_reward):
+                        run_best_reward = float(self.reward_config.bad_reward)
                     run_best_so_far.append((budget_after_put, run_best_reward))
                 else:
                     # A same-batch numerical equivalent is only discovered

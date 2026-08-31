@@ -92,6 +92,13 @@ def _write_db(tmp_path: Path, dates: list[str], ts_codes: list[str], bars: pd.Da
             ],
             cfg,
         )
+        # P9 (whitelist §10.1 case 2): the v4 vocabulary samples
+        # industry-relative features, so the fixture must carry Shenwan
+        # membership (two industries) — otherwise IND_REL_* degrade to the
+        # neutral constant and the fail-closed constant-signal gate rejects
+        # every sampled formula.
+        db.replace_sw_members("801010", ["000001.SZ", "600000.SH"], cfg)
+        db.replace_sw_members("801030", ["300001.SZ"], cfg)
         # P8-05: this fixture feeds the formal training write path, whose
         # schema-v2 identity must bind to a persisted dataset manifest.
         save_manifest(db, cfg, build_dataset_manifest(db, cfg))
@@ -194,7 +201,14 @@ def test_training_smoke(tmp_path):
             min_val_window_q25=-1e9,
         ),
     )
-    tokens = trainer.train(steps=1, batch_size=4)
+    # P9 (whitelist §10.1 case 2, docs/p9_factor_family_contract.md
+    # APPROVED): the v4 vocabulary shifted the operator token ids, so the
+    # default sampling seed lands on a CORR20-composite of the fixture's
+    # perfectly linear prices — a legitimately near-constant signal that
+    # the fail-closed gate rejects.  Seed 0 is pinned (deterministic,
+    # verified) to keep the smoke intent: exercise the artifact-saving
+    # path on the minimal fixture.
+    tokens = trainer.train(steps=1, batch_size=4, seed=0)
     assert tokens is not None
     assert trainer.best_formula
 

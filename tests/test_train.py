@@ -869,6 +869,44 @@ def test_train_constant_formula_gets_bad_reward(populated_db: DataConfig, monkey
     assert trainer.history[0]["avg_reward"] == trainer.reward_config.bad_reward
 
 
+def test_train_nan_val_reward_keeps_best_so_far_finite(
+    populated_db: DataConfig, monkeypatch
+):
+    """P9 contract revision appendix (captain-approved): the sparse-safe
+    event standardization legitimately produces NaN validation rewards (a
+    no-event day's IC is NaN), so the best-so-far recorder must defend
+    against non-finite values — ``max(-inf, nan)`` keeps -inf, which the
+    canonical identity layer rejects fail-closed.  The recorded curve must
+    stay finite, start at consumed budget 1 and be non-decreasing."""
+    import dataclasses
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=1, train_steps=1, max_formula_len=4)
+    trainer = AshareTrainer(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+    )
+    real_score = trainer.candidate_scorer.score
+
+    def nan_score(*args, **kwargs):
+        result = real_score(*args, **kwargs)
+        return dataclasses.replace(result, val_reward=float("nan"))
+
+    monkeypatch.setattr(trainer.candidate_scorer, "score", nan_score)
+    # The run artifact (search_result) is identity-hashed: the poisoned
+    # reward must not reach it as -inf/NaN.
+    trainer.train(steps=1, batch_size=1, save_artifacts=True)
+    curve = trainer.search_result.best_so_far
+    assert curve, "consumed budget must record a best-so-far entry"
+    assert curve[0][0] == 1
+    rewards = [reward for _, reward in curve]
+    assert all(np.isfinite(reward) for reward in rewards)
+    assert all(b >= a for a, b in zip(rewards, rewards[1:]))
+
+
 # --- reward deduplication / cross-step cache --------------------------------
 
 
@@ -1179,7 +1217,9 @@ def test_window_cap_slices_every_measurement(
     capped = capped_trainer.prepare_window(
         "2024-02-01", torch.device("cpu"), window_cap=cap
     )
-    assert capped.factor_tensor.shape == (62, cap[0], cap[1])
+    # P9 (whitelist §10.1 case 2, docs/p9_factor_family_contract.md
+    # APPROVED): the vocabulary grows 62 -> 73 features.
+    assert capped.factor_tensor.shape == (73, cap[0], cap[1])
     assert capped.train_universe_mask.shape == (cap[0], cap[1])
     assert capped.target_ret.shape == (cap[0], cap[1])
     assert capped.blocked_buy.shape == (cap[0], cap[1])

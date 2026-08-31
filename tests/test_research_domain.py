@@ -58,7 +58,9 @@ def test_domains_partition_vocabulary_exhaustively():
         owned |= set(domain.features)
     live = {name for name in FEATURE_NAMES if name != "NORTHBOUND_CHG"}
     assert owned == live
-    assert len(live) == 61
+    # P9 §5 (whitelist §10.1 case 2, contract APPROVED): 62 + 11 new
+    # features minus the deprecated neutral member.
+    assert len(live) == 72
     with pytest.raises(ValueError, match="NORTHBOUND_CHG"):
         domain_of_feature("NORTHBOUND_CHG")
 
@@ -313,7 +315,13 @@ def test_build_action_mask_restricts_feature_ids():
         if mask_all[0, token] == 0.0
         and vocab.feature_offset <= token < vocab.operator_offset
     ]
-    assert len(feature_tokens_all) == len(vocab.feature_names)
+    # P9 §4.2 (whitelist §10.1 case 2, contract APPROVED): the deprecated
+    # features leave the sampling space, so the unrestricted mask opens
+    # exactly the live features.
+    from ashare_model.vocab import DEPRECATED_FEATURE_NAMES
+
+    live_count = len(vocab.feature_names) - len(DEPRECATED_FEATURE_NAMES)
+    assert len(feature_tokens_all) == live_count
 
 
 def test_random_sampling_stays_inside_domain():
@@ -490,3 +498,27 @@ def test_run_protocol_rejects_illegal_domain_execution(
             spec_id=TEST_SPEC_ID,
             run_id=TEST_RUN_ID,
         )
+
+
+def test_p9_research_domain_version_and_single_domain_assignments():
+    """P9 §5: the v2 domain registry assigns every new feature to exactly
+    one research domain (LIQ/volume + limit-event -> short; residualized
+    momentum, PV divergence, crowding -> medium)."""
+    assert RESEARCH_DOMAIN_VERSION == 2
+    from ashare_model.research_domain import domain_of_feature
+
+    expectations = {
+        "IND_REL_RET_60": "medium_cross_section",
+        "IND_REL_RET_120": "medium_cross_section",
+        "PV_DIV_20": "medium_cross_section",
+        "CROWD_TURNOVER_60": "medium_cross_section",
+        "CROWD_AMOUNT_60": "medium_cross_section",
+        "MARGIN_CROWD_60": "medium_cross_section",
+        "LIQ_SHOCK_20": "short_price_volume",
+        "VOLUME_SHRINK_5_20": "short_price_volume",
+        "LIMIT_UP_CNT_5": "short_price_volume",
+        "LIMIT_DOWN_STREAK": "short_price_volume",
+        "LIMIT_BREAK_5": "short_price_volume",
+    }
+    for name, domain_id in expectations.items():
+        assert domain_of_feature(name).id == domain_id, name

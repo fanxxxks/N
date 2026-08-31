@@ -34,7 +34,9 @@ from .vocab import FORMULA_VOCAB
 
 # Bump when the registry schema, a domain's semantics (features, horizons,
 # cadences, baselines) or the per-domain reward/turnover defaults change.
-RESEARCH_DOMAIN_VERSION = 1
+# v2 (P9): the eleven orthogonal family features join their domains
+# (docs/p9_factor_family_contract.md §5, APPROVED 2026-09-01).
+RESEARCH_DOMAIN_VERSION = 2
 
 # Reserved compatible semantic: no domain defaults, pre-P6 behavior.
 UNIFIED_DOMAIN_ID = "unified"
@@ -121,6 +123,13 @@ _SHORT_FEATURES = (
     # Microstructure (Tier A price history).
     "SUSPEND_DAYS_60",
     "LIST_AGE",
+    # P9 §5.2/§5.3: liquidity shock + volume shrinkage + limit-event
+    # conditioning (all Tier A daily bars).
+    "LIQ_SHOCK_20",
+    "VOLUME_SHRINK_5_20",
+    "LIMIT_UP_CNT_5",
+    "LIMIT_DOWN_STREAK",
+    "LIMIT_BREAK_5",
 )
 
 _MEDIUM_FEATURES = (
@@ -155,6 +164,14 @@ _MEDIUM_FEATURES = (
     # External cross-section flows.
     "INDUSTRY_MOMENTUM",
     "MARGIN_BALANCE_CHG",
+    # P9 §5.1/§5.2/§5.4: industry-residualized momentum, price-volume
+    # divergence, per-stock crowding.
+    "IND_REL_RET_60",
+    "IND_REL_RET_120",
+    "PV_DIV_20",
+    "CROWD_TURNOVER_60",
+    "CROWD_AMOUNT_60",
+    "MARGIN_CROWD_60",
 )
 
 _SLOW_FEATURES = (

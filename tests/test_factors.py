@@ -163,8 +163,14 @@ def test_fundamental_and_neutral_families_declared():
     # PIT fundamentals come from the point-in-time pipeline, the external
     # factors from the capital-flow pipeline, and NORTHBOUND_CHG stays
     # neutral (its daily feed stopped in Aug 2024); all metadata-driven.
+    # P9 §5.4 (whitelist §10.1 case 2, contract APPROVED): MARGIN_CROWD_60
+    # joins the external capital-flow features.
     assert FUNDAMENTAL_PIT_NAMES
-    assert set(EXTERNAL_FACTOR_NAMES) == {"MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM"}
+    assert set(EXTERNAL_FACTOR_NAMES) == {
+        "MARGIN_BALANCE_CHG",
+        "INDUSTRY_MOMENTUM",
+        "MARGIN_CROWD_60",
+    }
     assert NEUTRAL_FEATURE_NAMES == {"NORTHBOUND_CHG"}
     assert "MARKET_CAP" in FACTOR_REGISTRY  # local daily-bar size proxy
 
@@ -993,3 +999,177 @@ def test_industry_demean_reference_is_eligible_only():
     assert out.loc["B", "d1"] == pytest.approx(1.0)
     assert out.loc["A", "d2"] == pytest.approx(-1.0)
     assert out.loc["B", "d2"] == pytest.approx(1.0)
+
+
+# --- P9 (docs/p9_factor_family_contract.md, APPROVED): new factors,
+# FACTOR_COMPUTE_VERSION, sparse-safe standardization. RED before impl. ---
+
+
+def test_p9_factor_compute_version_pinned():
+    from ashare_model.factors import FACTOR_COMPUTE_VERSION
+
+    assert FACTOR_COMPUTE_VERSION == 1
+
+
+def test_p9_new_factors_registered():
+    from ashare_model.factors import SPARSE_EVENT_FEATURES
+
+    for name in (
+        "IND_REL_RET_60",
+        "IND_REL_RET_120",
+        "LIQ_SHOCK_20",
+        "VOLUME_SHRINK_5_20",
+        "PV_DIV_20",
+        "LIMIT_UP_CNT_5",
+        "LIMIT_DOWN_STREAK",
+        "LIMIT_BREAK_5",
+        "CROWD_TURNOVER_60",
+        "CROWD_AMOUNT_60",
+    ):
+        assert name in FACTOR_REGISTRY, name
+    # MARGIN_CROWD_60 is an external-feed feature (like MARGIN_BALANCE_CHG):
+    # injected via build_capital_frames, not registered in FACTOR_REGISTRY.
+    from ashare_data.capital_flow import EXTERNAL_FACTOR_NAMES
+
+    assert "MARGIN_CROWD_60" in EXTERNAL_FACTOR_NAMES
+    assert "MARGIN_CROWD_60" not in FACTOR_REGISTRY
+    # The sparse-safe path (P9 §5.3) applies to the event family only.
+    for name in (
+        "LIMIT_UP_EVENT",
+        "LIMIT_DOWN_EVENT",
+        "LIMIT_STREAK",
+        "LIMIT_UP_CNT_20",
+        "LIMIT_BREAK",
+        "LIMIT_UP_CNT_5",
+        "LIMIT_DOWN_STREAK",
+        "LIMIT_BREAK_5",
+    ):
+        assert name in SPARSE_EVENT_FEATURES, name
+
+
+def test_p9_ind_rel_ret_60_matches_manual_industry_demean(bars_data):
+    dates, ts_codes, bars = bars_data
+    engine = AshareFactorEngine()
+    close = engine._pivot(bars, ts_codes, dates, "close")
+    industry = pd.DataFrame(
+        [["801010" if c == ts_codes[0] else "801030"] * len(dates) for c in ts_codes],
+        index=ts_codes,
+        columns=dates,
+    )
+    mask = np.ones((len(ts_codes), len(dates)), dtype=bool)
+    eligible = pd.DataFrame(mask, index=ts_codes, columns=dates)
+    ctx = engine._build_context(bars, ts_codes, dates, close, eligible, industry)
+    got = FACTOR_REGISTRY["IND_REL_RET_60"][1](ctx)
+    raw = _shift_ratio(ctx.close, 60)
+    for code_group in ("801010", "801030"):
+        members = [c for c in ts_codes if industry.loc[c].iloc[0] == code_group]
+        manual_mean = raw.loc[members].mean(axis=0)
+        np.testing.assert_allclose(
+            got.loc[members].to_numpy(dtype=float),
+            (raw.loc[members] - manual_mean).to_numpy(dtype=float),
+            equal_nan=True,
+        )
+
+
+def test_p9_sparse_event_features_survive_standardization():
+    """P9 §5.3: a 1%-incidence one-word limit-up cross-section must not be
+    clipped into an all-zero column by the 1%/99% winsorize (t2 finding F1)."""
+    n = 200
+    ts_codes = [f"{i:06d}.SZ" for i in range(1, n + 1)]
+    n_dates = 25
+    dates = pd.bdate_range("2024-01-01", periods=n_dates).strftime("%Y%m%d").tolist()
+    event_day = 22
+    rows = []
+    for code in ts_codes:
+        for i, date in enumerate(dates):
+            if i == event_day and code in ("000007.SZ", "000042.SZ"):
+                row = {
+                    "open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0,
+                    "pre_close": 10.0,
+                }
+            else:
+                row = {
+                    "open": 9.9, "high": 10.2, "low": 9.8, "close": 10.0,
+                    "pre_close": 9.9,
+                }
+            rows.append(
+                {
+                    "ts_code": code,
+                    "trade_date": date,
+                    **row,
+                    "volume": 1_000_000.0,
+                    "amount": 1_000_000.0 * row["close"],
+                    "turnover_rate": 1.0,
+                    "adj_factor": 1.0,
+                }
+            )
+    bars = pd.DataFrame(rows)
+    mask = np.ones((n, n_dates), dtype=bool)
+    tensor = compute_factor_tensor(bars, ts_codes, dates, mask)
+    row_idx = FEATURE_NAMES.index("LIMIT_UP_EVENT")
+    col = tensor[row_idx, :, event_day]
+    event_stock = ts_codes.index("000007.SZ")
+    # The event day cross-section is non-degenerate and directionally right.
+    assert not np.allclose(col, 0.0), "event day was flattened by winsorize (F1)"
+    assert col[event_stock] > 0.0
+    assert int((col < 0).sum()) >= 100
+    # Non-event days legitimately stay degenerate (all zero = neutral).
+    assert np.allclose(tensor[row_idx, :, event_day - 1], 0.0)
+
+
+def test_p9_sparse_safe_path_leaves_dense_features_unchanged():
+    """P9 §5.3 guard: features outside SPARSE_EVENT_FEATURES keep the exact
+    winsorize+MAD standardization (no accidental path switch)."""
+    from ashare_data.processor import winsorize_cross_section
+
+    n = 60
+    ts_codes = [f"{i:06d}.SZ" for i in range(1, n + 1)]
+    n_dates = 40
+    dates = pd.bdate_range("2024-01-01", periods=n_dates).strftime("%Y%m%d").tolist()
+    rows = []
+    rng = np.random.default_rng(7)
+    for i, code in enumerate(ts_codes):
+        for j, date in enumerate(dates):
+            close = 10.0 + 0.05 * j + rng.normal(0, 0.1)
+            rows.append(
+                {
+                    "ts_code": code,
+                    "trade_date": date,
+                    "open": close * 0.99,
+                    "high": close * 1.02,
+                    "low": close * 0.97,
+                    "close": close,
+                    "pre_close": close,
+                    "volume": 1_000_000.0 * (1.0 + 0.3 * rng.normal()),
+                    "amount": 1_000_000.0 * close * (1.0 + 0.3 * rng.normal()),
+                    "turnover_rate": 1.0 + 0.2 * rng.normal(),
+                    "adj_factor": 1.0,
+                }
+            )
+    bars = pd.DataFrame(rows)
+    mask = np.ones((n, n_dates), dtype=bool)
+    engine = AshareFactorEngine()
+    close = engine._pivot(bars, ts_codes, dates, "close")
+    eligible = pd.DataFrame(mask, index=ts_codes, columns=dates)
+    ctx = engine._build_context(bars, ts_codes, dates, close, eligible, None)
+    amount_share = _factor_amount_share(ctx.amount, eligible)
+    expected = (
+        winsorize_cross_section(amount_share, eligible=mask).fillna(0.0).to_numpy()
+    )
+    tensor = compute_factor_tensor(bars, ts_codes, dates, mask)
+    got = tensor[FEATURE_NAMES.index("AMOUNT_SHARE")]
+    np.testing.assert_allclose(got, expected, atol=1e-6)
+
+
+def test_p9_margin_crowd_frame_is_a_capital_flow_feature():
+    from ashare_data.capital_flow import EXTERNAL_FACTOR_NAMES, _margin_crowd
+
+    assert "MARGIN_CROWD_60" in EXTERNAL_FACTOR_NAMES
+    idx = pd.date_range("2024-01-01", periods=70, freq="D").strftime("%Y%m%d")
+    wide = pd.DataFrame(
+        [np.linspace(1.0, 70.0, 70)], index=["000001.SZ"], columns=idx
+    )
+    out = _margin_crowd(wide, 60)
+    assert out.iloc[0, :59].isna().all()
+    last = out.iloc[0, -1]
+    assert last == pytest.approx(float(wide.iloc[0, -1]) / float(np.mean(wide.iloc[0, -60:])))

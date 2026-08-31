@@ -57,6 +57,11 @@ _VERSION_IMPORTS: dict[str, tuple[str, str]] = {
     "reward_version": ("ashare_model.reward", "REWARD_VERSION"),
     "search_contract_version": ("ashare_model.search_contract", "SEARCH_CONTRACT_VERSION"),
     "semantic_cache_version": ("ashare_model.semantic_cache", "SEMANTIC_CACHE_VERSION"),
+    # P9 §9: the factor-computation semantics (sparse-safe event
+    # standardization + the P9 feature constructions) carry their own
+    # version so a factor-tensor semantic change is never invisible to
+    # artifact classification.
+    "factor_compute_version": ("ashare_model.factors", "FACTOR_COMPUTE_VERSION"),
     "execution_spec_version": ("ashare_portfolio.execution_spec", "EXECUTION_SPEC_VERSION"),
     "portfolio_constructor_version": (
         "ashare_portfolio.constructor",
@@ -221,6 +226,9 @@ class RunSpec(BaseModel):
     execution_spec_version: int
     portfolio_constructor_version: int
     rebalance_policy_version: int
+    # P9 §9 (additive, optional so pre-P9 artifacts stay valid): semantics
+    # of the factor tensor construction; the factory always populates it.
+    factor_compute_version: int | None = None
 
     # research semantics
     research_domain: str = Field(min_length=1)

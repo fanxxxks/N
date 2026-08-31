@@ -16,8 +16,11 @@ Grammar generations:
   space so pre-v2 feature/operator ids never shift.
 * v3 (P7-E): sampling legality gains the semantic-type dimension — the
   action mask is type-aware (see
-  ``docs/p7_semantic_types_contract.md``).  Execution, canonicalization
-  and by-name remapping of saved formulas are unchanged.
+  ``docs/p7_semantic_types_contract.md``).
+* v4 (P9): the four orthogonal P9 families join the vocabulary and the
+  deprecated features leave the sampling space
+  (docs/p9_factor_family_contract.md).  Execution, canonicalization and
+  by-name remapping of saved formulas are unchanged.
 """
 
 from __future__ import annotations
@@ -129,11 +132,54 @@ _FEATURE_NAMES_V3 = (
 # RET_20 was identical to MOMENTUM_20 (same computation, 0.99 correlation).
 FEATURE_ALIASES = {"RET_20": "MOMENTUM_20"}
 
+# Third vocabulary generation (v3) ends at the P7-E state; v4 (P9,
+# docs/p9_factor_family_contract.md §5) appends the four approved orthogonal
+# families: industry-residualized momentum, liquidity shock / volume
+# shrinkage / price-volume divergence, limit-event conditioning, and
+# per-stock crowding.  Names are appended so every pre-v4 token id is
+# stable (the same discipline as v2/v3).
+_FEATURE_NAMES_V4 = (
+    # Family ①: industry-residualized medium-horizon momentum/reversal.
+    "IND_REL_RET_60",
+    "IND_REL_RET_120",
+    # Family ②: liquidity shock, volume shrinkage, price-volume divergence.
+    "LIQ_SHOCK_20",
+    "VOLUME_SHRINK_5_20",
+    "PV_DIV_20",
+    # Family ③: limit-event conditioning (sparse-safe standardization).
+    "LIMIT_UP_CNT_5",
+    "LIMIT_DOWN_STREAK",
+    "LIMIT_BREAK_5",
+    # Family ④: per-stock crowding (breadth is out of the vocabulary).
+    "CROWD_TURNOVER_60",
+    "CROWD_AMOUNT_60",
+    "MARGIN_CROWD_60",
+)
+
 FEATURE_NAMES = tuple(
     name
-    for name in _FEATURE_NAMES_V1 + _FEATURE_NAMES_V2 + _FEATURE_NAMES_V3
+    for name in _FEATURE_NAMES_V1 + _FEATURE_NAMES_V2 + _FEATURE_NAMES_V3 + _FEATURE_NAMES_V4
     if name not in FEATURE_ALIASES
 )
+
+# P9 §4: approved deprecations (docs/p9_factor_family_contract.md §4.1,
+# APPROVED 2026-09-01).  Deprecated names keep their token ids and their
+# factor computations (legacy formulas resolve by name forever); they only
+# leave the sampling space (grammar v4 action mask) and promotion.
+# LIMIT_STREAK is deliberately NOT deprecated here: its deprecation is
+# conditional on the post-P9 re-measurement adjudication (contract §7.3).
+DEPRECATION_REASONS: dict[str, str] = {
+    "NORTHBOUND_CHG": "daily feed discontinued (2024-08); stays neutral",
+    "RET_5": "P9 §4.1: exact mirror of REVERSAL_5 (|corr|=1.000); NEG(REVERSAL_5) is equivalent",
+    "RET_10": "P9 §4.1: 0.902 correlated with BIAS_20; covered by RET_1 + BIAS_20",
+    "RET_120": "P9 §4.1: exact mirror of REVERSAL_120 (|corr|=1.000); weaker standalone ICIR",
+    "MOMENTUM_60": "P9 §4.1: exact mirror of REVERSAL_60 (|corr|=1.000)",
+    "VOLUME_RATIO": "P9 §4.1: 0.977 correlated with VOLUME_IMPACT (log form kept for robustness)",
+    "TURNOVER_MA5": "P9 §4.1: 0.926/0.928 correlated with TURNOVER and TURNOVER_MA20",
+    "MACD_DEA": "P9 §4.1: 0.926 correlated with MACD_DIF; no independent incremental OOS",
+    "VOL_60": "P9 §4.1: 0.907 correlated with IVOL_60 (the stronger incremental contributor)",
+}
+DEPRECATED_FEATURE_NAMES = frozenset(DEPRECATION_REASONS)
 
 # Pins of the first released vocabulary generation.  Formulas saved without
 # feature metadata (legacy artifacts) resolve against these lists; the
@@ -165,11 +211,14 @@ LEGACY_OPERATOR_NAMES = (
 
 # Grammar generation of the current vocabulary.  v1 was the open_slots-era
 # layout (PAD only, no EOS); v2 adds the independent EOS token and the
-# stack-only postfix grammar; v3 (P7-E) makes the action mask type-aware.
+# stack-only postfix grammar; v3 (P7-E) makes the action mask type-aware;
+# v4 (P9) appends the four orthogonal P9 families and removes the
+# deprecated features from the sampling space (they keep their token ids
+# and computations).
 # Bumping this constant changes
 # ``feature_version`` and therefore invalidates the token layout recorded
 # in older training artifacts (which resolve by name, so they still load).
-GRAMMAR_VERSION = 3
+GRAMMAR_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -181,6 +230,10 @@ class FormulaVocab:
     # vocabularies (pre-v2 artifacts being remapped by name) are built
     # without one; the live vocabulary always has it.
     has_eos: bool = True
+    # P9 §4.2: feature names that left the sampling space but keep their
+    # token ids and computations.  Only the live production vocabulary
+    # carries these; toy/legacy vocabularies default to an empty set.
+    deprecated_names: frozenset[str] = frozenset()
 
     @property
     def feature_count(self) -> int:
@@ -237,6 +290,7 @@ class FormulaVocab:
 FORMULA_VOCAB = FormulaVocab(
     feature_names=FEATURE_NAMES,
     operator_names=tuple(cfg[0] for cfg in OPS_CONFIG),
+    deprecated_names=DEPRECATED_FEATURE_NAMES,
 )
 
 

@@ -130,7 +130,15 @@ def test_typed_primitive_set_covers_vocabulary():
         for entries in pset.primitives.values()
         for p in entries
     }
-    assert terminals == set(FORMULA_VOCAB.feature_names)
+    # P9 §4.2 (whitelist §10.1 case 2, contract APPROVED): deprecated
+    # features leave every backend's sampling space, so the GP terminal
+    # set covers exactly the live vocabulary.
+    from ashare_model.vocab import DEPRECATED_FEATURE_NAMES
+
+    assert terminals == set(FORMULA_VOCAB.feature_names) - set(
+        DEPRECATED_FEATURE_NAMES
+    )
+    assert not (terminals & set(DEPRECATED_FEATURE_NAMES))
     assert set(primitives) == set(FORMULA_VOCAB.operator_names)
     from ashare_model.ops import OPS_CONFIG
 

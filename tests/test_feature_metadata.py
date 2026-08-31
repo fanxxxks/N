@@ -97,7 +97,9 @@ def test_registry_version_is_pinned():
     # permission) plus horizon/cost/depends_on derived from the P6 domain
     # registry and FACTOR_REGISTRY (contract: plan §6.1).  Descriptive
     # only: no search/scoring/promotion semantics change.
-    assert FEATURE_REGISTRY_VERSION == 3
+    # v4 (P9, docs/p9_factor_family_contract.md APPROVED 2026-09-01):
+    # whitelist §10.1 case 2.
+    assert FEATURE_REGISTRY_VERSION == 4
 
 
 def test_expected_horizon_derives_from_research_domains():
@@ -184,3 +186,34 @@ def test_semantic_type_counts_match_authoring():
     # The six-type lattice is fully used (contract §6.1 semantic table).
     used = {meta.semantic_type for meta in FEATURE_METADATA.values()}
     assert used == set(SemanticType)
+
+
+def test_p9_new_features_have_authored_metadata():
+    """P9 §5: every v4 feature carries authored research metadata
+    (fail-closed; FeatureRegistry.build must never see a gap)."""
+    p9_new = (
+        "IND_REL_RET_60", "IND_REL_RET_120", "LIQ_SHOCK_20",
+        "VOLUME_SHRINK_5_20", "PV_DIV_20", "LIMIT_UP_CNT_5",
+        "LIMIT_DOWN_STREAK", "LIMIT_BREAK_5", "CROWD_TURNOVER_60",
+        "CROWD_AMOUNT_60", "MARGIN_CROWD_60",
+    )
+    for name in p9_new:
+        meta = FEATURE_METADATA[name]
+        assert meta.availability_rule, name
+        assert meta.hypothesis, name
+        assert meta.expected_direction in (-1, 0, 1), name
+
+
+def test_p9_pending_data_placeholders_stay_outside_the_vocabulary():
+    from ashare_model.feature_metadata import PENDING_DATA_FEATURES
+    from ashare_model.vocab import FEATURE_NAMES
+
+    names = {entry.name for entry in PENDING_DATA_FEATURES}
+    assert names == {
+        "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
+    }
+    for entry in PENDING_DATA_FEATURES:
+        assert not entry.promotion_allowed
+        assert entry.name not in FEATURE_METADATA
+        assert entry.name not in FEATURE_NAMES
+        assert entry.required_fields

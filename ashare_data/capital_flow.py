@@ -13,8 +13,9 @@ Sources (all free via AkShare):
   survivorship caveat as the index constituents.
 
 :func:`build_capital_frames` turns the stored tables into
-``[stock x date]`` frames for the two vocabulary features:
-``MARGIN_BALANCE_CHG`` (20-day financing-balance change) and
+``[stock x date]`` frames for the three vocabulary features:
+``MARGIN_BALANCE_CHG`` (20-day financing-balance change),
+``MARGIN_CROWD_60`` (P9 §5.4: balance relative to its own 60-day mean) and
 ``INDUSTRY_MOMENTUM`` (20-day industry index return mapped to members).
 :func:`build_industry_member_frame` exposes the raw membership snapshot as
 a ``[stock x date]`` industry-code frame for the industry-relative factors.
@@ -34,9 +35,10 @@ from .db import AshareDB, sql_quoted_list
 from .fundamentals import _cached_or_fetch, _read_cached, _write_cached
 
 # Vocabulary feature names produced by this module.
-EXTERNAL_FACTOR_NAMES = ("MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM")
+EXTERNAL_FACTOR_NAMES = ("MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM", "MARGIN_CROWD_60")
 
 _MARGIN_WINDOW = 20
+_MARGIN_CROWD_WINDOW = 60
 _INDUSTRY_WINDOW = 20
 # Margin data is final shortly after publication; dates older than this
 # many days are never refetched.
@@ -184,6 +186,17 @@ def build_industry_member_frame(
     return frame
 
 
+def _margin_crowd(wide: pd.DataFrame, window: int = _MARGIN_CROWD_WINDOW) -> pd.DataFrame:
+    """Margin-balance crowding: the balance relative to its own trailing mean
+    (P9 §5.4).  Strict warmup: the first ``window - 1`` sessions stay NaN
+    (no fabricated baseline from partial history); missing values stay NaN.
+    """
+
+    base = wide.replace([np.inf, -np.inf], np.nan)
+    baseline = base.T.rolling(window, min_periods=window).mean().T
+    return (base / baseline).replace([np.inf, -np.inf], np.nan)
+
+
 def build_capital_frames(
     config,
     ts_codes: list[str],
@@ -226,6 +239,7 @@ def build_capital_frames(
         with np.errstate(all="ignore"):
             change = wide / wide.shift(_MARGIN_WINDOW, axis=1) - 1.0
         frames["MARGIN_BALANCE_CHG"] = change.replace([np.inf, -np.inf], np.nan)
+        frames["MARGIN_CROWD_60"] = _margin_crowd(wide, _MARGIN_CROWD_WINDOW)
 
     if industry_map and not sw_index.empty:
         index_wide = sw_index.pivot_table(

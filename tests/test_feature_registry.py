@@ -146,8 +146,10 @@ def test_registry_version_is_pinned():
     # FACTOR_REGISTRY.  Descriptive only -- no search, scoring or
     # promotion semantics change (contract: docs/p7_maintainability_plan.md
     # §6.1, which supersedes the pinned v2 assertion on the requirement-
-    # change path).
-    assert FEATURE_REGISTRY_VERSION == 3
+    # change path).  v4 (P9, docs/p9_factor_family_contract.md APPROVED
+    # 2026-09-01): the orthogonal families, the deprecations and the
+    # pending_data placeholders — whitelist §10.1 case 2.
+    assert FEATURE_REGISTRY_VERSION == 4
 
 
 def test_registry_records_data_tiers(tensor, mask):
@@ -175,7 +177,15 @@ def test_summary_reports_tiers_and_deprecations(tensor, mask):
     )
     summary = registry.summary()
     assert summary["n_features"] == len(FEATURE_NAMES)
-    assert summary["deprecated"] == ["NORTHBOUND_CHG"]
+    # P9 §4.1 (whitelist §10.1 case 2, contract APPROVED): the eight window
+    # variants join NORTHBOUND_CHG in the deprecated set.
+    assert summary["deprecated"] == sorted(
+        [
+            "NORTHBOUND_CHG",
+            "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
+            "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",
+        ]
+    )
     assert PitLevel.PIT_DAILY.value in summary["by_pit_level"]
     assert summary["n_clusters"] >= 1
 
@@ -187,3 +197,32 @@ def test_build_requires_aligned_inputs():
             np.ones((5, 6), dtype=bool),
             calibration_slice=CalibrationSlice.of(5),
         )
+
+
+def test_p9_registry_version_deprecations_and_pending_data():
+    """P9 §4/§6: the v4 registry records the approved deprecations with
+    reasons and exposes the pending_data placeholders without adding them
+    to the vocabulary."""
+    assert FEATURE_REGISTRY_VERSION == 4
+    p9_deprecated = (
+        "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
+        "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",
+    )
+    tensor = np.zeros((len(FEATURE_NAMES), 3, 4), dtype=np.float32)
+    registry = FeatureRegistry.build(
+        tensor,
+        np.ones((3, 4), dtype=bool),
+        calibration_slice=CalibrationSlice.of(4),
+    )
+    records = registry.records()
+    for name in p9_deprecated:
+        record = records[name]
+        assert record.deprecated, name
+        assert not record.promotion_allowed, name
+        assert record.deprecation_reason, name
+    summary = registry.summary()
+    assert set(summary["pending_data"]) == {
+        "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
+    }
+    for name in summary["pending_data"]:
+        assert name not in records

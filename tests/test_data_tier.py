@@ -90,7 +90,12 @@ def test_tier_a_is_independent_of_fundamentals_industry_and_placeholders():
 def test_tier_sets_partition_the_vocabulary():
     tier_b = _tier_set(DataTier.B)
     tier_c = _tier_set(DataTier.C)
-    assert tier_b == set(FUNDAMENTAL_PIT_NAMES) | {"MARGIN_BALANCE_CHG"}
+    # P9 §5.4 (whitelist §10.1 case 2, contract APPROVED): MARGIN_CROWD_60
+    # rides the same PIT margin feed as MARGIN_BALANCE_CHG -> Tier B.
+    assert tier_b == set(FUNDAMENTAL_PIT_NAMES) | {
+        "MARGIN_BALANCE_CHG",
+        "MARGIN_CROWD_60",
+    }
     assert tier_c == {n for n in FEATURE_NAMES if n.startswith("IND_REL_")} | {
         "INDUSTRY_MOMENTUM",
         "NORTHBOUND_CHG",

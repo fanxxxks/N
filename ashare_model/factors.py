@@ -39,6 +39,30 @@ NEUTRAL_FEATURE_NAMES = {
     "NORTHBOUND_CHG",
 }
 
+# P9 (docs/p9_factor_family_contract.md §5.3): version of the factor
+# computation semantics.  v1 = the sparse-safe standardization for the
+# event family (P9 §5.3, t2 finding F1) plus the P9 feature additions.
+# Recorded in run artifacts via the runspec version registry.
+FACTOR_COMPUTE_VERSION = 1
+
+# Sparse event features standardize on the sparse-safe path: the 1%/99%
+# winsorize quantiles flatten any day whose event incidence is below the
+# quantile into an all-zero cross-section (t2 finding F1 — LIMIT_* were
+# non-degenerate on as few as 8 of 2826 sessions), so these features skip
+# the winsorize and use a plain mean/std standardization with a floored
+# standard deviation instead.  Days without events legitimately keep a
+# degenerate (all-neutral) cross-section; event days keep their signal.
+SPARSE_EVENT_FEATURES = {
+    "LIMIT_UP_EVENT",
+    "LIMIT_DOWN_EVENT",
+    "LIMIT_STREAK",
+    "LIMIT_UP_CNT_20",
+    "LIMIT_BREAK",
+    "LIMIT_UP_CNT_5",
+    "LIMIT_DOWN_STREAK",
+    "LIMIT_BREAK_5",
+}
+
 # Factor family labels: the metadata fields used by diagnostics and
 # family-level ablation experiments.
 FAMILIES = (
@@ -397,21 +421,34 @@ def _limit_event_frame(ctx: FactorContext, direction: str) -> pd.DataFrame:
     return cached
 
 
-def _limit_streak(ctx: FactorContext) -> pd.DataFrame:
-    """Consecutive one-word limit-up days ending today (0 on non-event days).
+def _streak_frame(event: np.ndarray, index, columns) -> pd.DataFrame:
+    """Consecutive non-zero event days ending today (0 on non-event days).
 
     Trailing-only recursion: the streak at day t depends solely on days
     <= t, so no future information can leak in.
     """
 
-    event = _limit_event_frame(ctx, "up").to_numpy(dtype=float)
     out = np.zeros_like(event)
     for t in range(event.shape[1]):
         if t == 0:
             out[:, t] = event[:, t]
         else:
             out[:, t] = np.where(event[:, t] > 0.0, out[:, t - 1] + 1.0, 0.0)
-    return pd.DataFrame(out, index=ctx.close.index, columns=ctx.close.columns)
+    return pd.DataFrame(out, index=index, columns=columns)
+
+
+def _limit_streak(ctx: FactorContext) -> pd.DataFrame:
+    """Consecutive one-word limit-up days ending today (0 on non-event days)."""
+
+    event = _limit_event_frame(ctx, "up").to_numpy(dtype=float)
+    return _streak_frame(event, ctx.close.index, ctx.close.columns)
+
+
+def _limit_down_streak(ctx: FactorContext) -> pd.DataFrame:
+    """Consecutive one-word limit-down days ending today (P9 §5.3)."""
+
+    event = _limit_event_frame(ctx, "down").to_numpy(dtype=float)
+    return _streak_frame(event, ctx.close.index, ctx.close.columns)
 
 
 def _limit_up_count(ctx: FactorContext, window: int = 20) -> pd.DataFrame:
@@ -468,6 +505,131 @@ def _turnover_vol(ctx: FactorContext, window: int = 20) -> pd.DataFrame:
     raw = ctx.turnover.replace([np.inf, -np.inf], np.nan)
     vol = raw.T.rolling(window, min_periods=2).std().T
     return vol.where(raw.notna())
+
+
+def _amount_share_cached(ctx: FactorContext) -> pd.DataFrame:
+    """The AMOUNT_SHARE cross-section, computed once per context."""
+
+    cached = ctx._cache.get("amount_share")
+    if cached is None:
+        cached = _factor_amount_share(ctx.amount, ctx.eligible)
+        ctx._cache["amount_share"] = cached
+    return cached
+
+
+def _rolling_corr(
+    a: pd.DataFrame,
+    b: pd.DataFrame,
+    window: int = 20,
+    min_periods: int = 10,
+) -> pd.DataFrame:
+    """Trailing-window Pearson correlation of two ``[stock x date]`` frames.
+
+    NaN-aware and strictly backward-looking: prefix sums restricted to the
+    pairs where both series are finite (the same technique as
+    :func:`_rolling_capm`), so suspension gaps never fabricate correlation.
+    Windows with fewer than ``min_periods`` valid pairs, or with a
+    degenerate variance, yield NaN (neutral).
+    """
+
+    av = a.to_numpy(dtype=float)
+    bv = b.to_numpy(dtype=float)
+    if av.shape != bv.shape:
+        raise ValueError(f"rolling-corr shape mismatch: {av.shape} vs {bv.shape}")
+    valid = np.isfinite(av) & np.isfinite(bv)
+    r = np.where(valid, av, 0.0)
+    s = np.where(valid, bv, 0.0)
+    n_stocks, n_dates = av.shape
+
+    def prefix(mat: np.ndarray) -> np.ndarray:
+        return np.concatenate([np.zeros((n_stocks, 1)), np.cumsum(mat, axis=1)], axis=1)
+
+    pv = prefix(valid.astype(float))
+    pr = prefix(r)
+    ps = prefix(s)
+    prs = prefix(r * s)
+    pr2 = prefix(r * r)
+    ps2 = prefix(s * s)
+
+    idx = np.arange(n_dates)
+    start = np.maximum(idx - window + 1, 0)
+    end = idx + 1
+    n = pv[:, end] - pv[:, start]
+    sr = pr[:, end] - pr[:, start]
+    ss = ps[:, end] - ps[:, start]
+    srs = prs[:, end] - prs[:, start]
+    sr2 = pr2[:, end] - pr2[:, start]
+    ss2 = ps2[:, end] - ps2[:, start]
+
+    with np.errstate(all="ignore"):
+        cov = n * srs - sr * ss
+        var_r = n * sr2 - sr * sr
+        var_s = n * ss2 - ss * ss
+        denom = np.sqrt(var_r * var_s)
+        corr = np.where(
+            (n >= min_periods) & (denom > 1e-12), cov / denom, np.nan
+        )
+    return pd.DataFrame(
+        np.where(np.isfinite(corr), corr, np.nan),
+        index=a.index,
+        columns=a.columns,
+    )
+
+
+def _crowd_ratio(raw: pd.DataFrame, window: int) -> pd.DataFrame:
+    """Level of ``raw`` relative to its own trailing mean (P9 §5.4 crowding).
+
+    NaN stays NaN (no fabrication from missing history); a zero trailing
+    mean is guarded like every other division in this module.
+    """
+
+    return (raw / (_rolling_mean(raw, window) + 1e-9)).replace(
+        [np.inf, -np.inf], np.nan
+    )
+
+
+def _crowd_turnover(ctx: FactorContext) -> pd.DataFrame:
+    """Turnover crowding: turnover rate relative to its own 60-day mean.
+
+    Missingness follows the TURNOVER convention (``_turnover_smoothed``):
+    the ratio exists only on days where today's turnover rate exists.
+    """
+
+    raw = ctx.turnover.replace([np.inf, -np.inf], np.nan)
+    return _crowd_ratio(raw, 60).where(raw.notna())
+
+
+def _sparse_safe_standardize(wide: pd.DataFrame, eligible) -> pd.DataFrame:
+    """Mean/std standardization for sparse event features (P9 §5.3).
+
+    The reference statistics (mean, standard deviation) are computed only
+    over the eligible and finite cells of each date column, exactly like
+    :func:`ashare_data.processor.winsorize_cross_section` — but the
+    quantile winsorize is skipped, so a day with rare events keeps its
+    non-degenerate cross-section instead of being clipped into an
+    all-zero column (t2 finding F1).  The standard deviation is floored
+    so a no-event day (constant cross-section) maps to the neutral 0
+    instead of exploding; missing values stay NaN for the caller's
+    neutral fill.
+    """
+
+    arr = wide.to_numpy(dtype=float)
+    eligible = np.asarray(eligible, dtype=bool)
+    if eligible.shape != arr.shape:
+        raise ValueError(
+            f"eligible shape {eligible.shape} does not match wide shape {arr.shape}"
+        )
+    ref = eligible & np.isfinite(arr)
+    has_ref = ref.any(axis=0)
+    reference = np.where(ref, arr, np.nan)
+    reference[:, ~has_ref] = 0.0
+    with np.errstate(all="ignore"):
+        mean = np.nanmean(reference, axis=0)
+        std = np.nanstd(reference, axis=0)
+    std = np.where(np.isfinite(std) & (std > 1e-9), std, 1e-9)
+    out = (arr - mean) / std
+    out[:, ~has_ref] = 0.0
+    return pd.DataFrame(out, index=wide.index, columns=wide.columns)
 
 
 def _industry_demean(ctx: FactorContext, frame: pd.DataFrame) -> pd.DataFrame:
@@ -819,6 +981,107 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
             ctx, ctx.turnover.replace([np.inf, -np.inf], np.nan)
         ),
     )
+
+    # --- P9 additions (docs/p9_factor_family_contract.md §5) ---------------
+    # Family ①: industry-residualized medium-horizon momentum/reversal.
+    # (Market residualization is already implicit in the per-date
+    # cross-sectional standardization; only the industry dimension is new.)
+    add(
+        "IND_REL_RET_60",
+        "industry",
+        ("close",),
+        61,
+        "60-day return minus its Shenwan-industry mean",
+        lambda ctx: _industry_demean(ctx, _shift_ratio(ctx.close, 60)),
+    )
+    add(
+        "IND_REL_RET_120",
+        "industry",
+        ("close",),
+        121,
+        "120-day return minus its Shenwan-industry mean",
+        lambda ctx: _industry_demean(ctx, _shift_ratio(ctx.close, 120)),
+    )
+    # Family ②: liquidity shock, volume shrinkage, price-volume divergence.
+    add(
+        "LIQ_SHOCK_20",
+        "liquidity",
+        ("amount",),
+        20,
+        "One-day amount-share shock vs its 20-day baseline (share / MA20 - 1)",
+        lambda ctx: _crowd_ratio(_amount_share_cached(ctx), 20),
+    )
+    add(
+        "VOLUME_SHRINK_5_20",
+        "volume",
+        ("volume",),
+        20,
+        "Volume shrinkage: MA5(volume) / MA20(volume) - 1",
+        lambda ctx: (
+            _rolling_mean(ctx.volume, 5) / (_rolling_mean(ctx.volume, 20) + 1e-9)
+            - 1.0
+        ).replace([np.inf, -np.inf], np.nan),
+    )
+    add(
+        "PV_DIV_20",
+        "volume",
+        ("close", "volume"),
+        20,
+        "Price-volume divergence: 20-day correlation of daily returns and log-volume changes",
+        lambda ctx: _rolling_corr(
+            _returns(ctx.close),
+            np.log1p(ctx.volume.clip(lower=0)).diff(axis=1),
+            window=20,
+            min_periods=10,
+        ),
+    )
+    # Family ③: limit-event conditioning (requires the P9 sparse-safe
+    # standardization path; see SPARSE_EVENT_FEATURES).
+    add(
+        "LIMIT_UP_CNT_5",
+        "event",
+        ("close", "high", "low", "pre_close"),
+        5,
+        "One-word limit-up days in the trailing 5 days",
+        lambda ctx: _limit_up_count(ctx, 5),
+    )
+    add(
+        "LIMIT_DOWN_STREAK",
+        "event",
+        ("close", "high", "low", "pre_close"),
+        2,
+        "Consecutive one-word limit-down days ending today",
+        _limit_down_streak,
+    )
+    add(
+        "LIMIT_BREAK_5",
+        "event",
+        ("close", "high", "low", "pre_close"),
+        5,
+        "Limit-up breaks (intraday touch without a sealed close) in the trailing 5 days",
+        lambda ctx: _limit_break(ctx).T.rolling(5, min_periods=1).sum().T,
+    )
+    # Family ④: per-stock crowding (market breadth is deliberately OUT of
+    # the vocabulary — a per-date constant cannot survive cross-sectional
+    # standardization; P9 §5.4).
+    add(
+        "CROWD_TURNOVER_60",
+        "liquidity",
+        ("turnover_rate",),
+        60,
+        "Turnover crowding: turnover rate relative to its own 60-day mean",
+        _crowd_turnover,
+    )
+    add(
+        "CROWD_AMOUNT_60",
+        "liquidity",
+        ("amount",),
+        60,
+        "Amount-share crowding: today's market share relative to its own 60-day mean",
+        lambda ctx: _crowd_ratio(_amount_share_cached(ctx), 60),
+    )
+    # MARGIN_CROWD_60 is injected via build_capital_frames (external feed,
+    # like MARGIN_BALANCE_CHG) and is therefore not registered here.
     return registry
 
 
@@ -951,7 +1214,14 @@ class AshareFactorEngine:
             if isinstance(frame, pd.Series):
                 frame = frame.to_frame().T
             frame = frame.reindex(index=ts_codes, columns=dates)
-            frame = winsorize_cross_section(frame, eligible=universe_mask)
+            if name in SPARSE_EVENT_FEATURES:
+                # P9 §5.3: sparse event features skip the quantile
+                # winsorize (t2 finding F1) and standardize on the plain
+                # mean/std of the eligible cross-section with a floored
+                # standard deviation.
+                frame = _sparse_safe_standardize(frame, eligible=universe_mask)
+            else:
+                frame = winsorize_cross_section(frame, eligible=universe_mask)
             # After cross-sectional standardization 0 is the neutral value.
             standardized.append(frame.fillna(0.0).values.astype(np.float32))
 
