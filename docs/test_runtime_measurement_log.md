@@ -94,6 +94,27 @@ top-2 = 218.59s（28.1%）；top-10 = 321.42s（41.2%）。单条 135.69s 的
 研究结论边界：本条目为工程测量（engineering run type），不产生也不
 声称任何研究结论。
 
-## PR1 门禁（2026-08-31，codex/test-runtime-b1-baseline 候选 commit）
+## PR1 门禁（2026-08-31，codex/test-runtime-b1-baseline）
 
-（待运行后填写）
+第一阶段门禁在证据 commit `44a47fb` 上运行，结果如下：
+
+| 门禁项 | 结果 |
+|---|---|
+| `python -m compileall -q ashare_data ashare_model ashare_portfolio ashare_trading scripts webapi` | 通过（exit 0） |
+| `python scripts/freeze_lock.py --check` | 通过（pin 文件同步；注意 `--check-full` 在本机对 `requirements.lock` 报既有漂移，见下） |
+| `git diff --check` | 通过 |
+| web job：`npm ci` → `npm ls --depth=0` → `npm run build`（tsc -b 在 build 内） | 通过（exit 0，build 40.85s） |
+| `python -m pytest -q tests`（全量） | 通过：**1323 passed / 5 skipped / 614 warnings in 852.59s**，三项计数与 B1 基线一致，零回归 |
+| `python -m pip check`（共享 miniconda 环境） | **失败（任务前既有状态，非本任务引入）**：`langchain-community 0.3.24`↔`langchain 1.3.4`、`langchain-core 1.4.0`、`httpx2`↔`idna 3.11` 等冲突；全部涉事包（langchain 系、idna）经 grep 证实**不在任何 requirements 契约文件内**（.in/.txt 均 0 匹配） |
+| `python -m pip check`（CI 忠实复现：%TEMP% 干净 venv，仅装 requirements.txt + requirements-optional.txt） | **通过**（"No broken requirements found"）——与 CI 的干净安装语义一致 |
+
+环境偏差披露（均为任务前既有，已记为后续独立小任务线索）：
+
+1. 共享 miniconda 环境存在契约外包（langchain 栈、旧 idna），导致本地
+   `pip check` 失败；CI 等价复现须在干净 venv 中执行（本条目已这样做）。
+2. `python scripts/freeze_lock.py --check-full` 失败：`requirements.lock`
+   全量快照相对当前环境漂移（同因：契约外包）。pin 文件（CI 门禁对象）
+   是同步的；lock 卫生修复不在本 campaign 范围。
+
+合并前在最终候选 commit 上重跑同套门禁的结果记录于 merge commit
+message 与评审记录（测量日志只承载测量与门禁命令矩阵本身）。
