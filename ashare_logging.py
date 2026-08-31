@@ -13,6 +13,7 @@ and :func:`export_log_txt` at the end.  The default log directory is
 
 from __future__ import annotations
 
+import os
 import sys
 from collections import deque
 from datetime import datetime
@@ -38,6 +39,20 @@ def _memory_sink(message: Any) -> None:
     """Append a formatted loguru message to the in-memory buffer."""
 
     _LOG_LINES.append(str(message).rstrip())
+
+
+def worker_log_suffix() -> str:
+    """File-name component isolating per-xdist-worker log files.
+
+    pytest-xdist sets ``PYTEST_XDIST_WORKER`` (e.g. ``gw0``) in every
+    worker process. Without this component, workers starting in the same
+    second would share one ``.log`` file and race on one export target
+    (test-runtime audit 2026-08-31). Serial runs get an empty suffix, so
+    the historical naming scheme is preserved byte-for-byte.
+    """
+
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    return f"_{worker}" if worker else ""
 
 
 def setup_run_logging(
@@ -70,7 +85,7 @@ def setup_run_logging(
     log_dir = Path(log_dir) if log_dir is not None else root / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = log_dir / f"{run_name}_{timestamp}.log"
+    log_path = log_dir / f"{run_name}{worker_log_suffix()}_{timestamp}.log"
 
     logger.add(sys.stderr, level=level, colorize=True)
     logger.add(_memory_sink, level=level, format=_TXT_FORMAT)
@@ -115,6 +130,14 @@ def export_log_txt(
     content = get_log_text()
     if content:
         content += "\n"
-    path.write_text(content, encoding="utf-8")
+    # Atomic export (test-runtime audit 2026-08-31): concurrent or failed
+    # exports must never corrupt the target — write a temp file, replace.
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        raise
     logger.success(f"Logs exported to {path}")
     return path

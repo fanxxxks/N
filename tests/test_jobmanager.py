@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -133,6 +134,37 @@ def test_start_conflict_while_running(tmp_path: Path):
     manager.start()
     with pytest.raises(RunConflictError):
         manager.start()
+    _stop_and_wait(manager)
+
+
+def test_start_conflict_survives_second_boundary_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression (PR3 parity, 2026-08-31): sample started_at before Popen.
+
+    The PID-reuse guard in ``_is_alive`` rejects processes whose create_time
+    is older than the recorded ``started_at``. ``started_at`` used to be
+    sampled after Popen returned, so any spawn whose Popen->sample window
+    crossed a clock-second boundary — routine under parallel-worker load —
+    made the guard reject the manager's own live child; a second ``start()``
+    then stole the lock and double-spawned instead of raising
+    RunConflictError. Deterministic reproduction: a post-Popen delay pushes
+    the ``started_at`` sample into the next clock second unconditionally.
+    """
+
+    manager = _manager(tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd())
+    real_popen = subprocess.Popen
+
+    def slow_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        time.sleep(1.1)  # force the started_at sample past the child's second
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", slow_popen)
+    manager.start()
+    with pytest.raises(RunConflictError):
+        manager.start()
+    monkeypatch.undo()
     _stop_and_wait(manager)
 
 

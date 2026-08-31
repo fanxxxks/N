@@ -1158,7 +1158,8 @@ python -m pytest -q --lf
 # 首次 push 前：CI-equivalent Python job（对应 ci.yml test job + §10.2 本地门禁）
 python -m pip check
 python scripts/freeze_lock.py --check
-python -m pytest -q tests
+# 并行全量门禁：parallel-vs-serial parity 对账见 docs/test_runtime_measurement_log.md（PR3 起）
+python -m pytest -q tests -n auto
 python -m compileall -j 0 -q ashare_data ashare_model ashare_portfolio ashare_trading scripts webapi
 git diff --check
 
