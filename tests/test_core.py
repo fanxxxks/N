@@ -18,6 +18,7 @@ from ashare_data.config import (
     make_data_config,
 )
 from ashare_data.db import AshareDB
+from ashare_data.manifest import build_dataset_manifest, save_manifest
 from ashare_data.processor import normalize_daily_bars
 from ashare_model.alphagpt import build_action_mask
 from ashare_model.backtest import AshareBacktestEngine
@@ -91,6 +92,9 @@ def _write_db(tmp_path: Path, dates: list[str], ts_codes: list[str], bars: pd.Da
             ],
             cfg,
         )
+        # P8-05: this fixture feeds the formal training write path, whose
+        # schema-v2 identity must bind to a persisted dataset manifest.
+        save_manifest(db, cfg, build_dataset_manifest(db, cfg))
     return cfg
 
 
