@@ -75,6 +75,10 @@ def git_repo(tmp_path: Path) -> Path:
 def _build(**overrides):
     kwargs = dict(BASE_KWARGS)
     kwargs.update(overrides)
+    # Identity/semantics unit tests must not depend on the ambient worktree
+    # state; clean/dirty-tree behavior is covered by the dedicated tmp-git
+    # tests below, which pass an explicit repo_root.
+    kwargs.setdefault("require_clean_tree", False)
     return build_runspec(**kwargs)
 
 
@@ -89,6 +93,7 @@ def test_schema_version_is_pinned():
 def test_spec_id_is_deterministic_and_independent_of_kwarg_order():
     spec_a = _build()
     reordered = dict(reversed(list(BASE_KWARGS.items())))
+    reordered.setdefault("require_clean_tree", False)
     spec_b = build_runspec(**reordered)
     assert spec_a.spec_id == spec_b.spec_id
     assert spec_a.to_payload() == spec_b.to_payload()
