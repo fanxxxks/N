@@ -25,21 +25,32 @@ skipped/warnings 不得增长。
 - 工作树状态：tracked 干净；既有未跟踪文件 `.agent-teams/`、
   `docs/p5_implementation_plan.md`（任务前已存在，未触碰）。
 - 命令：`python -m pytest -q tests --durations=100`
-- 结果：**1323 passed, 5 skipped, 614 warnings in 779.26s（0:12:59）**
+- 结果（首次运行，2026-08-31 14:37）：1323 passed, 5 skipped, 614 warnings
+  in 779.26s（0:12:59）。该次运行的 pytest 控制台输出未完整落盘：任务系统
+  仅保留会话内尾部，`logs/pytest_b1_baseline_cbda238.txt` 实为 conftest
+  导出的 loguru 内存缓冲片段（约 3.7 分钟跨度），不含 pytest 汇总行、
+  warnings summary 与 durations 表——构成 §11.2 证据缺口，由下条完整
+  重测收口（评审 R1-F1）。
+- 结果（同 SHA 完整重测，2026-08-31 15:29，campaign 权威口径）：
+  **1323 passed, 5 skipped, 614 warnings in 740.36s（0:12:20）**。
+- 原始产物（权威）：`logs/pytest_b1_baseline_cbda238_full.txt`——在
+  detached worktree（`D:\minequant\AlphaGPT-wt\b1-remeasure`，精确检出
+  cbda238）以 `cmd /c "... > file 2>&1"` 完整捕获 stdout+stderr，含
+  warnings summary（L20 起）、slowest-100 durations（L76 起）与汇总行
+  （L177），格式同 `logs/pytest_p6_final.txt` 先例。两次运行计数完全一致
+  （1323/5/614），墙钟差 −4.99% 属机器波动。
 - 5 skipped 均为登记在册的 CUDA skipif 基线（test_ops/test_train/test_vm），
   与 p7 终态持平。
-- 原始产物：`logs/pytest.txt`（本次会话导出），快照留存于
-  `logs/pytest_b1_baseline_cbda238.txt`。
 
 ### 与 p7 终态基线的对比（诚实记录，不下结论）
 
 | 口径 | p7 终态 | B1 基线 | 变化 |
 |---|---|---|---|
-| passed | 1212 | 1323 | +111（P8-05 新增合同测试） |
+| passed | 1212 | 1323 | +111（净增测试定义 +82：P8-01..04 +61、P8-05 净 +21；其余 +29 为参数化展开口径差） |
 | skipped | 5 | 5 | 持平 |
 | warnings | 614 | 614 | 持平 |
-| 墙钟 | 562.68s | 779.26s | +216.58s |
-| 平均每测试 | 0.464s | 0.589s | +26.9% |
+| 墙钟 | 562.68s | 740.36s | +177.68s |
+| 平均每测试 | 0.464s | 0.560s | +20.5% |
 
 墙钟增长的分解（测试数增加 vs 每测试变慢）未做归因实验；本表只记录
 观察。B1 数字自此取代 p7 终态成为本 campaign 的对比基线。
@@ -48,20 +59,22 @@ skipped/warnings 不得增长。
 
 | 测试 | 耗时 | 占全量 |
 |---|---|---|
-| test_evaluation.py::test_run_protocol_rows_and_determinism | 135.69s | 17.4% |
-| test_evaluation.py::test_run_protocol_records_universe_policy | 82.90s | 10.6% |
-| test_grammar.py::test_random_samples_execute_100_percent | 21.65s | 2.8% |
-| test_evaluation.py::test_cli_smoke | 17.42s | 2.2% |
-| test_evaluation.py::test_cli_confirmation_smoke | 16.78s | 2.2% |
-| test_archive_run.py::test_run_dir_collision_gets_suffix | 13.50s | 1.7% |
-| test_data_loader.py::test_industry_codes_all_nan_without_membership | 8.71s | 1.1% |
-| test_promotion.py::test_cli_promotion_refuses_legacy_artifact_without_dataset | 8.53s | 1.1% |
-| test_archive_run.py::test_protocol_manifest_records_actual_run_scope | 8.33s | 1.1% |
-| test_archive_run.py::test_formula_derived_slug_is_sanitized | 7.91s | 1.0% |
+| test_evaluation.py::test_run_protocol_rows_and_determinism | 126.43s | 17.1% |
+| test_evaluation.py::test_run_protocol_records_universe_policy | 68.13s | 9.2% |
+| test_grammar.py::test_random_samples_execute_100_percent | 19.09s | 2.6% |
+| test_evaluation.py::test_cli_confirmation_smoke | 17.84s | 2.4% |
+| test_evaluation.py::test_cli_smoke | 16.97s | 2.3% |
+| test_archive_run.py::test_run_dir_collision_gets_suffix | 11.79s | 1.6% |
+| test_archive_run.py::test_protocol_manifest_records_actual_run_scope | 9.51s | 1.3% |
+| test_archive_run.py::test_protocol_mode_does_not_require_formula | 8.31s | 1.1% |
+| test_archive_run.py::test_protocol_mode_archives_with_manifest_block | 8.03s | 1.1% |
+| test_promotion.py::test_cli_promotion_refuses_legacy_artifact_without_dataset | 7.90s | 1.1% |
 
-top-2 = 218.59s（28.1%）；top-10 = 321.42s（41.2%）。单条 135.69s 的
-协议行测试是分片均衡与并行收益的最大杠杆；test_archive_run.py 以数量
-取胜（多条约 7–13.5s）。
+top-2 = 194.56s（26.3%）；top-10 = 294.00s（39.7%）。头部排序两次运行
+同构（单条 126.43s 的协议行测试仍是分片均衡与并行收益的最大杠杆；
+test_archive_run.py 以数量取胜），尾部名次有机器负载噪声（如重测中
+test_data_loader 的 8.71s 条目未进 top-10）。本表以可复核的完整快照
+重测口径为准；分片均衡设计依据此表。
 
 ### warnings 结构快照（PR4 归并口径的原始材料）
 
@@ -78,8 +91,9 @@ top-2 = 218.59s（28.1%）；top-10 = 321.42s（41.2%）。单条 135.69s 的
 - `UniverseDevelopmentFallbackWarning`（data_loader 开发兜底显式告警）：
   test_manifest 1。
 
-以上按 pytest warning summary 的（文件/测试聚类）粒度转录；(类别, 消息
-模板, 调用位置) 多重集的机器可读再基线在 PR4 落地。
+以上按 pytest warning summary 的（文件/测试聚类）粒度转录，已与完整快照
+（`pytest_b1_baseline_cbda238_full.txt` L20-75）逐组核对一致（R1 复核）；
+(类别, 消息模板, 调用位置) 多重集的机器可读再基线在 PR4 落地。
 
 ### 证据缺口收口
 
@@ -105,16 +119,38 @@ top-2 = 218.59s（28.1%）；top-10 = 321.42s（41.2%）。单条 135.69s 的
 | `git diff --check` | 通过 |
 | web job：`npm ci` → `npm ls --depth=0` → `npm run build`（tsc -b 在 build 内） | 通过（exit 0，build 40.85s） |
 | `python -m pytest -q tests`（全量） | 通过：**1323 passed / 5 skipped / 614 warnings in 852.59s**，三项计数与 B1 基线一致，零回归 |
-| `python -m pip check`（共享 miniconda 环境） | **失败（任务前既有状态，非本任务引入）**：`langchain-community 0.3.24`↔`langchain 1.3.4`、`langchain-core 1.4.0`、`httpx2`↔`idna 3.11` 等冲突；全部涉事包（langchain 系、idna）经 grep 证实**不在任何 requirements 契约文件内**（.in/.txt 均 0 匹配） |
+| `python -m pip check`（共享 miniconda 环境） | **失败（任务前既有状态，非本任务引入）**。归因分两类（R1-F2 修正）：①`langchain` 系（community 0.3.24 ↔ langchain 1.3.4、langchain-core 1.4.0 等）——真契约外包，requirements `.in`/`.txt`/`requirements.lock` 全部零匹配；②`idna` 3.11——**契约内陈旧**：`requirements.lock:37` pin `idna==3.18`，本机安装 3.11，低于 optional pin `httpx2==2.12.0` 的传递要求（idna>=3.18） |
 | `python -m pip check`（CI 忠实复现：%TEMP% 干净 venv，仅装 requirements.txt + requirements-optional.txt） | **通过**（"No broken requirements found"）——与 CI 的干净安装语义一致 |
 
 环境偏差披露（均为任务前既有，已记为后续独立小任务线索）：
 
-1. 共享 miniconda 环境存在契约外包（langchain 栈、旧 idna），导致本地
-   `pip check` 失败；CI 等价复现须在干净 venv 中执行（本条目已这样做）。
+1. 共享 miniconda 环境存在两类偏差导致本地 `pip check` 失败：契约外包
+   （langchain 系，`.in`/`.txt`/lock 零匹配）与契约内陈旧（`idna` 本机
+   3.11 < `requirements.lock:37` pin 的 3.18）。CI 等价复现须在干净 venv
+   中执行（本条目已这样做，通过）。
 2. `python scripts/freeze_lock.py --check-full` 失败：`requirements.lock`
-   全量快照相对当前环境漂移（同因：契约外包）。pin 文件（CI 门禁对象）
-   是同步的；lock 卫生修复不在本 campaign 范围。
+   全量快照相对当前环境漂移，由上述两类偏差共同构成。pin 文件（CI 门禁
+   对象）是同步的；lock 卫生修复不在本 campaign 范围。
+
+原始产物留存（R1-F3）：44a47fb 与 3192e17 两次门禁 pytest 的控制台输出
+未完整落盘（同 F1 缺口；计数 1323/5/614 与两次基线运行一致）。自本修订
+起，最终候选的门禁 pytest 以完整重定向留档于 `logs/pytest_gate_<sha>.txt`
+（结果与路径记入 merge commit 与评审记录），后续 PR 一律沿用该口径。
 
 合并前在最终候选 commit 上重跑同套门禁的结果记录于 merge commit
 message 与评审记录（测量日志只承载测量与门禁命令矩阵本身）。
+
+## 修订记录
+
+- **R1（2026-08-31，独立评审 findings F1-F4）**：
+  F1/B1 与门禁运行的原始产物留存口径修正——在精确检出 cbda238 的
+  detached worktree 以完整 stdout+stderr 重定向重测基线，计数与首测完全
+  一致（1323/5/614），权威快照 `logs/pytest_b1_baseline_cbda238_full.txt`；
+  对比表与最慢测试表切换到可复核的重测口径（740.36s）。
+  F2/pip check 失败归因修正：langchain=契约外（lock 零匹配）、
+  idna=契约内陈旧（lock pin 3.18 vs 本机 3.11）。
+  F3/自本修订起最终候选门禁 pytest 完整落盘 `logs/pytest_gate_<sha>.txt`。
+  F4/+111 归因修正：净增测试定义 +82（P8-01..04 +61、P8-05 净 +21），
+  其余为参数化展开口径差。
+  不变量结论（1323/5/614；skipped/warnings 不增长；top-2 杠杆结构）
+  在修正前后保持一致。
