@@ -72,6 +72,96 @@ def new_run_id() -> str:
     return uuid4().hex
 
 
+LIFECYCLE_CONTRACT_DOC = "docs/p8_research_lifecycle_contract.md"
+
+
+def lifecycle_contract_hash(repo_root: Path | None = None) -> str:
+    """SHA-256 of the governing pre-registration contract document."""
+
+    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[1]
+    path = root / LIFECYCLE_CONTRACT_DOC
+    if not path.is_file():
+        raise ValueError(f"missing lifecycle contract document: {path}")
+    return sha256_hex(path.read_text(encoding="utf-8"))
+
+
+def resolve_runtime_thresholds() -> dict[str, float]:
+    """The resolved preregistered threshold set (single authorities)."""
+
+    import dataclasses
+
+    from ashare_data.gates import MIN_ELIGIBLE_DEFAULT
+    from ashare_model.promotion import PromotionThresholds
+
+    thresholds = {
+        f"promotion_{name}": float(value)
+        for name, value in dataclasses.asdict(PromotionThresholds()).items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    thresholds["min_eligible"] = float(MIN_ELIGIBLE_DEFAULT)
+    return thresholds
+
+
+def resolve_runtime_runspec(
+    *,
+    dataset_id: str,
+    data_cutoff: str,
+    data_config,
+    backtest_config,
+    requested_budget: int,
+    n_folds: int,
+    research_domain: str = "unified",
+    target: str = "forward_return",
+    seeds: tuple[int, ...] | None = None,
+    searcher: str | None = None,
+    max_formula_len: int | None = None,
+    repo_root: Path | None = None,
+    require_clean_tree: bool = True,
+) -> RunSpec:
+    """Mechanical runtime pre-registration snapshot (P8-05 wiring).
+
+    Derives the frozen RunSpec from the actual runtime configuration and
+    the single-authority constants: dev/holdout windows from the data and
+    backtest configs, execution/capital/fee block from the P3 provenance
+    authority, thresholds from the promotion/gate authorities, and the
+    governing contract hash from the lifecycle contract document. Formal
+    entry points call this once per run and open their RunStore run with
+    the result.
+    """
+
+    from ashare_portfolio.execution_spec import portfolio_config_provenance
+
+    def _d8(value: str) -> str:
+        text = str(value).replace("-", "")
+        if not _DATE_RE.match(text):
+            raise ValueError(f"invalid date {value!r} (expected YYYYMMDD-ish)")
+        return text
+
+    train_end = _d8(backtest_config.train_end_date)
+    return build_runspec(
+        dataset_id=dataset_id,
+        data_cutoff=_d8(data_cutoff),
+        research_domain=research_domain,
+        frequency=str(backtest_config.rebalance_frequency),
+        target=target,
+        horizon=int(backtest_config.target_horizon),
+        requested_budget=requested_budget,
+        n_folds=int(n_folds),
+        dev_window=WindowSpec(start=_d8(data_config.start_date), end=train_end),
+        holdout_window=WindowSpec(
+            start=train_end, end=_d8(backtest_config.end_date)
+        ),
+        preregistered_contract_hash=lifecycle_contract_hash(repo_root),
+        resolved_thresholds=resolve_runtime_thresholds(),
+        portfolio_config=portfolio_config_provenance(backtest_config),
+        seeds=seeds,
+        searcher=searcher,
+        max_formula_len=max_formula_len,
+        repo_root=repo_root,
+        require_clean_tree=require_clean_tree,
+    )
+
+
 class UniversePolicySpec(BaseModel):
     """Resolved PIT eligibility policy (mirrors ``ashare_data.universe.UniversePolicy``)."""
 

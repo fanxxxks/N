@@ -1,9 +1,10 @@
-"""Typed schemas for the formal boundary artifacts (P7-C).
+"""Typed schemas for the formal boundary artifacts (P7-C, P8-05).
 
-Contract: ``docs/p7_artifact_schema_contract.md``.  The strategy
-(``best_ashare_strategy.json``), protocol (``protocol_result.json``),
-backtest (``backtest_result.json``) and paper-state
-(``sim_portfolio_state.json``) payloads carry
+Contracts: ``docs/p7_artifact_schema_contract.md`` and
+``docs/p8_research_lifecycle_contract.md`` (§2 identity hierarchy, §8
+migration matrix).  The strategy (``best_ashare_strategy.json``),
+protocol (``protocol_result.json``), backtest (``backtest_result.json``)
+and paper-state (``sim_portfolio_state.json``) payloads carry
 ``artifact_schema_version`` and are validated with Pydantic:
 
 * **write side (fail-closed)**: writers stamp the version and validate
@@ -13,8 +14,18 @@ backtest (``backtest_result.json``) and paper-state
   single classification entry point (readers must not implement a second
   version comparison): ``current`` payloads validate via
   ``validate_payload`` (``ArtifactSchemaError`` on failure), ``legacy``
-  payloads flow through the pre-contract read path byte-identically, and
+  payloads (v0: no key; v1: the P7-C generation) flow through the
+  pre-contract read path byte-identically and are audit-only — formal
+  consumers must call :func:`require_current_schema`, and
   ``unknown``/future versions are hard-rejected.
+
+P8-05 (schema v2): every formal artifact carries the lifecycle identity
+block (``spec_id``/``run_id``/``candidate_id``; paper state additionally
+``account_id``). The strategy artifact's historical searcher-internal
+``candidate_id`` label is superseded by the lifecycle identity
+(``ashare_model.identity.candidate_id``); the label survives as the
+optional diagnostic ``searcher_candidate_label``. Legacy artifacts keep
+their historical values read-only.
 
 Top-level models are ``extra="forbid"`` by contract: new top-level
 provenance requires an explicit schema change plus a bump of
@@ -23,13 +34,22 @@ provenance requires an explicit schema change plus a bump of
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 # Bump when any top-level field is added, removed or retyped; the contract
-# (§4) rejects unknown/future versions on read.
-ARTIFACT_SCHEMA_VERSION = 1
+# (§4) rejects unknown/future versions on read. P8-05: 1 -> 2 (identity).
+ARTIFACT_SCHEMA_VERSION = 2
+
+# Legacy schema generations (audit-only on read; never written anymore).
+LEGACY_SCHEMA_VERSIONS = (1,)
+
+_SPEC_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+_RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_CANDIDATE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+_ACCOUNT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 class ArtifactSchemaError(ValueError):
@@ -55,6 +75,8 @@ def classify_schema_version(
         return "unknown"
     if version == ARTIFACT_SCHEMA_VERSION:
         return "current"
+    if version in LEGACY_SCHEMA_VERSIONS:
+        return "legacy"
     return "unknown"
 
 
@@ -135,7 +157,93 @@ class _SchemaBase(BaseModel):
         return self.model_dump()
 
 
-class StrategyArtifact(_SchemaBase):
+class _LineageBase(_SchemaBase):
+    """P8-05 lifecycle identity block shared by every formal artifact.
+
+    Contract §2: ``spec_id`` (content identity of the frozen RunSpec),
+    ``run_id`` (per-execution UUID), ``candidate_id`` (content identity of
+    the candidate formula). Paper state additionally carries
+    ``account_id``. Searcher-internal candidate labels are diagnostics
+    (``searcher_candidate_label``), never lifecycle identity.
+    """
+
+    spec_id: str
+    run_id: str
+    candidate_id: str
+
+    @field_validator("spec_id")
+    @classmethod
+    def _spec_id_format(cls, value: str) -> str:
+        if not _SPEC_ID_RE.match(value):
+            raise ValueError(f"spec_id must be 64-char lowercase hex sha256: {value!r}")
+        return value
+
+    @field_validator("run_id")
+    @classmethod
+    def _run_id_format(cls, value: str) -> str:
+        if not _RUN_ID_RE.match(value):
+            raise ValueError(f"run_id must be a 32-char lowercase uuid4 hex: {value!r}")
+        return value
+
+    @field_validator("candidate_id")
+    @classmethod
+    def _candidate_id_format(cls, value: str) -> str:
+        if not _CANDIDATE_ID_RE.match(value):
+            raise ValueError(
+                f"candidate_id must be the lifecycle content identity "
+                f"(64-char lowercase hex sha256): {value!r}"
+            )
+        return value
+
+
+def assert_consistent_lineage(
+    *payloads: Mapping[str, Any],
+    spec_id: str | None = None,
+    run_id: str | None = None,
+) -> tuple[str, str]:
+    """Cross-artifact lineage consistency (single implementation).
+
+    Every payload must be current schema with an identical, well-formed
+    ``(spec_id, run_id)`` pair; optional expected values are enforced.
+    Artifacts from different runs or specs must never be combined
+    (contract §4.3/§8) — raise :class:`ArtifactSchemaError`.
+    """
+
+    if not payloads:
+        raise ArtifactSchemaError(
+            "assert_consistent_lineage requires at least one artifact payload"
+        )
+    seen: set[tuple[str, str]] = set()
+    for payload in payloads:
+        require_current_schema(payload, artifact="lineage")
+        actual_spec = payload.get("spec_id")
+        actual_run = payload.get("run_id")
+        if not _SPEC_ID_RE.match(str(actual_spec)) or not _RUN_ID_RE.match(
+            str(actual_run)
+        ):
+            raise ArtifactSchemaError(
+                f"artifact lineage identity is malformed: spec_id={actual_spec!r}, "
+                f"run_id={actual_run!r}"
+            )
+        seen.add((str(actual_spec), str(actual_run)))
+    if len(seen) > 1:
+        raise ArtifactSchemaError(
+            f"lineage mismatch: artifacts originate from different "
+            f"runs/specs: {sorted(seen)} — combining them is forbidden"
+        )
+    actual_spec, actual_run = seen.pop()
+    if spec_id is not None and actual_spec != spec_id:
+        raise ArtifactSchemaError(
+            f"lineage mismatch: artifact spec_id {actual_spec!r} != expected {spec_id!r}"
+        )
+    if run_id is not None and actual_run != run_id:
+        raise ArtifactSchemaError(
+            f"lineage mismatch: artifact run_id {actual_run!r} != expected {run_id!r}"
+        )
+    return actual_spec, actual_run
+
+
+class StrategyArtifact(_LineageBase):
     """``best_ashare_strategy.json`` spine (writer: trainer._write_artifact).
 
     Field list enumerated from the writer code (contract §3); keys that
@@ -144,7 +252,6 @@ class StrategyArtifact(_SchemaBase):
     """
 
     formula: list[int]
-    candidate_id: str
     formula_text: str
     source: str
     direction: int
@@ -187,6 +294,10 @@ class StrategyArtifact(_SchemaBase):
     rl_initialization: str | None = None
     imitation: dict | None = None
     experimental: bool | None = None
+    # P8-05: the searcher-internal candidate label ("rl:<tokens>" style) is
+    # a diagnostic only; the lifecycle candidate identity is the base
+    # class's ``candidate_id``.
+    searcher_candidate_label: str | None = None
     # Legacy stamp, present only on files stamped post-hoc by
     # artifact_versions (never written by the trainer).
     legacy: bool | None = None
@@ -194,7 +305,7 @@ class StrategyArtifact(_SchemaBase):
     legacy_stamped_at: str | None = None
 
 
-class ProtocolResultArtifact(_SchemaBase):
+class ProtocolResultArtifact(_LineageBase):
     """``protocol_result.json`` spine (writer: eval_artifacts.build_result)."""
 
     protocol_version: str
@@ -232,7 +343,7 @@ class ProtocolResultArtifact(_SchemaBase):
     dsr_extra_trials: int
 
 
-class BacktestResultArtifact(_SchemaBase):
+class BacktestResultArtifact(_LineageBase):
     """``backtest_result.json`` spine (writer: backtest.py CLI)."""
 
     formula: list[int]
@@ -271,12 +382,22 @@ class EquityPointModel(BaseModel):
     equity: float
 
 
-class PaperStateArtifact(_SchemaBase):
+class PaperStateArtifact(_LineageBase):
     """``sim_portfolio_state.json`` spine (writer: ashare_trading.portfolio)."""
 
+    account_id: str
     initial_capital: float
     cash: float
     trade_count: int
     last_exec_date: str | None
     positions: dict[str, PositionStateModel]
     equity_history: list[EquityPointModel]
+
+    @field_validator("account_id")
+    @classmethod
+    def _account_id_format(cls, value: str) -> str:
+        if not _ACCOUNT_ID_RE.match(value):
+            raise ValueError(
+                f"account_id must be a 32-char lowercase uuid4 hex: {value!r}"
+            )
+        return value
