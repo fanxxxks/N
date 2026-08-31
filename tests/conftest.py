@@ -9,6 +9,7 @@ import pytest
 
 from ashare_data.config import DataConfig
 from ashare_data.db import AshareDB
+from ashare_data.manifest import build_dataset_manifest, save_manifest
 from ashare_logging import export_log_txt, setup_run_logging
 
 
@@ -108,4 +109,7 @@ def populated_db(data_config: DataConfig, bars_data) -> DataConfig:
             ],
             data_config,
         )
+        # P8-05: formal artifacts require a resolved dataset identity, so
+        # the shared fixture persists the content-addressed manifest.
+        save_manifest(db, data_config, build_dataset_manifest(db, data_config))
     return data_config
