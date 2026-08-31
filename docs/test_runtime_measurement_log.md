@@ -154,3 +154,113 @@ message 与评审记录（测量日志只承载测量与门禁命令矩阵本身
   其余为参数化展开口径差。
   不变量结论（1323/5/614；skipped/warnings 不增长；top-2 杠杆结构）
   在修正前后保持一致。
+
+## PR3（2026-08-31，codex/test-runtime-b2c2-xdist，pytest-xdist 试点）
+
+### 依赖契约（B2）
+
+- `pytest-xdist==3.8.0`（+`execnet==2.1.2`）与 `baostock==0.9.3` 进入
+  `requirements-optional.in/.txt`（freeze_lock 重生成，`.txt` 恰 +2 行）。
+- baostock 为**活契约消费者**（R2-F1 对本节初稿"无消费者"声明的更正）：
+  `ashare_data/akshare_client.py:532` 生产 fallback 链、
+  `scripts/import_pit_universe.py:139/212` 懒加载、
+  `tests/test_akshare_client.py:246` 无 skip 的无条件 import——契约闭包
+  必须包含，否则全量收集即失败。仓内历史全量运行均在含 baostock 的
+  miniconda 超集环境；旧 lock 未含 baostock 属 lock 陈旧，而非"无消费
+  者"。matplotlib/seaborn 等残留经 grep 证实零代码 import，判断不变。
+- `requirements.lock` 从干净 CI 忠实 venv 解释器重生成：attempt-1 parity
+  中 `test_lock_files.py::test_lock_file_is_a_full_freeze` 正确拒绝了
+  "保留陈旧 lock"的捷径（该守卫实证有效）。lock 逐项变化（R2-F4 列明）：
+  `execnet==2.1.2`、`baostock==0.9.3` 新增；`torch==2.11.0+cu128 →
+  2.11.0+cpu`（旧 lock 生成自 cu128 环境，按 P0-06 CPU-base 契约修正）；
+  `pydantic==2.13.4 → 2.13.3`（对齐 requirements.txt L18，旧值属陈旧
+   漂移）；`idna==3.18 → 3.19`、`joblib==1.5.3 → 1.6.0`（其新硬依赖
+   `cloudpickle==3.1.2` 随之新增）及 click/curl_cffi/filelock/lxml/
+   narwhals/platformdirs、`scs 3.2.11 → 3.3.0`、`protobuf 7.35.1 →
+   7.36.0`、`Pygments 2.20.0 → 2.21.0` 等传递版本随干净闭包解析更新
+   （R2-F6 更正：scs/protobuf/Pygments 系 cvxpy/streamlit 链必需传递
+   依赖的**版本上跳**，仍在 lock 中，非移除；实现 commit 3bdac28 的
+   message 中同一清单有相同笔误，以本日志为准）；移除经 grep 证实零
+   代码 import 的环境残留（matplotlib/seaborn 及 matplotlib 依赖族
+   contourpy/cycler/fonttools/kiwisolver/pyparsing）。
+  `freeze_lock --check` 与干净环境 `--check-full` 双通过（后者修复前
+  持续失败——lock 卫生实质改善）。
+- `pip check`：干净 venv 通过（含全部新 pin）；共享 miniconda 仍失败
+  （既有状态，见 PR1 披露）。
+
+### C2 日志竞态修复
+
+- RED：`tests/test_logging_parallel.py` 3 项预期失败（`worker_log_suffix`
+  缺失 → ImportError；.log 命名无 worker 后缀 → 同秒碰撞；导出崩溃损坏
+  目标文件）；命令 `python -m pytest -q tests/test_logging_parallel.py`。
+- GREEN：`worker_log_suffix()`（读 `PYTEST_XDIST_WORKER`，serial 为空串，
+  历史命名字节兼容）；`export_log_txt` 原子化（tmp + `os.replace`，失败
+  清理 tmp）；conftest 每 worker 导出 `logs/pytest_gwN.txt`（serial 保持
+  `logs/pytest.txt`）。GREEN 4/4（含既有 `test_logging.py` 串行契约）。
+- 实证：xdist smoke `pytest -n 2` 8 passed；`logs/pytest_gw0.txt` /
+  `pytest_gw1.txt` 每 worker 导出观测。
+
+### C4 关联缺陷：jobmanager 冲突检测的跨秒竞态（并行门禁暴露）
+
+- 现象：attempt-2 parity（b027d2e 树）中
+  `test_jobmanager.py::test_start_conflict_while_running` 失败
+  （DID NOT RAISE），第二个 start() 偷锁并双 spawn（快照 stderr 双
+  "Simulation started" 行）。
+- 根因：`_spawn` 在 `Popen` 返回**之后**采样 `started_at`（`_now_iso()`
+  为秒级截断），而 `_is_alive` 的 PID 重用守卫把
+  `create_time < started_at` 判为非本进程——Popen→采样窗口跨秒时
+  （并行负载下窗口拉大）守卫误杀自己的活子进程。attempt-1/闭包运行
+  绿 = 低负载下概率低；串行历史全量均未触发。
+- RED（确定性）：`test_start_conflict_survives_second_boundary_spawn`
+  —— Popen 后延迟 1.1s 强制跨秒，修复前必红（1 failed / 7.65s）。
+- GREEN：`started_at` 采样移到 `Popen` 之前（守卫语义不变：仅拒绝创建
+  于 run 启动之前的外来进程）；jobmanager 模块 16/16（9.33s）。
+- 该缺陷为既有产品缺陷，由门禁并行化暴露并构成其可交付前提（与 C2
+  同类处理）；闭包与后续并行运行均依赖此修复。
+
+### 门禁命令同步
+
+- AGENTS §10.2 第 3 步 → `python -m pytest -q tests -n auto`，附 fail-closed
+  条款：仅当当次 PR 的 parity 对账已记入本日志时可用，否则回退串行命令；
+  CI job 命令不变。onboarding §9.2 同步。drift guard 扩展
+  （`test_local_full_suite_gate_runs_parallel`，RED 1 → GREEN 5/5）。
+- PR2 评审两条 low 观察（docstring 条款定位、§9.2 切片加固）顺手修正并
+  在实现 commit 中披露。
+
+### parity 对账（被测实现 SHA 3bdac28，`-n auto` = 6 workers）
+
+- worker 数更正（R2-F3）：xdist `-n auto` 取 psutil **物理核** = 6
+  （本机逻辑核 12；gw0-gw5 六份 worker 导出佐证），非 12。
+- 命令：`python -m pytest -q tests -n auto`（完整 stdout+stderr 重定向
+  → `logs/pytest_parity_3bdac28.txt`）。
+- 结果：**1332 passed / 5 skipped / 615 warnings / 275.64s（4:35）**。
+- 计数对账（R2-F2 修正）：1332 = 1327（PR2 门禁）+ 3
+  （`test_logging_parallel.py` 新契约）+ 1
+  （`test_local_full_suite_gate_runs_parallel` drift guard）+ 1
+  （`test_start_conflict_survives_second_boundary_spawn` 回归测试）；
+  skipped 5 持平。
+- warnings 口径：615 = 614 + 1。与 PR2 门禁快照做 warnings 段集合差：
+  唯一差异为 `test_evaluation` 组 7→8（once-per-process 语义的 warning
+  在多 worker 下重复实例），**warning 种类/消息/位置零新增**。据此确立
+  可比口径：warnings"不增长"不变量在并行口径下按去重
+  (类别, 消息模板, 调用位置) 集合判定（裸总数在 worker 数变化时不可直接
+  比对）；该口径由 PR4 的归并 job 机器化。
+- 提速：275.64s vs B1 串行基线 740.36s = **2.69x**（vs 711.37s 门禁运行
+  = 2.58x）。
+- 尝试史（全部留证）：attempt-1（f964c3a 树，281.67s，1 failed = lock
+  契约违约，`logs/pytest_parity_attempt1_lockviolation.txt`）；attempt-2
+  （b027d2e 树，307.09s，1 failed = jobmanager 跨秒竞态，
+  `logs/pytest_parity_b027d2e.txt`）；attempt-3（3bdac28 树，本文数字，
+  绿）。
+- 干净闭包全量（R2-F1 证据）：venv 解释器 `pytest -n auto` 于 b027d2e
+  树 → **1331 passed / 5 skipped / 615 warnings / 323.93s**，快照
+  `logs/pytest_closure_b027d2e.txt`（含 test_akshare_client 的 baostock
+  无条件 import）——契约闭包可独立运行全量套件，取代本节初稿失真的
+  "无缺失"声明。
+
+### 最终候选门禁
+
+- 于最终候选（本条目提交后的 HEAD）运行：串行全量 pytest（严格 CI 等
+  价复现）、web job（npm ci/ls/build）、compileall -j 0、freeze_lock
+  --check、git diff --check、干净环境 pip check；结果记入 merge commit
+  与评审记录。
