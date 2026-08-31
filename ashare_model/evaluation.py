@@ -295,12 +295,19 @@ def run_protocol(
     reward_config: RewardConfig | None,
     proto_cfg: ProtocolConfig,
     tier_name: str,
+    *,
     fold_indices: list[int] | None = None,
     seeds: list[int] | None = None,
     extra_trial_rows: list[dict] | None = None,
     max_t_perms: int = 5000,
     ledger=None,
     regime=None,
+    # P8-05: lifecycle identity of the evaluating run, resolved by the
+    # entry point (frozen RunSpec + open RunStore run) and stamped into the
+    # protocol artifact. Required — a protocol result without identity is
+    # never a formal artifact.
+    spec_id: str,
+    run_id: str,
 ) -> dict:
     """Run the full protocol: baselines + one trained candidate per
     (fold, seed), all scored by the shared engine path.
@@ -540,6 +547,8 @@ def run_protocol(
         tier_name,
         tier,
         rows,
+        spec_id=spec_id,
+        run_id=run_id,
         data_end_date=loader.dates[-1],
         extra_trial_rows=extra_trial_rows,
         max_t_perms=max_t_perms,
@@ -660,76 +669,124 @@ def main(argv=None) -> int:
 
         loader = AshareDataLoader(data_config, model_config)
         loader.load_data()
+        if not loader.dataset_id:
+            from .artifact_schemas import ArtifactSchemaError
+
+            raise ArtifactSchemaError(
+                "formal protocol artifacts require a resolved dataset_id "
+                "(dataset manifest); migrate the database with "
+                "`python -m ashare_data.manifest` before evaluation"
+            )
         extra_trials = load_trial_rows(args.trials, loader.dataset_id)
         ledger = ExperimentLedger(root / args.ledger)
         regime = RegimeRegistry(root / args.regime)
 
-        if args.selfcheck:
-            # Noise measurement is a measurement too: it must not touch a
-            # locked holdout slice.
-            regime.assert_folds_clear(proto_cfg.folds, dataset_id=loader.dataset_id)
-            rows: list[dict] = []
-            for fold_cfg in proto_cfg.folds:
-                rows.append(
-                    _run_recorded(
-                        ledger,
-                        lambda fold_cfg=fold_cfg: selfcheck_rows(
-                            loader,
-                            ProtocolConfig(folds=[fold_cfg]),
-                            backtest_config,
-                        )[0],
-                        algorithm="selfcheck",
-                        candidate="selfcheck:noise",
-                        fold_train_end=fold_cfg.train_end,
-                        fold_test_end=fold_cfg.test_end,
-                    )
-                )
-            open_trials = ledger.finalize()
-            ledger_payload = {
-                "path": str(ledger.path),
-                "run_id": ledger.run_id,
-                "tainted": bool(open_trials),
-                "n_trials": len(list(ledger.trials_for())),
-            }
-            result = build_result(
-                proto_cfg,
-                "selfcheck",
-                TierConfig(0, 0),
-                rows,
-                data_end_date=loader.dates[-1],
-                extra_trial_rows=extra_trials,
-                max_t_perms=args.max_t_perms,
-                universe_policy=universe_policy_payload(loader),
-                dataset_id=loader.dataset_id,
-                ledger=ledger_payload,
-                regime=regime,
-                backtest_config=backtest_config,
-            )
-        else:
-            fold_indices = list(range(args.folds)) if args.folds else None
-            seeds = (
-                [int(s) for s in args.seeds.split(",")] if args.seeds else None
-            )
-            result = run_protocol(
-                loader,
-                data_config,
-                model_config,
-                backtest_config,
-                reward_config,
-                proto_cfg,
-                args.tier,
-                fold_indices=fold_indices,
-                seeds=seeds,
-                extra_trial_rows=extra_trials,
-                max_t_perms=args.max_t_perms,
-                ledger=ledger,
-                regime=regime,
-            )
-        out_path = root / args.output
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+        fold_indices = list(range(args.folds)) if args.folds else None
+        seeds = (
+            [int(s) for s in args.seeds.split(",")]
+            if args.seeds
+            else list(proto_cfg.seeds)
         )
+        tier = TierConfig(0, 0) if args.selfcheck else getattr(proto_cfg, args.tier)
+        # The selfcheck uses eval_corrections.selfcheck_rows' fixed seed 1234.
+        # Its zero-step tier still receives a positive identity budget: this
+        # is an engineering measurement run, not a claim of zero work.
+        spec_seeds = (1234,) if args.selfcheck else tuple(seeds)
+        requested_budget = max(1, int(tier.steps) * int(tier.batch_size))
+        from .artifact_writer import write_boundary_artifact
+        from .run_store import RunStore
+        from .runspec import resolve_runtime_runspec
+
+        spec = resolve_runtime_runspec(
+            dataset_id=loader.dataset_id,
+            data_cutoff=loader.dates[-1],
+            data_config=data_config,
+            backtest_config=backtest_config,
+            requested_budget=requested_budget,
+            n_folds=len(proto_cfg.folds),
+            research_domain=proto_cfg.domain,
+            seeds=spec_seeds,
+            searcher=model_config.searcher,
+            max_formula_len=model_config.max_formula_len,
+            # SPEC_LOCKED clean-tree evidence activates in P8-06+; this
+            # schema-v2 run still records the exact commit and lock hash.
+            require_clean_tree=False,
+        )
+        out_path = root / args.output
+        store = RunStore(data_config.data_dir)
+
+        with store.open_run(spec) as handle:
+            if args.selfcheck:
+                # Noise measurement is a measurement too: it must not touch a
+                # locked holdout slice.
+                regime.assert_folds_clear(
+                    proto_cfg.folds, dataset_id=loader.dataset_id
+                )
+                rows: list[dict] = []
+                for fold_cfg in proto_cfg.folds:
+                    rows.append(
+                        _run_recorded(
+                            ledger,
+                            lambda fold_cfg=fold_cfg: selfcheck_rows(
+                                loader,
+                                ProtocolConfig(folds=[fold_cfg]),
+                                backtest_config,
+                            )[0],
+                            algorithm="selfcheck",
+                            candidate="selfcheck:noise",
+                            fold_train_end=fold_cfg.train_end,
+                            fold_test_end=fold_cfg.test_end,
+                        )
+                    )
+                open_trials = ledger.finalize()
+                ledger_payload = {
+                    "path": str(ledger.path),
+                    "run_id": ledger.run_id,
+                    "tainted": bool(open_trials),
+                    "n_trials": len(list(ledger.trials_for())),
+                }
+                result = build_result(
+                    proto_cfg,
+                    "selfcheck",
+                    tier,
+                    rows,
+                    spec_id=spec.spec_id,
+                    run_id=handle.run_id,
+                    data_end_date=loader.dates[-1],
+                    extra_trial_rows=extra_trials,
+                    max_t_perms=args.max_t_perms,
+                    universe_policy=universe_policy_payload(loader),
+                    dataset_id=loader.dataset_id,
+                    ledger=ledger_payload,
+                    regime=regime,
+                    backtest_config=backtest_config,
+                )
+            else:
+                result = run_protocol(
+                    loader,
+                    data_config,
+                    model_config,
+                    backtest_config,
+                    reward_config,
+                    proto_cfg,
+                    args.tier,
+                    fold_indices=fold_indices,
+                    seeds=seeds,
+                    extra_trial_rows=extra_trials,
+                    max_t_perms=args.max_t_perms,
+                    ledger=ledger,
+                    regime=regime,
+                    spec_id=spec.spec_id,
+                    run_id=handle.run_id,
+                )
+            write_boundary_artifact(
+                handle,
+                artifact_type="protocol",
+                model_cls=ProtocolResultArtifact,
+                payload=result,
+                candidate_id=result["candidate_id"],
+                convenience_path=out_path,
+            )
         logger.success(f"Protocol result written to {out_path}")
         print(json.dumps(result["aggregates"], ensure_ascii=False, indent=2))
         stitched = result.get("stitched") or {}

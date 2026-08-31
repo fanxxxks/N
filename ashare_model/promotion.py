@@ -656,7 +656,15 @@ def main(argv=None) -> int:
     artifact_path = Path(args.artifact)
     if not artifact_path.is_absolute():
         artifact_path = root / artifact_path
-    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    from .artifact_schemas import ProtocolResultArtifact
+    from .artifact_writer import read_boundary_artifact
+
+    loaded = read_boundary_artifact(
+        artifact_path, model_cls=ProtocolResultArtifact, formal=True
+    )
+    if loaded is None:
+        raise FileNotFoundError(f"protocol artifact not found: {artifact_path}")
+    artifact, _ = loaded
 
     regime = RegimeRegistry(root / args.regime)
     paper = PaperWindowRegistry(root / args.paper)

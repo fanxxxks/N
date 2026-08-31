@@ -10,6 +10,10 @@ from ashare_data.config import BacktestConfig, SimConfig
 from ashare_data.schemas import SimOrder
 from ashare_trading.matching import SimBroker
 from ashare_trading.portfolio import SimulationPortfolio
+from tests.conftest import open_test_handle
+
+TEST_CANDIDATE_ID = "c" * 64
+TEST_ACCOUNT_ID = "d" * 32
 
 
 def _sim_config(tmp_path: Path) -> SimConfig:
@@ -40,7 +44,13 @@ def test_portfolio_save_load_and_market_value(tmp_path: Path):
     portfolio = SimulationPortfolio(100000.0, path)
     portfolio.add_buy("000001.SZ", "平安银行", 10, 10.0, "20240101")
     portfolio.record_equity("20240101", {"000001.SZ": 10.5})
-    portfolio.save()
+    with open_test_handle(tmp_path / "store") as handle:
+        portfolio.bind_lineage(
+            handle,
+            candidate_id=TEST_CANDIDATE_ID,
+            account_id=TEST_ACCOUNT_ID,
+        )
+        portfolio.save()
 
     loaded = SimulationPortfolio(100000.0, path)
     assert loaded.positions["000001.SZ"].quantity == 10
@@ -142,7 +152,13 @@ def test_broker_cash_never_goes_negative_with_min_fee(tmp_path: Path):
 def test_portfolio_save_is_atomic(tmp_path: Path):
     portfolio = SimulationPortfolio(100000.0, tmp_path / "state.json")
     portfolio.add_buy("000001.SZ", "平安银行", 100, 10.0, "20240101")
-    portfolio.save()
+    with open_test_handle(tmp_path / "store") as handle:
+        portfolio.bind_lineage(
+            handle,
+            candidate_id=TEST_CANDIDATE_ID,
+            account_id=TEST_ACCOUNT_ID,
+        )
+        portfolio.save()
     assert (tmp_path / "state.json").exists()
     assert not (tmp_path / "state.tmp.json").exists()
     loaded = SimulationPortfolio(100000.0, tmp_path / "state.json")
@@ -174,7 +190,13 @@ def test_portfolio_last_exec_date_roundtrip(tmp_path: Path):
     portfolio = SimulationPortfolio(100000.0, path)
     portfolio.last_exec_date = "20240105"
     portfolio.record_equity("20240105", {})
-    portfolio.save()
+    with open_test_handle(tmp_path / "store") as handle:
+        portfolio.bind_lineage(
+            handle,
+            candidate_id=TEST_CANDIDATE_ID,
+            account_id=TEST_ACCOUNT_ID,
+        )
+        portfolio.save()
 
     loaded = SimulationPortfolio(100000.0, path)
     assert loaded.last_exec_date == "20240105"
@@ -203,11 +225,13 @@ def test_portfolio_legacy_state_derives_last_exec_date(tmp_path: Path):
 
 
 def test_portfolio_fresh_state_has_no_history(tmp_path: Path):
-    portfolio = SimulationPortfolio(100000.0, tmp_path / "state.json")
+    path = tmp_path / "state.json"
+    portfolio = SimulationPortfolio(100000.0, path)
     assert not portfolio.has_history
     portfolio.reset()
     assert not portfolio.has_history
     assert portfolio.last_exec_date is None
+    assert not path.exists()
 
 
 # --- ST status: display names never drive limits; st_codes is as-of only ---

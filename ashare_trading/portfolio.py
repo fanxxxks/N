@@ -1,14 +1,10 @@
 """Simulated A-share portfolio state.
 
-Persistence is a typed-artifact boundary (P7-C,
-docs/p7_artifact_schema_contract.md §5): saves are stamped with
-``artifact_schema_version`` and validated fail-closed; loads run the
-schema matrix — a corrupt or unknown-version state file raises
-:class:`ashare_model.artifact_schemas.ArtifactSchemaError` and is *never*
-overwritten by a fresh state (the pre-contract ``except Exception ->
-reset()`` path could destroy the only copy of an account).  Legacy
-version-less state files load through the pre-contract tolerant path and
-migrate on the next normal save.
+Schema-v2 saves are lifecycle-bound RunStore artifacts. A portfolio must
+be explicitly bound to an open run, candidate and account before saving;
+the historical state path is only an atomic convenience mirror. Corrupt
+or unknown files fail closed. Legacy v0/v1 state remains readable for
+audit, but is read-only and can never be implicitly migrated or resumed.
 """
 
 from __future__ import annotations
@@ -17,13 +13,14 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ashare_data.io_utils import atomic_write_json
 from ashare_model.artifact_schemas import (
     ARTIFACT_SCHEMA_VERSION,
     ArtifactSchemaError,
     PaperStateArtifact,
     apply_schema_matrix,
 )
+from ashare_model.artifact_writer import write_boundary_artifact
+from ashare_model.run_store import RunHandle
 
 
 @dataclass
@@ -53,6 +50,11 @@ class SimulationPortfolio:
         # watermark: a day is only recorded here after its orders/trades were
         # written and its equity snapshot saved, so replay can never overlap.
         self.last_exec_date: str | None = None
+        self._handle: RunHandle | None = None
+        self._bound_candidate_id: str | None = None
+        self._bound_account_id: str | None = None
+        self._loaded_lineage: dict[str, str] | None = None
+        self._legacy_read_only = False
         self.load()
 
     @property
@@ -65,13 +67,105 @@ class SimulationPortfolio:
             or self.trade_count
         )
 
-    def reset(self) -> None:
+    @property
+    def loaded_lineage(self) -> dict[str, str] | None:
+        """Identity loaded from the current state mirror, if any."""
+
+        return dict(self._loaded_lineage) if self._loaded_lineage else None
+
+    @property
+    def legacy_read_only(self) -> bool:
+        return self._legacy_read_only
+
+    def bind_lineage(
+        self,
+        handle: RunHandle,
+        *,
+        candidate_id: str,
+        account_id: str,
+    ) -> None:
+        """Bind saves to one new follower run and validate resume lineage."""
+
+        if self._legacy_read_only:
+            raise ArtifactSchemaError(
+                "legacy v0/v1 paper state is audit-only and cannot be "
+                "bound, resumed or saved as schema v2"
+            )
+        if not isinstance(handle, RunHandle):
+            raise ArtifactSchemaError(
+                "paper state binding requires an open RunHandle (RunStore)"
+            )
+        if self._handle is not None:
+            raise ArtifactSchemaError(
+                "paper state is already bound; detach the prior run handle first"
+            )
+        expected = {
+            "spec_id": handle.spec.spec_id,
+            "candidate_id": candidate_id,
+            "account_id": account_id,
+        }
+        if self._loaded_lineage is not None:
+            conflicts = {
+                key: {
+                    "state": self._loaded_lineage.get(key),
+                    "strategy": value,
+                }
+                for key, value in expected.items()
+                if self._loaded_lineage.get(key) != value
+            }
+            if conflicts:
+                raise ArtifactSchemaError(
+                    "paper state/strategy lineage mismatch; refusing resume: "
+                    f"{conflicts}"
+                )
+        # Validate identity formats and the in-memory state before the day
+        # loop starts. The formal writer repeats this check before disk I/O.
+        PaperStateArtifact.validate_payload(
+            {
+                "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+                "spec_id": handle.spec.spec_id,
+                "run_id": handle.run_id,
+                "candidate_id": candidate_id,
+                "account_id": account_id,
+                **self._state_payload(),
+            }
+        )
+        self._handle = handle
+        self._bound_candidate_id = candidate_id
+        self._bound_account_id = account_id
+
+    def detach_handle(self) -> None:
+        """Detach without closing; the run owner closes the handle."""
+
+        self._handle = None
+        self._bound_candidate_id = None
+        self._bound_account_id = None
+
+    def reset(self, *, allow_legacy: bool = False) -> None:
+        if self._legacy_read_only and not allow_legacy:
+            raise ArtifactSchemaError(
+                "legacy v0/v1 paper state is audit-only; archive/retire it "
+                "before an explicit reset"
+            )
+        if self._handle is not None:
+            raise ArtifactSchemaError(
+                "cannot reset paper state while a RunStore handle is bound"
+            )
+        try:
+            self.state_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise ArtifactSchemaError(
+                f"could not remove paper state mirror {self.state_path}: {exc}"
+            ) from exc
         self.cash = self.initial_capital
         self.positions = {}
         self.equity_history = []
         self.trade_count = 0
         self.last_exec_date = None
-        self.save()
+        self._loaded_lineage = None
+        self._legacy_read_only = False
 
     def load(self) -> None:
         if not self.state_path.exists():
@@ -93,9 +187,15 @@ class SimulationPortfolio:
             )
         # Version matrix: unknown/future hard-rejects, current validates,
         # legacy (no version key) flows through the pre-contract path.
-        apply_schema_matrix(
+        verdict = apply_schema_matrix(
             payload, artifact="paper state", model=PaperStateArtifact
         )
+        self._legacy_read_only = verdict == "legacy"
+        if verdict == "current":
+            self._loaded_lineage = {
+                key: str(payload[key])
+                for key in ("spec_id", "run_id", "candidate_id", "account_id")
+            }
         try:
             self.cash = float(payload.get("cash", self.initial_capital))
             self.trade_count = int(payload.get("trade_count", 0))
@@ -115,9 +215,8 @@ class SimulationPortfolio:
                 f"refusing to resume or overwrite it ({exc})"
             ) from exc
 
-    def save(self) -> None:
-        payload = {
-            "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+    def _state_payload(self) -> dict:
+        return {
             "initial_capital": self.initial_capital,
             "cash": self.cash,
             "trade_count": self.trade_count,
@@ -125,11 +224,36 @@ class SimulationPortfolio:
             "positions": {k: asdict(v) for k, v in self.positions.items()},
             "equity_history": self.equity_history,
         }
-        # Fail-closed (P7-C §2.1): a state that does not satisfy the
-        # schema raises ValidationError here and never reaches disk.
-        PaperStateArtifact.model_validate(payload)
-        # Atomic write: a crash mid-save can never leave a truncated state.
-        atomic_write_json(self.state_path, payload)
+
+    def save(self) -> None:
+        if self._legacy_read_only:
+            raise ArtifactSchemaError(
+                "legacy v0/v1 paper state is audit-only; refusing implicit "
+                "schema-v2 migration or save"
+            )
+        if (
+            self._handle is None
+            or self._bound_candidate_id is None
+            or self._bound_account_id is None
+        ):
+            raise ArtifactSchemaError(
+                "paper state is not bound to a RunStore run, candidate and account"
+            )
+        write_boundary_artifact(
+            self._handle,
+            artifact_type="paper_state",
+            model_cls=PaperStateArtifact,
+            payload=self._state_payload(),
+            candidate_id=self._bound_candidate_id,
+            account_id=self._bound_account_id,
+            convenience_path=self.state_path,
+        )
+        self._loaded_lineage = {
+            "spec_id": self._handle.spec.spec_id,
+            "run_id": self._handle.run_id,
+            "candidate_id": self._bound_candidate_id,
+            "account_id": self._bound_account_id,
+        }
 
     def add_buy(self, ts_code: str, name: str, quantity: float, price: float, date: str) -> None:
         cost = quantity * price

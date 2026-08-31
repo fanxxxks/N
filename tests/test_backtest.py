@@ -1,13 +1,40 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
 from ashare_data.config import BacktestConfig, DataConfig
 from ashare_data.processor import open_to_open_returns
-from ashare_model.backtest import AshareBacktestEngine, equal_weight_benchmark_returns
+from ashare_model.backtest import (
+    AshareBacktestEngine,
+    equal_weight_benchmark_returns,
+    load_formal_strategy,
+)
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.vocab import FORMULA_VOCAB
+from ashare_model.run_store import RunStore
+from tests.conftest import write_current_strategy
+
+
+def test_load_formal_strategy_reconstructs_exact_runspec(tmp_path):
+    payload = write_current_strategy(tmp_path, dataset_id="ds-backtest")
+    loaded, spec = load_formal_strategy(
+        tmp_path / "best_ashare_strategy.json", RunStore(tmp_path)
+    )
+    assert loaded == payload
+    assert spec.spec_id == payload["spec_id"]
+
+
+def test_load_formal_strategy_rejects_legacy_strategy(tmp_path):
+    path = tmp_path / "strategy.json"
+    path.write_text(
+        json.dumps({"formula": [1], "formula_text": "RET_1"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit, match="legacy"):
+        load_formal_strategy(path, RunStore(tmp_path))
 
 
 def _engine_inputs(populated_db: DataConfig):

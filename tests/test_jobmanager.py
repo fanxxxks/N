@@ -272,10 +272,9 @@ def test_reset_archives_then_resets(tmp_path: Path):
     assert result["ok"], result
     assert marker.exists()
 
-    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
-    assert state["trade_count"] == 0
-    assert state["equity_history"] == []
-    assert state["last_exec_date"] is None
+    # P8-05 reset removes the convenience state; immutable v2 evidence
+    # remains content-addressed in RunStore and legacy bytes were archived.
+    assert not (tmp_path / "state.json").exists()
     # The paper trail is parked, never deleted.
     assert not (tmp_path / "orders").exists()
     assert list(tmp_path.glob("orders.bak_*"))
@@ -303,7 +302,7 @@ def test_reset_skips_archive_without_history(tmp_path: Path):
     result = manager.reset()
     assert result["ok"]
     assert result["archive"] == "no history to archive"
-    assert (tmp_path / "state.json").exists()  # fresh state written by reset()
+    assert not (tmp_path / "state.json").exists()
 
 
 def test_reset_conflict_while_running(tmp_path: Path):

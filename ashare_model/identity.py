@@ -36,6 +36,7 @@ from typing import Any
 
 __all__ = [
     "CanonicalJSONError",
+    "candidate_id",
     "canonical_json",
     "canonical_json_strict",
     "content_hash",
@@ -108,6 +109,27 @@ def content_hash(kind: str, value: Any) -> str:
     if type(kind) is not str or not kind:
         raise CanonicalJSONError("content_hash kind must be a non-empty str")
     return sha256_hex(canonical_json_strict({"kind": kind, "value": value}))
+
+
+def candidate_id(spec_id: str, tokens, direction: int) -> str:
+    """Lifecycle content identity of one candidate formula (contract §2).
+
+    ``H(kind="candidate", {spec_id, canonical tokens, direction})`` —
+    unique within a spec, never reusable across specs. This is the single
+    candidate-identity implementation: searcher-internal candidate labels
+    are diagnostics, never lifecycle identity.
+    """
+
+    if type(spec_id) is not str or not spec_id:
+        raise CanonicalJSONError("candidate_id requires a non-empty spec_id")
+    return content_hash(
+        "candidate",
+        {
+            "spec_id": spec_id,
+            "tokens": [int(t) for t in tokens],
+            "direction": int(direction),
+        },
+    )
 
 
 def sha256_hex(text: str) -> str:

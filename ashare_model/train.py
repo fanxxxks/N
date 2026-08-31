@@ -33,7 +33,7 @@ from ashare_data.gates import ProductionGateRunner
 from ashare_data.processor import open_to_open_returns
 
 from .alphagpt import MODEL_VERSION, AlphaGPTModel, build_action_mask
-from .artifact_schemas import ARTIFACT_SCHEMA_VERSION, StrategyArtifact
+from .artifact_schemas import StrategyArtifact
 from .candidates import (
     PARETO_OBJECTIVES,
     CandidateScore,
@@ -793,7 +793,11 @@ class AshareTrainer:
             return self.best_tokens
 
         return self._write_artifact(
-            contract=contract, vm_device=vm_device, searcher="rl"
+            contract=contract,
+            vm_device=vm_device,
+            searcher="rl",
+            seed=seed,
+            requested_budget=int(steps) * int(batch_size),
         )
 
     def _build_rl_search_result(
@@ -870,25 +874,39 @@ class AshareTrainer:
         contract: TrainingTimeContract,
         vm_device: torch.device,
         searcher: str = "rl",
+        seed: int,
+        requested_budget: int,
     ) -> list[int] | None:
         """Write the standard training artifact (selection + strategy JSON +
-        the policy checkpoint for RL runs) for the current selection."""
+        the policy checkpoint for RL runs) for the current selection.
+
+        P8-05: the strategy artifact is a lifecycle-bound boundary artifact —
+        the run resolves its frozen RunSpec, opens a RunStore run and
+        persists through :func:`write_boundary_artifact` (content-addressed,
+        fail-closed identity, atomic convenience mirror).  The strategy
+        JSON stays at its historical path as the display mirror.
+        """
 
         selected = self.selection_result.selected
         if selected is None:
             return None
         # ``evaluation`` imports this module at module level; resolve lazily.
         from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
+        from .artifact_writer import write_boundary_artifact  # noqa: PLC0415
+        from .identity import candidate_id  # noqa: PLC0415
+        from .run_store import RunStore  # noqa: PLC0415
+        from .runspec import resolve_runtime_runspec  # noqa: PLC0415
 
         score_payload = selected.to_dict()
         score_payload.pop("tokens", None)
+        # P8-05: the searcher-internal candidate label is a diagnostic only;
+        # the lifecycle candidate identity (identity.candidate_id over
+        # spec_id + tokens + direction) is stamped by the formal writer.
+        searcher_candidate_label = score_payload.pop("candidate_id", None)
         output = {
-            # P7-C typed-artifact schema (docs/p7_artifact_schema_contract.md):
-            # stamped and validated fail-closed below, before anything is
-            # written to disk.
-            "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
             "formula": self.best_tokens,
             **score_payload,
+            "searcher_candidate_label": searcher_candidate_label,
             "history": self.history,
             "searcher": searcher,
             # Reproducibility provenance: the policy stays on CPU, so
@@ -946,9 +964,37 @@ class AshareTrainer:
             )
         out_path = self.data_config.data_dir / "best_ashare_strategy.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        # Fail-closed (P7-C §2.1): an artifact that does not satisfy the
-        # schema raises ValidationError here and never reaches disk.
-        StrategyArtifact.model_validate(output)
+        # P8-05: resolve the frozen RunSpec for this run and persist through
+        # the RunStore-bound formal writer.  A formal strategy artifact
+        # requires a resolved dataset identity (T1-01 manifest); a legacy
+        # database without one is refused here, fail-closed.
+        if not self.loader.dataset_id:
+            from .artifact_schemas import ArtifactSchemaError  # noqa: PLC0415
+
+            raise ArtifactSchemaError(
+                "formal strategy artifacts require a resolved dataset_id "
+                "(dataset manifest); migrate the database with "
+                "`python -m ashare_data.manifest` before training"
+            )
+        spec = resolve_runtime_runspec(
+            dataset_id=self.loader.dataset_id,
+            data_cutoff=self.loader.dates[-1],
+            data_config=self.data_config,
+            backtest_config=self.backtest_config,
+            requested_budget=int(requested_budget),
+            # Training evaluates a single validation tail; the campaign's
+            # fold plan is carried by the protocol run's own spec.
+            n_folds=1,
+            research_domain=self.domain_id,
+            seeds=tuple(sorted({int(self.init_seed), int(seed)})),
+            searcher=searcher,
+            max_formula_len=int(self.model_config.max_formula_len),
+            # The clean-tree SPEC_LOCKED evidence gate activates with the
+            # lifecycle stages (P8-06+); the spec still records the exact
+            # git commit and dependency-lock hash.
+            require_clean_tree=False,
+        )
+        cand = candidate_id(spec.spec_id, self.best_tokens, output["direction"])
         if self.search_result is not None and self.search_result.elite_archive is not None:
             from .elite_archive import write_elite_archive  # noqa: PLC0415
 
@@ -957,10 +1003,16 @@ class AshareTrainer:
                 self.search_result.elite_archive,
             )
             logger.info("search.elite_archive path={}", archive_path)
-        out_path.write_text(
-            json.dumps(output, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        store = RunStore(self.data_config.data_dir)
+        with store.open_run(spec) as handle:
+            write_boundary_artifact(
+                handle,
+                artifact_type="strategy",
+                model_cls=StrategyArtifact,
+                payload=output,
+                candidate_id=cand,
+                convenience_path=out_path,
+            )
         if searcher == "rl":
             # The checkpoint is the RL policy only: the non-RL searchers
             # are not models, so no .pt is written for them.
@@ -1390,7 +1442,11 @@ class AshareTrainer:
             )
             return self.best_tokens
         return self._write_artifact(
-            contract=window.contract, vm_device=vm_device, searcher=searcher
+            contract=window.contract,
+            vm_device=vm_device,
+            searcher=searcher,
+            seed=seed,
+            requested_budget=int(budget),
         )
 
     @staticmethod

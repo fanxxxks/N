@@ -76,6 +76,8 @@ def _strong_artifact(regime=None, **kwargs):
     )
     return build_result(
         proto, "confirmation", TierConfig(50, 256), rows,
+        spec_id="a" * 64,
+        run_id="b" * 32,
         data_end_date="2026-12-31",
         dataset_id="ds-current",
         regime=regime,
@@ -461,6 +463,39 @@ def test_cli_register_paper_window(tmp_path):
     assert registry.completed("abc123", 60) is not None
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"artifact_schema_version": 1, "rows": []},
+        {"artifact_schema_version": 3, "rows": []},
+    ],
+    ids=["legacy-v1", "unknown-v3"],
+)
+def test_cli_promotion_rejects_noncurrent_protocol_artifact(tmp_path, payload):
+    import json
+
+    from ashare_model.artifact_schemas import ArtifactSchemaError
+    from ashare_model.promotion import main
+
+    artifact_path = tmp_path / "protocol.json"
+    artifact_path.write_text(json.dumps(payload), encoding="utf-8")
+    output_path = tmp_path / "verdict.json"
+    with pytest.raises(ArtifactSchemaError):
+        main(
+            [
+                "--artifact",
+                str(artifact_path),
+                "--output",
+                str(output_path),
+                "--regime",
+                str(tmp_path / "regime.json"),
+                "--paper",
+                str(tmp_path / "paper.json"),
+            ]
+        )
+    assert not output_path.exists()
+
+
 def test_cli_promotion_refuses_legacy_artifact_without_dataset(
     tmp_path, populated_db
 ):
@@ -505,6 +540,8 @@ def test_cli_promotion_refuses_legacy_artifact_without_dataset(
         "confirmation",
         TierConfig(50, 256),
         rows,
+        spec_id="a" * 64,
+        run_id="b" * 32,
         data_end_date="2024-01-25",
         # dataset_id deliberately absent: legacy measurement.
     )
