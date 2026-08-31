@@ -57,7 +57,7 @@ from ashare_data.io_utils import read_json_safe
 from ashare_data.manifest import latest_manifest
 
 from .alphagpt import MODEL_VERSION
-from .artifact_versions import classify_artifact
+from .artifact_versions import classify_artifact, version_matches
 from .evaluation import PROTOCOL_VERSION
 from .reward import REWARD_VERSION
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
@@ -191,6 +191,10 @@ def build_report(
         reasons = list(artifact.get("legacy_reasons") or [])
         fields = artifact.get("fields") or {}
         name = artifact.get("name", "artifact")
+        # Version equality uses the single comparison primitive from
+        # ashare_model.artifact_versions; the doctor's own semantics
+        # (missing fields are skipped here and reported separately below,
+        # legacy artifacts downgrade to info) stay local.
         for key, current in (
             ("reward_version", REWARD_VERSION),
             ("protocol_version", PROTOCOL_VERSION),
@@ -202,7 +206,7 @@ def build_report(
             ),
         ):
             recorded = fields.get(key)
-            if recorded is not None and str(recorded) != str(current):
+            if recorded is not None and not version_matches(recorded, current):
                 message = (
                     f"{name} artifact {key} {recorded} != current {current}"
                 )
