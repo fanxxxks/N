@@ -250,6 +250,12 @@ class SimJobManager:
             popen_kwargs["creationflags"] = (
                 subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
             )
+        # Sample started_at BEFORE Popen (PR3 parity regression 2026-08-31):
+        # the PID-reuse guard in _is_alive rejects processes created before
+        # started_at, so a post-Popen sample that lands in the next clock
+        # second makes the guard reject the manager's own live child and a
+        # second start() would steal the lock and double-spawn.
+        started_at = _now_iso()
         with open(log_path, "a", encoding="utf-8") as log_handle:
             proc = subprocess.Popen(
                 argv,
@@ -263,7 +269,7 @@ class SimJobManager:
         record = {
             "status": "starting",
             "pid": proc.pid,
-            "started_at": _now_iso(),
+            "started_at": started_at,
             "stopping_at": None,
             "ended_at": None,
             "exit_code": None,

@@ -362,7 +362,9 @@ Python 改动通常按以下顺序验证：
 
 1. 最小相关测试文件；
 2. 相邻契约/golden/parity 测试；
-3. `python -m pytest -q tests`；
+3. `python -m pytest -q tests -n auto`（本地并行全量门禁；仅当当次 PR 的
+   parallel-vs-serial parity 对账已记入测量日志时可用，未对账时必须回退
+   串行 `python -m pytest -q tests`；CI job 命令不变）；
 4. `python -m compileall -j 0 -q ashare_data ashare_model ashare_portfolio ashare_trading scripts webapi`；
 5. `git diff --check`。
 

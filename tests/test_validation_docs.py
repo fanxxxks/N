@@ -1,14 +1,15 @@
 """Drift guard: validation-command lists must stay in sync across AGENTS.md
 and docs/PROJECT_ONBOARDING.md.
 
-AGENTS §10.2 (final paragraph) requires AGENTS, CI, the local verification
-entry points, and related docs to move together and forbids drifting command
-lists. On 2026-08-31 an audit found exactly such drift: the onboarding
-recommended commands lacked the parallel ``compileall`` invocation,
-``git diff --check``, and ``npm ls --depth=0``, while listing a standalone
-``tsc --noEmit`` step that CI does not run (tsc executes inside
-``npm run build`` = ``tsc -b && vite build``). These tests pin the shared
-command list so the drift cannot recur silently.
+AGENTS §10.2 (gate-sync rule in the documentation/config-changes paragraph)
+requires AGENTS, CI, the local verification entry points, and related docs
+to move together and forbids drifting command lists. On 2026-08-31 an audit
+found exactly such drift: the onboarding recommended commands lacked the
+parallel ``compileall`` invocation, ``git diff --check``, and
+``npm ls --depth=0``, while listing a standalone ``tsc --noEmit`` step that
+CI does not run (tsc executes inside ``npm run build`` = ``tsc -b && vite
+build``). These tests pin the shared command list so the drift cannot recur
+silently.
 
 The assertions target the recommended-commands section (§9.2) only; the
 historical verification record in §9.1 is intentionally left alone.
@@ -30,13 +31,19 @@ COMPILEALL_CMD = (
     "ashare_portfolio ashare_trading scripts webapi"
 )
 
+# §10.2 step 3, parallel local full-suite gate.  Legal only with per-PR
+# parallel-vs-serial parity evidence (counts + warnings multiset) recorded
+# in docs/test_runtime_measurement_log.md; CI job commands are unchanged.
+PYTEST_GATE_CMD = "python -m pytest -q tests -n auto"
+
 
 def _onboarding_recommended_commands() -> str:
-    """Return the §9.2 recommended-commands section (to end of file)."""
+    """Return the §9.2 recommended-commands section (up to the next heading)."""
 
-    marker = "### 9.2"
-    start = ONBOARDING.index(marker)
-    return ONBOARDING[start:]
+    start = ONBOARDING.index("### 9.2")
+    next_heading = ONBOARDING.find("\n### ", start + 1)
+    end = next_heading if next_heading != -1 else len(ONBOARDING)
+    return ONBOARDING[start:end]
 
 
 def test_agents_compileall_uses_parallel_jobs() -> None:
@@ -71,3 +78,10 @@ def test_onboarding_has_no_standalone_tsc_step() -> None:
     """tsc runs inside `npm run build`; a standalone step drifts from CI."""
 
     assert "tsc --noEmit" not in _onboarding_recommended_commands()
+
+
+def test_local_full_suite_gate_runs_parallel() -> None:
+    """§10.2 step 3 and onboarding §9.2 must use the parallel gate form."""
+
+    assert PYTEST_GATE_CMD in AGENTS
+    assert PYTEST_GATE_CMD in _onboarding_recommended_commands()

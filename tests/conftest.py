@@ -11,7 +11,7 @@ import pytest
 from ashare_data.config import BacktestConfig, DataConfig
 from ashare_data.db import AshareDB
 from ashare_data.manifest import build_dataset_manifest, save_manifest
-from ashare_logging import export_log_txt, setup_run_logging
+from ashare_logging import export_log_txt, setup_run_logging, worker_log_suffix
 
 
 DEFAULT_CODES = ["000001.SZ", "600000.SH", "300001.SZ"]
@@ -51,7 +51,9 @@ def _run_logging():
     setup_run_logging(run_name="pytest")
     yield
     project_root = Path(__file__).resolve().parents[1]
-    export_log_txt(path=project_root / "logs" / "pytest.txt")
+    # Per-worker export target (PR3/B2+C2): each xdist worker exports its
+    # own buffer to its own file; serial runs keep logs/pytest.txt.
+    export_log_txt(path=project_root / "logs" / f"pytest{worker_log_suffix()}.txt")
 
 
 @pytest.fixture
