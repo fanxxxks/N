@@ -536,7 +536,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | feature registry | 3（v3 起记录携带作者研究元数据与 horizon/cost/depends_on 派生三元组（P7 D1，仅描述性）；v2 起逐特征记录 data_tier） |
 | data tier | 1（ashare_model/data_tier.py，P2 新增） |
 | tier report | 1（ashare_model/tier_reports.py，P2 新增） |
-| fee matrix / searcher bench | 1（P1 新增测量模块） |
+| fee matrix / searcher bench | 1 / 2（P1 新增测量模块；searcher bench v2 起统一四后端 SearchResult 与唯一语义预算口径，契约见 docs/p4_search_transformer_contract.md §3） |
 | bare factor backtest | 3（v2 记录完整执行 provenance；v3 固定四象限 schema） |
 | portfolio constructor | 1（ashare_portfolio/constructor.py） |
 | rebalance policy | 2（v2 新增 every_20_days 与 monthly 频率，P6） |
