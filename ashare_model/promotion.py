@@ -33,7 +33,6 @@ verdict records the thresholds used, so a refusal is auditable.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -41,6 +40,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ashare_data.io_utils import atomic_write_json, read_json_safe
+
+from .identity import formula_hash
 
 from .data_tier import (
     DATA_TIER_VERSION,
@@ -79,19 +80,6 @@ class PromotionThresholds:
     paper_min_sessions: int = 60
     stress_cost_multipliers: tuple[float, ...] = (0.5, 1.0, 2.0)
     stress_capital_multipliers: tuple[float, ...] = (0.1, 1.0, 10.0)
-
-
-def formula_hash(tokens, formula_text: str | None = None) -> str:
-    """Content hash identifying one formula across artifacts and paper
-    windows: the canonical token list when available, else the text."""
-
-    if tokens:
-        text = json.dumps([int(t) for t in tokens], sort_keys=True)
-    elif formula_text:
-        text = formula_text
-    else:
-        raise ValueError("formula_hash needs tokens or formula_text")
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def validate_allowed_tiers(allowed: tuple[str, ...]) -> tuple[str, ...]:
