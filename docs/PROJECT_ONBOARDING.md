@@ -531,12 +531,12 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 |---|---:|
 | 模型 | <code>MODEL_VERSION = 3</code>（v3 记录 elite-imitation 初始化；v2 checkpoint 明确拒绝晋级并重训） |
 | 奖励 | <code>REWARD_VERSION = 14</code>（v14 分离稀疏研究标签与逐日组合收益） |
-| 评价协议 | <code>PROTOCOL_VERSION = 24</code>（v24 增加研究域维度并记录 research_domain；v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
-| 公式语法 | <code>GRAMMAR_VERSION = 2</code> |
-| feature registry | 2（v2 起逐特征记录 data_tier） |
+| 评价协议 | <code>PROTOCOL_VERSION = 25</code>（v25 用语义类型约束采样候选池（P7-E）；v24 增加研究域维度并记录 research_domain；v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
+| 公式语法 | <code>GRAMMAR_VERSION = 3</code>（v3 使 action mask 类型感知（P7-E）；v2 引入独立 EOS 与 stack-only postfix 语法） |
+| feature registry | 3（v3 起记录携带作者研究元数据与 horizon/cost/depends_on 派生三元组（P7 D1，仅描述性）；v2 起逐特征记录 data_tier） |
 | data tier | 1（ashare_model/data_tier.py，P2 新增） |
 | tier report | 1（ashare_model/tier_reports.py，P2 新增） |
-| fee matrix / searcher bench | 1（P1 新增测量模块） |
+| fee matrix / searcher bench | 1 / 2（P1 新增测量模块；searcher bench v2 起统一四后端 SearchResult 与唯一语义预算口径，契约见 docs/p4_search_transformer_contract.md §3） |
 | bare factor backtest | 3（v2 记录完整执行 provenance；v3 固定四象限 schema） |
 | portfolio constructor | 1（ashare_portfolio/constructor.py） |
 | rebalance policy | 2（v2 新增 every_20_days 与 monthly 频率，P6） |
