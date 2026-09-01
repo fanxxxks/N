@@ -172,7 +172,7 @@ def test_factor_tensor_and_backtest(tmp_path):
     assert "sortino" in result.metrics
 
 
-def test_training_smoke(tmp_path):
+def test_training_smoke(tmp_path, monkeypatch):
     dates, ts_codes, bars = _make_bars(tmp_path, 25)
     cfg = _write_db(tmp_path, dates, ts_codes, bars)
     model_cfg = ModelConfig(batch_size=4, train_steps=1, max_formula_len=6)
@@ -201,14 +201,35 @@ def test_training_smoke(tmp_path):
             min_val_window_q25=-1e9,
         ),
     )
-    # P9 (whitelist §10.1 case 2, docs/p9_factor_family_contract.md
-    # APPROVED): the v4 vocabulary shifted the operator token ids, so the
-    # default sampling seed lands on a CORR20-composite of the fixture's
-    # perfectly linear prices — a legitimately near-constant signal that
-    # the fail-closed gate rejects.  Seed 0 is pinned (deterministic,
-    # verified) to keep the smoke intent: exercise the artifact-saving
-    # path on the minimal fixture.
-    tokens = trainer.train(steps=1, batch_size=4, seed=0)
+    # P9 (whitelist §10.1 case 2): force a deterministic bare-factor
+    # formula (RET_1 + EOS) via the fixed-sample pattern used throughout
+    # test_train, so the smoke is independent of the vocabulary
+    # generation's sampling distribution (the v4/v5 layouts shifted the
+    # operator token ids, which twice moved the naive seeded sample onto
+    # legitimately constant signals).
+    from torch.distributions import Categorical
+
+    eos = FORMULA_VOCAB.eos_token_id
+    add_token = FORMULA_VOCAB.operator_offset
+    # One full max_len=6 sequence: RET_1 RET_1 ADD EOS PAD PAD --
+    # operator-bearing (the zero-operator-coverage guard would hard-fail a
+    # bare-factor run), non-constant on this fixture, and PAD only after
+    # EOS (legality preserved).
+    pattern = [1, 1, add_token, eos, 0, 0]
+    state = {"pos": -1}
+
+    def fixed_sample(self):
+        state["pos"] += 1
+        token = pattern[state["pos"] % len(pattern)]
+        return torch.full(
+            (self.logits.shape[0],),
+            token,
+            dtype=torch.long,
+            device=self.logits.device,
+        )
+
+    monkeypatch.setattr(Categorical, "sample", fixed_sample)
+    tokens = trainer.train(steps=1, batch_size=1)
     assert tokens is not None
     assert trainer.best_formula
 
