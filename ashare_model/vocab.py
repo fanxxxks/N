@@ -156,9 +156,28 @@ _FEATURE_NAMES_V4 = (
     "MARGIN_CROWD_60",
 )
 
+# v5 (P13, docs/p13_fundamental_fields_contract.md §5.3) appends the four
+# family-⑤ slow-fundamental features (cash-flow quality, accruals, asset
+# growth, earnings acceleration) once their PIT data fields are registered.
+# Names are appended so every pre-v5 token id is stable (the same
+# discipline as v2/v3/v4); the family joins and leaves promotion as one
+# atomic unit (§8 族级裁决).
+_FEATURE_NAMES_V5 = (
+    "CASHFLOW_QUALITY",
+    "ACCRUALS",
+    "ASSET_GROWTH",
+    "EARNINGS_ACCEL",
+)
+
 FEATURE_NAMES = tuple(
     name
-    for name in _FEATURE_NAMES_V1 + _FEATURE_NAMES_V2 + _FEATURE_NAMES_V3 + _FEATURE_NAMES_V4
+    for name in (
+        _FEATURE_NAMES_V1
+        + _FEATURE_NAMES_V2
+        + _FEATURE_NAMES_V3
+        + _FEATURE_NAMES_V4
+        + _FEATURE_NAMES_V5
+    )
     if name not in FEATURE_ALIASES
 )
 
@@ -219,11 +238,13 @@ LEGACY_OPERATOR_NAMES = (
 # v4 (P9) appends the four orthogonal P9 families and removes the
 # deprecated features from the sampling space (they keep their token ids
 # and computations); v5 (P9 adjudication) adds the conditionally-deprecated
-# LIMIT_STREAK and the two second-pass consolidations to that set.
+# LIMIT_STREAK and the two second-pass consolidations to that set;
+# v6 (P13 §5.3/§6.1) appends the four family-⑤ slow-fundamental features
+# (append-only, no existing token id moves).
 # Bumping this constant changes
 # ``feature_version`` and therefore invalidates the token layout recorded
 # in older training artifacts (which resolve by name, so they still load).
-GRAMMAR_VERSION = 5
+GRAMMAR_VERSION = 6
 
 
 @dataclass(frozen=True)

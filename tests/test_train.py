@@ -1219,7 +1219,9 @@ def test_window_cap_slices_every_measurement(
     )
     # P9 (whitelist §10.1 case 2, docs/p9_factor_family_contract.md
     # APPROVED): the vocabulary grows 62 -> 73 features.
-    assert capped.factor_tensor.shape == (73, cap[0], cap[1])
+    # P13 (whitelist §10.1 case 2, docs/p13_fundamental_fields_contract.md
+    # §5.3 APPROVED): family ⑤ appends four more -> 77.
+    assert capped.factor_tensor.shape == (77, cap[0], cap[1])
     assert capped.train_universe_mask.shape == (cap[0], cap[1])
     assert capped.target_ret.shape == (cap[0], cap[1])
     assert capped.blocked_buy.shape == (cap[0], cap[1])

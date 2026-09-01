@@ -54,7 +54,11 @@ from .vocab import FEATURE_NAMES
 # staying samplable), the conditional LIMIT_STREAK deprecation triggered,
 # and two second-pass consolidations (LIQ_SHOCK_20, CROWD_TURNOVER_60)
 # deprecated.
-FEATURE_REGISTRY_VERSION = 5
+# v6 (P13 §5.3/§6.1, docs/p13_fundamental_fields_contract.md APPROVED):
+# the family-⑤ pending_data placeholders lift into authoritative metadata
+# and the four slow-fundamental features join the vocabulary (grammar v6,
+# research domain v3); registry summary exposes no pending_data members.
+FEATURE_REGISTRY_VERSION = 6
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

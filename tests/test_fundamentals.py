@@ -302,3 +302,460 @@ def test_akshare_client_offline_indicator_and_dividend(tmp_path: Path):
     div = client.get_dividend_detail("000001.SZ")
     assert div.iloc[0]["announce_date"] == "20240520"
     assert div.iloc[0]["dividend_yield"] == pytest.approx(0.035)
+
+
+# --- P13 (C line, t14): cash-flow statement + total-assets fields -------------
+#
+# Contract: docs/p13_fundamental_fields_contract.md §5.1-§5.4, §7 (RED list).
+# Every expected value below is derived independently from the pre-registered
+# formulas (§5.3), never from the implementation's output (AGENTS §10.1).
+
+_FAMILY5 = (
+    "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
+)
+
+# Synthetic cumulative (YTD) fundamentals for one stock.  TTM singles
+# derived from these rows (independently computed):
+#   profit singles: 2021: 6,8,10,18 | 2022: 8,10,12,20 | 2023: 10,14,15,21 | 2024Q1: 18
+#   TTM profit:  Q4'21=42 Q1'22=44 Q2'22=46 Q3'22=48 Q4'22=50
+#                Q1'23=52 Q2'23=56 Q3'23=59 Q4'23=60 Q1'24=68
+#   cfo singles:    2021: 12,14,12,26 | 2022: 16,16,18,24 | 2023: 18,18,20,24 | 2024Q1: 24
+#   TTM cfo:     Q4'21=64 Q1'22=68 Q2'22=70 Q3'22=76 Q4'22=74
+#                Q1'23=76 Q2'23=78 Q3'23=80 Q4'23=80 Q1'24=86
+_CUM_ROWS = [
+    # (report_date, announce_date, profit_cum, cfo_cum, total_assets)
+    ("20210331", "20210430", 6.0, 12.0, 820.0),
+    ("20210630", "20210831", 14.0, 26.0, 830.0),
+    ("20210930", "20211031", 24.0, 38.0, 840.0),
+    ("20211231", "20220430", 42.0, 64.0, 850.0),
+    ("20220331", "20220430", 8.0, 16.0, 900.0),
+    ("20220630", "20220831", 18.0, 32.0, 920.0),
+    ("20220930", "20221031", 30.0, 50.0, 950.0),
+    ("20221231", "20230430", 50.0, 74.0, 1000.0),
+    ("20230331", "20230430", 10.0, 18.0, 1000.0),
+    ("20230630", "20230831", 24.0, 36.0, 1050.0),
+    ("20230930", "20231031", 39.0, 56.0, 1100.0),
+    ("20231231", "20240430", 60.0, 80.0, 1200.0),
+    ("20240331", "20240430", 18.0, 24.0, 1250.0),
+]
+
+
+def _fundamental_columns(db: AshareDB, cfg) -> dict[str, str]:
+    cols = db.query(
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_name = ? ORDER BY ordinal_position",
+        [cfg.fundamentals_table],
+    )
+    return {str(r.column_name): str(r.data_type) for r in cols.itertuples()}
+
+
+def _populate_cumulative(db: AshareDB, cfg, rows=None) -> None:
+    rows = rows if rows is not None else _CUM_ROWS
+    _populate(
+        db,
+        cfg,
+        [
+            _row(
+                "000001.SZ",
+                rep,
+                ann,
+                profit_cum=p,
+                net_operate_cash_flow=c,
+                total_assets=ta,
+            )
+            for rep, ann, p, c, ta in rows
+        ],
+    )
+
+
+def _first_visible(dates: list[str], announce: str) -> str:
+    return next(d for d in dates if d >= announce)
+
+
+def test_fundamental_schema_has_cash_flow_and_total_assets(tmp_path: Path):
+    """RED-1 (§5.1): the schema carries both new DOUBLE columns and the
+    migration is idempotent."""
+    cfg = _data_config(tmp_path)
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        cols = _fundamental_columns(db, cfg)
+        assert cols.get("net_operate_cash_flow") == "DOUBLE"
+        assert cols.get("total_assets") == "DOUBLE"
+        # Idempotent: re-running the migration neither fails nor duplicates.
+        db.create_schema(cfg)
+        assert _fundamental_columns(db, cfg) == cols
+
+
+def test_fundamental_schema_migrates_existing_table_additively(tmp_path: Path):
+    """RED-1 (§5.1/§4.6): a pre-P13 table survives create_schema with the
+    new columns added and NULL until backfilled; existing rows keep their
+    values."""
+    cfg = _data_config(tmp_path)
+    with AshareDB(cfg.duckdb_path) as db:
+        db.execute(
+            f"""
+            CREATE TABLE {cfg.fundamentals_table} (
+                ts_code VARCHAR,
+                report_date VARCHAR,
+                announce_date VARCHAR,
+                dividend_announce VARCHAR,
+                eps_cum DOUBLE,
+                bvps DOUBLE,
+                roe DOUBLE,
+                roa DOUBLE,
+                gross_margin DOUBLE,
+                net_margin DOUBLE,
+                revenue_cum DOUBLE,
+                profit_cum DOUBLE,
+                revenue_yoy DOUBLE,
+                profit_yoy DOUBLE,
+                debt_ratio DOUBLE,
+                dividend_yield DOUBLE,
+                PRIMARY KEY (ts_code, report_date)
+            )
+            """
+        )
+        # Pre-migration row: raw insert in the 16-column pre-P13 shape
+        # (create_schema always precedes upserts in the real sync path).
+        db.execute(
+            f"INSERT INTO {cfg.fundamentals_table} VALUES "
+            f"('000001.SZ', '20231231', '20240315', NULL, NULL, NULL, NULL, "
+            f"NULL, NULL, NULL, NULL, 60.0, NULL, NULL, NULL, NULL)"
+        )
+        db.create_schema(cfg)  # additive migration path
+        cols = _fundamental_columns(db, cfg)
+        assert cols.get("net_operate_cash_flow") == "DOUBLE"
+        assert cols.get("total_assets") == "DOUBLE"
+        row = db.query(
+            f"SELECT * FROM {cfg.fundamentals_table} WHERE ts_code='000001.SZ'"
+        ).iloc[0]
+        assert row["profit_cum"] == pytest.approx(60.0)
+        # NULL doubles surface as NaN through the pandas bridge.
+        assert pd.isna(row["net_operate_cash_flow"])
+        assert pd.isna(row["total_assets"])
+
+
+def test_upsert_fundamentals_new_fields_coalesce(tmp_path: Path):
+    """Invariant 3 (§4.3): partial upserts merge per column; no existing
+    value is wiped and merging sources never moves a visibility date."""
+    cfg = _data_config(tmp_path)
+    with AshareDB(cfg.duckdb_path) as db:
+        _populate(
+            db,
+            cfg,
+            [_row("000001.SZ", "20231231", "20240315", profit_cum=60.0)],
+        )
+        db.upsert_fundamentals(
+            [_row("000001.SZ", "20231231", None, net_operate_cash_flow=74.0)],
+            cfg,
+        )
+        db.upsert_fundamentals(
+            [_row("000001.SZ", "20231231", None, total_assets=1000.0)], cfg
+        )
+        row = db.query(
+            f"SELECT * FROM {cfg.fundamentals_table} WHERE ts_code='000001.SZ'"
+        ).iloc[0]
+        assert row["profit_cum"] == pytest.approx(60.0)
+        assert row["net_operate_cash_flow"] == pytest.approx(74.0)
+        assert row["total_assets"] == pytest.approx(1000.0)
+        # The cash-flow-only row must not move the earnings visibility date.
+        assert row["announce_date"] == "20240315"
+
+
+class _StubFundamentalClient:
+    """Minimal client stub for the P13 bulk cash-flow / balance-sheet path."""
+
+    offline = False
+
+    # Canonical earnings columns (mirrors the real client's return shape).
+    _EARNINGS_COLS = [
+        "ts_code", "report_date", "announce_date", "eps_cum", "bvps",
+        "roe", "gross_margin", "net_margin", "revenue_cum", "profit_cum",
+        "revenue_yoy", "profit_yoy",
+    ]
+
+    def __init__(self, earnings, cash_flow, balance_sheet):
+        self._earnings = earnings
+        self._cash_flow = cash_flow
+        self._balance_sheet = balance_sheet
+
+    def get_earnings_report(self, quarter):
+        df = self._earnings.get(quarter, pd.DataFrame())
+        if df.empty:
+            return df
+        return df.reindex(columns=self._EARNINGS_COLS)
+
+    def get_cash_flow_report(self, quarter):
+        return self._cash_flow.get(quarter, pd.DataFrame())
+
+    def get_balance_sheet(self, quarter):
+        return self._balance_sheet.get(quarter, pd.DataFrame())
+
+    def get_financial_indicator(self, code, year):
+        return pd.DataFrame()
+
+    def get_dividend_detail(self, code):
+        return pd.DataFrame()
+
+
+def test_sync_cash_flow_and_balance_sheet_join_announce_master(tmp_path: Path):
+    """RED-2 (§5.2): bulk cash-flow/balance-sheet rows are universe-filtered
+    and joined to the earnings announce master; rows without a master match
+    are dropped (fail-closed — a disclosure date is never guessed)."""
+    cfg = _data_config(tmp_path)
+    universe = ["000001.SZ", "000002.SZ"]
+    earnings = {
+        "20231231": pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20231231",
+                    "announce_date": "20240430",
+                },
+                {
+                    "ts_code": "000002.SZ",
+                    "report_date": "20231231",
+                    "announce_date": "20240430",
+                },
+                {
+                    "ts_code": "600000.SH",
+                    "report_date": "20231231",
+                    "announce_date": "20240430",
+                },
+            ]
+        )
+    }
+    cash_flow = {
+        "20231231": pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20231231",
+                    "net_operate_cash_flow": 74.0,
+                },
+                # Out-of-universe code: must never be stored.
+                {
+                    "ts_code": "600000.SH",
+                    "report_date": "20231231",
+                    "net_operate_cash_flow": 5.0,
+                },
+                # No earnings master row -> dropped, date never guessed.
+                {
+                    "ts_code": "000002.SZ",
+                    "report_date": "20220930",
+                    "net_operate_cash_flow": 3.0,
+                },
+            ]
+        )
+    }
+    balance_sheet = {
+        "20231231": pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20231231",
+                    "total_assets": 1000.0,
+                }
+            ]
+        )
+    }
+    client = _StubFundamentalClient(earnings, cash_flow, balance_sheet)
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        sync_fundamentals(client, db, cfg, universe)
+        rows = db.query(f"SELECT * FROM {cfg.fundamentals_table}")
+    assert "600000.SH" not in set(rows["ts_code"])  # universe filter
+    by_code = {code: sub for code, sub in rows.groupby("ts_code")}
+    r1 = by_code["000001.SZ"].iloc[0]
+    assert r1["net_operate_cash_flow"] == pytest.approx(74.0)
+    assert r1["total_assets"] == pytest.approx(1000.0)
+    assert r1["announce_date"] == "20240430"  # joined from the master
+    # 000002.SZ keeps exactly its earnings row; the master-less cash-flow
+    # row for 20220930 was dropped entirely.
+    assert len(by_code["000002.SZ"]) == 1
+    assert by_code["000002.SZ"].iloc[0]["report_date"] == "20231231"
+    assert np.isnan(by_code["000002.SZ"].iloc[0]["net_operate_cash_flow"])
+
+
+def test_build_pit_frames_family5_golden(tmp_path: Path):
+    """RED-4 (§5.3): the four family-⑤ formulas, value by value, on
+    synthetic fundamentals.  Visibility = the later announce of the
+    numerator/denominator pair; announcement-season ties resolve to the
+    later report."""
+    cfg = _data_config(tmp_path)
+    codes = ["000001.SZ"]
+    dates = pd.bdate_range("2022-01-03", "2024-07-31").strftime("%Y%m%d").tolist()
+    with AshareDB(cfg.duckdb_path) as db:
+        _populate_cumulative(db, cfg)
+
+    close = pd.DataFrame(20.0, index=codes, columns=dates)
+    frames = build_pit_frames(cfg, codes, dates, close)
+    for name in _FAMILY5:
+        assert name in frames, name
+
+    def visible(announce: str) -> str:
+        return _first_visible(dates, announce)
+
+    def check(name: str, announce: str, expected: float) -> None:
+        got = frames[name].loc["000001.SZ", visible(announce)]
+        assert got == pytest.approx(expected), (name, announce, got)
+
+    # Before any four-quarter TTM is visible: neutral, never fabricated.
+    pre = dates[dates.index(visible("20220430")) - 1]
+    for name in _FAMILY5:
+        assert np.isnan(frames[name].loc["000001.SZ", pre]), name
+
+    # 20220430: season tie (Q4'21 annual + Q1'22) -> the later report wins.
+    check("CASHFLOW_QUALITY", "20220430", 68 / 44)
+    check("ACCRUALS", "20220430", (44 - 68) / 900)
+    # ASSET_GROWTH at Q1'22: t-4 report period is Q1'21 (present).
+    check("ASSET_GROWTH", "20220430", 900 / 820 - 1)
+    # EARNINGS_ACCEL needs g at t-1 with a complete TTM at t-5: NaN.
+    assert np.isnan(
+        frames["EARNINGS_ACCEL"].loc["000001.SZ", visible("20220430")]
+    )
+
+    check("CASHFLOW_QUALITY", "20220831", 70 / 46)
+    check("ACCRUALS", "20220831", (46 - 70) / 920)
+    check("ASSET_GROWTH", "20220831", 920 / 830 - 1)
+
+    check("CASHFLOW_QUALITY", "20221031", 76 / 48)
+    check("ACCRUALS", "20221031", (48 - 76) / 950)
+    check("ASSET_GROWTH", "20221031", 950 / 840 - 1)
+
+    # 20230430: season tie (Q4'22 + Q1'23) -> Q1'23 values win.
+    check("CASHFLOW_QUALITY", "20230430", 76 / 52)
+    check("ACCRUALS", "20230430", (52 - 76) / 1000)
+    check("ASSET_GROWTH", "20230430", 1000 / 900 - 1)
+    # g(Q1'23)=52/44-1, g(Q4'22)=50/42-1 -> acceleration.
+    check("EARNINGS_ACCEL", "20230430", (52 / 44 - 1) - (50 / 42 - 1))
+
+    check("CASHFLOW_QUALITY", "20230831", 78 / 56)
+    check("ACCRUALS", "20230831", (56 - 78) / 1050)
+    check("ASSET_GROWTH", "20230831", 1050 / 920 - 1)
+    check("EARNINGS_ACCEL", "20230831", (56 / 46 - 1) - (52 / 44 - 1))
+
+    check("CASHFLOW_QUALITY", "20231031", 80 / 59)
+    check("ACCRUALS", "20231031", (59 - 80) / 1100)
+    check("ASSET_GROWTH", "20231031", 1100 / 950 - 1)
+    check("EARNINGS_ACCEL", "20231031", (59 / 48 - 1) - (56 / 46 - 1))
+
+    # 20240430: season tie (Q4'23 + Q1'24) -> Q1'24 values win, and the
+    # frame fills forward to the end of the range.
+    check("CASHFLOW_QUALITY", "20240430", 86 / 68)
+    check("ACCRUALS", "20240430", (68 - 86) / 1250)
+    check("ASSET_GROWTH", "20240430", 1250 / 1000 - 1)
+    check("EARNINGS_ACCEL", "20240430", (68 / 52 - 1) - (60 / 50 - 1))
+    last = dates[-1]
+    assert frames["CASHFLOW_QUALITY"].loc["000001.SZ", last] == pytest.approx(
+        86 / 68
+    )
+    assert frames["ASSET_GROWTH"].loc["000001.SZ", last] == pytest.approx(0.25)
+
+
+def test_build_pit_frames_family5_no_future_leak(tmp_path: Path):
+    """RED-3 (§7): property scan — a family-⑤ frame may only change value
+    on the first trading date at or after a statutory announcement."""
+    cfg = _data_config(tmp_path)
+    codes = ["000001.SZ"]
+    dates = pd.bdate_range("2022-01-03", "2024-07-31").strftime("%Y%m%d").tolist()
+    with AshareDB(cfg.duckdb_path) as db:
+        _populate_cumulative(db, cfg)
+    close = pd.DataFrame(20.0, index=codes, columns=dates)
+    frames = build_pit_frames(cfg, codes, dates, close)
+
+    visible_dates = {
+        _first_visible(dates, ann) for _, ann, _, _, _ in _CUM_ROWS
+    }
+    for name in _FAMILY5:
+        series = frames[name].loc["000001.SZ"]
+        changes: list[str] = []
+        prev = np.nan
+        for date, value in series.items():
+            changed = (np.isnan(prev) != np.isnan(value)) or (
+                not np.isnan(prev)
+                and not np.isnan(value)
+                and value != prev
+            )
+            if changed:
+                changes.append(date)
+            prev = value
+        assert set(changes) <= visible_dates, (name, set(changes) - visible_dates)
+
+
+def test_build_pit_frames_family5_missing_quarter_stays_nan(tmp_path: Path):
+    """RED-4 NaN propagation (§5.3): a missing report breaks every TTM
+    window -> the affected features stay NaN (never a shifted window)."""
+    cfg = _data_config(tmp_path)
+    codes = ["000001.SZ"]
+    dates = pd.bdate_range("2023-01-02", "2024-07-31").strftime("%Y%m%d").tolist()
+    rows = [r for r in _CUM_ROWS if r[0] != "20230630"]  # drop Q2'23
+    rows = [r for r in rows if r[0] >= "20230331"]
+    with AshareDB(cfg.duckdb_path) as db:
+        _populate_cumulative(db, cfg, rows)
+    close = pd.DataFrame(20.0, index=codes, columns=dates)
+    frames = build_pit_frames(cfg, codes, dates, close)
+    for name in ("CASHFLOW_QUALITY", "ACCRUALS"):
+        assert frames[name].loc["000001.SZ"].isna().all(), name
+
+
+def test_build_pit_frames_family5_guards(tmp_path: Path):
+    """RED-4 guards (§5.3): non-positive TTM profit / non-positive
+    total_assets must produce NaN, never a signed garbage ratio."""
+    cfg = _data_config(tmp_path)
+    codes = ["000001.SZ"]
+    dates = pd.bdate_range("2022-01-03", "2024-07-31").strftime("%Y%m%d").tolist()
+    rows = [
+        # 2022: loss year -> TTM profit negative.
+        ("20220331", "20220430", -50.0, 20.0, 0.0),
+        ("20220630", "20220831", -80.0, 40.0, 0.0),
+        ("20220930", "20221031", -90.0, 60.0, 0.0),
+        ("20221231", "20230430", -120.0, 80.0, 0.0),
+        # 2023: recovery to positive TTM.
+        ("20230331", "20230430", 5.0, 10.0, 1000.0),
+        ("20230630", "20230831", 12.0, 18.0, 1050.0),
+        ("20230930", "20231031", 21.0, 27.0, 1100.0),
+        ("20231231", "20240430", 40.0, 34.0, 1200.0),
+    ]
+    with AshareDB(cfg.duckdb_path) as db:
+        _populate_cumulative(db, cfg, rows)
+    close = pd.DataFrame(20.0, index=codes, columns=dates)
+    frames = build_pit_frames(cfg, codes, dates, close)
+
+    def series(name):
+        return frames[name].loc["000001.SZ"]
+
+    # total_assets <= 0 through 2022: ACCRUALS/ASSET_GROWTH stay NaN there.
+    v2022 = dates.index(_first_visible(dates, "20220430"))
+    v2022_end = dates.index(_first_visible(dates, "20230430")) - 1
+    assert series("ACCRUALS").iloc[v2022:v2022_end].isna().all()
+    assert series("ASSET_GROWTH").iloc[v2022:v2022_end].isna().all()
+    # CASHFLOW_QUALITY while TTM profit <= 0 (the whole 2022 window): NaN.
+    assert series("CASHFLOW_QUALITY").iloc[v2022:v2022_end].isna().all()
+    # After the recovery TTM is visible the ratios become finite again.
+    post = dates.index(_first_visible(dates, "20240430"))
+    assert series("CASHFLOW_QUALITY").iloc[post] == pytest.approx(34 / 40)
+    assert series("ACCRUALS").iloc[post] == pytest.approx((40 - 34) / 1200)
+    # EARNINGS_ACCEL: g needs TTM profit at t-4 > 0; with the 2022 loss year
+    # the denominator is non-positive (or incomplete) for every t -> NaN.
+    assert series("EARNINGS_ACCEL").isna().all()
+
+
+def test_build_pit_frames_family5_unbacked_rows_stay_nan(tmp_path: Path):
+    """RED-7 (§7, in-scope portion): rows that predate the backfill (new
+    fields NULL) yield all-NaN frames — fail-closed transition state, no
+    neutral values fabricated (AGENTS §5.3)."""
+    cfg = _data_config(tmp_path)
+    codes = ["000001.SZ"]
+    dates = pd.bdate_range("2023-01-02", "2024-07-31").strftime("%Y%m%d").tolist()
+    with AshareDB(cfg.duckdb_path) as db:
+        _populate(
+            db,
+            cfg,
+            [_row("000001.SZ", "20231231", "20240430", profit_cum=60.0)],
+        )
+    close = pd.DataFrame(20.0, index=codes, columns=dates)
+    frames = build_pit_frames(cfg, codes, dates, close)
+    for name in _FAMILY5:
+        assert name in frames, name
+        assert frames[name].loc["000001.SZ"].isna().all(), name

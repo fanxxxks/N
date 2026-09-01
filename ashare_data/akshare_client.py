@@ -139,6 +139,25 @@ def _sina_symbol(ts_code: str) -> str:
     return f"{market}{symbol}"
 
 
+def _disclosure_season_end(quarter: str) -> str:
+    """Statutory disclosure-season end of one report period (PIT anchor).
+
+    Q1 -> 04-30, H1 -> 08-31, Q3 -> 10-31 of the same year; the annual
+    report -> 04-30 of the NEXT year.  Conservative (never visible before
+    the season ends) and independent of any per-stock announcement feed.
+    Shared single source for every bulk fundamental endpoint
+    (docs/p13_fundamental_fields_contract.md §5.6).
+    """
+
+    year = int(quarter[:4])
+    return {
+        "0331": f"{year}0430",
+        "0630": f"{year}0831",
+        "0930": f"{year}1031",
+        "1231": f"{year + 1}0430",
+    }.get(quarter[4:], quarter)
+
+
 class AkShareClient:
     """Thin AkShare adapter used by ashare_data.sync.
 
@@ -621,14 +640,7 @@ class AkShareClient:
             return pd.DataFrame()
         df["ts_code"] = df["symbol"].astype(str).apply(_ts_code_from_symbol)
         df = df[df["ts_code"].apply(is_valid_a_share_code)]
-        year = int(quarter[:4])
-        season_end = {
-            "0331": f"{year}0430",
-            "0630": f"{year}0831",
-            "0930": f"{year}1031",
-            "1231": f"{year + 1}0430",
-        }.get(quarter[4:], quarter)
-        df["announce_date"] = season_end
+        df["announce_date"] = _disclosure_season_end(quarter)
         df["report_date"] = quarter
         numeric = [
             "eps_cum",
@@ -661,6 +673,85 @@ class AkShareClient:
                 "profit_yoy",
             ]
         ]
+
+    def get_cash_flow_report(self, quarter: str) -> pd.DataFrame:
+        """Whole-market cash-flow statement for one quarter (Eastmoney
+        现金流量表, ``stock_xjll_em``).
+
+        Mirrors :meth:`get_earnings_report` (docs/p13_fundamental_fields_contract.md
+        §5.2): cumulative year-to-date ``net_operate_cash_flow`` (same
+        口径 as ``profit_cum``; single periods are derived downstream via
+        ``_single_periods``), the statutory disclosure-season end as the
+        point-in-time date (the endpoint's own announcement column is never
+        used for visibility), and A-share code validation.
+        """
+
+        if self.offline:
+            df = self._load_fixture(f"cash_flow_{quarter}")
+            if df is None or df.empty:
+                return pd.DataFrame()
+        else:
+            import akshare as ak
+
+            df = self._fetch(lambda: ak.stock_xjll_em(date=quarter))
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(
+            columns={
+                "股票代码": "symbol",
+                "经营性现金流-现金流量净额": "net_operate_cash_flow",
+            }
+        )
+        if "symbol" not in df.columns:
+            return pd.DataFrame()
+        df["ts_code"] = df["symbol"].astype(str).apply(_ts_code_from_symbol)
+        df = df[df["ts_code"].apply(is_valid_a_share_code)]
+        df["announce_date"] = _disclosure_season_end(quarter)
+        df["report_date"] = quarter
+        df["net_operate_cash_flow"] = pd.to_numeric(
+            df.get("net_operate_cash_flow"), errors="coerce"
+        )
+        return df[
+            ["ts_code", "report_date", "announce_date", "net_operate_cash_flow"]
+        ]
+
+    def get_balance_sheet(self, quarter: str) -> pd.DataFrame:
+        """Whole-market balance sheet for one quarter (Eastmoney 资产负债表,
+        ``stock_zcfzb_em``).
+
+        Mirrors :meth:`get_earnings_report` (docs/p13_fundamental_fields_contract.md
+        §5.2): ``total_assets`` is a balance-sheet LEVEL at the report date
+        (a stock, not a flow -- never run through ``_single_periods``), with
+        the statutory disclosure-season end as the point-in-time date and
+        A-share code validation.
+        """
+
+        if self.offline:
+            df = self._load_fixture(f"balance_sheet_{quarter}")
+            if df is None or df.empty:
+                return pd.DataFrame()
+        else:
+            import akshare as ak
+
+            df = self._fetch(lambda: ak.stock_zcfzb_em(date=quarter))
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(
+            columns={
+                "股票代码": "symbol",
+                "资产-总资产": "total_assets",
+            }
+        )
+        if "symbol" not in df.columns:
+            return pd.DataFrame()
+        df["ts_code"] = df["symbol"].astype(str).apply(_ts_code_from_symbol)
+        df = df[df["ts_code"].apply(is_valid_a_share_code)]
+        df["announce_date"] = _disclosure_season_end(quarter)
+        df["report_date"] = quarter
+        df["total_assets"] = pd.to_numeric(
+            df.get("total_assets"), errors="coerce"
+        )
+        return df[["ts_code", "report_date", "announce_date", "total_assets"]]
 
     def get_financial_indicator(
         self, ts_code: str, start_year: int

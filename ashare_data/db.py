@@ -125,10 +125,22 @@ class AshareDB:
                 profit_yoy DOUBLE,
                 debt_ratio DOUBLE,
                 dividend_yield DOUBLE,
+                net_operate_cash_flow DOUBLE,
+                total_assets DOUBLE,
                 PRIMARY KEY (ts_code, report_date)
             )
             """
         )
+        # P13 additive migration (docs/p13_fundamental_fields_contract.md
+        # §5.1): CREATE TABLE IF NOT EXISTS cannot add columns to a
+        # pre-P13 table, so the two family-⑤ fields are added idempotently
+        # on every create_schema call.  Existing rows keep their values and
+        # read NULL in the new columns until the P13 backfill fills them.
+        for _p13_column in ("net_operate_cash_flow", "total_assets"):
+            self.execute(
+                f"ALTER TABLE {config.fundamentals_table} "
+                f"ADD COLUMN IF NOT EXISTS {_p13_column} DOUBLE"
+            )
         self.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {config.margin_table} (
@@ -386,6 +398,8 @@ class AshareDB:
             "profit_yoy",
             "debt_ratio",
             "dividend_yield",
+            "net_operate_cash_flow",
+            "total_assets",
         ]
         df = pd.DataFrame(rows).reindex(columns=cols)
         for date_col in ("announce_date", "dividend_announce"):
@@ -405,7 +419,8 @@ class AshareDB:
                    CAST(dividend_announce AS VARCHAR),
                    eps_cum, bvps, roe, roa, gross_margin, net_margin,
                    revenue_cum, profit_cum, revenue_yoy, profit_yoy,
-                   debt_ratio, dividend_yield
+                   debt_ratio, dividend_yield,
+                   net_operate_cash_flow, total_assets
             FROM _fund_df
             ON CONFLICT (ts_code, report_date) DO UPDATE SET
                 {updates}

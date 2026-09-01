@@ -44,10 +44,13 @@ def test_feature_version_pinned():
     # requirement-change path, APPROVED 2026-09-01): the four orthogonal
     # families append 11 feature names and the deprecated features leave
     # the sampling space; saved formulas still resolve by name.
-    assert FORMULA_VOCAB.feature_version == "ce3cf72b4af8"
+    # v6 (P13 §5.3/§6.1, docs/p13_fundamental_fields_contract.md
+    # APPROVED): family ⑤ appends 4 slow-fundamental names (73 -> 77);
+    # whitelist §10.1 case 2.
+    assert FORMULA_VOCAB.feature_version == "0e64ad614bfd"
     assert len(FORMULA_VOCAB.feature_version) == 12
-    # v5 grammar: the v4 layout plus the §7 adjudicated deprecations.
-    assert GRAMMAR_VERSION == 5
+    # v6 grammar: the v5 layout plus the P13 family-⑤ feature append.
+    assert GRAMMAR_VERSION == 6
     # A grammar bump changes the version even with identical name lists.
     legacy = FormulaVocab(
         feature_names=FORMULA_VOCAB.feature_names,
@@ -272,12 +275,18 @@ P9_DEPRECATED_FEATURES = (
 
 def test_p9_grammar_v4_with_additive_feature_generation():
     # v5 = the v4 P9 layout + the §7 adjudicated deprecations.
-    assert GRAMMAR_VERSION == 5
+    # v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤ appends 4 more.
+    assert GRAMMAR_VERSION == 6
     for name in P9_NEW_FEATURES:
         assert name in FEATURE_NAMES
-    # v4 names are appended, so every pre-v4 token id stays stable.
-    assert len(FEATURE_NAMES) == 73
-    assert list(FEATURE_NAMES[-len(P9_NEW_FEATURES):]) == list(P9_NEW_FEATURES)
+    # v4 names are appended, so every pre-v4 token id stays stable; the
+    # P13 family-⑤ names append after them, so every pre-v5 token id
+    # (including the deprecated v4 names) stays stable too.
+    assert len(FEATURE_NAMES) == 77
+    assert list(FEATURE_NAMES[62:73]) == list(P9_NEW_FEATURES)
+    assert list(FEATURE_NAMES[73:]) == [
+        "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
+    ]
 
 
 def test_p9_deprecated_names_stay_in_the_token_space():

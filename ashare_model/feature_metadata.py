@@ -76,6 +76,11 @@ _FUNDAMENTAL = (
     "point-in-time fundamental table: the latest report period disclosed by "
     "session t (disclosure-lag aware; the current snapshot is never backfilled)"
 )
+_FUNDAMENTAL_TTM = (
+    "quarterly report, visible after the statutory disclosure season ends "
+    "(Q1 04-30 / H1 08-31 / Q3 10-31 / annual next-year 04-30); TTM ratios "
+    "require four complete consecutive quarters (docs/p13_fundamental_fields_contract.md §5.3)"
+)
 _CAPITAL = "point-in-time margin/capital-flow feed as of session t"
 _SNAPSHOT_EXT = (
     "industry membership snapshot + daily bars up to session t inclusive "
@@ -665,6 +670,43 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         compute_cost=ComputeCost.LOW,
         depends_on=("capital_flow_pit",),
     ),
+    # Family ⑤ (P13 §5.3, docs/p13_fundamental_fields_contract.md): the
+    # pending_data placeholders become authoritative metadata -- same
+    # pre-registered hypotheses, real availability rules, and depends_on
+    # covering the fundamental_pit fields each formula consumes.  The
+    # family joins/leaves promotion as one atomic unit (§8 adjudication).
+    "CASHFLOW_QUALITY": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Cash-flow quality: operating cash flow that confirms reported earnings predicts durable outperformance.",
+        expected_direction=1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("net_operate_cash_flow", "profit_cum"),
+    ),
+    "ACCRUALS": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Accruals: earnings backed by accruals rather than cash reverse.",
+        expected_direction=-1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("net_operate_cash_flow", "profit_cum", "total_assets"),
+    ),
+    "ASSET_GROWTH": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Asset growth: aggressive balance-sheet expansion underperforms (investment factor).",
+        expected_direction=-1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("total_assets",),
+    ),
+    "EARNINGS_ACCEL": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Earnings acceleration: the second difference of TTM profit growth predicts continued fundamental momentum.",
+        expected_direction=1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("profit_cum",),
+    ),
 }
 
 # Structural invariants checked at import: the table must cover exactly the
@@ -676,7 +718,7 @@ assert set(FEATURE_METADATA) == set(FEATURE_NAMES), (
 assert not (set(NEUTRAL_FEATURE_NAMES) & set(EXTERNAL_FACTOR_NAMES))
 
 
-# --- P9 §6: pending_data placeholders (family ⑤, NOT in the vocabulary) ----
+# --- P9 §6: pending_data placeholders ---------------------------------------
 
 @dataclass(frozen=True)
 class PendingDataFeature:
@@ -693,25 +735,9 @@ class PendingDataFeature:
     promotion_allowed: bool = False
 
 
-PENDING_DATA_FEATURES: tuple[PendingDataFeature, ...] = (
-    PendingDataFeature(
-        name="CASHFLOW_QUALITY",
-        hypothesis="Cash-flow quality: operating cash flow that confirms reported earnings predicts durable outperformance.",
-        required_fields=("cash_flow_statement: net_operate_cash_flow", "income_statement: net_profit"),
-    ),
-    PendingDataFeature(
-        name="ACCRUALS",
-        hypothesis="Accruals: earnings backed by accruals rather than cash reverse.",
-        required_fields=("cash_flow_statement: net_operate_cash_flow", "income_statement: net_profit", "balance_sheet: total_assets"),
-    ),
-    PendingDataFeature(
-        name="ASSET_GROWTH",
-        hypothesis="Asset growth: aggressive balance-sheet expansion underperforms (investment factor).",
-        required_fields=("balance_sheet: total_assets",),
-    ),
-    PendingDataFeature(
-        name="EARNINGS_ACCEL",
-        hypothesis="Earnings acceleration: the second difference of TTM profit growth predicts continued fundamental momentum.",
-        required_fields=("income_statement: profit TTM history (derivable from fundamental_pit.profit_cum once scoped)",),
-    ),
-)
+# P13 §5.3 (docs/p13_fundamental_fields_contract.md): the four family-⑤
+# placeholders (CASHFLOW_QUALITY, ACCRUALS, ASSET_GROWTH, EARNINGS_ACCEL)
+# were lifted into FEATURE_METADATA as authoritative members once their
+# PIT data fields were registered.  The documentation mechanism itself is
+# retained for future data-gap families; it currently carries no members.
+PENDING_DATA_FEATURES: tuple[PendingDataFeature, ...] = ()
