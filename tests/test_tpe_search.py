@@ -215,8 +215,9 @@ def test_tpe_length_prior_induced_distribution():
 
 def test_tpe_emission_length_distribution_frozen_bounds():
     """P14 §8-4 冻结口径（t24 对账裁决观察项 A，t43 修复）：生产词表
-    （FORMULA_VOCAB，114 tokens / EOS 113）、max_len=12、≥2000 条
-    ask→propose→记录循环的发射序列——
+    （FORMULA_VOCAB，B-fix 后 118 tokens / EOS 113——新特征 ID 114-117
+    追加在全表 EOS 之后；计数随词表演进更新，判据不变）、max_len=12、
+    ≥2000 条 ask→propose→记录循环的发射序列——
 
     * content=11（即 12 token 含 EOS 的上限长度）占比 **≤ 0.25**；
     * content ≤ 8 占比 **≥ 0.40**；
