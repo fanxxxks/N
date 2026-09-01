@@ -44,11 +44,10 @@ def test_feature_version_pinned():
     # requirement-change path, APPROVED 2026-09-01): the four orthogonal
     # families append 11 feature names and the deprecated features leave
     # the sampling space; saved formulas still resolve by name.
-    assert FORMULA_VOCAB.feature_version == "d89b0e43206f"
+    assert FORMULA_VOCAB.feature_version == "ce3cf72b4af8"
     assert len(FORMULA_VOCAB.feature_version) == 12
-    # v4 grammar: the independent EOS token, the stack-only postfix rules,
-    # the semantic-type-aware action mask and the deprecation exclusion.
-    assert GRAMMAR_VERSION == 4
+    # v5 grammar: the v4 layout plus the §7 adjudicated deprecations.
+    assert GRAMMAR_VERSION == 5
     # A grammar bump changes the version even with identical name lists.
     legacy = FormulaVocab(
         feature_names=FORMULA_VOCAB.feature_names,
@@ -272,7 +271,8 @@ P9_DEPRECATED_FEATURES = (
 
 
 def test_p9_grammar_v4_with_additive_feature_generation():
-    assert GRAMMAR_VERSION == 4
+    # v5 = the v4 P9 layout + the §7 adjudicated deprecations.
+    assert GRAMMAR_VERSION == 5
     for name in P9_NEW_FEATURES:
         assert name in FEATURE_NAMES
     # v4 names are appended, so every pre-v4 token id stays stable.

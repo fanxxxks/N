@@ -166,8 +166,9 @@ FEATURE_NAMES = tuple(
 # APPROVED 2026-09-01).  Deprecated names keep their token ids and their
 # factor computations (legacy formulas resolve by name forever); they only
 # leave the sampling space (grammar v4 action mask) and promotion.
-# LIMIT_STREAK is deliberately NOT deprecated here: its deprecation is
-# conditional on the post-P9 re-measurement adjudication (contract §7.3).
+# P9 §7 adjudication (measurement log 2026-09-01): LIMIT_STREAK's
+# conditional deprecation TRIGGERED (|corr| with LIMIT_UP_EVENT = 0.980),
+# and two second-pass consolidations joined the set.
 DEPRECATION_REASONS: dict[str, str] = {
     "NORTHBOUND_CHG": "daily feed discontinued (2024-08); stays neutral",
     "RET_5": "P9 §4.1: exact mirror of REVERSAL_5 (|corr|=1.000); NEG(REVERSAL_5) is equivalent",
@@ -178,6 +179,9 @@ DEPRECATION_REASONS: dict[str, str] = {
     "TURNOVER_MA5": "P9 §4.1: 0.926/0.928 correlated with TURNOVER and TURNOVER_MA20",
     "MACD_DEA": "P9 §4.1: 0.926 correlated with MACD_DIF; no independent incremental OOS",
     "VOL_60": "P9 §4.1: 0.907 correlated with IVOL_60 (the stronger incremental contributor)",
+    "LIMIT_STREAK": "P9 §7.3 conditional deprecation TRIGGERED post-fix: |corr| with LIMIT_UP_EVENT = 0.980 >= 0.9",
+    "LIQ_SHOCK_20": "P9 §7.1 second-pass: 0.968 correlated with VOLUME_IMPACT; marginal family-gate margin (dIC +0.0054)",
+    "CROWD_TURNOVER_60": "P9 §7.1 second-pass: 0.971 correlated with CROWD_AMOUNT_60 (the stronger family member)",
 }
 DEPRECATED_FEATURE_NAMES = frozenset(DEPRECATION_REASONS)
 
@@ -214,11 +218,12 @@ LEGACY_OPERATOR_NAMES = (
 # stack-only postfix grammar; v3 (P7-E) makes the action mask type-aware;
 # v4 (P9) appends the four orthogonal P9 families and removes the
 # deprecated features from the sampling space (they keep their token ids
-# and computations).
+# and computations); v5 (P9 adjudication) adds the conditionally-deprecated
+# LIMIT_STREAK and the two second-pass consolidations to that set.
 # Bumping this constant changes
 # ``feature_version`` and therefore invalidates the token layout recorded
 # in older training artifacts (which resolve by name, so they still load).
-GRAMMAR_VERSION = 4
+GRAMMAR_VERSION = 5
 
 
 @dataclass(frozen=True)

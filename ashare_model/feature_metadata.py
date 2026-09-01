@@ -544,6 +544,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Consecutive one-word limit-ups: speculative streaks reverse after the run.",
         expected_direction=-1,
         semantic_type=SemanticType.BOOLEAN_EVENT_SIGNAL,
+        promotion_allowed=False,  # P9 §7.3 conditional deprecation TRIGGERED (0.980)
     ),
     "LIMIT_UP_CNT_20": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=20),
@@ -602,6 +603,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Liquidity shock: a one-day surge in market share marks attention-driven overpricing that reverses.",
         expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
+        promotion_allowed=False,  # P9 §7.1 second-pass: 0.968 vs VOLUME_IMPACT
     ),
     "VOLUME_SHRINK_5_20": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=20),
@@ -616,23 +618,30 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         semantic_type=SemanticType.VOLUME_LIKE,
     ),
     # Family ③: limit-event conditioning (sparse-safe standardization).
+    # P9 §7 adjudication: family ③ = negative result on the pre-registered
+    # incremental gate (no member reached dIC_OOS >= +0.005; the
+    # pre-registered continuation direction was falsified).  The features
+    # stay computed and samplable but are not promotable.
     "LIMIT_UP_CNT_5": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=5),
         hypothesis="Short-window limit-up clustering: speculative continuation within the week.",
         expected_direction=1,
         semantic_type=SemanticType.BOOLEAN_EVENT_SIGNAL,
+        promotion_allowed=False,  # P9 §7: family ③ negative result
     ),
     "LIMIT_DOWN_STREAK": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=2),
         hypothesis="Consecutive one-word limit-downs: forced-selling overhang continues over the streak.",
         expected_direction=-1,
         semantic_type=SemanticType.BOOLEAN_EVENT_SIGNAL,
+        promotion_allowed=False,  # P9 §7: family ③ negative result
     ),
     "LIMIT_BREAK_5": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=5),
         hypothesis="Repeated failed limit-ups (炸板): speculative churn, weak follow-through.",
         expected_direction=-1,
         semantic_type=SemanticType.BOOLEAN_EVENT_SIGNAL,
+        promotion_allowed=False,  # P9 §7: family ③ negative result
     ),
     # Family ④: per-stock crowding.
     "CROWD_TURNOVER_60": AuthoredFeatureMeta(
@@ -640,6 +649,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Self-relative turnover crowding: turnover far above the stock's own baseline marks overpriced attention.",
         expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
+        promotion_allowed=False,  # P9 §7.1 second-pass: 0.971 vs CROWD_AMOUNT_60
     ),
     "CROWD_AMOUNT_60": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=60),

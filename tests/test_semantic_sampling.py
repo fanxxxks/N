@@ -282,7 +282,7 @@ def test_version_pins():
     from ashare_model.search_contract import SEARCH_CONTRACT_VERSION
     from ashare_model.vocab import GRAMMAR_VERSION
 
-    assert GRAMMAR_VERSION == 4
+    assert GRAMMAR_VERSION == 5
     assert SEARCH_CONTRACT_VERSION == 2
     assert PROTOCOL_VERSION == "25"
 

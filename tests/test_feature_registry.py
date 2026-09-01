@@ -146,10 +146,9 @@ def test_registry_version_is_pinned():
     # FACTOR_REGISTRY.  Descriptive only -- no search, scoring or
     # promotion semantics change (contract: docs/p7_maintainability_plan.md
     # §6.1, which supersedes the pinned v2 assertion on the requirement-
-    # change path).  v4 (P9, docs/p9_factor_family_contract.md APPROVED
-    # 2026-09-01): the orthogonal families, the deprecations and the
-    # pending_data placeholders — whitelist §10.1 case 2.
-    assert FEATURE_REGISTRY_VERSION == 4
+    # change path).  v5 (P9 §7 adjudication, measurement log
+    # 2026-09-01): whitelist §10.1 case 2.
+    assert FEATURE_REGISTRY_VERSION == 5
 
 
 def test_registry_records_data_tiers(tensor, mask):
@@ -177,13 +176,16 @@ def test_summary_reports_tiers_and_deprecations(tensor, mask):
     )
     summary = registry.summary()
     assert summary["n_features"] == len(FEATURE_NAMES)
-    # P9 §4.1 (whitelist §10.1 case 2, contract APPROVED): the eight window
-    # variants join NORTHBOUND_CHG in the deprecated set.
+    # P9 §4.1 + §7 adjudication (whitelist §10.1 case 2, contract
+    # APPROVED): the eight window variants, the triggered conditional
+    # LIMIT_STREAK and the two second-pass consolidations join
+    # NORTHBOUND_CHG in the deprecated set.
     assert summary["deprecated"] == sorted(
         [
             "NORTHBOUND_CHG",
             "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
             "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",
+            "LIMIT_STREAK", "LIQ_SHOCK_20", "CROWD_TURNOVER_60",
         ]
     )
     assert PitLevel.PIT_DAILY.value in summary["by_pit_level"]
@@ -202,8 +204,10 @@ def test_build_requires_aligned_inputs():
 def test_p9_registry_version_deprecations_and_pending_data():
     """P9 §4/§6: the v4 registry records the approved deprecations with
     reasons and exposes the pending_data placeholders without adding them
-    to the vocabulary."""
-    assert FEATURE_REGISTRY_VERSION == 4
+    to the vocabulary.  v5 = the §7 adjudication (family ③ negative,
+    LIMIT_STREAK conditional deprecation triggered, two second-pass
+    consolidations)."""
+    assert FEATURE_REGISTRY_VERSION == 5
     p9_deprecated = (
         "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
         "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",

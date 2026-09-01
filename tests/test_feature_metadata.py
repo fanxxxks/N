@@ -97,9 +97,9 @@ def test_registry_version_is_pinned():
     # permission) plus horizon/cost/depends_on derived from the P6 domain
     # registry and FACTOR_REGISTRY (contract: plan §6.1).  Descriptive
     # only: no search/scoring/promotion semantics change.
-    # v4 (P9, docs/p9_factor_family_contract.md APPROVED 2026-09-01):
+    # v5 (P9 §7 adjudication, measurement log 2026-09-01):
     # whitelist §10.1 case 2.
-    assert FEATURE_REGISTRY_VERSION == 4
+    assert FEATURE_REGISTRY_VERSION == 5
 
 
 def test_expected_horizon_derives_from_research_domains():

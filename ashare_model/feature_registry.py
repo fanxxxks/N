@@ -49,7 +49,12 @@ from .vocab import FEATURE_NAMES
 # v4 (P9, docs/p9_factor_family_contract.md APPROVED): the four orthogonal
 # families join the vocabulary, eight window variants are deprecated, and
 # the pending_data placeholders (family ⑤) are surfaced in the summary.
-FEATURE_REGISTRY_VERSION = 4
+# v5 (P9 §7 adjudication, measurement log 2026-09-01): family ③ recorded
+# as a negative result (its features keep promotion_allowed=False while
+# staying samplable), the conditional LIMIT_STREAK deprecation triggered,
+# and two second-pass consolidations (LIQ_SHOCK_20, CROWD_TURNOVER_60)
+# deprecated.
+FEATURE_REGISTRY_VERSION = 5
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9
