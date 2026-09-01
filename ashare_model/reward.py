@@ -14,6 +14,20 @@ never be compared silently.
 
 Version history
 ---------------
+* v15: the reward band widens from +/-1.0 to +/-10.0 and ``bad_reward``
+  moves from -2.0 to -20.0 so the invalid-formula sentinel stays outside
+  the band (contract ``docs/p11_reward_v15_contract.md`` §5.1).  The
+  complexity penalty becomes a two-segment non-monotonic shape scored in
+  the candidate scorer (§5.2): no penalty at or below
+  ``complexity_free_bill`` (= 3.0) and an excess slope
+  ``complexity_penalty`` (= 0.05) per unit above it.  This removes the
+  v14 structural ceiling — ``clip_high - 0.02 * bill`` capped every
+  bill>1 combo strictly below a saturating bare factor (0.98 platform,
+  12/12 P10 rows) — while keeping anti-bloat pressure at high complexity
+  (bill=25 bills 1.10 vs v14's 0.50).  Both deliberate relaxations (the
+  free zone; bills in (3, 5) paying less than v14) are disclosed in
+  ``RewardConfig``.  v14 artifacts cannot be compared or promoted as v15
+  evidence.
 * v14: P3 separates sparse causal research labels from adjacent-open daily
   portfolio returns, carries the global rebalance schedule through every
   training/validation window, and routes target construction through the
@@ -138,7 +152,7 @@ from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
 from ashare_portfolio.constructor import PortfolioConstructor
 
-REWARD_VERSION = "14"
+REWARD_VERSION = "15"
 
 _ANNUALIZATION = 252
 

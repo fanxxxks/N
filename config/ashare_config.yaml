@@ -66,23 +66,32 @@ model:
 
 # Reward-scoring constants; semantic changes to the reward implementation
 # bump ashare_model.reward.REWARD_VERSION and are recorded in artifacts.
-# Current semantics (v14): reward = portfolio active IR — annualized
-# effective-n shrunk information ratio of the gross basket returns versus
-# the equal-weight universe benchmark — minus the exact annualized
-# execution-cost drag; sparse causal targets drive IC/ICIR while adjacent-open
-# daily returns drive PnL, all under the global P3 rebalance schedule.
-# Validation reward is the median over validation_splits sub-windows; bare
-# single-factor formulas pay a small complexity_penalty (kept tiny so the
-# validation floor stays reachable); artifacts are saved only when BOTH
-# the best validation reward reaches min_val_reward AND the best formula's
-# validation-window rank-ICIR reaches min_val_icir (signal-quality gate
-# against low-IC, low-turnover fundamental copies).
+# Current semantics (v15, contract docs/p11_reward_v15_contract.md §5): reward
+# = portfolio active IR — annualized effective-n shrunk information ratio of
+# the gross basket returns versus the equal-weight universe benchmark — minus
+# the exact annualized execution-cost drag, scored against a +/-10 clip band
+# (v14: +/-1.0; the old band clipped nearly every candidate onto a 0.98
+# ceiling platform and destroyed discrimination); sparse causal targets drive
+# IC/ICIR while adjacent-open daily returns drive PnL, all under the global P3
+# rebalance schedule.  bad_reward moves to -20.0 so the invalid-formula
+# sentinel stays outside the widened band.  The complexity penalty is
+# two-segment non-monotonic (§5.2): nothing at or below complexity_free_bill
+# (3.0), then complexity_penalty (0.05, an *excess* slope — v14: a full slope
+# 0.02 from bill=1.0) per unit above.  Both intentional relaxations vs v14 are
+# disclosed: (a) the free zone bill <= 3.0 pays nothing; (b) bills in (3.0,
+# 5.0) pay less than v14 (bill=4: 0.05 vs 0.08).  High-complexity pressure is
+# not weaker: bill=5 pays 0.10 (equal to v14), bill=25 pays 1.10 vs 0.50.
+# Validation reward is the median over validation_splits sub-windows; artifacts
+# are saved only when BOTH the best validation reward reaches min_val_reward
+# AND the best formula's validation-window rank-ICIR reaches min_val_icir
+# (signal-quality gate against low-IC, low-turnover fundamental copies).
 reward:
-  reward_clip_low: -1.0
-  reward_clip_high: 1.0
-  bad_reward: -2.0
+  reward_clip_low: -10.0
+  reward_clip_high: 10.0
+  bad_reward: -20.0
   cost_weight: 1.0
-  complexity_penalty: 0.02
+  complexity_penalty: 0.05
+  complexity_free_bill: 3.0
   min_val_reward: 0.0
   min_val_icir: 0.05
   ic_min_stocks: 10
