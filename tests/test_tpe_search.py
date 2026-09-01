@@ -183,9 +183,11 @@ def test_tpe_tell_gives_skipped_proposals_the_punitive_worst_so_far(monkeypatch)
 
 
 def test_tpe_length_prior_induced_distribution():
-    """The per-step EOS prior must break the cap stacking: on the toy
-    max_len=10 the dominant (cap) content length must fall far below the
-    P10-era ~91% and short formulas must receive real coverage."""
+    """Additional smoke (NOT the frozen bound — see
+    ``test_tpe_emission_length_distribution_frozen_bounds``): the per-step
+    EOS prior must break the cap stacking: on the toy max_len=10 the
+    dominant (cap) content length must fall far below the P10-era ~91% and
+    short formulas must receive real coverage."""
     seen: list[tuple[int, ...]] = []
 
     evaluator = _coarse_evaluator(budget=240)
@@ -209,6 +211,92 @@ def test_tpe_length_prior_induced_distribution():
     short = sum(1 for c in contents if c <= 7) / len(contents)
     assert cap <= 0.35, f"cap stacking unchanged: {cap:.2f}"
     assert short >= 0.40, f"no short-formula coverage: {short:.2f}"
+
+
+def test_tpe_emission_length_distribution_frozen_bounds():
+    """P14 §8-4 冻结口径（t24 对账裁决观察项 A，t43 修复）：生产词表
+    （FORMULA_VOCAB，114 tokens / EOS 113）、max_len=12、≥2000 条
+    ask→propose→记录循环的发射序列——
+
+    * content=11（即 12 token 含 EOS 的上限长度）占比 **≤ 0.25**；
+    * content ≤ 8 占比 **≥ 0.40**；
+    * 全部发射序列 ≤ 12 token（未终结序列按发射长度计，RED-4 原文口径）。
+
+    发射循环无需真实研究评价：桩评价器对每个不同 token 元组给出唯一
+    calibration fingerprint，使每个发射序列恰好计费一次（零语义重复、
+    零停滞），因此 ask→propose 流即为完整发射记录，且运行必然以
+    budget_exhausted 终止（发射数 ≥ 预算由记账结构保证）。机制上
+    cap 占比 ≤ P(target_content=11) = 1/10 —— 冻结界 0.25 有充足裕度。
+    """
+    import hashlib
+
+    from ashare_data.config import BacktestConfig, RewardConfig
+
+    rng0 = np.random.default_rng(3)
+    base_fp = rng0.normal(0.001, 0.01, size=(6, 60))
+    base_ex = rng0.normal(0.001, 0.01, size=(6, 40))
+
+    def _key(tokens) -> int:
+        digest = hashlib.md5(
+            ",".join(str(int(t)) for t in tokens).encode()
+        ).hexdigest()[:8]
+        return int(digest, 16)
+
+    def fingerprint_execute(tokens):
+        r = np.random.default_rng(_key(tokens))
+        return base_fp + r.normal(0, 0.01, size=base_fp.shape)
+
+    def execute(tokens):
+        r = np.random.default_rng(_key(tokens))
+        return base_ex + r.normal(0, 0.01, size=base_ex.shape)
+
+    evaluator = SemanticBudgetEvaluator(
+        target=base_ex,
+        universe_mask=np.ones(base_ex.shape, dtype=bool),
+        backtest_config=BacktestConfig(
+            initial_capital=100000.0, top_n=2, single_weight_cap=0.5
+        ),
+        reward_config=RewardConfig(
+            ic_min_stocks=3,
+            min_val_reward=-1e9,
+            min_val_icir=-1e9,
+            min_valid_ic_days=2,
+            min_effective_stocks=2,
+            min_coverage=0.0,
+            min_activity=0.0,
+            min_sign_stability=0.0,
+            min_val_window_q25=-1e9,
+        ),
+        val_windows=[(12, 18), (18, 24)],
+        train_signal_range=(0, 12),
+        budget=2000,
+        dataset_id="dataset-a",
+        protocol_version=18,
+        window_id="train:0:100",
+        execute=execute,
+        fingerprint_execute=fingerprint_execute,
+    )
+
+    seen: list[tuple[int, ...]] = []
+    original_propose = evaluator.propose
+
+    def recording_propose(tokens):
+        seen.append(tuple(int(t) for t in tokens))
+        return original_propose(tokens)
+
+    evaluator.propose = recording_propose
+    result = run_tpe_baseline(seed=7, evaluator=evaluator, max_formula_len=12)
+
+    assert result.termination_reason == "budget_exhausted"
+    assert result.proposal_count == len(seen) >= 2000
+    eos = FORMULA_VOCAB.eos_token_id
+    # RED-4 原文口径：未终结序列按发射长度计。
+    contents = [tokens.index(eos) if eos in tokens else len(tokens) for tokens in seen]
+    assert all(length <= 12 for length in contents)
+    cap = sum(1 for c in contents if c == 11) / len(contents)
+    short = sum(1 for c in contents if c <= 8) / len(contents)
+    assert cap <= 0.25, f"frozen bound violated at the cap: {cap:.4f}"
+    assert short >= 0.40, f"frozen bound violated on short coverage: {short:.4f}"
 
 
 def test_length_prior_target_lengths_match_preregistered_profile():
