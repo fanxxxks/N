@@ -759,3 +759,99 @@ def test_build_pit_frames_family5_unbacked_rows_stay_nan(tmp_path: Path):
     for name in _FAMILY5:
         assert name in frames, name
         assert frames[name].loc["000001.SZ"].isna().all(), name
+
+
+def test_balance_sheet_endpoint_uses_stock_zcfz_em(monkeypatch):
+    """P13 amendment RED (t20 window-② incident, A①): the balance-sheet
+    bulk endpoint in akshare 1.18.91 is ``stock_zcfz_em`` — t14 originally
+    called the nonexistent ``stock_zcfzb_em``, which the network-mocked
+    RED suite could not catch (AGENTS §2.2 step-5 lesson: extend
+    verification to the real integration seam).  This contract test pins
+    the attribute name without touching the network."""
+    import akshare
+
+    from ashare_data.akshare_client import AkShareClient
+
+    calls: dict[str, str] = {}
+
+    def fake_zcfz(date: str):
+        calls["stock_zcfz_em"] = date
+        return pd.DataFrame([{"股票代码": "000001", "资产-总资产": 1200.0}])
+
+    monkeypatch.setattr(akshare, "stock_zcfz_em", fake_zcfz, raising=False)
+    # The wrong attribute must stay absent: calling it must fail loudly.
+    monkeypatch.delattr(akshare, "stock_zcfzb_em", raising=False)
+
+    cfg = config_module.DataConfig(start_date="2024-01-01", end_date="2024-12-31")
+    client = AkShareClient(cfg)  # online path; the patched module answers
+    df = client.get_balance_sheet("20240331")
+    assert calls == {"stock_zcfz_em": "20240331"}
+    assert df.iloc[0]["ts_code"] == "000001.SZ"
+    assert df.iloc[0]["total_assets"] == 1200.0
+    # Statutory season-end anchor, not the endpoint's announcement column.
+    assert df.iloc[0]["announce_date"] == "20240430"
+
+
+def test_sync_cache_path_filters_out_of_scope_codes(tmp_path: Path):
+    """P13 amendment RED (t20 window-② incident, A②): the cache-read path
+    must apply the same universe filter as the fetch path — the pre-P2-01
+    whole-market caches otherwise resurrect purged out-of-scope rows
+    (root cause of the 116,613-row regression on 2026-09-02).  The chain
+    reproduced here is the real one: an unfiltered earnings cache read
+    writes the out-of-scope code, whose row then becomes its own announce
+    master and admits the cash-flow row too."""
+    cfg = _data_config(tmp_path)
+    universe = ["000001.SZ"]  # 600000.SH is deliberately out of scope
+    cache_dir = cfg.parquet_dir / "fundamental"
+    cache_dir.mkdir(parents=True)
+    # A stale whole-market earnings cache, like the pre-P2-01 artifacts
+    # (full client column shape, whole-market code coverage).
+    earnings_cache = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "report_date": "20231231",
+                "announce_date": "20240430",
+                "profit_cum": 60.0,
+            },
+            {
+                "ts_code": "600000.SH",
+                "report_date": "20231231",
+                "announce_date": "20240430",
+                "profit_cum": 500.0,
+            },
+        ]
+    )
+    earnings_cache = earnings_cache.reindex(
+        columns=[
+            "ts_code", "report_date", "announce_date", "eps_cum", "bvps",
+            "roe", "gross_margin", "net_margin", "revenue_cum", "profit_cum",
+            "revenue_yoy", "profit_yoy",
+        ]
+    )
+    earnings_cache.to_parquet(cache_dir / "earnings_20231231.parquet", index=False)
+    # A whole-market cash-flow cache for the same period.
+    pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "report_date": "20231231",
+                "announce_date": "20240430",
+                "net_operate_cash_flow": 74.0,
+            },
+            {
+                "ts_code": "600000.SH",
+                "report_date": "20231231",
+                "announce_date": "20240430",
+                "net_operate_cash_flow": 99.0,
+            },
+        ]
+    ).to_parquet(cache_dir / "cash_flow_20231231.parquet", index=False)
+    client = _StubFundamentalClient({}, {}, {})
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        sync_fundamentals(client, db, cfg, universe)
+        rows = db.query(f"SELECT * FROM {cfg.fundamentals_table}")
+    assert set(rows["ts_code"]) == {"000001.SZ"}
+    r = rows[rows["ts_code"] == "000001.SZ"].iloc[0]
+    assert r["net_operate_cash_flow"] == pytest.approx(74.0)

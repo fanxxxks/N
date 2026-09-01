@@ -733,7 +733,7 @@ class AkShareClient:
         else:
             import akshare as ak
 
-            df = self._fetch(lambda: ak.stock_zcfzb_em(date=quarter))
+            df = self._fetch(lambda: ak.stock_zcfz_em(date=quarter))
         if df is None or df.empty:
             return pd.DataFrame()
         df = df.rename(

@@ -635,6 +635,10 @@ def sync_fundamentals(
                 continue
         if df.empty:
             continue
+        # The universe filter applies to the cache path too: pre-P2-01
+        # caches hold whole-market rows, and reading them unfiltered would
+        # resurrect purged out-of-scope codes (t20 window-② incident).
+        df = df[df["ts_code"].isin(universe_set)]
         rows = [{c: row[c] for c in _EARNINGS_COLUMNS} for row in df.to_dict("records")]
         db.upsert_fundamentals(rows, config)
         total_rows += len(rows)
@@ -684,6 +688,9 @@ def sync_fundamentals(
                     continue
             if df.empty:
                 continue
+            # Same cache-path discipline as the earnings loop (t20
+            # window-② incident): filter before the master join.
+            df = df[df["ts_code"].isin(universe_set)]
             rows: list[dict[str, Any]] = []
             for row in df.to_dict("records"):
                 announce = announce_map.get(
