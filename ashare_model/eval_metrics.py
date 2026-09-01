@@ -176,6 +176,12 @@ def evaluate_signal(
         "n_ic_dates": int(ic["n_dates"]),
         "ic_mean_tradable": float(ic_tradable["ic_mean"]),
         "icir_tradable": float(ic_tradable["icir"]),
+        # P10 §5.2 组合活动门 (additive observability): the portfolio
+        # activity counters the engine already computes, surfaced so the
+        # searcher comparison can disclose suppressed/low-activity books.
+        "rebalance_count": int(m.get("rebalance_count", 0)),
+        "order_count": int(m.get("order_count", 0)),
+        "suppressed_trade_count": int(m.get("suppressed_trade_count", 0)),
         # Raw per-day series: kept in every row so the DS / max-t corrections
         # and later analysis never have to reconstruct them from aggregates.
         "daily_returns": [float(x) for x in result.daily_returns],
