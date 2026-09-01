@@ -282,6 +282,15 @@ SEARCH_CONTRACT v4 统一承载（§3.2"新增版本接入既有兼容性权威"
    断言 consumed/requested ≥ 0.50 且终止为 budget_exhausted（现行为停滞于 ≪50%、
    proposal_stagnation → 稳定红）。fixture 需复用 test_gp_search.py 的 toy 模式并证明
    确定性（同 seed 两次运行一致）。
+   【delta note（t24-ruling-obsA / t49，判据非改动）】本条的 toy 坍缩断言经三环境实证
+   不可稳健携带：GP 动态被 process hash 顺序 + BLAS 线程 FP 主导，跨环境实测
+   (punitive, neutral) = (288, 84) / (115, 83) / (60, 103)（第三组为全钉环境
+   PYTHONHASHSEED=0 + threadpool_limits(1)），单线程 2/2 通过但跨 hash seed 仍翻转——
+   方向本身被环境决定，toy 可达语义类空间退化所致。实现落地为 FP 稳健确定性护栏
+   （threadpool_limits(1) 下两锚点臂各两遍 consumed + best-so-far 逐字节相等，
+   tests/test_gp_search.py），跨臂消耗比较断言撤除；坍缩裁决由 §9 正式运行承担
+   （GP 消耗 ≥ 50%——判据值与全部冻结数字逐字不变，正式运行机制见 §9 研究测量段）。
+   FP 敏感性实证全文见 t49 任务产出与 t31/t32 测量日志。
 3. **TPE 惩罚性 tell**：以 spy/monkeypatch 捕获 `study.tell`（或对实现的纯函数权威断言）：
    跳过提案被 tell 的值 == worst-so-far ≠ best_reward；首批全 invalid 时 fallback -inf；
    真实评价路径 tell 真实分数不变（现行为 tell best → 稳定红）。
