@@ -22,7 +22,7 @@ from ashare_model.train import (
 from ashare_model.vocab import FORMULA_VOCAB, GRAMMAR_VERSION
 from ashare_portfolio.rebalance import RebalancePolicy
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
-from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
+from ashare_trading.golden import EXECUTION_SPEC_VERSION
 
 
 def test_resolve_device_auto_prefers_cuda(monkeypatch):

@@ -13,7 +13,7 @@ from ashare_data.config import BacktestConfig
 from ashare_data.processor import open_to_open_returns
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.reward import simulate_basket_daily_returns
-from ashare_portfolio.golden import GoldenParity
+from ashare_trading.golden import GoldenParity
 from ashare_portfolio.rebalance import RebalancePolicy
 
 

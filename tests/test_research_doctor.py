@@ -19,7 +19,7 @@ from ashare_model.reward import REWARD_VERSION
 from ashare_model import research_doctor as doctor
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
 from ashare_portfolio.execution_spec import execution_provenance
-from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
+from ashare_trading.golden import EXECUTION_SPEC_VERSION
 
 
 def _current_portfolio_config() -> dict:

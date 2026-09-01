@@ -19,7 +19,7 @@ from ashare_model.evaluation import PROTOCOL_VERSION
 from ashare_model.reward import REWARD_VERSION
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
 from ashare_portfolio.execution_spec import execution_provenance
-from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
+from ashare_trading.golden import EXECUTION_SPEC_VERSION
 from ashare_model.artifact_versions import (
     classify_artifact,
     classify_bare_factor,

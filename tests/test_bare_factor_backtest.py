@@ -34,7 +34,7 @@ from ashare_model.data_loader import AshareDataLoader
 from ashare_model.evaluation import PROTOCOL_VERSION
 from ashare_model.reward import REWARD_VERSION
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
-from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
+from ashare_trading.golden import EXECUTION_SPEC_VERSION
 
 SEVEN = ["REVERSAL_5", "RSQ_60", "ILLIQ_20", "OVERNIGHT_RET",
          "MOMENTUM_20", "ROE", "TURNOVER"]
