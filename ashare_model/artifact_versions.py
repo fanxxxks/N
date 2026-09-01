@@ -6,6 +6,13 @@ Pre-P3 artifacts — including the reward-v10 strategy
 generation and must never be mistaken for the current champion.  This
 module is the single source of the classification rules:
 
+* :func:`version_matches` — the single version-comparison primitive
+  shared by every consumer (the classifiers here, the promotion gates and
+  the research doctor): a recorded version matches the current code
+  generation iff it is present and string-equal after coercion.
+  Missing-field semantics (skip vs. fail) and message wording stay with
+  each consumer; only the comparison itself lives here, so the rule
+  cannot drift into a second implementation (AGENTS.md §9);
 * :func:`classify_strategy` / :func:`classify_protocol` — pure rules over
   a payload: an artifact is legacy when any recorded version/provenance
   field differs from or predates the current code generation;
@@ -55,10 +62,25 @@ _ARTIFACTS = (
 )
 
 
+def version_matches(recorded: Any, current: Any) -> bool:
+    """Single version-comparison rule shared by every consumer (F2).
+
+    A recorded version matches the current code generation iff it is
+    present and string-equal after coercion (``str(recorded) ==
+    str(current)``) — the current generation deliberately mixes int and
+    str version constants (``EXECUTION_SPEC_VERSION=2`` vs
+    ``PROTOCOL_VERSION="25"``).  ``None`` never matches; whether a
+    missing field is an error, a legacy reason or skipped entirely is
+    each consumer's own semantics and stays with the consumer.
+    """
+
+    return recorded is not None and str(recorded) == str(current)
+
+
 def _version_mismatch(field: str, recorded: Any, current: Any) -> str | None:
     if recorded is None:
         return None
-    if str(recorded) != str(current):
+    if not version_matches(recorded, current):
         return f"{field} {recorded} != current {current}"
     return None
 

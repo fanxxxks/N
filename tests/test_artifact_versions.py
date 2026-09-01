@@ -26,6 +26,7 @@ from ashare_model.artifact_versions import (
     classify_protocol,
     classify_strategy,
     stamp_legacy_artifacts,
+    version_matches,
 )
 from ashare_model.research_domain import RESEARCH_DOMAIN_VERSION
 from ashare_model import research_doctor as doctor
@@ -124,6 +125,29 @@ def _v12_protocol() -> dict:
         "reward_version": "10",
         # no dataset_id / stitched / ledger
     }
+
+
+def test_version_matches_is_the_single_comparison_rule():
+    # F2: one parameterized comparison primitive shared by
+    # artifact_versions, promotion and research_doctor.  A recorded
+    # version matches the current code generation iff it is present and
+    # string-equal after coercion — the current generation deliberately
+    # mixes int and str constants (EXECUTION_SPEC_VERSION=2,
+    # PROTOCOL_VERSION="25").
+    assert version_matches("25", "25") is True
+    assert version_matches(2, 2) is True
+    assert version_matches("2", 2) is True
+    assert version_matches(25, "25") is True
+    assert version_matches("24", "25") is False
+    assert version_matches(1, 2) is False
+
+
+def test_version_matches_never_matches_missing():
+    # None never matches; whether a missing field is an error, a legacy
+    # reason or skipped entirely stays with each consumer.
+    assert version_matches(None, "25") is False
+    assert version_matches(None, 2) is False
+    assert version_matches(None, None) is False
 
 
 def test_current_strategy_is_not_legacy():
