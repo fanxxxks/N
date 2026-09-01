@@ -1,7 +1,6 @@
-# P10 四搜索器公平对比预注册契约（gp/tpe/random/rl）
+# P10 四搜索器公平对比预注册契约（已批准）
 
-- 状态：**DRAFT — 待批准**。批准前不实施任何语义变更（本契约的实现在批准后
-  由 t7/t8 按本文执行）。批准后本文保持前瞻性，禁止用实现或测量输出反向修改。
+- 状态：**APPROVED — 2026-09-01 由 AgentTeams captain 批准**（用户已授权 captain 自主推进，豁免 AGENTS.md 1.7 质问义务）。批准后由 t7 按 §10 RED 清单与 §11 实施顺序执行；批准后本文保持前瞻性，禁止用实现或测量输出反向修改。
 - 起草：search-runner（AgentTeams alpha-orth-research t6），2026-09-01
 - 证据基线：t1 数据/产物 Readiness 审计（G1–G7 PASS，manifest 重建后
   dataset_id=a839ecf2…）；t2 62 因子库存审计；t3/t4/t5 P9 因子族契约与实现
@@ -276,6 +275,7 @@ GRAMMAR/PROTOCOL（词表与评价协议零改动）。
 
 ## 11. 批准与边界
 
+- **批准记录**：2026-09-01 由 AgentTeams alpha-orth-research captain 审阅并批准（审阅依据：GP 长度缺口发现属实——`_max_nodes = max_len // 2 = 6` 确实只发射 ≤6 节点，导致 GP 有效上限 7 token vs 其他三臂 12 token，修正为 `max_len - 1 = 11` 节点属 AGENTS.md §7 要求的 matched comparison 必要条件；预算 B=2000 基于 CPU 实测标定合理，Stage A≈4.84h 且全程≈5.4–5.7h 含≈20% 余量；回测硬门槛完全对齐用户指令；版本表与 7 项 RED 测试齐备；§8 五情形改进方向映射预注册）。批准后由 t7 按 §10 RED 清单与 §11 实施顺序执行，本文保持前瞻性，禁止用实现或测量输出反向修改。
 - 批准后实施顺序：t7 = RED（§10）→ 最小实现（gp_search `_max_nodes`、
   searcher_bench v3 campaign 模式、ledger 接线）→ GREEN/回归 → Stage A 运行
   + 测量日志；t8 = Stage B/C + 裁决报告。两步各自原子提交，不与本契约混合。

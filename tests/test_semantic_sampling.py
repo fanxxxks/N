@@ -277,13 +277,17 @@ def test_feature_id_restriction_still_applies():
 
 def test_version_pins():
     """§4: the coordinated generation bumps (requirement-change path,
-    arbitration source: docs/p7_semantic_types_contract.md)."""
+    arbitration source: docs/p7_semantic_types_contract.md; the
+    SEARCH_CONTRACT pin moves to 3 per the approved P10 contract
+    §9 — docs/p10_searcher_fairness_contract.md — GP node-cap
+    alignment changes the matched effective space, AGENTS.md §10.1
+    case 2)."""
     from ashare_model.evaluation import PROTOCOL_VERSION
     from ashare_model.search_contract import SEARCH_CONTRACT_VERSION
     from ashare_model.vocab import GRAMMAR_VERSION
 
     assert GRAMMAR_VERSION == 5
-    assert SEARCH_CONTRACT_VERSION == 2
+    assert SEARCH_CONTRACT_VERSION == 3
     assert PROTOCOL_VERSION == "25"
 
 

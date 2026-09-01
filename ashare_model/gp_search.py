@@ -334,10 +334,19 @@ def _op_arity(name: str) -> int:
 
 
 def _max_nodes(max_formula_len: int) -> int:
-    """Largest tree that fits the policy's length budget: a tree of ``n``
-    nodes serializes to ``2n - 1`` postfix tokens plus EOS <= max_len."""
+    """Largest tree that fits the policy's length budget.
 
-    return max(1, int(max_formula_len) // 2)
+    ``tree_to_tokens`` emits exactly one token per node (the invariant
+    pinned by the semantic-sampling property tests), so a tree of ``n``
+    nodes serializes to ``n`` content tokens plus one EOS.  P10
+    (docs/p10_searcher_fairness_contract.md §4.3) therefore caps nodes at
+    ``max_formula_len - 1`` so GP reaches the same EOS-inclusive token
+    budget as the other backends; the previous ``max_len // 2`` bound
+    under-restricted GP to 7 total tokens at the production max_len of
+    12 (a matched comparison requires one shared effective length).
+    """
+
+    return max(1, int(max_formula_len) - 1)
 
 
 def run_gp_baseline(

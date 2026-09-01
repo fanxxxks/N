@@ -16,7 +16,12 @@ from .candidates import CandidateScore
 # v2 (P7-E): the effective search space (legal formula set) is narrowed by
 # semantic-type sampling legality (docs/p7_semantic_types_contract.md);
 # results from different contract versions are never matched comparisons.
-SEARCH_CONTRACT_VERSION = 2
+# v3 (P10): GP's effective max formula length is aligned to the shared
+# EOS-inclusive budget (node cap = max_formula_len - 1; previously
+# max_len // 2, which under-restricted GP to 7 total tokens at the
+# production max_len of 12) — docs/p10_searcher_fairness_contract.md §4.3.
+# v2 and v3 results are never matched comparisons.
+SEARCH_CONTRACT_VERSION = 3
 
 TERMINATION_REASONS = frozenset(
     {
