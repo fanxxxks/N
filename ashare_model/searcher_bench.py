@@ -856,15 +856,18 @@ def _parse_window_cap(text: str) -> tuple[int, int]:
 
 def _config_hash(config_arg: str | None, root: Path) -> str | None:
     """SHA-256 over the effective config inputs (YAML file bytes plus the
-    runtime-overrides file when present).  ``None`` only when the config
-    file cannot be located — the campaign still runs, provenance records
-    the gap."""
+    runtime-overrides file when present).  ``config_arg=None`` resolves
+    to :func:`ashare_data.config.load_config`'s default path.  ``None``
+    is returned only when the config file cannot be read — the campaign
+    still runs, provenance records the gap."""
 
     from ashare_data.config import RUNTIME_OVERRIDES_FILENAME
 
     try:
-        path = Path(config_arg)
-        if not path.is_absolute():
+        path = Path(config_arg) if config_arg is not None else None
+        if path is None:
+            path = root / "config" / "ashare_config.yaml"
+        elif not path.is_absolute():
             path = root / path
         digest = hashlib.sha256()
         digest.update(path.read_bytes())
@@ -872,7 +875,7 @@ def _config_hash(config_arg: str | None, root: Path) -> str | None:
         if overrides.exists():
             digest.update(b"\x00--runtime-overrides--\x00")
             digest.update(overrides.read_bytes())
-    except Exception:
+    except OSError:
         return None
     return digest.hexdigest()
 

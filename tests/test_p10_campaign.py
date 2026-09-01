@@ -19,6 +19,7 @@ Contract source: docs/p10_searcher_fairness_contract.md —
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +31,7 @@ from ashare_model.search_contract import SEARCH_CONTRACT_VERSION
 from ashare_model.searcher_bench import (
     P10_ROW_ORDER,
     SEARCHER_BENCH_VERSION,
+    _config_hash,
     benchmark_campaign,
     benchmark_searchers,
 )
@@ -37,6 +39,21 @@ from ashare_model.train import AshareTrainer
 from ashare_model.vocab import FORMULA_VOCAB
 
 SEARCHERS = ("gp", "tpe", "random", "rl")
+
+
+def test_p10_config_hash_resolves_default_config_path():
+    """Provenance fix (t7): ``_config_hash(None, root)`` must hash the
+    default config path (the ``load_config`` fallback), not silently
+    record ``None`` — campaign run a45764aad… carried config_hash=None
+    because ``Path(None)`` raised inside the old try block (contract
+    §4.2 requires the effective config hash in provenance)."""
+
+    root = Path(__file__).resolve().parents[1]
+    via_default = _config_hash(None, root)
+    via_explicit = _config_hash("config/ashare_config.yaml", root)
+    assert via_default is not None
+    assert via_default == via_explicit
+    assert _config_hash("config/does_not_exist.yaml", root) is None
 
 
 def _reward_cfg() -> RewardConfig:
