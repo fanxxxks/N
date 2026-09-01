@@ -112,25 +112,50 @@ class RewardConfig:
 
     Semantic changes to the reward implementation bump
     ``ashare_model.reward.REWARD_VERSION``; these values only tune the
-    current version (v13: portfolio active IR minus exact annualized
-    execution costs; IC/ICIR are auxiliary reported/gated statistics;
-    robust HAC-shrunk ICIR, hard signal-quality gates and AST complexity
-    billing carried over from v12).
+    current version (v15: portfolio active IR minus exact annualized
+    execution costs, scored against a +/-10 clip band; IC/ICIR are
+    auxiliary reported/gated statistics; robust HAC-shrunk ICIR, hard
+    signal-quality gates and AST complexity billing carried over from
+    v12; contract ``docs/p11_reward_v15_contract.md``).
+
+    v15 changes (contract §5): the clip band widens from +/-1.0 to
+    +/-10.0 and ``bad_reward`` moves from -2.0 to -20.0 so the sentinel
+    stays outside the band; the complexity penalty becomes a two-segment
+    non-monotonic shape (free zone at or below ``complexity_free_bill``,
+    then linear in the excess).  v14 artifacts are not comparable with
+    v15 rewards.
     """
 
-    reward_clip_low: float = -1.0
-    reward_clip_high: float = 1.0
+    # v14: +/-1.0.  v15 widens the band to +/-10.0 (contract §5.1): the
+    # annualized active IR of usable factor families reaches ~1.75+, so
+    # the v14 band clipped nearly every candidate onto a 0.98 ceiling
+    # platform and destroyed reward discrimination.
+    reward_clip_low: float = -10.0
+    reward_clip_high: float = 10.0
     # Assigned by the trainer to invalid/constant formulas only; it sits
     # below ``reward_clip_low`` so unusable formulas stay distinguishable.
-    bad_reward: float = -2.0
+    # v14: -2.0; v15 moves it to -20.0 to keep the sentinel outside the
+    # widened band (invariant: ``bad_reward < reward_clip_low``).
+    bad_reward: float = -20.0
     # Multiplier on exact annualized daily execution costs (1.0 = honest cost).
     cost_weight: float = 1.0
-    # Complexity billing (T1-03): the reward pays
-    # ``complexity_penalty * complexity_bill(ast)`` where the bill combines
-    # AST node count, depth, longest operator window and operation cost
-    # (bare single-factor copies bill exactly 1.0, keeping the historical
-    # bare-factor nudge identical).
-    complexity_penalty: float = 0.02
+    # Complexity billing (T1-03; v15 redefinition, contract §5.2): the
+    # scorer charges nothing at or below ``complexity_free_bill`` and
+    # ``complexity_penalty * (bill - complexity_free_bill)`` above it,
+    # where the bill combines AST node count, depth, longest operator
+    # window and operation cost (bare single-factor copies bill exactly
+    # 1.0).  ``complexity_penalty`` is the *excess* slope (v14 semantics:
+    # a full slope ``0.02 * bill`` starting at bill=1.0; v14 value 0.02).
+    # Both intentional relaxations relative to v14 are disclosed here:
+    # (a) the free zone ``bill <= 3.0`` pays nothing (v14 billed 0.02 at
+    # bill=1.0); (b) bills in (3.0, 5.0) pay less than v14 (bill=4: 0.05
+    # vs 0.08).  High-complexity pressure is not weaker: bill=5 pays 0.10
+    # (equal to v14) and bill=25 pays 1.10 vs v14's 0.50.
+    complexity_penalty: float = 0.05
+    # v15 (contract §5.2): complexity bills at or below this threshold pay
+    # no penalty (free zone); above it the excess is billed at
+    # ``complexity_penalty`` per unit.  The field is absent in v14.
+    complexity_free_bill: float = 3.0
     # Hard complexity ceiling: formulas whose complexity bill exceeds this
     # are rejected outright (``complexity_above_maximum``).
     max_complexity: float = 25.0
