@@ -67,10 +67,10 @@ AlphaGPT 当前是一套本地优先、单用户、纯 A 股横截面因子研�
 |---|---|---|
 | [data/best_ashare_strategy.json](../data/best_ashare_strategy.json) | 公式为 <code>(VOL_20 CORR60 (ATR_14 ADD MAX3((RET_10 ADD (PS_TTM MUL TS_RANK20(DIVIDEND_YIELD))))))</code>，方向 -1，reward v10 | 已由 <code>scripts/stamp_legacy_artifacts.py</code> 盖章 legacy（无 searcher / reward v10≠14 / 无 protocol/execution/constructor/config provenance / 无 model_version / 无 dataset_id，2026-08-27T10:31:32Z）；当前 reward v14 |
 | [data/backtest_result.json](../data/backtest_result.json) | 公式为 <code>LIMIT_BREAK</code>，2015-01-06 至 2026-08-14，累计收益 -100%，Sharpe -1.956 | 公式与当前策略 JSON 不同；无 <code>dataset_id</code>；属于旧 schema |
-| [data/protocol_result.json](../data/protocol_result.json) | protocol v12、reward v10、60 行候选 | 已盖章 legacy（protocol v12≠22 / reward v10≠14 / 无 execution/constructor/config provenance / 无 dataset_id / 无 stitched / 无 ledger）；当前 protocol v22、reward v14；没有 stitched OOS、dataset、ledger 或 data-regime 块 |
+| [data/protocol_result.json](../data/protocol_result.json) | protocol v12、reward v10、60 行候选 | 已盖章 legacy（protocol v12≠25 / reward v10≠14 / 无 execution/constructor/config provenance / 无 dataset_id / 无 stitched / 无 ledger）；当前 protocol v25、reward v14；没有 stitched OOS、dataset、ledger 或 data-regime 块 |
 | [data/sim_portfolio_state.json](../data/sim_portfolio_state.json) | 2,822 个权益点、28,179 笔成交、最后日期 2026-08-14 | 旧状态没有 <code>last_exec_date</code>、公式、配置版本或 <code>dataset_id</code>；续跑时可能把新策略接到旧权益曲线上 |
 
-结论：当前 UI 只能视为“历史文件查看器”，不能被当作一组同源、同版本、可复现的研究结果。任何策略判断前，应先核对数据 manifest（当前已存在，dataset_id <code>b927074a455a…</code>），再按当前版本重新训练、回测、执行 v22 协议，并通过六道晋级门禁。
+结论：当前 UI 只能视为“历史文件查看器”，不能被当作一组同源、同版本、可复现的研究结果。任何策略判断前，应先核对数据 manifest（当前已存在，dataset_id <code>b927074a455a…</code>），再按当前版本重新训练、回测、执行 v25 协议，并通过六道晋级门禁。
 
 ### 0.3 自基线以来的变更（P0 / P1 / P2）
 
@@ -290,7 +290,7 @@ flowchart TD
     Tests -. 覆盖 .-> API
 ~~~
 
-静态 import 扫描显示，最强依赖方向是 <code>ashare_model → ashare_data</code>，其次是 <code>ashare_trading → ashare_data/ashare_model</code>。反向依赖很少，层次总体清楚；但 [ashare_portfolio/golden.py](../ashare_portfolio/golden.py) 为一致性测试同时依赖回测、执行和交易层，是有意的集成验证边界。
+静态 import 扫描显示，最强依赖方向是 <code>ashare_model → ashare_data</code>，其次是 <code>ashare_trading → ashare_data/ashare_model</code>。反向依赖很少，层次总体清楚；一致性测试 [ashare_trading/golden.py](../ashare_trading/golden.py) 位于最上层、顺向依赖回测、执行和组合层，是有意的集成验证边界。
 
 ### 3.4 从数据到策略的核心数据流
 
@@ -506,7 +506,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 搜索 | [baseline_harness.py](../ashare_model/baseline_harness.py) | matched unique-semantic-evaluation 预算和统一搜索评价适配器 |
 | 搜索治理 | [admission.py](../ashare_model/admission.py) | v2 配对种子规则：imitation RL 必须在 area/OOS IR 同时胜 random RL 与 GP；失败时禁用高级 RL |
 | 评价 | [backtest.py](../ashare_model/backtest.py) | 消费统一 PortfolioConstructor 的连续权重回测、基准、费用、持仓快照和指标 |
-| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v24 nested walk-forward + P4 四搜索器统一比较语义、P6 研究域维度、全局日历/稀疏标签/拼接 OOS/DSR/max-t |
+| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v25 nested walk-forward + P4 四搜索器统一比较语义、P6 研究域维度、P7-E 语义类型候选约束、全局日历/稀疏标签/拼接 OOS/DSR/max-t |
 | 评价 | [pareto.py](../ashare_model/pareto.py) | 多目标 Pareto frontier 辅助 |
 | 治理 | [ledger.py](../ashare_model/ledger.py) | append-only JSONL 试验账本、序列和 SHA-256 hash chain |
 | 治理 | [regime.py](../ashare_model/regime.py) | dev cutoff、预锁 final slice、dataset 绑定和违规拒绝 |
@@ -531,12 +531,12 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 |---|---:|
 | 模型 | <code>MODEL_VERSION = 3</code>（v3 记录 elite-imitation 初始化；v2 checkpoint 明确拒绝晋级并重训） |
 | 奖励 | <code>REWARD_VERSION = 14</code>（v14 分离稀疏研究标签与逐日组合收益） |
-| 评价协议 | <code>PROTOCOL_VERSION = 24</code>（v24 增加研究域维度并记录 research_domain；v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
-| 公式语法 | <code>GRAMMAR_VERSION = 2</code> |
-| feature registry | 2（v2 起逐特征记录 data_tier） |
+| 评价协议 | <code>PROTOCOL_VERSION = 25</code>（v25 用语义类型约束采样候选池（P7-E）；v24 增加研究域维度并记录 research_domain；v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
+| 公式语法 | <code>GRAMMAR_VERSION = 3</code>（v3 使 action mask 类型感知（P7-E）；v2 引入独立 EOS 与 stack-only postfix 语法） |
+| feature registry | 3（v3 起记录携带作者研究元数据与 horizon/cost/depends_on 派生三元组（P7 D1，仅描述性）；v2 起逐特征记录 data_tier） |
 | data tier | 1（ashare_model/data_tier.py，P2 新增） |
 | tier report | 1（ashare_model/tier_reports.py，P2 新增） |
-| fee matrix / searcher bench | 1（P1 新增测量模块） |
+| fee matrix / searcher bench | 1 / 2（P1 新增测量模块；searcher bench v2 起统一四后端 SearchResult 与唯一语义预算口径，契约见 docs/p4_search_transformer_contract.md §3） |
 | bare factor backtest | 3（v2 记录完整执行 provenance；v3 固定四象限 schema） |
 | portfolio constructor | 1（ashare_portfolio/constructor.py） |
 | rebalance policy | 2（v2 新增 every_20_days 与 monthly 频率，P6） |
@@ -553,7 +553,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 核心 | [optimizer.py](../ashare_portfolio/optimizer.py) | constructor 的可选 CVXPY/OSQP 长仓 QP 后端；alpha、风险、换手、冲击、行业/beta/size 暴露、ADV 容量约束 |
 | 契约 | [rebalance.py](../ashare_portfolio/rebalance.py) | 全局 daily/weekly/every-N/monthly 调仓日历及 frequency/horizon 非重叠约束（v2 起含 every_20_days 与 monthly，P6） |
 | provenance | [execution_spec.py](../ashare_portfolio/execution_spec.py) | execution v2、constructor 版本和完整组合配置的统一记录/校验 |
-| 集成测试 | [golden.py](../ashare_portfolio/golden.py) | 将当前 constructor 权重通过 lot-free/whole-lot 撮合重放，分解费用、阻塞、手数残差；外部权重必须携带匹配 provenance |
+| 集成测试 | [golden.py](../ashare_trading/golden.py) | 将当前 constructor 权重通过 lot-free/whole-lot 撮合重放，分解费用、阻塞、手数残差；外部权重必须携带匹配 provenance |
 | 包入口 | [__init__.py](../ashare_portfolio/__init__.py) | 公开 constructor/optimizer/golden/provenance 类型 |
 
 reward、完整回测、golden parity 和 simulation 都消费同一个 <code>PortfolioConstructor</code>。生产默认由 YAML 选择 <code>equal_weight</code>；将 <code>portfolio_method</code> 显式改为 <code>optimizer</code> 时，同一 constructor 调用 QP 后端，并继续执行相同的缓冲、阻断和后处理契约。
@@ -570,7 +570,7 @@ reward、完整回测、golden parity 和 simulation 都消费同一个 <code>Po
 | 控制 | [signals.py](../ashare_trading/signals.py) | STOP/STOPPED 文件协议 |
 | 包入口 | [__init__.py](../ashare_trading/__init__.py) | 包标识 |
 
-回测是连续权重模型；模拟盘是真实股数、买入 100 股整手、可零股清仓。两者通过共享费用模型和 [ashare_portfolio/golden.py](../ashare_portfolio/golden.py) 检查可解释残差，而不是承诺逐分完全相同。
+回测是连续权重模型；模拟盘是真实股数、买入 100 股整手、可零股清仓。两者通过共享费用模型和 [ashare_trading/golden.py](../ashare_trading/golden.py) 检查可解释残差，而不是承诺逐分完全相同。
 
 ### 4.7 Web 与看板
 
@@ -679,7 +679,7 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | 策略晋级 | [promotion.py](../ashare_model/promotion.py) | v22/v14/v2 当前协议、paper windows、当前数据与组合 provenance | 六门 verdict（+data_tier，默认 A-only） |
 | 统一组合构造 | [constructor.py](../ashare_portfolio/constructor.py) | signal、前仓、PIT/阻断 mask、资本、配置 | PortfolioOutput；equal_weight/optimizer 共用后处理 |
 | QP 组合优化 | [optimizer.py](../ashare_portfolio/optimizer.py) | alpha、前仓、风险/暴露/ADV | PortfolioSolution；由 constructor 的 optimizer 方法消费 |
-| 回测/撮合黄金一致性 | [golden.py](../ashare_portfolio/golden.py) | 回测目标权重和原始 bar | ParityReport |
+| 回测/撮合黄金一致性 | [golden.py](../ashare_trading/golden.py) | 回测目标权重和原始 bar | ParityReport |
 | 模拟订单与撮合 | [orders.py](../ashare_trading/orders.py)、[matching.py](../ashare_trading/matching.py) | 目标权重、现金、bar | SimOrder/SimTrade |
 | 模拟状态/续跑 | [portfolio.py](../ashare_trading/portfolio.py)、[run_sim.py](../ashare_trading/run_sim.py) | 策略、旧状态、日期区间 | portfolio/progress/逐日流水 |
 | 模拟子进程控制 | [manager.py](../ashare_trading/manager.py)、[signals.py](../ashare_trading/signals.py) | API 操作 | run record、锁、STOP、子进程 |
@@ -899,11 +899,11 @@ API 没有数据同步、训练、回测、协议评价或晋级路由，这些�
 - <code>ashare_data</code> 不依赖模型、交易或 Web，是底层。
 - <code>ashare_execution.py</code> 只依赖配置和 NumPy，供 model/portfolio/trading 复用。
 - <code>ashare_model</code> 依赖 data + execution，不依赖 Web。
-- <code>ashare_trading</code> 依赖 data + model + execution。
+- <code>ashare_trading</code> 依赖 data + model + execution，golden 集成规范另顺向依赖 portfolio.execution_spec。
 - <code>webapi</code> 依赖 data + execution + trading，只读模型产物而不 import trainer。
 - <code>webui</code> 只通过 HTTP 依赖 webapi。
 - <code>dashboard</code> 直接读文件/DB，绕过 webapi。
-- <code>ashare_portfolio.golden</code> 跨越 model/execution/trading，是有意的集成规范；optimizer 自身相对独立。
+- <code>ashare_trading.golden</code> 自最上层顺向跨越 model/execution/portfolio，是有意的集成规范；optimizer 自身相对独立。
 
 新增功能时应保持依赖向下，不要让 data 反向 import model/trading，也不要把 React 响应结构变成核心领域模型。
 

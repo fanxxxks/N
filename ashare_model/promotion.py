@@ -43,6 +43,7 @@ from ashare_data.io_utils import atomic_write_json, read_json_safe
 
 from .identity import formula_hash
 
+from .artifact_versions import version_matches
 from .data_tier import (
     DATA_TIER_VERSION,
     TIER_TIME_RULES,
@@ -368,29 +369,36 @@ def evaluate_challenger(
     gates: dict[str, dict] = {}
     top = artifact.get("top_trial")
 
-    # G1 -- data & formula P0 gate.
+    # G1 -- data & formula P0 gate.  Version equality uses the single
+    # comparison primitive from ashare_model.artifact_versions; a missing
+    # field never matches and renders as ``None`` in the message (pinned
+    # by the F2 characterization tests).  G1 checks protocol / reward /
+    # execution / portfolio_constructor only; the wider field set
+    # (model_version, searcher, imitation) belongs to classify_strategy.
     reasons: list[str] = []
     if artifact.get("legacy") is True:
         reasons.append("artifact is explicitly marked legacy")
-    if str(artifact.get("protocol_version")) != str(PROTOCOL_VERSION):
+    if not version_matches(artifact.get("protocol_version"), PROTOCOL_VERSION):
         reasons.append(
             f"artifact protocol_version {artifact.get('protocol_version')} != "
             f"{PROTOCOL_VERSION}; only current stitched artifacts qualify"
         )
-    if str(artifact.get("reward_version")) != str(REWARD_VERSION):
+    if not version_matches(artifact.get("reward_version"), REWARD_VERSION):
         reasons.append(
             f"artifact reward_version {artifact.get('reward_version')} != "
             f"{REWARD_VERSION}"
         )
-    if str(artifact.get("execution_version")) != str(EXECUTION_SPEC_VERSION):
+    if not version_matches(
+        artifact.get("execution_version"), EXECUTION_SPEC_VERSION
+    ):
         reasons.append(
             f"artifact execution_version {artifact.get('execution_version')} != "
             f"{EXECUTION_SPEC_VERSION}; legacy execution semantics cannot "
             "be promoted"
         )
-    if (
-        str(artifact.get("portfolio_constructor_version"))
-        != str(PORTFOLIO_CONSTRUCTOR_VERSION)
+    if not version_matches(
+        artifact.get("portfolio_constructor_version"),
+        PORTFOLIO_CONSTRUCTOR_VERSION,
     ):
         reasons.append(
             "artifact portfolio_constructor_version "

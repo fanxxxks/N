@@ -236,17 +236,28 @@ def test_icir_zero_with_fewer_than_two_observations():
 # --- turnover cost (continuous, rate-proportional) --------------------------
 
 
-def test_exact_round_trip_cost_formula_above_commission_floor():
+@pytest.mark.parametrize(
+    "notional",
+    [
+        100_000.0,  # original anchor case (floor not binding)
+        20_000.0,  # floor not binding (0.00025 x 20000 = 5 = min_commission)
+        10_000.0,  # floor binds (2.5 < 5)
+        2_000.0,  # floor binds
+        200.0,  # deep below the floor
+    ],
+)
+def test_exact_round_trip_cost_formula_commission_floor_grid(notional):
     cfg = _cfg()
     model = ExecutionCostModel.from_config(cfg)
-    exact = float(model.buy_cost(cfg.initial_capital).total) + float(
-        model.sell_cost(cfg.initial_capital).total
+    exact = float(model.buy_cost(notional).total) + float(
+        model.sell_cost(notional).total
     )
-    assert exact / cfg.initial_capital == pytest.approx(
-        2 * cfg.commission_rate
-        + cfg.stamp_tax_rate
-        + 2 * cfg.transfer_fee_rate
-        + 2 * cfg.slippage_rate,
+    commission = 2 * max(notional * cfg.commission_rate, cfg.min_commission)
+    assert exact == pytest.approx(
+        commission
+        + notional * cfg.stamp_tax_rate
+        + 2 * notional * cfg.transfer_fee_rate
+        + 2 * notional * cfg.slippage_rate,
         rel=1e-12,
     )
 

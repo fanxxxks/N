@@ -23,6 +23,9 @@ from ashare_data.config import (
 )
 from ashare_model import evaluation
 from ashare_model.evaluation import PROTOCOL_VERSION, build_result
+from ashare_model.reward import REWARD_VERSION
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
 from ashare_model.promotion import (
     PaperWindowRegistry,
     evaluate_challenger,
@@ -690,3 +693,97 @@ def test_data_tier_policy_rejects_c_and_unknown_tiers():
         _verdict(artifact, allowed_data_tiers=("C",))
     with pytest.raises(ValueError, match="unknown"):
         _verdict(artifact, allowed_data_tiers=("X",))
+
+
+# ---------------------------------------------------------------------------
+# F2 characterization pins (parity guards for the version-judgement
+# refactor, t3-M1): G1 compares exactly four recorded versions against the
+# current code generation — protocol / reward / execution /
+# portfolio_constructor — and treats a *missing* field as a mismatch
+# (``None`` is rendered into the message).  G1 deliberately does NOT
+# inspect ``model_version`` / ``searcher``; that wider field set belongs to
+# ``ashare_model.artifact_versions.classify_strategy``.  The asymmetry is
+# pinned here as current behavior, not endorsed as ideal — aligning the
+# coverage would tighten the promotion gate and is a research-semantics
+# change, out of F2 scope.
+# ---------------------------------------------------------------------------
+
+
+def _g1_gate(artifact, tmp_path):
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    return verdict["gates"]["data_formula_p0"]
+
+
+def test_g1_version_mismatch_messages_exact(tmp_path):
+    artifact = _strong_artifact()
+    artifact["protocol_version"] = "19"
+    artifact["reward_version"] = "10"
+    artifact["execution_version"] = 1
+    artifact["portfolio_constructor_version"] = 0
+    gate = _g1_gate(artifact, tmp_path)
+    assert not gate["passed"]
+    reasons = gate["reasons"]
+    assert (
+        f"artifact protocol_version 19 != {PROTOCOL_VERSION}; "
+        "only current stitched artifacts qualify"
+    ) in reasons
+    assert f"artifact reward_version 10 != {REWARD_VERSION}" in reasons
+    assert (
+        f"artifact execution_version 1 != {EXECUTION_SPEC_VERSION}; "
+        "legacy execution semantics cannot be promoted"
+    ) in reasons
+    assert (
+        "artifact portfolio_constructor_version 0 != "
+        f"{PORTFOLIO_CONSTRUCTOR_VERSION}"
+    ) in reasons
+
+
+def test_g1_treats_missing_versions_as_mismatch(tmp_path):
+    artifact = _strong_artifact()
+    for field in (
+        "protocol_version",
+        "reward_version",
+        "portfolio_constructor_version",
+    ):
+        artifact.pop(field, None)
+    gate = _g1_gate(artifact, tmp_path)
+    assert not gate["passed"]
+    reasons = gate["reasons"]
+    assert (
+        f"artifact protocol_version None != {PROTOCOL_VERSION}; "
+        "only current stitched artifacts qualify"
+    ) in reasons
+    assert f"artifact reward_version None != {REWARD_VERSION}" in reasons
+    assert (
+        "artifact portfolio_constructor_version None != "
+        f"{PORTFOLIO_CONSTRUCTOR_VERSION}"
+    ) in reasons
+
+
+def test_g1_version_comparison_is_string_coerced(tmp_path):
+    # The current generation mixes int and str version constants
+    # (EXECUTION_SPEC_VERSION=2 vs PROTOCOL_VERSION="25"); a recorded value
+    # matches iff str(recorded) == str(current).
+    artifact = _strong_artifact()
+    artifact["protocol_version"] = int(PROTOCOL_VERSION)
+    artifact["reward_version"] = int(REWARD_VERSION)
+    artifact["execution_version"] = str(EXECUTION_SPEC_VERSION)
+    artifact["portfolio_constructor_version"] = str(PORTFOLIO_CONSTRUCTOR_VERSION)
+    gate = _g1_gate(artifact, tmp_path)
+    assert gate["passed"], gate["reasons"]
+
+
+def test_g1_does_not_check_model_version_or_searcher(tmp_path):
+    # Field-coverage asymmetry pin: a stale model_version / unknown
+    # searcher still passes G1.
+    artifact = _strong_artifact()
+    artifact["model_version"] = 0
+    artifact["searcher"] = "deliberately-unknown"
+    gate = _g1_gate(artifact, tmp_path)
+    assert gate["passed"], gate["reasons"]

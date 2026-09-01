@@ -43,6 +43,7 @@ from .universe import (
     UniverseContractStatus,
     UniversePolicy,
     build_universe_mask,
+    dev_fallback_membership_records,
     member_bar_coverage,
     membership_interval_issues,
     resolve_universe_contract,
@@ -85,20 +86,11 @@ def _dev_membership_records(
 ) -> list[dict]:
     """All-period membership records for the development fallback.
 
-    Mirrors the loader's in-memory fallback: never persisted, provenance
-    stays visible through ``status.degraded``.
+    Delegates to the single definition in :mod:`ashare_data.universe`
+    (arch-review F4).
     """
 
-    index_code = str(config.index_codes[0])
-    return [
-        {
-            "index_code": index_code,
-            "ts_code": code,
-            "in_date": contract.sessions[0],
-            "out_date": "99991231",
-        }
-        for code in contract.codes
-    ]
+    return dev_fallback_membership_records(config.index_codes[0], contract)
 
 
 def _contract_eligible_mask(

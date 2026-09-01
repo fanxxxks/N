@@ -48,15 +48,14 @@ from ashare_data.config import BacktestConfig
 from ashare_data.processor import open_to_open_returns, tradability_blocked
 from ashare_execution import ExecutionCostModel
 from ashare_model.backtest import AshareBacktestEngine
-from ashare_trading.matching import SimBroker
-from ashare_trading.orders import build_orders, target_shares_from_weights
-from ashare_trading.portfolio import PositionState, SimulationPortfolio
-
-from .execution_spec import (
+from ashare_portfolio.execution_spec import (
     EXECUTION_SPEC_VERSION,
     execution_provenance,
     validate_execution_provenance,
 )
+from ashare_trading.matching import SimBroker
+from ashare_trading.orders import build_orders, target_shares_from_weights
+from ashare_trading.portfolio import PositionState, SimulationPortfolio
 
 _BAR_COLUMNS = ("open", "high", "low", "pre_close", "volume")
 

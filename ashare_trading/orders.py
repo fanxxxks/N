@@ -2,7 +2,7 @@
 
 One implementation of the weight -> order rule shared by the paper-trading
 runner (``ashare_trading.run_sim``) and the golden execution spec
-(``ashare_portfolio.golden``): whole-lot buys, sells first so their
+(``ashare_trading.golden``): whole-lot buys, sells first so their
 proceeds fund the day's buys, full-exit sells for held names outside the
 target set, and a deterministic order-id scheme.
 

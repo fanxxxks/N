@@ -45,7 +45,7 @@ from ashare_model.evaluation import (
 )
 from ashare_model.reward import REWARD_VERSION, rank_ic_series
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
-from ashare_portfolio.golden import EXECUTION_SPEC_VERSION
+from ashare_trading.golden import EXECUTION_SPEC_VERSION
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 
 TEST_SPEC_ID = "a" * 64

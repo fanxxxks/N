@@ -116,6 +116,29 @@ class ResolvedUniverse:
     status: UniverseContractStatus
 
 
+def dev_fallback_membership_records(
+    index_code: str, contract: ResolvedUniverse
+) -> list[dict]:
+    """All-period membership records for the explicit development fallback.
+
+    Single definition shared by the data loader and the production gates
+    (arch-review F4): every configured code is recorded as a member of
+    ``index_code`` from the first session, open-ended.  The fallback is
+    in-memory only, never persisted, and its degraded provenance stays
+    visible through ``UniverseContractStatus.degraded``.
+    """
+
+    return [
+        {
+            "index_code": str(index_code),
+            "ts_code": code,
+            "in_date": contract.sessions[0],
+            "out_date": OPEN_ENDED_OUT_DATE,
+        }
+        for code in contract.codes
+    ]
+
+
 def _normalize_date(value: object) -> str:
     if value is None or pd.isna(value):
         return ""

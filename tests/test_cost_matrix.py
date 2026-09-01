@@ -27,6 +27,7 @@ import json
 import pytest
 
 from ashare_data.config import BacktestConfig
+from ashare_execution import ExecutionCostModel
 from ashare_model.cost_matrix import (
     FEE_MATRIX_VERSION,
     annual_drag,
@@ -218,3 +219,46 @@ def test_cli_writes_fee_matrix_json(tmp_path):
     assert payload["version"] == FEE_MATRIX_VERSION
     assert "capacity" in payload and "recommended" in payload
     assert "feasible_structures" in payload
+
+
+# --- single fee semantics: delegation to ExecutionCostModel -----------------
+
+# (capital, positions) grid: per_order spans the no-floor region, the
+# floor-binding region and far below the minimum-commission floor.
+_DELEGATION_GRID = [
+    (1_000_000, 10),  # per_order 100000, floor not binding
+    (500_000, 10),  # per_order 50000
+    (200_000, 10),  # per_order 20000
+    (100_000, 5),  # per_order 20000
+    (100_000, 1),  # per_order 100000
+    (100_000, 10),  # per_order 10000, floor binds (0.00025*10000=2.5 < 5)
+    (100_000, 20),  # per_order 5000, floor binds
+    (100_000, 50),  # per_order 2000, floor binds
+    (10_000, 50),  # per_order 200, deep below the floor
+    (1_000, 50),  # per_order 20
+    (500, 50),  # per_order 10
+]
+
+
+@pytest.mark.parametrize("capital,positions", _DELEGATION_GRID)
+def test_round_trip_cost_matches_execution_cost_model_per_leg(capital, positions):
+    """Single-fee-semantics contract: the round-trip cost of one position
+    must equal buy+sell legs computed by the shared ExecutionCostModel —
+    on both sides of the per-order minimum-commission floor."""
+    bt = BacktestConfig()
+    per_order = capital / positions
+    model = ExecutionCostModel.from_config(bt)
+    buy = model.buy_cost(per_order)
+    sell = model.sell_cost(per_order)
+    expected = float(buy.total) + float(sell.total)
+    assert round_trip_cost(capital, positions, bt) == pytest.approx(
+        expected, abs=1e-9
+    )
+
+
+def test_round_trip_cost_zero_notional_is_zero():
+    """Zero-yuan positions are outside the report domain (build_fee_matrix
+    rejects capital <= 0).  Under the delegated ExecutionCostModel semantics
+    a zero order charges nothing — no order, no minimum commission."""
+    bt = BacktestConfig()
+    assert round_trip_cost(0, 5, bt) == 0.0
