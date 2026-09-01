@@ -67,10 +67,10 @@ AlphaGPT 当前是一套本地优先、单用户、纯 A 股横截面因子研�
 |---|---|---|
 | [data/best_ashare_strategy.json](../data/best_ashare_strategy.json) | 公式为 <code>(VOL_20 CORR60 (ATR_14 ADD MAX3((RET_10 ADD (PS_TTM MUL TS_RANK20(DIVIDEND_YIELD))))))</code>，方向 -1，reward v10 | 已由 <code>scripts/stamp_legacy_artifacts.py</code> 盖章 legacy（无 searcher / reward v10≠14 / 无 protocol/execution/constructor/config provenance / 无 model_version / 无 dataset_id，2026-08-27T10:31:32Z）；当前 reward v14 |
 | [data/backtest_result.json](../data/backtest_result.json) | 公式为 <code>LIMIT_BREAK</code>，2015-01-06 至 2026-08-14，累计收益 -100%，Sharpe -1.956 | 公式与当前策略 JSON 不同；无 <code>dataset_id</code>；属于旧 schema |
-| [data/protocol_result.json](../data/protocol_result.json) | protocol v12、reward v10、60 行候选 | 已盖章 legacy（protocol v12≠22 / reward v10≠14 / 无 execution/constructor/config provenance / 无 dataset_id / 无 stitched / 无 ledger）；当前 protocol v22、reward v14；没有 stitched OOS、dataset、ledger 或 data-regime 块 |
+| [data/protocol_result.json](../data/protocol_result.json) | protocol v12、reward v10、60 行候选 | 已盖章 legacy（protocol v12≠25 / reward v10≠14 / 无 execution/constructor/config provenance / 无 dataset_id / 无 stitched / 无 ledger）；当前 protocol v25、reward v14；没有 stitched OOS、dataset、ledger 或 data-regime 块 |
 | [data/sim_portfolio_state.json](../data/sim_portfolio_state.json) | 2,822 个权益点、28,179 笔成交、最后日期 2026-08-14 | 旧状态没有 <code>last_exec_date</code>、公式、配置版本或 <code>dataset_id</code>；续跑时可能把新策略接到旧权益曲线上 |
 
-结论：当前 UI 只能视为“历史文件查看器”，不能被当作一组同源、同版本、可复现的研究结果。任何策略判断前，应先核对数据 manifest（当前已存在，dataset_id <code>b927074a455a…</code>），再按当前版本重新训练、回测、执行 v22 协议，并通过六道晋级门禁。
+结论：当前 UI 只能视为“历史文件查看器”，不能被当作一组同源、同版本、可复现的研究结果。任何策略判断前，应先核对数据 manifest（当前已存在，dataset_id <code>b927074a455a…</code>），再按当前版本重新训练、回测、执行 v25 协议，并通过六道晋级门禁。
 
 ### 0.3 自基线以来的变更（P0 / P1 / P2）
 
@@ -506,7 +506,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 搜索 | [baseline_harness.py](../ashare_model/baseline_harness.py) | matched unique-semantic-evaluation 预算和统一搜索评价适配器 |
 | 搜索治理 | [admission.py](../ashare_model/admission.py) | v2 配对种子规则：imitation RL 必须在 area/OOS IR 同时胜 random RL 与 GP；失败时禁用高级 RL |
 | 评价 | [backtest.py](../ashare_model/backtest.py) | 消费统一 PortfolioConstructor 的连续权重回测、基准、费用、持仓快照和指标 |
-| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v24 nested walk-forward + P4 四搜索器统一比较语义、P6 研究域维度、全局日历/稀疏标签/拼接 OOS/DSR/max-t |
+| 评价 | [evaluation.py](../ashare_model/evaluation.py) | v25 nested walk-forward + P4 四搜索器统一比较语义、P6 研究域维度、P7-E 语义类型候选约束、全局日历/稀疏标签/拼接 OOS/DSR/max-t |
 | 评价 | [pareto.py](../ashare_model/pareto.py) | 多目标 Pareto frontier 辅助 |
 | 治理 | [ledger.py](../ashare_model/ledger.py) | append-only JSONL 试验账本、序列和 SHA-256 hash chain |
 | 治理 | [regime.py](../ashare_model/regime.py) | dev cutoff、预锁 final slice、dataset 绑定和违规拒绝 |
