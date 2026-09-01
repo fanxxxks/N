@@ -225,7 +225,7 @@ OOS 不得进入任何 PR 开发反馈；paper 观察数据只允许机器证明
    degraded reason，且默认不可晋级。
 4. 数据或 universe 改动必须运行并记录 G1–G7 数据资格门禁（权威定义在
    `ashare_data/gates.py`，CLI 入口 `python scripts/check_production_gates.py`；与
-   `ashare_model/promotion.py` 的晋级门禁 G1–G6 是两个独立编号空间，禁止混用）；
+   `ashare_model/promotion.py` 的晋级门禁 G1–G7 是两个独立编号空间，禁止混用）；
    不得用 `--dev` 结果支持正式结论。
 5. 数据 readiness 必须检查最近开市日、缺失交易日、覆盖率和 manifest，而不是只检查表存在。
 6. 数据库同步、purge、回填和范围迁移是有状态操作：先只读审计精确范围，再执行，再复核

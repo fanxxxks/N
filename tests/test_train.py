@@ -294,8 +294,11 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
     crafted[:, val_start:] = target[:, val_start:] * 100.0
     crafted_t = torch.tensor(crafted, dtype=torch.float32)
     monkeypatch.setattr(trainer.vm, "execute", lambda tokens, ft: crafted_t)
-    # Force an operator-bearing formula so the bare-copy penalty does not
-    # apply: the validation reward then clips at exactly the ceiling.
+    # Force an operator-bearing formula: the validation reward then clips
+    # at exactly the ceiling (v15, contract docs/p11_reward_v15_contract.md
+    # §5.2/§6.3: the forced RET_1 RET_1 ADD bills 1.70, inside the default
+    # complexity_free_bill free zone of 3.0, so no penalty is charged on
+    # top of the clip).
     add_token = FORMULA_VOCAB.operator_offset
     pattern = [1, 1, add_token, FORMULA_VOCAB.eos_token_id]
     state = {"pos": -1}
@@ -313,10 +316,12 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
     monkeypatch.setattr(Categorical, "sample", fixed_sample)
     tokens = trainer.train(steps=1, batch_size=1)
     assert tokens is not None
-    # The validation reward clips at the ceiling minus the AST complexity
-    # bill of the forced operator formula (0.02 * 1.7 for RET_1 RET_1 ADD).
+    # The validation reward clips at the ceiling; the forced operator
+    # formula bills 1.70 <= complexity_free_bill (3.0), so the v15
+    # two-segment penalty adds nothing (p11 contract §5.2/§6.3: the v14
+    # expectation "clip_high - 0.02 * 1.7" no longer holds).
     assert trainer.best_reward == pytest.approx(
-        trainer.reward_config.reward_clip_high - 0.02 * 1.7, abs=1e-6
+        trainer.reward_config.reward_clip_high, abs=1e-6
     )
     assert "value_loss" in trainer.history[0]
     assert "entropy" in trainer.history[0]
@@ -325,18 +330,23 @@ def test_best_formula_selected_on_validation_window(tmp_path, populated_db: Data
 def test_bare_factor_penalty_applied_but_operator_formula_not(
     tmp_path, populated_db: DataConfig, monkeypatch
 ):
-    """T1-03 complexity billing: a bare single-feature formula bills
-    exactly ``complexity_penalty`` (bill 1.0); an operator-bearing formula
-    bills ``complexity_penalty * complexity_bill(ast)`` (RET_1 RET_1 ADD
-    bills 1.7), so the bare factor is cheaper than the operator formula —
-    the reverse of the pre-v12 flat nudge."""
+    """T1-03 complexity billing under the v15 two-segment shape (p11
+    contract §5.2/§6.3, §10.1 case 2): with
+    ``complexity_free_bill=1.0`` the bare single-feature formula (bill
+    1.0) sits exactly at the free-zone boundary and pays nothing, while an
+    operator-bearing formula bills
+    ``complexity_penalty * (bill - complexity_free_bill)`` (RET_1 RET_1
+    ADD bills 1.7 -> 0.25 * 0.7), so the bare factor stays cheaper than
+    the operator formula.  The custom free bill exercises the excess
+    slope; the v14 semantics (full slope ``0.02 * bill`` from bill=1.0)
+    were replaced by the pre-registered v15 shape."""
 
     import ashare_model.train as train_module
 
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
-    reward_config = _reward_cfg(complexity_penalty=0.25)
+    reward_config = _reward_cfg(complexity_penalty=0.25, complexity_free_bill=1.0)
     trainer = AshareTrainer(
         populated_db,
         model_config,
@@ -387,23 +397,25 @@ def test_bare_factor_penalty_applied_but_operator_formula_not(
     # carry different complexity bills, so both were evaluated: distinct
     # semantic classes, two budget units.
     assert trainer.semantic_cache.budget_used == 2
-    # Bare factor: bill 1.0 -> penalty exactly complexity_penalty.
-    assert bare_score.train_reward == pytest.approx(0.25)
-    assert bare_score.val_reward == pytest.approx(0.15)
+    # Bare factor: bill 1.0 sits exactly at complexity_free_bill -> the
+    # free zone pays nothing (v15 §5.2 boundary-inclusive continuity).
+    assert bare_score.train_reward == pytest.approx(0.5)
+    assert bare_score.val_reward == pytest.approx(0.4)
     assert bare_score.train_icir == pytest.approx(0.45)
     assert bare_score.val_icir == pytest.approx(0.35)
-    # Operator formula: bill 1.7 -> penalty 0.25 * 1.7 = 0.425.
+    # Operator formula: bill 1.7 - free 1.0 = 0.7 excess -> penalty
+    # 0.25 * 0.7 = 0.175.
     assert combined_score.complexity_cost == pytest.approx(1.7)
-    assert combined_score.complexity_penalty == pytest.approx(0.25 * 1.7)
-    assert combined_score.train_reward == pytest.approx(0.5 - 0.25 * 1.7)
-    assert combined_score.val_reward == pytest.approx(0.4 - 0.25 * 1.7)
+    assert combined_score.complexity_penalty == pytest.approx(0.25 * 0.7)
+    assert combined_score.train_reward == pytest.approx(0.5 - 0.25 * 0.7)
+    assert combined_score.val_reward == pytest.approx(0.4 - 0.25 * 0.7)
     assert combined_score.train_icir == pytest.approx(0.45)
     assert combined_score.val_icir == pytest.approx(0.35)
     # The selection prefers the cheaper bare factor under the new billing.
     assert trainer.best_tokens == list(bare)
-    assert trainer.best_val_reward == pytest.approx(0.15)
+    assert trainer.best_val_reward == pytest.approx(0.4)
     assert trainer.best_val_icir == pytest.approx(0.35)
-    assert trainer.best_train_reward == pytest.approx(0.25)
+    assert trainer.best_train_reward == pytest.approx(0.5)
     assert trainer.best_train_icir == pytest.approx(0.45)
 
 
@@ -1518,9 +1530,12 @@ def test_icir_gate_blocks_weak_signal(tmp_path, populated_db: DataConfig, monkey
     assert trainer.best_val_reward == -float("inf")
     rejected = trainer.selection_result.best_rejected
     assert rejected is not None
-    # The operator formula pays its AST complexity bill
-    # (0.02 * 1.7 for RET_1 RET_1 ADD) on top of the reported 0.8.
-    assert rejected.val_reward == pytest.approx(0.8 - 0.02 * 1.7)
+    # The operator formula's AST bill (1.7 for RET_1 RET_1 ADD) sits inside
+    # the default complexity_free_bill free zone (3.0), so under the v15
+    # two-segment shape (p11 contract §5.2; §6.3 combo-penalty expectation
+    # category, §10.1 case 2) nothing is charged on top of the reported 0.8
+    # (v14: 0.8 - 0.02 * 1.7).
+    assert rejected.val_reward == pytest.approx(0.8)
     assert rejected.val_icir == pytest.approx(0.01)
     assert not (populated_db.data_dir / "best_ashare_strategy.json").exists()
 

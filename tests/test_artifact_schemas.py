@@ -188,7 +188,7 @@ class TestStrategySchema:
         payload.update(
             {
                 "legacy": True,
-                "legacy_reason": ["reward_version 10 != current 14"],
+                "legacy_reason": ["reward_version 10 != current 15"],
                 "legacy_stamped_at": "2026-08-27T10:31:32+00:00",
             }
         )

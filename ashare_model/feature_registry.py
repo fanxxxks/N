@@ -385,3 +385,66 @@ class FeatureRegistry:
                 depends_on=resolve_depends_on(name, authored),
             )
         return cls(records, str(calibration_slice), source="factor_tensor")
+
+
+def formula_registry_status_report(
+    tokens=None,
+    feature_name: str | None = None,
+) -> dict:
+    """Registry promotability of a formula's features (P12 promotion G7).
+
+    Single decode path: reuses :func:`ashare_model.data_tier.formula_feature_names`
+    (the route the G6 data-tier gate already uses); ``tokens`` is the
+    canonical postfix token list and ``feature_name`` covers bare-factor
+    baseline rows (``formula=None``, ``formula_text=NAME``), symmetric to
+    :func:`ashare_model.data_tier.formula_data_tier_report`.  The
+    per-feature status is read from the single registry authorities
+    (``feature_metadata`` authored flags and ``vocab.DEPRECATION_REASONS``)
+    — never copied.
+
+    Returns ``{"feature_registry_version", "per_feature": {name:
+    {"promotion_allowed": bool, "deprecated": bool}}, "traceable": bool}``.
+    An untraceable input (no tokens, an undecodable token list, a name
+    outside the vocabulary, or an authored-metadata gap) yields
+    ``traceable=False`` with an empty ``per_feature`` — the promotion gate
+    must reject (fail closed, docs/p12_promotion_enforcement_contract.md §4).
+    """
+
+    # Lazy import: ``data_tier`` imports this module at module level
+    # (PitLevel / pit_level_of), so the dependency cannot be module-level
+    # here either (same pattern as :meth:`FeatureRegistry.summary`).
+    from .data_tier import formula_feature_names
+
+    untraceable = {
+        "feature_registry_version": FEATURE_REGISTRY_VERSION,
+        "per_feature": {},
+        "traceable": False,
+    }
+    if tokens is not None:
+        names = formula_feature_names(tokens)
+        if names is None:
+            return untraceable
+    elif feature_name is not None:
+        if feature_name not in FEATURE_NAMES:
+            return untraceable
+        names = [feature_name]
+    else:
+        return untraceable
+
+    per_feature: dict[str, dict[str, bool]] = {}
+    for name in names:
+        try:
+            allowed = bool(authored_metadata_of(name).promotion_allowed)
+        except ValueError:
+            # Authored-metadata gap: fail closed — the gate rejects via
+            # ``traceable=False`` instead of guessing a status.
+            return untraceable
+        per_feature[name] = {
+            "promotion_allowed": allowed,
+            "deprecated": name in _DEPRECATION_REASONS,
+        }
+    return {
+        "feature_registry_version": FEATURE_REGISTRY_VERSION,
+        "per_feature": per_feature,
+        "traceable": True,
+    }
