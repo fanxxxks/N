@@ -211,3 +211,111 @@ def test_run_gp_baseline_uses_shared_budget_ledger():
     stats = evaluator.stats()
     assert stats["budget_used"] == 6
     assert stats["n_semantic_dedups"] >= 0
+
+
+# --- P14 §5.1/§5.2: punitive fitness for skipped proposals ------------------
+# Contract: docs/p14_search_digest_preregistration.md (search digest) —
+# skipped proposals (invalid / semantic-duplicate / claimed-before-flush)
+# must receive the run's worst registered finite reward (never the current
+# best): the old "neutral = best" anchor let invalid and duplicate
+# individuals tie with the best and drove the P10 population collapse
+# (GP consumed 5–14% of its budget).
+
+
+def test_evaluator_worst_reward_is_the_punitive_anchor():
+    evaluator = _evaluator(budget=8)
+    assert evaluator.worst_reward == float("-inf")  # nothing registered yet
+    vocab = FORMULA_VOCAB
+    ret1 = vocab.feature_offset + vocab.feature_names.index("RET_1")
+    ret5 = vocab.feature_offset + vocab.feature_names.index("RET_5")
+    add = vocab.operator_offset + vocab.operator_names.index("ADD")
+    s1, consumed1 = evaluator.propose((ret1, ret5, add, vocab.eos_token_id))
+    assert consumed1 and s1 is not None
+    s2, consumed2 = evaluator.propose((ret5, vocab.eos_token_id))
+    assert consumed2 and s2 is not None
+    vals = [float(s.val_reward) for s in (s1, s2)]
+    assert evaluator.worst_reward == min(vals)
+    assert evaluator.best_reward == max(vals)
+    # An invalid proposal registers nothing: the anchor is unchanged.
+    evaluator.propose(())
+    assert evaluator.worst_reward == min(vals)
+
+
+def test_evaluator_execute_none_proposals_never_break_best_so_far():
+    """T2-01 + p14 §5.1: an execution failure is not billed and produces
+    no reward, so it must not emit a best-so-far coordinate — the old code
+    registered it at a duplicate budget coordinate and crashed the
+    SearchResult construction (latent defect exposed by the p14 punitive
+    scenarios)."""
+
+    base = _context()
+    target = base["target"]
+    vocab = FORMULA_VOCAB
+    blocked_token = vocab.feature_offset + vocab.feature_names.index("RET_5")
+    ret1 = vocab.feature_offset + vocab.feature_names.index("RET_1")
+    eos = vocab.eos_token_id
+
+    def execute(tokens):
+        # Deterministic per-formula execution failure: RET_5 never executes.
+        if any(int(t) == blocked_token for t in tokens):
+            return None
+        rng = np.random.default_rng(sum(int(t) for t in tokens) % 1000 + 1)
+        return target + rng.normal(0, 0.02, size=target.shape)
+
+    evaluator = _evaluator(budget=8, execute=execute, fingerprint_execute=execute)
+    evaluator.propose((ret1, eos))  # bills (class 1)
+    score, consumed = evaluator.propose((blocked_token, eos))  # fails to execute
+    assert consumed is True and score is not None  # attempted, not billed
+    assert evaluator.budget_used == 1  # the failed execution is not billed
+    evaluator.propose((ret1, eos))  # canonical duplicate of the first
+    result = evaluator.finish(
+        backend="gp", seed=1, termination_reason="budget_exhausted"
+    )
+    coordinates = [x for x, _ in result.best_so_far]
+    assert coordinates == sorted(set(coordinates))  # strictly increasing
+
+
+def test_run_gp_baseline_punitive_fitness_beats_neutral_best(monkeypatch):
+    """Collapse-recovery A/B (p14 §8-2): the P10-faithful scenario — fine
+    semantic fingerprints, so the population's own convergence re-proposes
+    claimed classes.  With the old anchor (skipped proposals tied with the
+    current best) the search collapses early; with the p14 punitive anchor
+    (worst-so-far) selection returns to novel, evaluable lineage and the
+    consumption differential is the collapse metric.  Asserted as an
+    in-process A/B so the comparison does not depend on process-level hash
+    randomization (measured: punitive 288 vs neutral-best 84 consumed on
+    this scenario; the formal-run criterion GP consumption ≥ 50% is the
+    p14 §9 judgment and is unchanged)."""
+
+    consumed: dict[str, int] = {}
+    saved_property = SemanticBudgetEvaluator.worst_reward
+    try:
+        result = run_gp_baseline(
+            seed=7, evaluator=_evaluator(budget=300), max_formula_len=10
+        )
+        consumed["punitive"] = result.consumed_budget
+        # Emulate the old anchor exactly: skipped proposals tied with the
+        # current best.
+        monkeypatch.setattr(
+            SemanticBudgetEvaluator,
+            "worst_reward",
+            property(lambda self: self.best_reward),
+        )
+        result = run_gp_baseline(
+            seed=7, evaluator=_evaluator(budget=300), max_formula_len=10
+        )
+        consumed["neutral_best"] = result.consumed_budget
+    finally:
+        SemanticBudgetEvaluator.worst_reward = saved_property
+    assert consumed["punitive"] > consumed["neutral_best"], consumed
+
+
+def test_run_gp_baseline_punitive_fitness_deterministic():
+    first = run_gp_baseline(
+        seed=7, evaluator=_evaluator(budget=120), max_formula_len=10
+    )
+    second = run_gp_baseline(
+        seed=7, evaluator=_evaluator(budget=120), max_formula_len=10
+    )
+    assert first.best_so_far == second.best_so_far
+    assert first.consumed_budget == second.consumed_budget

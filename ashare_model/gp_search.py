@@ -24,6 +24,7 @@ running until the evaluation budget is exhausted.  Deterministic in
 
 from __future__ import annotations
 
+import math
 import random as py_random
 
 import numpy as np
@@ -364,10 +365,12 @@ def run_gp_baseline(
     """Generational strongly-typed GP search under the semantic budget.
 
     Proposals that the evaluator skips (invalid, degenerate, duplicate or
-    claimed classes) receive the current best reward as a neutral fitness;
-    only full evaluations consume budget.  The search stops when the
-    budget is exhausted or a generation produced no new evaluation.
-    ``feature_ids`` (P6 §4.2) restricts the terminal set.
+    claimed classes) receive the run's worst registered finite reward as a
+    punitive fitness — never the current best, which let invalid and
+    duplicate individuals tie with the best and drove the P10 population
+    collapse (p14 §1.1/§5.1).  Only full evaluations consume budget.  The
+    search stops when the budget is exhausted or a generation produced no
+    new evaluation.  ``feature_ids`` (P6 §4.2) restricts the terminal set.
     """
 
     _ensure_creator()
@@ -409,8 +412,14 @@ def run_gp_baseline(
         tokens = tuple(tree_to_tokens(ind, vocab))
         score = evaluator.score_of(tokens)
         if score is not None:
-            return float(score.val_reward)
-        return evaluator.best_reward  # neutral fitness for skipped proposals
+            reward = float(score.val_reward)
+            if math.isfinite(reward):
+                return reward
+        # Punitive anchor (p14 §5.1): a skipped proposal is strictly no
+        # better than every evaluated proposal — never the current best,
+        # which let invalid/duplicate individuals tie with the best and
+        # collapse the population (P10: GP consumed 5–14% of its budget).
+        return evaluator.worst_reward
 
     population = [fresh_individual() for _ in range(pop_size)]
     stall_generations = 0

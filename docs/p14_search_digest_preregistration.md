@@ -76,8 +76,12 @@ tier 完全盲：
    均已实现且有测试覆盖，可作为 track 限制的现成机制。
 4. A 线（reward v15）、B 线（promotion 执法）、C 线（fundamental 字段）并行推进且与本文
    无共享文件（§13 所有权表）；本文的机制与判据不依赖任何一线的合并结果。
-5. Optuna `TPESampler` 接受任意有限目标值及 `-inf`（仅拒绝 NaN——`tpe_search.py:160-161`
-   既有注释）；若安装版本实测拒绝，触发 §12 停止条件。
+5. Optuna `TPESampler` 接受任意有限目标值及 `-inf`（实装 4.9.0 实测
+   `tell(-inf)` 接受；`tell(NaN)` 不抛异常而是 UserWarning +
+   TrialState.FAIL，trial 不进入代理模型——`tpe_search.py:158-161` 的
+   既有注释"仅拒绝 NaN"与实装不符，实现时更正该注释；惩罚路径永不发送
+   NaN：非有限真实分数同样路由到惩罚值，t17 F2）。若安装版本实测拒绝
+   ±inf，触发 §12 停止条件。
 6. 测试 toy vocab/evaluator fixtures（`tests/test_gp_search.py`、`tests/test_tpe_search.py` 模式）
    可确定性地构造重复压力场景。
 
@@ -151,7 +155,8 @@ tier 完全盲：
 
 - `tpe_search.tell`（tpe_search.py:153-162）：跳过/非有限情形从 `study.tell(trial, best_reward)`
   改为 `study.tell(trial, punitive)`，punitive 定义与 §5.1 完全一致（同一 `worst_reward` 权威；
-  无有限分数时 `-inf`，Optuna 仅拒绝 NaN）。真实评价的有限 reward 原样 tell（重复类若命中
+  无有限分数时 `-inf`；Optuna 4.9.0 接受 ±inf，NaN 会以 UserWarning + FAIL 拒判——惩罚
+  路径永不发送 NaN，t17 F2）。真实评价的有限 reward 原样 tell（重复类若命中
   已评缓存、`score_of` 返回真实分数，tell 真实分数——该路径不变，见
   `baseline_harness.py:291-293,349-357`）。
 - 语义：surrogate 收到"该区域 = 迄今最差"的一致信号 → 后验回避重复生成区；同一 run 内
@@ -173,7 +178,7 @@ tier 完全盲：
     （非 EOS 合法 token 保持既有均匀份额）。
 - **验收界**（机制门，RED 可测，生产词表 114/max_len 12、固定 seed，作用于**提案分布**
   ——机制唯一可控对象）：提案中 content=11（即 12 token 含 EOS）占比 **≤ 25%**、
-  content ≤ 8 占比 **≥ 40%**；自然界完法只会缩短分布，界留有工程余量。正式运行逐行
+  content ≤ 8 占比 **≥ 40%**；自然合法公式只会缩短分布，界留有工程余量。正式运行逐行
   记录的**被评唯一**长度分布是结果不是门（短长度唯一类会先耗尽，被评分布允许长于
   提案分布），其判据归 §9 判据 2。
 - **GP 排除**：GP 三行上限占比 1.1%–4.5%、赢家 content 4–8，无堆积病灶；树生成深度
@@ -193,8 +198,9 @@ tier 完全盲：
 **选定：方案乙——研究/晋级预算分离**。机制：
 
 1. track 定义：`research`（全可采样词表，61 特征）与 `promotion_tier_a`
-   （`tier_features(("A",))` 运行时派生，现 41 特征；随 registry 演进自动一致——C 线
-   合并后无需改本文）。
+   （`tier_features(("A",))` **交可采样集**（排除 12 个 deprecated——
+   deprecated 本就不可采样，grammar v4+ 规则，故行为无差，t17 F1）运行
+   时派生，现 41 特征；随 registry 演进自动一致——C 线合并后无需改本文）。
 2. campaign 行结构：v4 campaign 模式每 (seed × backend) 拆两行：research 行预算
    **P14_RESEARCH_BUDGET = 1200**，promotion_tier_a 行预算 **P14_PROMOTION_BUDGET = 800**；
    合计 2000 与 P10 每 (seed, backend) 总预算一致 → 最终 7h 正式运行的墙钟投影不被本

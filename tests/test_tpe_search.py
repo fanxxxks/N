@@ -9,11 +9,15 @@ reuse the stored score without billing.
 
 from __future__ import annotations
 
+import math
+from collections import Counter
+
 import numpy as np
 import pytest
 
 from ashare_model.baseline_harness import SemanticBudgetEvaluator
 from ashare_model.tpe_search import run_tpe_baseline
+from ashare_model.vocab import FORMULA_VOCAB
 
 
 def _evaluator(**overrides):
@@ -105,3 +109,125 @@ def test_run_tpe_baseline_invalid_proposals_cost_nothing():
     assert score is None and not consumed
     result = run_tpe_baseline(seed=17, evaluator=evaluator, max_formula_len=10)
     assert result.n_evaluated == 4
+
+
+# --- P14 §5.2/§5.3: punitive tell + proposal length prior -------------------
+# Contract: docs/p14_search_digest_preregistration.md — skipped proposals
+# must be told the run's worst registered finite reward (never the current
+# best: at the P10 0.98 plateau every duplicate was told the plateau value,
+# poisoning the surrogate), and the per-step EOS prior (profile
+# p14-uniform-2-11-v1) must break the 91% cap-length stacking.
+
+
+def _coarse_evaluator(**overrides):
+    """Coarse calibration fingerprint (token-sum mod 7): after the first
+    handful of (fingerprint, bill) classes every further proposal is a
+    semantic duplicate with score_of -> None — the punitive tell path."""
+    rng = np.random.default_rng(5)
+    target = rng.normal(0.001, 0.01, size=(12, 48))
+
+    def fingerprint_execute(tokens):
+        cls = sum(int(t) for t in tokens) % 7
+        return target * (1.0 + 0.001 * cls)
+
+    return _evaluator(fingerprint_execute=fingerprint_execute, **overrides)
+
+
+def test_tpe_tell_gives_skipped_proposals_the_punitive_worst_so_far(monkeypatch):
+    import ashare_model.tpe_search as tpe_module
+
+    told: list[float] = []
+    real_create = tpe_module.optuna.create_study
+
+    class RecordingStudy:
+        def __init__(self, study):
+            self._study = study
+
+        def ask(self):
+            return self._study.ask()
+
+        def tell(self, trial, value=None, **kwargs):
+            told.append(float(value))
+            return self._study.tell(trial, value, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._study, name)
+
+    monkeypatch.setattr(
+        tpe_module.optuna,
+        "create_study",
+        lambda **kwargs: RecordingStudy(real_create(**kwargs)),
+    )
+    evaluator = _coarse_evaluator(budget=64)
+    result = run_tpe_baseline(seed=7, evaluator=evaluator, max_formula_len=10)
+    assert result.proposal_count > result.consumed_budget, "fixture produced no skips"
+    real = [
+        float(score.val_reward)
+        for score in result.scores
+        if score.val_reward is not None and math.isfinite(float(score.val_reward))
+    ]
+    assert len(real) == result.consumed_budget
+    assert all(math.isfinite(value) for value in told)  # never NaN/inf
+    r_min, r_max = min(real), max(real)
+    # Skipped proposals are told the punitive worst-so-far: after the
+    # minimum has registered, every skip adds a told value == r_min
+    # (strictly more than the real evaluations of that value), and no skip
+    # is ever told the current best (the r_max tell count stays at the real
+    # count).  The old behavior told best_reward for every skip: r_max
+    # inflation (strictly more than real) and no r_min inflation.
+    assert Counter(told)[r_min] > Counter(real)[r_min], (
+        Counter(told)[r_min],
+        Counter(real)[r_min],
+    )
+    assert Counter(told)[r_max] == Counter(real)[r_max]
+
+
+def test_tpe_length_prior_induced_distribution():
+    """The per-step EOS prior must break the cap stacking: on the toy
+    max_len=10 the dominant (cap) content length must fall far below the
+    P10-era ~91% and short formulas must receive real coverage."""
+    seen: list[tuple[int, ...]] = []
+
+    evaluator = _coarse_evaluator(budget=240)
+
+    original_propose = evaluator.propose
+
+    def recording_propose(tokens):
+        seen.append(tuple(int(t) for t in tokens))
+        return original_propose(tokens)
+
+    evaluator.propose = recording_propose
+    result = run_tpe_baseline(seed=11, evaluator=evaluator, max_formula_len=10)
+    assert len(seen) >= result.proposal_count * 0.9
+    eos = FORMULA_VOCAB.eos_token_id
+
+    def content_length(tokens):
+        return tokens.index(eos) if eos in tokens else len(tokens)
+
+    contents = [content_length(tokens) for tokens in seen]
+    cap = sum(1 for c in contents if c >= 9) / len(contents)
+    short = sum(1 for c in contents if c <= 7) / len(contents)
+    assert cap <= 0.35, f"cap stacking unchanged: {cap:.2f}"
+    assert short >= 0.40, f"no short-formula coverage: {short:.2f}"
+
+
+def test_length_prior_target_lengths_match_preregistered_profile():
+    import random as _random
+
+    from ashare_model import search_length_prior as lp
+
+    assert lp.LENGTH_PRIOR_PROFILE == "p14-uniform-2-11-v1"
+    assert lp.eos_probability(0, 12) == 0.0
+    assert lp.eos_probability(1, 12) == 0.0
+    # Target: P(content = L) = 1/10 for L in 2..11 at max_len 12.
+    q = [lp.eos_probability(step, 12) for step in range(12)]
+    survive = 1.0
+    for content in range(2, 12):
+        assert abs(survive * q[content] - 0.1) < 1e-9, content
+        survive *= 1.0 - q[content]
+    assert abs(q[11] - 1.0) < 1e-9  # the cap position forces completion
+    # Degradation: below 4 positions the profile is inactive (no targets).
+    assert lp.sample_target_content_length(_random.Random(1), 3) is None
+    rng = _random.Random(7)
+    draws = [lp.sample_target_content_length(rng, 12) for _ in range(400)]
+    assert set(draws) == set(range(2, 12))  # the full preregistered range

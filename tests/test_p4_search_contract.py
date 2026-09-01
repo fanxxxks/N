@@ -29,12 +29,17 @@ def test_p4_semantic_versions_are_pinned_by_contract():
     # P10 contract §9 (docs/p10_searcher_fairness_contract.md, approved
     # 2026-09-01) bumps SEARCH_CONTRACT_VERSION 2 -> 3 (GP node-cap
     # alignment changes the matched effective space) and
-    # SEARCHER_BENCH_VERSION 2 -> 3 (campaign seed-list runner); the
-    # pins move accordingly (AGENTS.md §10.1 case 2).
-    assert SEARCH_CONTRACT_VERSION == 3
+    # SEARCHER_BENCH_VERSION 2 -> 3 (campaign seed-list runner).
+    # P14 contract §6 (docs/p14_search_digest_preregistration.md, approved
+    # 2026-09-02) bumps SEARCH_CONTRACT_VERSION 3 -> 4 (punitive fitness/
+    # tell anchors, proposal length prior, research/promotion tracks) and
+    # SEARCHER_BENCH_VERSION 3 -> 4 (campaign track dimension with
+    # per-track budgets); pre/post results are never matched comparisons
+    # (AGENTS.md §10.1 case 2).
+    assert SEARCH_CONTRACT_VERSION == 4
     assert PROTOCOL_VERSION == "25"
     assert MODEL_VERSION == 3
-    assert SEARCHER_BENCH_VERSION == 3
+    assert SEARCHER_BENCH_VERSION == 4
 
 
 def test_model_searcher_accepts_exactly_the_four_registered_backends():
