@@ -1,0 +1,888 @@
+{
+  "version": "p10-stage-a-summary-1",
+  "source_artifact": "data/p10_searcher_comparison/campaign.json (raw, untracked)",
+  "run_id": "a45764aadaab444b9b0fa4a1c60b35a1",
+  "searcher_bench_version": 3,
+  "created_at": "2026-09-01T11:51:02",
+  "finished_at": "2026-09-01T15:45:25",
+  "wall_seconds_total": 14062.8,
+  "campaign_status": "completed",
+  "not_run": [],
+  "identity": {
+    "budget": 2000,
+    "seeds": [
+      42,
+      7,
+      2024
+    ],
+    "searchers": [
+      "gp",
+      "tpe",
+      "random",
+      "rl"
+    ],
+    "rl_steps": 8,
+    "window_cap": [
+      300,
+      400
+    ],
+    "train_end_date": "2020-12-31",
+    "fold_index": 0,
+    "dataset_id": "a839ecf2284b354a5ab6ed3228d13fc5d7f3d93a2fadba0b08d8c909edf194fd",
+    "max_formula_len": 12
+  },
+  "campaign_provenance": {
+    "budget": 2000,
+    "seeds": [
+      42,
+      7,
+      2024
+    ],
+    "searchers": [
+      "gp",
+      "tpe",
+      "random",
+      "rl"
+    ],
+    "rl_steps": 8,
+    "window_cap": [
+      300,
+      400
+    ],
+    "train_end_date": "2020-12-31",
+    "fold_index": 0,
+    "dataset_id": "a839ecf2284b354a5ab6ed3228d13fc5d7f3d93a2fadba0b08d8c909edf194fd",
+    "max_formula_len": 12,
+    "device": "cpu",
+    "semantic_cache_version": 1,
+    "git_commit": "d692b0517de4e841f4bc1f94c4de9b6dc038c4ab",
+    "config_hash": null,
+    "wall_cap_s": 25200.0,
+    "calibration_s_per_eval": {
+      "gp": 0.657,
+      "tpe": 1.012,
+      "random": 0.562,
+      "rl": 0.676
+    },
+    "deviation_stop_ratio": 2.0,
+    "row_order": [
+      "42:gp",
+      "42:tpe",
+      "42:random",
+      "42:rl",
+      "7:gp",
+      "7:tpe",
+      "7:random",
+      "7:rl",
+      "2024:gp",
+      "2024:tpe",
+      "2024:random",
+      "2024:rl"
+    ],
+    "rl_initialization": "random"
+  },
+  "ledger": {
+    "path": "data/p10_searcher_comparison/ledger.jsonl",
+    "entries": 24,
+    "terminal_trials": 12,
+    "all_succeeded": true
+  },
+  "rows": [
+    {
+      "seed": 42,
+      "searcher": "gp",
+      "requested_budget": 2000,
+      "consumed_budget": 199,
+      "proposal_count": 4600,
+      "invalid_proposals": 3962,
+      "semantic_duplicates": 85,
+      "unique_ratio": 0.0995,
+      "termination_reason": "proposal_stagnation",
+      "stagnation_reason": "three_generations_without_new_semantic_class",
+      "wall_seconds": 107.4,
+      "wall_per_1000_evals": 539.5,
+      "projected_wall_s_calibration": 1314.0,
+      "peak_rss_mb": 3094.7,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 9,
+        "3": 21,
+        "4": 25,
+        "5": 20,
+        "6": 20,
+        "7": 22,
+        "8": 25,
+        "9": 19,
+        "10": 13,
+        "11": 16,
+        "12": 9
+      },
+      "final_best_so_far": [
+        199,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "DOWNVOL10(GATE(SIGN(LIST_AGE), MAX3(MACD_DIF), MA5(CLOSE_POSITION)))",
+        "direction": 1,
+        "tokens": [
+          49,
+          80,
+          46,
+          85,
+          11,
+          96,
+          81,
+          109
+        ],
+        "val_reward": 0.9188333333333333,
+        "val_icir": 0.2828363008912112,
+        "train_reward": -0.10810538328850558,
+        "complexity_cost": 4.058333333333334,
+        "active_ir": 4.608172394495748,
+        "average_turnover": 0.04558823529411765,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "A",
+          "tiers_used": [
+            "A"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 42,
+      "searcher": "tpe",
+      "requested_budget": 2000,
+      "consumed_budget": 2000,
+      "proposal_count": 5255,
+      "invalid_proposals": 38,
+      "semantic_duplicates": 3155,
+      "unique_ratio": 1.0,
+      "termination_reason": "budget_exhausted",
+      "stagnation_reason": null,
+      "wall_seconds": 2574.4,
+      "wall_per_1000_evals": 1287.2,
+      "projected_wall_s_calibration": 2024.0,
+      "peak_rss_mb": 3551.5,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 36,
+        "3": 11,
+        "4": 6,
+        "5": 1,
+        "6": 2,
+        "7": 2,
+        "8": 11,
+        "9": 100,
+        "11": 7,
+        "12": 1824
+      },
+      "final_best_so_far": [
+        2000,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "DELTA10(GATE(MA10(KURT_20), IND_REL_RET_5, (DOWNVOL5(TURNOVER_CHG) DIV STD20(DELTA20(KURT_20)))))",
+        "direction": -1,
+        "tokens": [
+          16,
+          97,
+          59,
+          7,
+          108,
+          16,
+          112,
+          88,
+          77,
+          81,
+          111,
+          113
+        ],
+        "val_reward": 0.8916666666666667,
+        "val_icir": 0.16404363608667147,
+        "train_reward": -0.4223992316908163,
+        "complexity_cost": 5.416666666666666,
+        "active_ir": 5.121205496384058,
+        "average_turnover": 0.029411764705882353,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "C",
+          "tiers_used": [
+            "A",
+            "C"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 42,
+      "searcher": "random",
+      "requested_budget": 2000,
+      "consumed_budget": 2000,
+      "proposal_count": 3870,
+      "invalid_proposals": 0,
+      "semantic_duplicates": 1870,
+      "unique_ratio": 1.0,
+      "termination_reason": "budget_exhausted",
+      "stagnation_reason": null,
+      "wall_seconds": 1054.0,
+      "wall_per_1000_evals": 527.0,
+      "projected_wall_s_calibration": 1124.0,
+      "peak_rss_mb": 4337.9,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 27,
+        "3": 16,
+        "4": 5,
+        "5": 5,
+        "7": 4,
+        "8": 7,
+        "9": 96,
+        "10": 3,
+        "11": 9,
+        "12": 1828
+      },
+      "final_best_so_far": [
+        2000,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "((REVERSAL_5 CORR20 ((IND_REL_RET_120 CORR10 MARKET_CAP) SUB (MARGIN_BALANCE_CHG CORR60 VOLUME_IMPACT))) ADD RSQ_60)",
+        "direction": 1,
+        "tokens": [
+          14,
+          64,
+          27,
+          106,
+          30,
+          9,
+          107,
+          75,
+          90,
+          42,
+          74,
+          113
+        ],
+        "val_reward": 0.905,
+        "val_icir": 0.4242294565664072,
+        "train_reward": -0.3016971551667863,
+        "complexity_cost": 4.75,
+        "active_ir": 4.1995279246154595,
+        "average_turnover": 0.04097774244833069,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "C",
+          "tiers_used": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 42,
+      "searcher": "rl",
+      "requested_budget": 2000,
+      "consumed_budget": 1287,
+      "proposal_count": 2000,
+      "invalid_proposals": 11,
+      "semantic_duplicates": 702,
+      "unique_ratio": 0.6435,
+      "termination_reason": "steps_exhausted",
+      "stagnation_reason": null,
+      "wall_seconds": 684.4,
+      "wall_per_1000_evals": 531.8,
+      "projected_wall_s_calibration": 1352.0,
+      "peak_rss_mb": 5085.4,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 16,
+        "3": 7,
+        "4": 3,
+        "5": 3,
+        "6": 1,
+        "7": 2,
+        "8": 11,
+        "9": 73,
+        "10": 1,
+        "11": 2,
+        "12": 1256
+      },
+      "final_best_so_far": [
+        1287,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "(TS_RANK60(GATE(JUMP(IND_REL_RET_60), RET_1, RSI_14)) DIV (STD20(TURNOVER_CHG) CORR5 CLOSE_POSITION))",
+        "direction": -1,
+        "tokens": [
+          63,
+          82,
+          1,
+          44,
+          81,
+          104,
+          7,
+          88,
+          11,
+          105,
+          77,
+          113
+        ],
+        "val_reward": 0.895,
+        "val_icir": 0.1563162581169058,
+        "train_reward": -0.262079459352705,
+        "complexity_cost": 5.25,
+        "active_ir": 5.058861609685498,
+        "average_turnover": 0.030981717011128777,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "C",
+          "tiers_used": [
+            "A",
+            "C"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 7,
+      "searcher": "gp",
+      "requested_budget": 2000,
+      "consumed_budget": 99,
+      "proposal_count": 2160,
+      "invalid_proposals": 1781,
+      "semantic_duplicates": 21,
+      "unique_ratio": 0.0495,
+      "termination_reason": "proposal_stagnation",
+      "stagnation_reason": "three_generations_without_new_semantic_class",
+      "wall_seconds": 54.0,
+      "wall_per_1000_evals": 545.3,
+      "projected_wall_s_calibration": 1314.0,
+      "peak_rss_mb": 4322.9,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 8,
+        "3": 15,
+        "4": 16,
+        "5": 8,
+        "6": 7,
+        "7": 8,
+        "8": 11,
+        "9": 7,
+        "10": 12,
+        "11": 5,
+        "12": 2
+      },
+      "final_best_so_far": [
+        99,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "GATE(DOWNVOL60(PV_DIV_20), IND_REL_RET_60, (MARGIN_BALANCE_CHG CORR5 TURNOVER_MA20))",
+        "direction": -1,
+        "tokens": [
+          67,
+          110,
+          63,
+          30,
+          54,
+          105,
+          81
+        ],
+        "val_reward": 0.931,
+        "val_icir": 0.29668428041027045,
+        "train_reward": 0.13010824213149014,
+        "complexity_cost": 3.4499999999999997,
+        "active_ir": 3.0559298569439433,
+        "average_turnover": 0.04626391096979332,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "C",
+          "tiers_used": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 7,
+      "searcher": "tpe",
+      "requested_budget": 2000,
+      "consumed_budget": 2000,
+      "proposal_count": 4705,
+      "invalid_proposals": 28,
+      "semantic_duplicates": 2623,
+      "unique_ratio": 1.0,
+      "termination_reason": "budget_exhausted",
+      "stagnation_reason": null,
+      "wall_seconds": 2390.8,
+      "wall_per_1000_evals": 1195.4,
+      "projected_wall_s_calibration": 2024.0,
+      "peak_rss_mb": 4809.9,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 32,
+        "3": 7,
+        "4": 6,
+        "5": 7,
+        "7": 5,
+        "8": 6,
+        "9": 103,
+        "10": 5,
+        "11": 8,
+        "12": 1821
+      },
+      "final_best_so_far": [
+        2000,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "(TURNOVER_STD20 CORR60 (IND_REL_TURNOVER CORR10 STD20(GATE(BETA_60, DOWNVOL5(PB), DOWNVOL60(ILLIQ_20)))))",
+        "direction": 1,
+        "tokens": [
+          55,
+          62,
+          40,
+          18,
+          108,
+          36,
+          110,
+          81,
+          88,
+          106,
+          107,
+          113
+        ],
+        "val_reward": 0.893,
+        "val_icir": 0.133558494700754,
+        "train_reward": -0.8998207192770312,
+        "complexity_cost": 5.35,
+        "active_ir": 4.735715647746749,
+        "average_turnover": 0.04779411764705882,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "C",
+          "tiers_used": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 7,
+      "searcher": "random",
+      "requested_budget": 2000,
+      "consumed_budget": 2000,
+      "proposal_count": 3859,
+      "invalid_proposals": 0,
+      "semantic_duplicates": 1859,
+      "unique_ratio": 1.0,
+      "termination_reason": "budget_exhausted",
+      "stagnation_reason": null,
+      "wall_seconds": 1093.6,
+      "wall_per_1000_evals": 546.8,
+      "projected_wall_s_calibration": 1124.0,
+      "peak_rss_mb": 5585.1,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 27,
+        "3": 6,
+        "4": 8,
+        "5": 11,
+        "6": 4,
+        "7": 2,
+        "8": 11,
+        "9": 103,
+        "10": 1,
+        "11": 6,
+        "12": 1821
+      },
+      "final_best_so_far": [
+        2000,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "(STD5(TURNOVER) DIV (ATR_14 CORR5 STD20(DECAY(GATE(LIMIT_UP_CNT_5, CROWD_AMOUNT_60, MARGIN_CROWD_60)))))",
+        "direction": -1,
+        "tokens": [
+          6,
+          99,
+          45,
+          68,
+          72,
+          73,
+          81,
+          83,
+          88,
+          105,
+          77,
+          113
+        ],
+        "val_reward": 0.8956666666666666,
+        "val_icir": 0.17128794218241622,
+        "train_reward": -0.20467073134993752,
+        "complexity_cost": 5.216666666666667,
+        "active_ir": 5.409823391285164,
+        "average_turnover": 0.030147058823529412,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "B",
+          "tiers_used": [
+            "A",
+            "B"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 7,
+      "searcher": "rl",
+      "requested_budget": 2000,
+      "consumed_budget": 1289,
+      "proposal_count": 2000,
+      "invalid_proposals": 17,
+      "semantic_duplicates": 694,
+      "unique_ratio": 0.6445,
+      "termination_reason": "steps_exhausted",
+      "stagnation_reason": null,
+      "wall_seconds": 809.5,
+      "wall_per_1000_evals": 628.0,
+      "projected_wall_s_calibration": 1352.0,
+      "peak_rss_mb": 6256.6,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 19,
+        "3": 8,
+        "4": 2,
+        "5": 8,
+        "6": 4,
+        "7": 2,
+        "8": 6,
+        "9": 76,
+        "10": 1,
+        "11": 5,
+        "12": 1258
+      },
+      "final_best_so_far": [
+        1289,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "(GATE(LIMIT_DOWN_STREAK, KURT_20, REVERSAL_5) DIV (VOLUME_IMPACT CORR20 (RET_1 SUB TS_RANK60(AMPLITUDE))))",
+        "direction": 1,
+        "tokens": [
+          69,
+          16,
+          14,
+          81,
+          9,
+          1,
+          10,
+          104,
+          75,
+          90,
+          77,
+          113
+        ],
+        "val_reward": 0.903,
+        "val_icir": 0.4541190391709019,
+        "train_reward": -0.3249650287358134,
+        "complexity_cost": 4.85,
+        "active_ir": 4.6961129635678915,
+        "average_turnover": 0.029411764705882353,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "A",
+          "tiers_used": [
+            "A"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 2024,
+      "searcher": "gp",
+      "requested_budget": 2000,
+      "consumed_budget": 279,
+      "proposal_count": 5600,
+      "invalid_proposals": 541,
+      "semantic_duplicates": 4134,
+      "unique_ratio": 0.1395,
+      "termination_reason": "proposal_stagnation",
+      "stagnation_reason": "three_generations_without_new_semantic_class",
+      "wall_seconds": 224.5,
+      "wall_per_1000_evals": 804.7,
+      "projected_wall_s_calibration": 1314.0,
+      "peak_rss_mb": 5437.6,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 19,
+        "3": 52,
+        "4": 65,
+        "5": 47,
+        "6": 39,
+        "7": 26,
+        "8": 12,
+        "9": 6,
+        "10": 5,
+        "11": 5,
+        "12": 3
+      },
+      "final_best_so_far": [
+        279,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "GATE(MARGIN_CROWD_60, IVOL_60, IND_REL_RET_60)",
+        "direction": -1,
+        "tokens": [
+          73,
+          41,
+          63,
+          81
+        ],
+        "val_reward": 0.957,
+        "val_icir": 0.4674526669306843,
+        "train_reward": -0.9707812780338398,
+        "complexity_cost": 2.15,
+        "active_ir": 4.052803720663006,
+        "average_turnover": 0.06416931637519872,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "C",
+          "tiers_used": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 2024,
+      "searcher": "tpe",
+      "requested_budget": 2000,
+      "consumed_budget": 2000,
+      "proposal_count": 4780,
+      "invalid_proposals": 33,
+      "semantic_duplicates": 2725,
+      "unique_ratio": 1.0,
+      "termination_reason": "budget_exhausted",
+      "stagnation_reason": null,
+      "wall_seconds": 2892.9,
+      "wall_per_1000_evals": 1446.5,
+      "projected_wall_s_calibration": 2024.0,
+      "peak_rss_mb": 4848.1,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 24,
+        "3": 5,
+        "4": 5,
+        "5": 6,
+        "6": 1,
+        "7": 6,
+        "8": 6,
+        "9": 112,
+        "10": 3,
+        "11": 10,
+        "12": 1822
+      },
+      "final_best_so_far": [
+        2000,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "(MOMENTUM_20 CORR60 (SKEW_20 DIV (MA10(REVERSAL_5) CORR5 (DELTA5(TURNOVER_MA20) CORR60 RET_1))))",
+        "direction": -1,
+        "tokens": [
+          12,
+          15,
+          14,
+          97,
+          54,
+          86,
+          1,
+          107,
+          105,
+          77,
+          107,
+          113
+        ],
+        "val_reward": 0.897,
+        "val_icir": 0.09286496884757262,
+        "train_reward": -0.25326570599306186,
+        "complexity_cost": 5.1499999999999995,
+        "active_ir": 6.569377727113308,
+        "average_turnover": 0.0517885532591415,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "A",
+          "tiers_used": [
+            "A"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 2024,
+      "searcher": "random",
+      "requested_budget": 2000,
+      "consumed_budget": 2000,
+      "proposal_count": 3993,
+      "invalid_proposals": 0,
+      "semantic_duplicates": 1993,
+      "unique_ratio": 1.0,
+      "termination_reason": "budget_exhausted",
+      "stagnation_reason": null,
+      "wall_seconds": 1280.7,
+      "wall_per_1000_evals": 640.4,
+      "projected_wall_s_calibration": 1124.0,
+      "peak_rss_mb": 4041.1,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 23,
+        "3": 12,
+        "4": 3,
+        "5": 5,
+        "6": 6,
+        "7": 6,
+        "8": 10,
+        "9": 104,
+        "10": 1,
+        "11": 5,
+        "12": 1825
+      },
+      "final_best_so_far": [
+        2000,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "(MOMENTUM_20 DIV (DOWNVOL5(BETA_60) CORR60 (ATR_14 DIV (CS_ZSCORE(IND_REL_RET_20) CORR5 TURNOVER_MA20))))",
+        "direction": -1,
+        "tokens": [
+          12,
+          40,
+          108,
+          45,
+          60,
+          93,
+          54,
+          105,
+          77,
+          107,
+          77,
+          113
+        ],
+        "val_reward": 0.897,
+        "val_icir": 0.3449327405300999,
+        "train_reward": -0.113271612541297,
+        "complexity_cost": 5.1499999999999995,
+        "active_ir": 5.13464175449066,
+        "average_turnover": 0.03374403815580286,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "C",
+          "tiers_used": [
+            "A",
+            "C"
+          ]
+        },
+        "eligible": true
+      }
+    },
+    {
+      "seed": 2024,
+      "searcher": "rl",
+      "requested_budget": 2000,
+      "consumed_budget": 1280,
+      "proposal_count": 2000,
+      "invalid_proposals": 11,
+      "semantic_duplicates": 709,
+      "unique_ratio": 0.64,
+      "termination_reason": "steps_exhausted",
+      "stagnation_reason": null,
+      "wall_seconds": 892.7,
+      "wall_per_1000_evals": 697.4,
+      "projected_wall_s_calibration": 1352.0,
+      "peak_rss_mb": 4742.3,
+      "completed": true,
+      "error": null,
+      "formula_len_histogram": {
+        "2": 10,
+        "3": 8,
+        "4": 2,
+        "5": 2,
+        "6": 4,
+        "7": 2,
+        "8": 5,
+        "9": 94,
+        "11": 5,
+        "12": 1239
+      },
+      "final_best_so_far": [
+        1280,
+        0.98
+      ],
+      "selected": {
+        "formula_text": "(TURNOVER_STD20 DIV DOWNVOL20(GATE(PS_TTM, CROWD_AMOUNT_60, GATE(JUMP(DEBT_RATIO), TURNOVER_CHG, TURNOVER))))",
+        "direction": -1,
+        "tokens": [
+          55,
+          19,
+          72,
+          26,
+          82,
+          7,
+          6,
+          81,
+          81,
+          91,
+          77,
+          113
+        ],
+        "val_reward": 0.895,
+        "val_icir": 0.45582256128293286,
+        "train_reward": -0.5354356441711502,
+        "complexity_cost": 5.25,
+        "active_ir": 5.115740227746393,
+        "average_turnover": 0.03165739268680445,
+        "data_tier": {
+          "data_tier_version": 1,
+          "max_tier": "B",
+          "tiers_used": [
+            "A",
+            "B"
+          ]
+        },
+        "eligible": true
+      }
+    }
+  ]
+}
