@@ -70,4 +70,5 @@
 ## 5. 裁决后提交
 
 - 分支：codex/p9-factor-families
-- 哈希：（裁决后提交的 hash 以 git log 为准——见 t5 任务 output）
+- 裁决执行提交：**d6a034d**（feat(p9): adjudicate the four families on the v4 re-measurement；11 files：vocab/feature_metadata/feature_registry + registry docs + 本日志 + 审计脚本与 metrics.json）
+- P9 实现提交：781f5e1（t4）
