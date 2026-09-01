@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SHARDS: dict[str, tuple[str, ...]] = {
     # ashare_data domain + shared io/logging/meta + doc-sync guards.
     "shard-data": (
+        "test_agents_md_budget.py",
         "test_akshare_client.py",
         "test_capital_flow.py",
         "test_ci_sharding.py",
