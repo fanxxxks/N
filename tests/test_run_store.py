@@ -14,13 +14,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 from pathlib import Path
 
 import pytest
 
 from ashare_model import run_store
-from ashare_model.identity import canonical_json, canonical_json_strict
+from ashare_model.identity import (
+    canonical_json,
+    canonical_json_strict,
+    content_hash,
+)
 from ashare_model.ledger import (
     LEDGER_SCHEMA_VERSION,
     ExperimentLedger,
@@ -363,3 +368,524 @@ def test_future_ledger_schema_version_rejected(tmp_path):
     path.write_text(canonical_json(line) + "\n", encoding="utf-8")
     with pytest.raises(LedgerIntegrityError, match="schema version"):
         ExperimentLedger(path, run_id="run-1", spec_id="spec-a")
+
+
+# -- P8-06 research lifecycle: replay-only hash-chained state machine --------
+#
+# Contract: docs/p8_research_lifecycle_contract.md §3/§4/§5.1 (P8-06 staged
+# activation per §4).  Scope baseline: t16 (AgentTeams alphagpt-p0-p1).
+# State is derived ONLY by replaying ``lifecycle.jsonl``; every transition
+# consumes a registered, hash-verified evidence artifact; edges outside the
+# P8-06 activation set are fail-closed rejected.  There is no authority
+# status JSON and no state setter.
+
+LIFECYCLE_IDEA = {
+    "idea_record_schema_version": 1,
+    "hypothesis": "Industry-relative reversal predicts medium-horizon returns",
+    "scope": "daily-bar features, formal mode, fold-0",
+    "economic_mechanism": "stock-specific overreaction vs peers reverts",
+    "non_goals": "no promotion claim, no paper operations, no searcher change",
+}
+
+_CONTRACT_PATH = Path(__file__).resolve().parents[1] / (
+    "docs/p8_research_lifecycle_contract.md"
+)
+
+
+def _gate_checks(ok=True):
+    """Seven G1..G7 checks using the producer's real naming convention."""
+    return [
+        {"name": f"G{i} synthetic check", "ok": ok, "detail": "ok" if ok else "fail"}
+        for i in range(1, 8)
+    ]
+
+
+def _clean_data_report(spec, ok=True):
+    """A formal, complete DataQualificationReport payload (all G ok unless
+    ``ok=False``); ``gate_result_hash`` is a real content hash over the
+    gate payload so the guard's hash-consistency check passes."""
+    checks = _gate_checks(ok=ok)
+    gate_payload = {"mode": "formal", "degraded": False, "checks": checks}
+    return {
+        "report_schema_version": 1,
+        "spec_id": spec.spec_id,
+        "dataset_id": spec.dataset_id,
+        "data_cutoff": spec.data_cutoff,
+        "expected_trading_days": 200,
+        "actual_trading_days": 200,
+        "missing_trading_days": [],
+        "mode": "formal",
+        "degraded": False,
+        "gate_checks": checks,
+        "gate_result_hash": content_hash("gate_result", gate_payload),
+        "min_eligible": 100.0,
+        "coverage": 0.99,
+        "universe_contract": {"mode": "strict", "degraded": False},
+        "degraded_sources": {"loader_frames": "clean"},
+        "completed": True,
+    }
+
+
+def _lifecycle_writer(store, spec):
+    from ashare_model import lifecycle
+
+    handle = store.open_run(spec)
+    return handle, lifecycle.LifecycleWriter(handle)
+
+
+def test_lifecycle_status_set_version_and_terminals():
+    from ashare_model import lifecycle
+
+    assert lifecycle.LIFECYCLE_CONTRACT_VERSION == 1
+    assert lifecycle.STATUSES == (
+        "IDEA",
+        "SPEC_LOCKED",
+        "DATA_QUALIFIED",
+        "FACTOR_SET_QUALIFIED",
+        "SEARCH_PLAN_ADMITTED",
+        "OOS_QUALIFIED",
+        "PAPER_OBSERVING",
+        "PROMOTED",
+        "REJECTED",
+        "FAILED",
+        "RETIRED",
+    )
+    assert lifecycle.TERMINAL_STATUSES == frozenset(
+        {"REJECTED", "FAILED", "RETIRED"}
+    )
+    for terminal in lifecycle.TERMINAL_STATUSES:
+        assert terminal not in lifecycle.LEGAL_EDGES  # no out-edges
+
+
+def test_lifecycle_edge_graph_matches_contract_code_block():
+    from ashare_model import lifecycle
+
+    text = _CONTRACT_PATH.read_text(encoding="utf-8")
+    match = re.search(r"```text\n(.*?)```", text, re.DOTALL)
+    assert match is not None, "contract §4 transition block missing"
+    lines = tuple(
+        " ".join(line.split())
+        for line in match.group(1).strip().splitlines()
+        if line.strip()
+    )
+    assert lines == lifecycle.LEGAL_TRANSITION_LINES
+    # Every mentioned state is a canonical status; the pair graph matches.
+    for line in lines:
+        src, dsts = line.split(" -> ")
+        assert src.strip() in lifecycle.STATUSES
+        for dst in dsts.split("|"):
+            assert dst.strip() in lifecycle.STATUSES
+            assert dst.strip() in lifecycle.LEGAL_EDGES[src.strip()]
+
+
+def test_lifecycle_activated_edge_set_is_exactly_p8_06():
+    from ashare_model import lifecycle
+
+    legal = lifecycle.legal_edge_pairs()
+    expected = {("IDEA", "SPEC_LOCKED"), ("SPEC_LOCKED", "DATA_QUALIFIED")}
+    expected |= {pair for pair in legal if pair[1] in ("FAILED", "RETIRED")}
+    assert lifecycle.ACTIVATED_EDGES == expected
+    future = legal - lifecycle.ACTIVATED_EDGES
+    assert ("DATA_QUALIFIED", "FACTOR_SET_QUALIFIED") in future
+    assert ("SPEC_LOCKED", "REJECTED") in future
+    assert ("OOS_QUALIFIED", "PAPER_OBSERVING") in future
+    assert ("PROMOTED", "RETIRED") not in future  # management edge, active
+
+
+def test_lifecycle_replay_only_state_and_status_json_ignored(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    writer.qualify_data(_clean_data_report(spec))
+    assert writer.current_state == "DATA_QUALIFIED"
+    assert lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id) == (
+        "DATA_QUALIFIED"
+    )
+    # A forged authority-status file must be ignored: state derives only
+    # from the append-only event chain (no status JSON authority).
+    (handle.run_dir / "status.json").write_text(
+        '{"state": "PROMOTED"}', encoding="utf-8"
+    )
+    assert lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id) == (
+        "DATA_QUALIFIED"
+    )
+
+
+def test_lifecycle_genesis_requires_registered_idea_record(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle = store.open_run(spec)
+    writer = lifecycle.LifecycleWriter(handle)
+    assert writer.current_state is None  # uninitialized before genesis
+    incomplete = dict(LIFECYCLE_IDEA)
+    incomplete.pop("economic_mechanism")
+    with pytest.raises(lifecycle.LifecycleError):
+        writer.record_idea(incomplete)
+    assert writer.current_state is None
+    assert handle.load_index()["artifacts"] == []  # nothing registered
+    writer.record_idea(LIFECYCLE_IDEA)
+    assert writer.current_state == "IDEA"
+    index = handle.load_index()
+    assert index["artifacts"][0]["artifact_type"] == "idea_record"
+    with pytest.raises(lifecycle.LifecycleError):
+        writer.record_idea(LIFECYCLE_IDEA)  # genesis only once
+
+
+def test_lifecycle_skip_level_transitions_rejected(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    with pytest.raises(lifecycle.LifecycleError):
+        writer.lock_spec()  # still uninitialized (no genesis)
+    writer.record_idea(LIFECYCLE_IDEA)
+    with pytest.raises(lifecycle.IllegalTransitionError):
+        writer.qualify_data(_clean_data_report(spec))  # IDEA -> DATA_QUALIFIED
+    assert writer.current_state == "IDEA"
+
+
+def test_lifecycle_future_stage_edges_fail_closed(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    with pytest.raises(lifecycle.StageNotActivatedError):
+        writer.transition("REJECTED", reason="not before P8-08")
+    writer.qualify_data(_clean_data_report(spec))
+    with pytest.raises(lifecycle.StageNotActivatedError):
+        writer.transition("FACTOR_SET_QUALIFIED")
+    assert writer.current_state == "DATA_QUALIFIED"
+
+
+def test_lifecycle_identity_mismatch_rejected_at_replay(tmp_path):
+    from ashare_model import lifecycle
+    from ashare_model.identity import content_hash
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    # Forge one more correctly-hashed event carrying a foreign spec_id.
+    path = handle.run_dir / "lifecycle.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    previous = json.loads(lines[-1])
+    payload = {
+        "lifecycle_contract_version": lifecycle.LIFECYCLE_CONTRACT_VERSION,
+        "seq": previous["seq"] + 1,
+        "prev_hash": previous["event_hash"],
+        "event_kind": "transition",
+        "from_state": "IDEA",
+        "to_state": "SPEC_LOCKED",
+        "spec_id": "spec-foreign",
+        "run_id": handle.run_id,
+        "evidence": None,
+        "completed": True,
+        "reason": "",
+        "ts": "2026-01-01T00:00:00+00:00",
+    }
+    forged = dict(payload, event_hash=content_hash("lifecycle-event", payload))
+    path.write_text(
+        "\n".join(lines + [canonical_json_strict(forged)]) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(lifecycle.IdentityMismatchError):
+        lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id)
+
+
+def test_lifecycle_tampered_chain_detected(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    path = handle.run_dir / "lifecycle.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    forged = json.loads(lines[0])
+    forged["reason"] = "rewritten history"
+    lines[0] = canonical_json_strict(forged)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(lifecycle.LifecycleIntegrityError):
+        lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id)
+
+
+def test_lifecycle_sequence_gap_detected(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    path = handle.run_dir / "lifecycle.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    # Drop the genesis line: the chain then starts at seq 2 — a gap.
+    path.write_text(lines[1] + "\n", encoding="utf-8")
+    with pytest.raises(lifecycle.LifecycleIntegrityError, match="sequence"):
+        lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id)
+
+
+def test_lifecycle_terminal_states_have_no_out_edges(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.retire(reason="superseded idea")
+    assert writer.current_state == "RETIRED"
+    with pytest.raises(lifecycle.IllegalTransitionError):
+        writer.fail(reason="after terminal")
+    handle.close()
+    assert lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id) == (
+        "RETIRED"
+    )
+
+
+def test_lifecycle_gate_fail_refused_with_evidence_preserved(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    report = _clean_data_report(spec)
+    report["gate_checks"] = _gate_checks(ok=False)
+    with pytest.raises(lifecycle.DataQualificationError, match="G"):
+        writer.qualify_data(report)
+    assert writer.current_state == "SPEC_LOCKED"
+    types = [e["artifact_type"] for e in handle.load_index()["artifacts"]]
+    assert types.count("data_qualification_report") == 1  # evidence preserved
+
+
+def test_lifecycle_degraded_or_dev_or_missing_days_refused(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    dev = _clean_data_report(spec)
+    dev["mode"] = "dev"
+    with pytest.raises(lifecycle.DataQualificationError, match="mode"):
+        writer.qualify_data(dev)
+    degraded = _clean_data_report(spec)
+    degraded["degraded"] = True
+    with pytest.raises(lifecycle.DataQualificationError, match="degraded"):
+        writer.qualify_data(degraded)
+    gaps = _clean_data_report(spec)
+    gaps["missing_trading_days"] = ["20240105"]
+    with pytest.raises(lifecycle.DataQualificationError, match="missing"):
+        writer.qualify_data(gaps)
+    untyped = _clean_data_report(spec)
+    untyped["degraded_sources"] = {
+        "loader_frames": "untyped_in_current_data_layer"
+    }
+    with pytest.raises(lifecycle.DataQualificationError, match="loader"):
+        writer.qualify_data(untyped)
+    assert writer.current_state == "SPEC_LOCKED"
+
+
+def test_lifecycle_clean_report_advances_to_data_qualified(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    writer.qualify_data(_clean_data_report(spec))
+    assert writer.current_state == "DATA_QUALIFIED"
+    handle.close()
+    assert lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id) == (
+        "DATA_QUALIFIED"
+    )
+
+
+def test_lifecycle_evidence_tamper_and_unregistered_rejected(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    writer.qualify_data(_clean_data_report(spec))
+    # Content drift on a registered evidence artifact must fail the replay.
+    report_id = handle.load_index()["artifacts"][-1]["artifact_id"]
+    target = handle.run_dir / "artifacts" / f"{report_id}.json"
+    original = target.read_text(encoding="utf-8")
+    payload = json.loads(original)
+    payload["coverage"] = 1.0
+    target.write_text(canonical_json_strict(payload), encoding="utf-8")
+    with pytest.raises(lifecycle.EvidenceError):
+        lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id)
+    target.write_text(original, encoding="utf-8")  # restore
+    # An event referencing an unregistered artifact must fail the replay.
+    path = handle.run_dir / "lifecycle.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    previous = json.loads(lines[-1])
+    event = {
+        "lifecycle_contract_version": lifecycle.LIFECYCLE_CONTRACT_VERSION,
+        "seq": previous["seq"] + 1,
+        "prev_hash": previous["event_hash"],
+        "event_kind": "transition",
+        "from_state": "DATA_QUALIFIED",
+        "to_state": "FAILED",
+        "spec_id": spec.spec_id,
+        "run_id": handle.run_id,
+        "evidence": {"artifact_id": "f" * 64, "artifact_type": "x"},
+        "completed": False,
+        "reason": "boom",
+        "ts": "2026-01-01T00:00:00+00:00",
+    }
+    forged = dict(event, event_hash=content_hash("lifecycle-event", event))
+    path.write_text(
+        "\n".join(lines + [canonical_json_strict(forged)]) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(lifecycle.EvidenceError):
+        lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id)
+
+
+def test_lifecycle_nan_evidence_rejected(tmp_path):
+    from ashare_model import lifecycle
+    from ashare_model.identity import CanonicalJSONError
+
+    store = RunStore(tmp_path)
+    handle = store.open_run(_spec())
+    writer = lifecycle.LifecycleWriter(handle)
+    poisoned = dict(LIFECYCLE_IDEA, coverage=float("nan"))
+    with pytest.raises(CanonicalJSONError):
+        writer.record_idea(poisoned)
+    assert writer.current_state is None
+
+
+def test_lifecycle_fail_and_retire_management_edges(tmp_path):
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.fail(reason="loader crashed mid-window")
+    assert writer.current_state == "FAILED"
+    assert writer.events[-1].completed is False
+    handle.close()
+    # Management continuation attaches to an EXISTING run explicitly.
+    with pytest.raises(RunStoreError):
+        store.attach_run(spec, "run-missing")
+    # A runspec.json that no longer matches the spec object is a mismatch.
+    runspec_path = handle.run_dir / "runspec.json"
+    stored = json.loads(runspec_path.read_text(encoding="utf-8"))
+    stored["dataset_id"] = "ds-tampered"
+    runspec_path.write_text(canonical_json_strict(stored), encoding="utf-8")
+    with pytest.raises(RunSpecMismatchError):
+        store.attach_run(spec, handle.run_id)
+    runspec_path.write_text(
+        canonical_json_strict(spec.to_payload()), encoding="utf-8"
+    )
+    resumed = store.attach_run(spec, handle.run_id)
+    writer2 = lifecycle.LifecycleWriter(resumed)
+    assert writer2.current_state == "FAILED"
+    # FAILED is terminal: retirement after failure is a non-contract edge.
+    with pytest.raises(lifecycle.IllegalTransitionError):
+        writer2.retire(reason="abandoned after failure")
+    resumed.close()
+    assert lifecycle.replay_run(tmp_path, spec.spec_id, handle.run_id) == (
+        "FAILED"
+    )
+    # RETIRED applies to a non-terminal existing run (administrative).
+    retire_handle = store.open_run(spec)  # fresh run_id, same spec
+    retire_writer = lifecycle.LifecycleWriter(retire_handle)
+    retire_writer.record_idea(LIFECYCLE_IDEA)
+    retire_writer.retire(reason="superseded idea")
+    assert retire_writer.current_state == "RETIRED"
+    retire_handle.close()
+    assert lifecycle.replay_run(
+        tmp_path, spec.spec_id, retire_handle.run_id
+    ) == "RETIRED"
+
+
+def test_lifecycle_cli_start_show_state_and_retire(tmp_path, capsys):
+    from ashare_model import lifecycle
+
+    spec = _spec()
+    idea_file = tmp_path / "idea.json"
+    idea_file.write_text(canonical_json_strict(LIFECYCLE_IDEA), encoding="utf-8")
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(
+        canonical_json_strict(spec.to_payload()), encoding="utf-8"
+    )
+    root = tmp_path / "store"
+    code = lifecycle.main(
+        [
+            "start",
+            "--root",
+            str(root),
+            "--spec-file",
+            str(spec_file),
+            "--idea-file",
+            str(idea_file),
+        ]
+    )
+    assert code == 0
+    listing = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert listing["spec_id"] == spec.spec_id
+    assert listing["state"] == "SPEC_LOCKED"
+    state = lifecycle.main(
+        [
+            "show-state",
+            "--root",
+            str(root),
+            "--spec-id",
+            listing["spec_id"],
+            "--run-id",
+            listing["run_id"],
+        ]
+    )
+    assert state == 0
+    shown = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert shown["state"] == "SPEC_LOCKED"
+    code = lifecycle.main(
+        [
+            "retire",
+            "--root",
+            str(root),
+            "--spec-id",
+            listing["spec_id"],
+            "--run-id",
+            listing["run_id"],
+            "--reason",
+            "superseded",
+        ]
+    )
+    assert code == 0
+    state = lifecycle.main(
+        [
+            "show-state",
+            "--root",
+            str(root),
+            "--spec-id",
+            listing["spec_id"],
+            "--run-id",
+            listing["run_id"],
+        ]
+    )
+    assert state == 0
+    shown = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert shown["state"] == "RETIRED"
