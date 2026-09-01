@@ -19,3 +19,6 @@ pytest-xdist
 # fallback 链与 scripts/import_pit_universe.py 均懒加载；tests/test_akshare_client.py
 # 无 skip 的无条件 import——契约闭包必须包含，否则全量收集即失败）。
 baostock
+# P14 搜索层测试的 FP 确定性护栏（tests/test_gp_search.py 在
+# threadpool_limits(1) 下钉扎 BLAS/OMP 线程池；t49 rider F2）。
+threadpoolctl
