@@ -167,8 +167,29 @@ class SimulationRunner:
         from ashare_data.manifest import check_dataset_id
 
         check_dataset_id(payload.get("dataset_id"), self.loader.dataset_id)
-        self.formula_tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
-        self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
+        # t60: the strict grammar gate (ccadeb9/t57) fail-closed rejects
+        # remap decoding for pre-P7 payloads.  p12's migration promise keeps
+        # legacy strategies LOADABLE FOR DISPLAY: the as-recorded token ids
+        # and formula text are preserved for the audit trail, while paper
+        # execution is rejected downstream by the audit-only lineage gate
+        # (a legacy strategy can never mint schema-v2 lineage).
+        formula_display_only = False
+        try:
+            self.formula_tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
+        except ValueError as exc:
+            logger.warning(
+                "Legacy formula tokens cannot be remap-decoded under the "
+                "strict grammar gate ({}); keeping the as-recorded token "
+                "ids for display only — paper execution is rejected "
+                "downstream by the audit-only lineage gate",
+                exc,
+            )
+            formula_display_only = True
+        if formula_display_only:
+            self.formula_tokens = list(payload.get("formula", []))
+            self.formula_text = str(payload.get("formula_text", ""))
+        else:
+            self.formula_text = formula_decode(self.formula_tokens, FORMULA_VOCAB)
         # The trainer records the trade direction it learned on its
         # validation tail; legacy artifacts without it fall back to an
         # inference on the training window in compute_signals().
