@@ -8,6 +8,8 @@ from ashare_model.vocab import (
     FEATURE_NAMES,
     FORMULA_VOCAB,
     GRAMMAR_VERSION,
+    GRAMMAR_V5_TOKEN_NAMES,
+    GRAMMAR_V5_VOCAB,
     LEGACY_FEATURE_NAMES,
     LEGACY_OPERATOR_NAMES,
     FormulaVocab,
@@ -208,24 +210,53 @@ def test_feature_aliases_are_consistent():
 
 
 def test_resolve_formula_tokens_aliases_retired_features():
-    # RET_20 was identical to MOMENTUM_20; a formula that references it
-    # (legacy token layout or recorded metadata) resolves to MOMENTUM_20's
-    # current token id with unchanged semantics.
-    legacy_token = 1 + LEGACY_FEATURE_NAMES.index("RET_20")
+    # RET_20 was identical to MOMENTUM_20; a formula that references it via
+    # recorded metadata resolves to MOMENTUM_20's current token id with
+    # unchanged semantics.
     expected = [1 + FEATURE_NAMES.index("MOMENTUM_20")]
-    resolved = resolve_formula_tokens({"formula": [legacy_token]})
-    assert resolved == expected
     payload = {
         "formula": [1],
         "feature_names": ["RET_20", "MOMENTUM_20"],
+        "grammar_version": 6,
     }
     assert resolve_formula_tokens(payload) == expected
 
 
-def test_legacy_bare_factor_migrates_to_feature_ast():
-    # Old bare-factor artifacts ([1] = first feature) migrate by name and
-    # decode to Feature(name): the AST is the single source of truth.
-    canonical = resolve_formula_tokens({"formula": [1]})
+def test_resolve_formula_tokens_fails_closed_without_grammar_version():
+    """t46 captain pre-ruling (AGENTS §4.3/§4.6): a payload without a
+    declared grammar generation is fail-closed rejected from remap
+    decoding -- silently decoding it against the latest table was the
+    t28 incident mechanism.  Display layers mark such artifacts
+    legacy/unavailable; pre-P7 artifacts need an explicit auditable
+    migration."""
+    legacy_token = 1 + LEGACY_FEATURE_NAMES.index("RET_20")
+    with pytest.raises(ValueError, match="grammar_version"):
+        resolve_formula_tokens({"formula": [legacy_token]})
+    with pytest.raises(ValueError, match="grammar_version"):
+        resolve_formula_tokens({"formula": [1]})
+
+
+def test_resolve_formula_tokens_fails_closed_on_unknown_grammar_generation():
+    """t46 captain pre-ruling: only known generations (5 = frozen layout,
+    6 = live) enter remap decoding; anything else fails closed."""
+    payload = _sample_payload()
+    payload["grammar_version"] = 2
+    with pytest.raises(ValueError, match="unsupported grammar generation 2"):
+        resolve_formula_tokens(payload)
+    payload["grammar_version"] = 7
+    with pytest.raises(ValueError, match="unsupported grammar generation 7"):
+        resolve_formula_tokens(payload)
+
+
+def test_legacy_bare_factor_requires_declared_generation():
+    # t46 captain pre-ruling: the old bare-factor migration path ([1] with
+    # no metadata) is superseded by the fail-closed grammar gate -- the
+    # bare token alone no longer declares which layout it was sampled
+    # against.  With the generation declared, the migration still works
+    # and the AST remains the single source of truth.
+    with pytest.raises(ValueError, match="grammar_version"):
+        resolve_formula_tokens({"formula": [1]})
+    canonical = resolve_formula_tokens({"formula": [1], "grammar_version": 6})
     assert canonical == [1]
     ast = decode(canonical)
     assert ast == Feature(FEATURE_NAMES[0])
@@ -243,7 +274,7 @@ def test_resolve_formula_tokens_alias_target_must_exist():
         feature_names=tuple(n for n in src.feature_names if n != "MOMENTUM_20"),
         operator_names=FORMULA_VOCAB.operator_names,
     )
-    payload = {"formula": [1], "feature_names": ["RET_20"]}
+    payload = {"formula": [1], "feature_names": ["RET_20"], "grammar_version": 6}
     with pytest.raises(ValueError, match="RET_20"):
         resolve_formula_tokens(payload, vocab=stripped)
 
@@ -277,6 +308,10 @@ def _sample_payload():
         "feature_names": list(FEATURE_NAMES),
         "operator_names": list(FORMULA_VOCAB.operator_names),
         "feature_version": FORMULA_VOCAB.feature_version,
+        # t46 captain pre-ruling: every formal artifact declares its grammar
+        # generation; payloads without it are fail-closed rejected from
+        # remap decoding (AGENTS §4.3/§4.6).
+        "grammar_version": GRAMMAR_VERSION,
     }
 
 
@@ -298,39 +333,70 @@ def test_resolve_formula_tokens_remaps_by_name():
 
 
 def test_resolve_formula_tokens_legacy_payload_without_metadata():
-    # Legacy artifacts carry no feature list: they resolve against the
-    # pinned first-generation vocabulary by name, so the old feature ids
-    # keep their meaning and the old operator ids shift to the new offset.
+    # t46 captain pre-ruling: a bare payload with no declared grammar
+    # generation is fail-closed rejected from remap decoding (the
+    # pre-t46 behavior silently decoded it against the LEGACY v1 layout,
+    # which misreads every post-v1 token id -- the t28 incident class).
     legacy_op = 1 + len(LEGACY_FEATURE_NAMES)  # first operator id pre-growth
     payload = {"formula": [1, 2, legacy_op]}
-    tokens = resolve_formula_tokens(payload)
-    assert tokens == [1, 2, FORMULA_VOCAB.operator_offset]
+    with pytest.raises(ValueError, match="grammar_version"):
+        resolve_formula_tokens(payload)
 
 
 def test_resolve_formula_tokens_remaps_legacy_under_future_vocab():
-    # Even against a hypothetical further-grown vocabulary the legacy
-    # formula remaps by name: feature ids stay, operator ids shift.
+    # Even against a hypothetical further-grown vocabulary a formula with
+    # a DECLARED generation remaps by name: feature ids stay, operator ids
+    # shift (t46 captain pre-ruling: the declared generation must be a
+    # known one -- here the live grammar 6).
     future = FormulaVocab(
         feature_names=tuple(FEATURE_NAMES) + ("NEW_FACTOR",),
         operator_names=tuple(FORMULA_VOCAB.operator_names) + ("NEWOP20",),
     )
-    legacy_op = 1 + len(LEGACY_FEATURE_NAMES)
-    tokens = resolve_formula_tokens({"formula": [1, legacy_op]}, vocab=future)
-    assert tokens == [1, future.operator_offset]
+    tokens = [1, 2, FORMULA_VOCAB.operator_offset]
+    payload = {
+        "formula": tokens,
+        "grammar_version": 6,
+    }
+    resolved = resolve_formula_tokens(payload, vocab=future)
+    assert resolved == [1, 2, future.operator_offset]
 
 
 def test_resolve_formula_tokens_accepts_bare_token_list():
-    assert resolve_formula_tokens([1, 2]) == [1, 2]
+    # A bare token list is accepted only when the generation is declared
+    # (t46 captain pre-ruling): with the live generation the ids are
+    # identity-mapped.
+    with pytest.raises(ValueError, match="grammar_version"):
+        resolve_formula_tokens([1, 2])
+    assert resolve_formula_tokens(
+        {"formula": [1, 2], "grammar_version": 6}
+    ) == [1, 2]
 
 
-def test_resolve_formula_tokens_v2_payload_keeps_eos_token():
-    # Payloads written under the v2 grammar record ``grammar_version`` and
-    # carry the EOS token; resolution must remap EOS by name, not misread
-    # it as a feature of the legacy layout.
-    payload = _sample_payload()
-    payload["grammar_version"] = 2
-    payload["formula"] = [1, 2, FORMULA_VOCAB.operator_offset, FORMULA_VOCAB.eos_token_id]
-    assert resolve_formula_tokens(payload) == payload["formula"]
+def test_resolve_formula_tokens_grammar5_payload_remaps_operators_and_eos():
+    """t46 Plan A Gap-1 evidence: the by-name remap covers ALL token
+    dimensions across the grammar-5 -> grammar-6 shift -- an operator id
+    (74..112 under grammar 5) resolves to its shifted operator id
+    (78..116) and EOS 113 resolves to 117, while feature ids 1-73 stay
+    bit-stable.  A grammar_version=2 payload (no frozen layout data) is
+    fail-closed rejected instead of silently misdecoded."""
+    feature = 1 + FEATURE_NAMES.index("ROE")  # grammar-5 feature id (bit-stable)
+    operator = 1 + 73 + 3  # grammar-5 operator id 77 (feature block grew)
+    payload = {
+        "formula": [feature, operator, 113],
+        "feature_names": list(GRAMMAR_V5_VOCAB.feature_names),
+        "operator_names": list(FORMULA_VOCAB.operator_names),
+        "grammar_version": 5,
+    }
+    resolved = resolve_formula_tokens(payload, FORMULA_VOCAB)
+    assert resolved == [feature, 78 + 3, 117]
+    # The names survive: same AST under both layouts.
+    assert tokens_to_names(resolved, FORMULA_VOCAB) == tokens_to_names(
+        [feature, operator, 113], GRAMMAR_V5_VOCAB
+    )
+    # An unknown historical generation fails closed.
+    v2_payload = dict(payload, grammar_version=2)
+    with pytest.raises(ValueError, match="unsupported grammar generation 2"):
+        resolve_formula_tokens(v2_payload, FORMULA_VOCAB)
 
 
 def test_resolve_formula_tokens_rejects_unknown_feature_name():
@@ -349,6 +415,7 @@ def test_resolve_formula_tokens_rejects_missing_feature_in_current_vocab():
     payload = {
         "formula": [1 + len(FEATURE_NAMES)],
         "feature_names": list(src.feature_names),
+        "grammar_version": 6,
     }
     with pytest.raises(ValueError, match="EXTRA"):
         resolve_formula_tokens(payload)

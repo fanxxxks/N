@@ -415,32 +415,37 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     if not isinstance(payload, dict) or "formula" not in payload:
         raise ValueError("formula payload has no 'formula' field")
 
-    # Payloads written by the v2 (EOS) grammar record ``grammar_version``;
-    # older artifacts are remapped against the pinned v1 layout, where the
-    # token after PAD is the first feature rather than EOS.  t46 Plan A: a
-    # BARE grammar-5 payload (no recorded name lists -- e.g. the P10
-    # campaign rows) dispatches to the frozen grammar-5 layout, because the
-    # grammar-6 feature append shifted the operator/EOS ids; the by-name
-    # remap then upgrades the formula into the live vocabulary (P9
-    # precedent -- the frozen list is data, not a second semantic path).
-    src_grammar = int(payload.get("grammar_version", 1))
+    # Fail-closed grammar dispatch (t46 captain pre-ruling, AGENTS §4.3):
+    # every formal artifact since the P7 schema records
+    # ``grammar_version``; a missing or unrecognized generation is
+    # rejected from remap decoding instead of being silently decoded
+    # against the latest table (that silent decode IS the t28 incident
+    # mechanism).  Known generations: 5 -> the frozen grammar-5 layout,
+    # 6 -> the live vocabulary; display layers mark such payloads
+    # legacy/unavailable (pre-P7 artifacts are read-only rejected per
+    # §4.6 and need an explicit auditable migration).
+    src_grammar_raw = payload.get("grammar_version")
+    if src_grammar_raw is None:
+        raise ValueError(
+            "formula payload has no grammar_version; pre-P7 artifacts are "
+            "fail-closed rejected from remap decoding (AGENTS §4.3/§4.6)"
+        )
+    src_grammar = int(src_grammar_raw)
+    if src_grammar not in (5, 6):
+        raise ValueError(
+            f"unsupported grammar generation {src_grammar} for remap "
+            "decoding (known generations: 5, 6)"
+        )
     src_has_eos = src_grammar >= 2
     src_features = payload.get("feature_names")
     src_operators = payload.get("operator_names")
     if src_features is None:
         if src_grammar == 5:
             src_features = _GRAMMAR_V5_FEATURE_NAMES
-            if src_operators is None:
-                src_operators = tuple(cfg[0] for cfg in OPS_CONFIG)
-        elif src_grammar >= 6:
-            # grammar-6+ bare tokens were sampled against the live layout.
-            src_features = FEATURE_NAMES
-            if src_operators is None:
-                src_operators = tuple(cfg[0] for cfg in OPS_CONFIG)
         else:
-            src_features = LEGACY_FEATURE_NAMES
+            src_features = FEATURE_NAMES
     if src_operators is None:
-        src_operators = LEGACY_OPERATOR_NAMES
+        src_operators = tuple(cfg[0] for cfg in OPS_CONFIG)
     src_features = tuple(str(name) for name in src_features)
     src_operators = tuple(str(name) for name in src_operators)
     src_vocab = FormulaVocab(

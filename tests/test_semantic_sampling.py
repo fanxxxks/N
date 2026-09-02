@@ -314,7 +314,12 @@ def test_legacy_formula_resolution_unaffected():
         "formula": tokens,
         "feature_names": list(FORMULA_VOCAB.feature_names),
         "operator_names": list(FORMULA_VOCAB.operator_names),
-        "grammar_version": 2,
+        # t46 strict grammar gate (whitelist §10.1 case 2, captain
+        # pre-ruling): only known generations (5/6) enter remap decoding;
+        # the type-violating formula itself is unchanged, so this test's
+        # intent (resolution-by-name is unaffected by P7-E typing) is
+        # preserved under the live generation declaration.
+        "grammar_version": 6,
     }
     resolved = resolve_formula_tokens(payload, FORMULA_VOCAB)
     assert resolved
