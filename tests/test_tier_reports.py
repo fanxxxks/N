@@ -200,3 +200,44 @@ def test_run_tier_diagnostics_per_set(populated_db: DataConfig):
         assert set(report["tiers"]) == set(tier_set)
         for row in report["per_feature"]:
             assert row["data_tier"] in tier_set
+
+def test_candidate_within_tier_grammar5_dispatch():
+    """t56 F1 (Plan A): the tier-confinement decode threads the declared
+    grammar generation -- grammar-5-era tokens (the P10 seed-7 formula)
+    decode via the frozen grammar-5 layout instead of the shifted live
+    feature block; without the declaration the decode fails closed."""
+    import json as _json
+
+    from pathlib import Path
+
+    from ashare_model.tier_reports import _candidate_within_tier
+
+    summary_path = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "p10_searcher_comparison_20260901"
+        / "summary.json"
+    )
+    summary = _json.loads(summary_path.read_text(encoding="utf-8"))
+    row = next(
+        r
+        for r in summary["rows"]
+        if r["seed"] == 7 and r["searcher"] == "random"
+    )
+    tokens = list(row["selected"]["tokens"])
+
+    import types
+
+    score = types.SimpleNamespace(tokens=tokens, eligible=True)
+
+    allowed = {
+        "TURNOVER",
+        "ATR_14",
+        "LIMIT_UP_CNT_5",
+        "CROWD_AMOUNT_60",
+        "MARGIN_CROWD_60",
+    }
+    assert _candidate_within_tier(score, allowed, grammar_version=5) is True
+    # Without the declared generation the shifted live layout misdecodes
+    # the operator/EOS ids -> fail closed.
+    assert _candidate_within_tier(score, allowed) is False

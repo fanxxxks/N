@@ -118,16 +118,27 @@ def _regime_payload(regime, proto_cfg: ProtocolConfig) -> dict | None:
     }
 
 
-def _data_tier_block(formula, formula_text: str | None) -> dict | None:
+def _data_tier_block(
+    formula,
+    formula_text: str | None,
+    grammar_version: int | None = None,
+) -> dict | None:
     """Compact credibility-tier block for one formula (v21, P2-02).
 
     Resolves the formula's features to their A/B/C tiers via
     :func:`ashare_model.data_tier.formula_data_tier_report` (``formula``
     tokens first; bare baseline rows fall back to ``formula_text``).
+    ``grammar_version`` (t56 F1) threads the artifact-declared grammar
+    generation into the decode: grammar-5-era tokens decode against the
+    frozen grammar-5 layout instead of the shifted live vocabulary.
     ``None`` when there is no traceable formula (e.g. ``equal_weight``).
     """
 
-    report = formula_data_tier_report(tokens=formula, feature_name=formula_text)
+    report = formula_data_tier_report(
+        tokens=formula,
+        feature_name=formula_text,
+        grammar_version=grammar_version,
+    )
     if report is None:
         return None
     return {
@@ -154,6 +165,7 @@ def build_result(
     ledger: dict | None = None,
     regime=None,
     backtest_config: BacktestConfig | None = None,
+    grammar_version: int | None = None,
 ) -> dict:
     """Assemble the protocol artifact (schema contract, see module docstring).
 
@@ -213,16 +225,22 @@ def build_result(
     for row in rows:
         if row.get("data_tier") is None:
             row["data_tier"] = _data_tier_block(
-                row.get("formula"), row.get("formula_text")
+                row.get("formula"),
+                row.get("formula_text"),
+                grammar_version=row.get("grammar_version", grammar_version),
             )
 
     stitched = stitch_oos_series(rows)
     for trial in stitched:
         trial.update(stitched_metrics(trial))
-        trial["data_tier"] = _data_tier_block(None, trial.get("formula_text"))
+        trial["data_tier"] = _data_tier_block(
+            None, trial.get("formula_text"), grammar_version=grammar_version
+        )
     top = top_trial(rows)
     if top is not None:
-        top["data_tier"] = _data_tier_block(None, top.get("formula_text"))
+        top["data_tier"] = _data_tier_block(
+            None, top.get("formula_text"), grammar_version=grammar_version
+        )
     result = _sanitize(
         {
             "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,

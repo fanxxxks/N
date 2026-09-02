@@ -104,13 +104,21 @@ def _train_one(loader, tensor, data_config, model_config, backtest_config,
     return trainer
 
 
-def best_confined_candidate(selection_result, allowed_features: set[str]):
+def best_confined_candidate(
+    selection_result,
+    allowed_features: set[str],
+    grammar_version: int | None = None,
+):
     """The best eligible candidate whose tokens reference only allowed
     features (tier confinement, contract §6).
 
     Returns the :class:`~ashare_model.candidates.CandidateScore` or
     ``None`` when no eligible confined candidate exists (fall back to the
     generator's global best, recorded with ``confined=false``).
+
+    ``grammar_version`` (t56 F1) threads the artifact-declared grammar
+    generation into the decode: grammar-5-era tokens decode against the
+    frozen grammar-5 layout instead of the shifted live vocabulary.
     """
 
     from .data_tier import formula_feature_names
@@ -119,7 +127,7 @@ def best_confined_candidate(selection_result, allowed_features: set[str]):
     for score in selection_result.candidates:
         if score.tokens is None or not score.eligible:
             continue
-        names = formula_feature_names(score.tokens)
+        names = formula_feature_names(score.tokens, grammar_version=grammar_version)
         if names is None or not set(names) <= allowed_features:
             continue
         if best is None or score.val_reward > best.val_reward:
@@ -127,14 +135,18 @@ def best_confined_candidate(selection_result, allowed_features: set[str]):
     return best
 
 
-def _candidate_within_tier(score, allowed_features: set[str]) -> bool:
+def _candidate_within_tier(
+    score,
+    allowed_features: set[str],
+    grammar_version: int | None = None,
+) -> bool:
     """Whether a candidate's tokens reference only allowed features."""
 
     from .data_tier import formula_feature_names
 
     if score is None or score.tokens is None:
         return False
-    names = formula_feature_names(score.tokens)
+    names = formula_feature_names(score.tokens, grammar_version=grammar_version)
     return names is not None and set(names) <= allowed_features
 
 
@@ -147,6 +159,7 @@ def run_tier_ablation(
     steps: int,
     batch_size: int,
     seed: int,
+    grammar_version: int | None = None,
 ) -> dict:
     """Train the generator on every tier set (same seed/steps/batch).
 
@@ -174,11 +187,11 @@ def run_tier_ablation(
         )
         allowed = set(tier_set_features(tuple(entry["included_tiers"])))
         selected = trainer.selection_result.selected
-        if _candidate_within_tier(selected, allowed):
+        if _candidate_within_tier(selected, allowed, grammar_version=grammar_version):
             confined_candidate = selected
         else:
             confined_candidate = best_confined_candidate(
-                trainer.selection_result, allowed
+                trainer.selection_result, allowed, grammar_version=grammar_version
             )
         if confined_candidate is not None:
             reward = float(confined_candidate.val_reward)
@@ -198,7 +211,9 @@ def run_tier_ablation(
             "confined": confined_flag,
             "best_reward": reward,
             "best_formula": formula_text,
-            "formula_data_tier": formula_data_tier_report(tokens=tokens),
+            "formula_data_tier": formula_data_tier_report(
+                tokens=tokens, grammar_version=grammar_version
+            ),
             "delta_vs_baseline": round(reward - baseline_reward, 4),
         }
     return runs

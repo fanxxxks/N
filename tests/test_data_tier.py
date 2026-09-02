@@ -151,14 +151,13 @@ def test_formula_data_tier_report_invalid_tokens_is_none():
     assert formula_data_tier_report(tokens=[999999]) is None
 
 
-def test_formula_grammar5_tokens_decode_via_frozen_layout():
-    """t46 Plan A: a grammar-5-era bare token list (the P10 seed-7 formula,
-    tokens read from the git-tracked P10 summary) must decode against the
-    FROZEN grammar-5 layout when the artifact declares grammar_version=5 --
-    under the live grammar-6 layout the operator/EOS shift makes the same
-    integers structurally invalid, so the dispatch is the fail-closed
-    legacy-decodability path (docs/p13_fundamental_fields_contract.md
-    §6.1/§6.2 erratum)."""
+def test_formula_grammar5_tokens_decode_via_declared_generation():
+    """t56 F1 (Plan A): a grammar-5-era bare token list (the P10 seed-7
+    formula, tokens read from the git-tracked P10 summary) decodes against
+    the FROZEN grammar-5 layout when the artifact declares
+    grammar_version=5; without the declaration the shifted live layout
+    fails closed (docs/p13_fundamental_fields_contract.md §6.1/§6.2
+    erratum)."""
     import json as _json
 
     from pathlib import Path
@@ -177,16 +176,19 @@ def test_formula_grammar5_tokens_decode_via_frozen_layout():
     )
     tokens = list(row["selected"]["tokens"])
 
-    # With the declared generation the features trace correctly ...
-    names = formula_feature_names(tokens, grammar_version=5)
-    assert names is not None
-    assert "LIMIT_UP_CNT_5" in names
-    assert "MARGIN_CROWD_60" in names
+    expected = [
+        "ATR_14",
+        "CROWD_AMOUNT_60",
+        "LIMIT_UP_CNT_5",
+        "MARGIN_CROWD_60",
+        "TURNOVER",
+    ]
+    assert formula_feature_names(tokens, grammar_version=5) == expected
     report = formula_data_tier_report(tokens=tokens, grammar_version=5)
     assert report is not None
     assert report["per_feature"]["MARGIN_CROWD_60"] == "B"
-
-    # ... and without it the shifted live layout fails closed (None).
+    assert report["per_feature"]["LIMIT_UP_CNT_5"] == "A"
+    # Without the declared generation the shifted live layout fails closed.
     assert formula_feature_names(tokens) is None
     assert formula_data_tier_report(tokens=tokens) is None
 

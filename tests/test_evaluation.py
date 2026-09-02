@@ -1352,3 +1352,37 @@ def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
     from ashare_model.identity import candidate_id
 
     assert payload["candidate_id"] == candidate_id(payload["spec_id"], [], 0)
+
+def test_data_tier_block_grammar5_dispatch(tmp_path):
+    """t56 F1 (Plan A): an artifact row declaring grammar_version=5 decodes
+    its tokens against the FROZEN grammar-5 layout -- the P10 seed-7
+    formula's features trace correctly (MARGIN_CROWD_60 = Tier B) instead
+    of failing closed under the shifted grammar-6 feature block.  Without
+    the declared generation the decode fails closed (None) -- the captain
+    pre-ruling keeps silent latest-table decoding impossible."""
+    import json as _json
+
+    from pathlib import Path
+
+    from ashare_model.eval_artifacts import _data_tier_block
+
+    summary_path = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "p10_searcher_comparison_20260901"
+        / "summary.json"
+    )
+    summary = _json.loads(summary_path.read_text(encoding="utf-8"))
+    row = next(
+        r
+        for r in summary["rows"]
+        if r["seed"] == 7 and r["searcher"] == "random"
+    )
+    tokens = list(row["selected"]["tokens"])
+
+    block = _data_tier_block(tokens, None, grammar_version=5)
+    assert block is not None
+    assert block["max_tier"] == "B"  # MARGIN_CROWD_60 is Tier B
+    assert block["tiers_used"] == ["A", "B"]
+    # Without the declared generation the shifted live layout fails closed.
+    assert _data_tier_block(tokens, None) is None
