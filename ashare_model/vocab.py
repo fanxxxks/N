@@ -367,6 +367,28 @@ GRAMMAR_V5_VOCAB = FormulaVocab(
 )
 GRAMMAR_V5_TOKEN_NAMES = GRAMMAR_V5_VOCAB.token_names
 
+# t57 F2 (contract-a ruling): the frozen grammar-3 layout serves grammar-2/3
+# artifacts.  grammar 4 kept the feature table identical to grammar 5's (the
+# P9 adjudication did not change the feature block), so GRAMMAR_V5_VOCAB
+# serves {4, 5} and this table serves {2, 3}.  The feature list is the
+# V1+V2+V3 blocks (62 names) -- a frozen prefix of the live vocabulary; EOS
+# sits at 102 (1 + 62 + 39), which is TS_RANK5 under the live layout -- the
+# concrete corruption a wrong-layout decode would produce.
+_GRAMMAR_V3_FEATURE_NAMES = tuple(
+    name
+    for name in _FEATURE_NAMES_V1 + _FEATURE_NAMES_V2 + _FEATURE_NAMES_V3
+    if name not in FEATURE_ALIASES
+)
+assert _GRAMMAR_V3_FEATURE_NAMES == tuple(FEATURE_NAMES)[: len(_GRAMMAR_V3_FEATURE_NAMES)], (
+    "the frozen grammar-3 feature list must stay a prefix of the live "
+    "vocabulary (grammar-6 only appends)"
+)
+GRAMMAR_V3_VOCAB = FormulaVocab(
+    feature_names=_GRAMMAR_V3_FEATURE_NAMES,
+    operator_names=tuple(cfg[0] for cfg in OPS_CONFIG),
+)
+GRAMMAR_V3_TOKEN_NAMES = GRAMMAR_V3_VOCAB.token_names
+
 
 def tokens_to_names(tokens: Iterable[int], vocab: FormulaVocab | None = None) -> list[str] | None:
     """Map a postfix token sequence to its token names.
@@ -395,13 +417,14 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     Payloads written by the trainer record the feature/operator name lists
     they were sampled against (``feature_names`` / ``operator_names`` /
     ``feature_version`` / ``grammar_version``), so formulas are remapped
-    **by name** and survive vocabulary additions.  Legacy payloads without
-    metadata resolve against the pinned first-generation lists
-    (:data:`LEGACY_FEATURE_NAMES` / :data:`LEGACY_OPERATOR_NAMES`); the
-    by-name remapping keeps them valid after vocabulary growth, and a bare
-    legacy factor resolves to its :class:`~ashare_model.ir.Feature` token
-    (the AST migration happens when the bytecode is decoded).  A bare token
-    list is accepted as a legacy payload.
+    **by name** and survive vocabulary additions.  Bare payloads (no
+    metadata) dispatch on their declared ``grammar_version`` to the frozen
+    per-generation layout (grammar 2/3 -> the grammar-3 layout, 4/5 -> the
+    grammar-5 layout, 6 -> live; unknown or missing generations are
+    fail-closed rejected), and the by-name remapping keeps them valid
+    after vocabulary growth; a bare legacy factor resolves to its
+    :class:`~ashare_model.ir.Feature` token (the AST migration happens
+    when the bytecode is decoded).
 
     This function only remaps ids by name; structural validity is the
     grammar's job (:func:`ashare_model.ir.decode`), so structurally invalid
@@ -415,15 +438,17 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     if not isinstance(payload, dict) or "formula" not in payload:
         raise ValueError("formula payload has no 'formula' field")
 
-    # Fail-closed grammar dispatch (t46 captain pre-ruling, AGENTS §4.3):
-    # every formal artifact since the P7 schema records
-    # ``grammar_version``; a missing or unrecognized generation is
+    # Fail-closed grammar dispatch (t46 captain pre-ruling + t57 F2
+    # extension, AGENTS §4.3): every formal artifact since the P7 schema
+    # records ``grammar_version``; a missing or unrecognized generation is
     # rejected from remap decoding instead of being silently decoded
     # against the latest table (that silent decode IS the t28 incident
-    # mechanism).  Known generations: 5 -> the frozen grammar-5 layout,
-    # 6 -> the live vocabulary; display layers mark such payloads
-    # legacy/unavailable (pre-P7 artifacts are read-only rejected per
-    # §4.6 and need an explicit auditable migration).
+    # mechanism).  Known generations and their frozen decode layouts:
+    # 2/3 -> the grammar-3 layout (62 features, EOS 102), 4/5 -> the
+    # grammar-5 layout (73 features, EOS 113), 6 -> the live vocabulary.
+    # Display layers mark such payloads legacy/unavailable (pre-P7
+    # artifacts are read-only rejected per §4.6 and need an explicit
+    # auditable migration).
     src_grammar_raw = payload.get("grammar_version")
     if src_grammar_raw is None:
         raise ValueError(
@@ -431,16 +456,18 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
             "fail-closed rejected from remap decoding (AGENTS §4.3/§4.6)"
         )
     src_grammar = int(src_grammar_raw)
-    if src_grammar not in (5, 6):
+    if src_grammar not in (2, 3, 4, 5, 6):
         raise ValueError(
             f"unsupported grammar generation {src_grammar} for remap "
-            "decoding (known generations: 5, 6)"
+            "decoding (known generations: 2, 3, 4, 5, 6)"
         )
     src_has_eos = src_grammar >= 2
     src_features = payload.get("feature_names")
     src_operators = payload.get("operator_names")
     if src_features is None:
-        if src_grammar == 5:
+        if src_grammar in (2, 3):
+            src_features = _GRAMMAR_V3_FEATURE_NAMES
+        elif src_grammar in (4, 5):
             src_features = _GRAMMAR_V5_FEATURE_NAMES
         else:
             src_features = FEATURE_NAMES

@@ -237,15 +237,38 @@ def test_resolve_formula_tokens_fails_closed_without_grammar_version():
 
 
 def test_resolve_formula_tokens_fails_closed_on_unknown_grammar_generation():
-    """t46 captain pre-ruling: only known generations (5 = frozen layout,
-    6 = live) enter remap decoding; anything else fails closed."""
+    """t46 captain pre-ruling + t57 F2: only known generations (2-6) enter
+    remap decoding; anything else fails closed."""
     payload = _sample_payload()
-    payload["grammar_version"] = 2
-    with pytest.raises(ValueError, match="unsupported grammar generation 2"):
+    payload["grammar_version"] = 1
+    with pytest.raises(ValueError, match="unsupported grammar generation 1"):
         resolve_formula_tokens(payload)
     payload["grammar_version"] = 7
     with pytest.raises(ValueError, match="unsupported grammar generation 7"):
         resolve_formula_tokens(payload)
+
+
+def test_grammar2_3_payloads_decode_via_frozen_v3_layout():
+    """t57 F2 (contract-a ruling): grammar-2/3 payloads decode against the
+    frozen grammar-3 layout (62 features, EOS 102) -- under the live
+    layout token 102 is TS_RANK5, so the per-generation dispatch is the
+    corruption guard; the by-name remap upgrades the formula into the live
+    vocabulary (EOS 102 -> 117)."""
+    v3_payload = {
+        "formula": [1, 102],  # RET_1 + EOS(102 under grammar 3)
+        "grammar_version": 3,
+    }
+    resolved = resolve_formula_tokens(v3_payload, FORMULA_VOCAB)
+    assert resolved == [1, FORMULA_VOCAB.eos_token_id]
+    # A grammar-2 payload dispatches to the same frozen layout.
+    v2_payload = {
+        "formula": [1, 102],
+        "grammar_version": 2,
+    }
+    assert resolve_formula_tokens(v2_payload, FORMULA_VOCAB) == [
+        1,
+        FORMULA_VOCAB.eos_token_id,
+    ]
 
 
 def test_legacy_bare_factor_requires_declared_generation():
@@ -377,8 +400,8 @@ def test_resolve_formula_tokens_grammar5_payload_remaps_operators_and_eos():
     dimensions across the grammar-5 -> grammar-6 shift -- an operator id
     (74..112 under grammar 5) resolves to its shifted operator id
     (78..116) and EOS 113 resolves to 117, while feature ids 1-73 stay
-    bit-stable.  A grammar_version=2 payload (no frozen layout data) is
-    fail-closed rejected instead of silently misdecoded."""
+    bit-stable.  t57 F2: grammar-2 payloads now dispatch to the frozen
+    grammar-3 layout; unknown generations still fail closed."""
     feature = 1 + FEATURE_NAMES.index("ROE")  # grammar-5 feature id (bit-stable)
     operator = 1 + 73 + 3  # grammar-5 operator id 77 (feature block grew)
     payload = {
@@ -393,10 +416,10 @@ def test_resolve_formula_tokens_grammar5_payload_remaps_operators_and_eos():
     assert tokens_to_names(resolved, FORMULA_VOCAB) == tokens_to_names(
         [feature, operator, 113], GRAMMAR_V5_VOCAB
     )
-    # An unknown historical generation fails closed.
-    v2_payload = dict(payload, grammar_version=2)
-    with pytest.raises(ValueError, match="unsupported grammar generation 2"):
-        resolve_formula_tokens(v2_payload, FORMULA_VOCAB)
+    # An unknown generation fails closed (t57 F2: known = 2-6).
+    v1_payload = dict(payload, grammar_version=1)
+    with pytest.raises(ValueError, match="unsupported grammar generation 1"):
+        resolve_formula_tokens(v1_payload, FORMULA_VOCAB)
 
 
 def test_resolve_formula_tokens_rejects_unknown_feature_name():

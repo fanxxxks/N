@@ -261,6 +261,21 @@ commit 回退；test_fundamental_scope stubs 保留）。legacy 分派落点：
 `feature_registry.formula_registry_status_report`、`promotion` G6/G7
 调用点的 grammar_version 穿递。GRammar 维持 6：布局真变、版本真升。
 
+### 6.4 追加（t57 F2，2026-09-02，contract-a 裁决书 (a)：按代扩展冻结布局表）
+
+§6.3 的分派机制按代扩展覆盖 grammar-2/3：新增**冻结 grammar-3 布局**
+（62 特征 = V1+V2+V3 块、39 算子、EOS=102；`_GRAMMAR_V3_FEATURE_NAMES`
+带 live 前缀断言守卫；`GRAMMAR_V3_VOCAB`/`GRAMMAR_V3_TOKEN_NAMES` 导出）。
+已知代与分派映射：**gv=2/3 → 冻结 grammar-3 布局；gv=4/5 → 冻结
+grammar-5 布局（P9 裁决未改表，两代表逐名相同）；gv=6 → 现行词汇**；
+缺失/未知 grammar_version → fail-closed 拒绝（§6.3 严格门不变）。
+EOS 错解守卫实证：现行布局下 token 102 = TS_RANK5（非 EOS），grammar-2/3
+载荷的 EOS=102 若按现行布局解码即腐蚀 AST——按代分派即为守卫。
+分派实现：`vocab.resolve_formula_tokens`（裸载荷按代选冻结 src；
+metadata 载荷按名重映射不变）；消费点穿递：`data_tier`、
+`feature_registry.formula_registry_status_report`、`promotion` G6/G7、
+`eval_artifacts`/`tier_reports`（t56 F1）。
+
 ## 7. 预期 RED 测试清单（实现前先红；t14 落地，同 commit 注册分片）
 
 1. **RED-1 schema 迁移**：迁移后两新列存在且类型 DOUBLE；重复执行幂等；
