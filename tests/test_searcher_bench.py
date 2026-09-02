@@ -237,3 +237,174 @@ def test_train_search_bills_the_trainers_semantic_cache(populated_db: DataConfig
             save_artifacts=False,
         )
         assert 0 < trainer.semantic_cache.budget_used <= 2, searcher
+
+
+# --- P14 §5.3/§5.4: length prior (random path) + research/promotion tracks --
+# Contract: docs/p14_search_digest_preregistration.md — the per-step EOS
+# prior (profile p14-uniform-2-11-v1) applies to the random sampler's
+# proposal distribution (cap-content fraction ≤ 25%, short-content coverage
+# ≥ 40%), and the v4 campaign separates the research (full vocabulary) and
+# promotion_tier_a (tier-A samplable vocabulary) tracks with per-track
+# budgets and a fail-closed tier-purity validation.
+# (p14 symbols are imported lazily inside each test so the RED run of this
+#  file contains only the expected new-test failures.)
+
+
+def test_p14_length_prior_random_proposal_distribution():
+    from ashare_model.search_length_prior import LENGTH_PRIOR_PROFILE
+    from ashare_model.train_windows import sample_random_formulas
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    assert LENGTH_PRIOR_PROFILE == "p14-uniform-2-11-v1"
+    seqs = sample_random_formulas(
+        seed=7, vocab=FORMULA_VOCAB, max_len=12, n=2000
+    )
+    assert len(seqs) == 2000
+    eos = FORMULA_VOCAB.eos_token_id
+    assert all(eos in seq for seq in seqs)  # still EOS-terminated
+    assert all(len(seq) <= 12 for seq in seqs)  # cap unchanged
+    contents = [seq.index(eos) for seq in seqs]
+    cap = sum(1 for c in contents if c == 11) / len(contents)
+    short = sum(1 for c in contents if c <= 8) / len(contents)
+    assert cap <= 0.25, f"cap stacking unchanged: {cap:.3f}"
+    assert short >= 0.40, f"no short-formula coverage: {short:.3f}"
+
+
+def test_p14_tier_a_feature_ids_come_from_the_single_tier_authority():
+    from ashare_model.data_tier import feature_tier
+    from ashare_model.searcher_bench import tier_a_feature_ids
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    ids = tier_a_feature_ids(FORMULA_VOCAB)
+    names = {
+        FORMULA_VOCAB.feature_names[token - FORMULA_VOCAB.feature_offset]
+        for token in ids
+    }
+    assert len(ids) == 41  # p14 appendix A: samplable tier-A features
+    assert all(feature_tier(name).value == "A" for name in names)
+    assert not (names & set(FORMULA_VOCAB.deprecated_names))
+
+
+def test_p14_campaign_runs_research_and_promotion_tracks(
+    populated_db: DataConfig, tmp_path
+):
+    from ashare_model.search_length_prior import LENGTH_PRIOR_PROFILE
+    from ashare_model.searcher_bench import (
+        P14_TRACKS,
+        SEARCHERS as BENCH_SEARCHERS,
+        benchmark_campaign,
+        tier_a_feature_ids,
+    )
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
+    payload = benchmark_campaign(
+        populated_db,
+        model_config,
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        _reward_cfg(),
+        loader,
+        seeds=(42, 7),
+        budget=16,
+        research_budget=10,
+        promotion_budget=6,
+        rl_steps=2,
+        train_end_date="2024-02-01",
+        window_cap=(3, 30),
+        fold_index=0,
+        device="cpu",
+        run_dir=tmp_path / "run",
+    )
+    assert payload["campaign_status"] == "completed"
+    rows = payload["rows"]
+    assert [
+        (row["seed"], row["track"], row["searcher"]) for row in rows
+    ] == [
+        (seed, track, searcher)
+        for seed in (42, 7)
+        for track in P14_TRACKS
+        for searcher in BENCH_SEARCHERS
+    ]
+    for row in rows:
+        assert row["length_prior_profile"] == LENGTH_PRIOR_PROFILE
+        if row["track"] == "research":
+            assert row["requested_budget"] == 10
+        else:
+            assert row["requested_budget"] == 6
+            assert row["tier_restriction"]["tier"] == "A"
+    # The A-track restriction is real: promotion rows carry the tier-A
+    # feature count from the single tier authority.
+    promotion_rows = [row for row in rows if row["track"] == "promotion_tier_a"]
+    assert {row["tier_restriction"]["feature_count"] for row in promotion_rows} == {
+        len(tier_a_feature_ids(FORMULA_VOCAB))
+    }
+
+
+def test_p14_campaign_rejects_mismatched_budget_split(
+    populated_db: DataConfig, tmp_path
+):
+    from ashare_model.searcher_bench import benchmark_campaign
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    model_config = ModelConfig(batch_size=2, train_steps=1, max_formula_len=4)
+    with pytest.raises(ValueError, match="budget"):
+        benchmark_campaign(
+            populated_db,
+            model_config,
+            BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+            _reward_cfg(),
+            loader,
+            seeds=(42,),
+            budget=16,
+            research_budget=9,
+            promotion_budget=6,
+            rl_steps=8,
+            train_end_date="2024-02-01",
+            window_cap=(3, 30),
+            fold_index=0,
+            device="cpu",
+            run_dir=tmp_path / "run",
+        )
+
+
+def test_p14_promotion_tier_purity_validation_is_fail_closed():
+    """Any billed candidate reaching beyond tier A fails the promotion row
+    (p14 §5.4.4): the validator rejects a C-tier formula and accepts an
+    A-tier one."""
+    import types
+
+    from ashare_model import searcher_bench as sb
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    vocab = FORMULA_VOCAB
+    ind_rel = vocab.feature_offset + vocab.feature_names.index("IND_REL_RET_5")
+    ret1 = vocab.feature_offset + vocab.feature_names.index("RET_1")
+    eos = vocab.eos_token_id
+    c_row = types.SimpleNamespace(
+        scores=[
+            types.SimpleNamespace(tokens=(ind_rel, eos)),
+            types.SimpleNamespace(tokens=(ret1, eos)),
+        ]
+    )
+    with pytest.raises(ValueError, match="tier"):
+        sb._validate_promotion_tier_purity(c_row, vocab)
+    a_row = types.SimpleNamespace(scores=[types.SimpleNamespace(tokens=(ret1, eos))])
+    sb._validate_promotion_tier_purity(a_row, vocab)  # must not raise
+
+
+def test_p14_constants_match_the_preregistered_split():
+    from ashare_model.search_length_prior import LENGTH_PRIOR_PROFILE
+    from ashare_model.searcher_bench import (
+        P14_PROMOTION_BUDGET,
+        P14_RESEARCH_BUDGET,
+        P14_TRACKS,
+    )
+
+    assert P14_RESEARCH_BUDGET == 1200
+    assert P14_PROMOTION_BUDGET == 800
+    assert P14_RESEARCH_BUDGET + P14_PROMOTION_BUDGET == 2000
+    assert P14_TRACKS == ("research", "promotion_tier_a")
+    assert LENGTH_PRIOR_PROFILE == "p14-uniform-2-11-v1"

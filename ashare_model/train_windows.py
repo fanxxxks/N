@@ -13,6 +13,7 @@ state transition in :mod:`ashare_model.semantic_sampling`.
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import numpy as np
 import torch
 
 from .alphagpt import build_action_mask
+from .search_length_prior import sample_target_content_length
 from .semantic_sampling import advance_stack_state
 from .time_contract import TrainingTimeContract
 
@@ -115,30 +117,29 @@ def validation_windows(
     return windows
 
 
-def sample_random_formulas(
-    seed: int, vocab, max_len: int, n: int, feature_ids: list[int] | None = None
+def _walk_uniform_batch(
+    count: int,
+    vocab,
+    max_len: int,
+    effective_len: int,
+    feature_ids: list[int] | None,
 ) -> list[tuple[int, ...]]:
-    """Sample ``n`` structurally valid postfix formulas under a uniform
-    prior over the legal action mask (the exact legality rules the policy
-    samples under, so the random-search baseline and the RL policy share
-    one search space).  Deterministic in ``seed``; pins torch's CPU RNG
-    exactly like the trainer does.  Every sequence is EOS-terminated, so
-    its effective (non-padded) length is always >= 2.
+    """One batched uniform walk over the legal action mask (the P14 length
+    prior bounds each batch by its effective position count, so the mask
+    forces EOS termination at the bound; rows are then PAD-padded back to
+    ``max_len`` — the historical shape of every sampled sequence).
+    Consumes the global torch RNG sequentially — deterministic under a
+    prior ``torch.manual_seed``."""
 
-    ``feature_ids`` (P6 §4.2) restricts sampling to the given feature
-    tokens; ``None`` keeps the pre-P6 full-vocabulary search space.
-    """
-
-    torch.manual_seed(seed)
-    stack_sizes = torch.zeros(n, dtype=torch.long)
+    stack_sizes = torch.zeros(count, dtype=torch.long)
     # P7-E: the sampling state carries one semantic-type id per stack slot
     # so the action mask can enforce operator signature legality.
-    stack_types = torch.zeros(n, max_len, dtype=torch.long)
-    done = torch.zeros(n, dtype=torch.bool)
+    stack_types = torch.zeros(count, max_len, dtype=torch.long)
+    done = torch.zeros(count, dtype=torch.bool)
     seqs: list[torch.Tensor] = []
-    for pos in range(max_len):
+    for pos in range(effective_len):
         mask = build_action_mask(
-            stack_sizes, done, pos, max_len, vocab, feature_ids=feature_ids,
+            stack_sizes, done, pos, effective_len, vocab, feature_ids=feature_ids,
             stack_types=stack_types,
         )
         allowed = (mask == 0.0).float()
@@ -163,7 +164,54 @@ def sample_random_formulas(
             done,
             vocab=vocab,
         )
-    return [tuple(int(t) for t in row) for row in torch.stack(seqs, dim=1).tolist()]
+    pad = vocab.pad_token_id
+    rows = torch.stack(seqs, dim=1).tolist()
+    return [
+        tuple(int(t) for t in row) + (pad,) * (max_len - len(row))
+        for row in rows
+    ]
+
+
+def sample_random_formulas(
+    seed: int, vocab, max_len: int, n: int, feature_ids: list[int] | None = None
+) -> list[tuple[int, ...]]:
+    """Sample ``n`` structurally valid postfix formulas over the legal
+    action mask with P14 per-sequence EOS length targets (profile
+    ``p14-uniform-2-11-v1``): each sequence walks under an effective
+    position bound of ``target + 1``, so the mask forces EOS termination
+    exactly at the drawn target and the proposal content-length
+    distribution is the preregistered discrete-uniform target (for
+    ``max_len < 4`` the profile is inactive and the walk keeps the legacy
+    full-length bound).  The exact legality rules the policy samples under
+    are unchanged, so the random-search baseline and the RL policy share
+    one search space.  Deterministic in ``seed``; pins torch's CPU RNG
+    exactly like the trainer does.  Every sequence is EOS-terminated, so
+    its effective (non-padded) length is always >= 2.
+
+    ``feature_ids`` (P6 §4.2) restricts sampling to the given feature
+    tokens; ``None`` keeps the pre-P6 full-vocabulary search space.
+    """
+
+    torch.manual_seed(seed)
+    length_rng = random.Random(seed)
+    if max_len >= 4:
+        targets = [length_rng.randint(2, max_len - 1) for _ in range(n)]
+    else:
+        targets = [None] * n
+    groups: dict[int | None, int] = {}
+    for target in targets:
+        groups[target] = groups.get(target, 0) + 1
+    out: list[tuple[int, ...]] = []
+    # Deterministic group order: the inactive profile first, then targets
+    # ascending.  Each group is one batched walk under its effective bound;
+    # rows are PAD-padded back to ``max_len`` (the historical shape).
+    for target in sorted(groups, key=lambda t: (t is None, t or 0)):
+        count = groups[target]
+        effective_len = max_len if target is None else target + 1
+        out.extend(
+            _walk_uniform_batch(count, vocab, max_len, effective_len, feature_ids)
+        )
+    return out
 
 
 def resolve_device(requested: str | None = None) -> torch.device:

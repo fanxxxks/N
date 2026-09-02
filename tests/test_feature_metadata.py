@@ -25,6 +25,7 @@ from ashare_model.feature_metadata import (
     RecommendedHorizon,
     SemanticType,
     authored_metadata_of,
+    resolve_depends_on,
 )
 from ashare_model.feature_registry import (
     FEATURE_REGISTRY_VERSION,
@@ -98,8 +99,11 @@ def test_registry_version_is_pinned():
     # registry and FACTOR_REGISTRY (contract: plan §6.1).  Descriptive
     # only: no search/scoring/promotion semantics change.
     # v5 (P9 §7 adjudication, measurement log 2026-09-01):
-    # whitelist §10.1 case 2.
-    assert FEATURE_REGISTRY_VERSION == 5
+    # v6 (P13 §5.3/§6.1, docs/p13_fundamental_fields_contract.md): family ⑤
+    # placeholders become authoritative metadata (4 features join the
+    # vocabulary).  Whitelist §10.1 case 2 — requirement change pre-registered
+    # in the approved p13 contract.
+    assert FEATURE_REGISTRY_VERSION == 6
 
 
 def test_expected_horizon_derives_from_research_domains():
@@ -204,16 +208,48 @@ def test_p9_new_features_have_authored_metadata():
         assert meta.expected_direction in (-1, 0, 1), name
 
 
-def test_p9_pending_data_placeholders_stay_outside_the_vocabulary():
+def test_p13_pending_placeholders_cleared_and_family5_unlocked():
+    """P13 §5.3 (whitelist §10.1 case 2 — approved contract changes the
+    requirement): the four family-⑤ placeholders leave PENDING_DATA_FEATURES
+    and enter the authoritative metadata table as samplable members.
+
+    The pre-P13 assertion (placeholders stay outside vocabulary/metadata)
+    is superseded by the p13 contract; the PendingDataFeature mechanism
+    itself is retained (contract §5.3) but carries no members."""
     from ashare_model.feature_metadata import PENDING_DATA_FEATURES
     from ashare_model.vocab import FEATURE_NAMES
 
-    names = {entry.name for entry in PENDING_DATA_FEATURES}
-    assert names == {
-        "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
+    assert PENDING_DATA_FEATURES == ()
+    family5 = ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL")
+    for name in family5:
+        assert name in FEATURE_METADATA, name
+        assert name in FEATURE_NAMES, name
+        assert FEATURE_METADATA[name].promotion_allowed is True, name
+
+
+def test_p13_family5_metadata_is_authoritative():
+    """P13 §5.3: authoritative metadata per feature — real availability
+    rule, pre-registered direction, and depends_on covering the required
+    fundamental_pit fields."""
+    required = {
+        "CASHFLOW_QUALITY": ("net_operate_cash_flow",),
+        "ACCRUALS": ("net_operate_cash_flow", "total_assets"),
+        "ASSET_GROWTH": ("total_assets",),
+        "EARNINGS_ACCEL": (),
     }
-    for entry in PENDING_DATA_FEATURES:
-        assert not entry.promotion_allowed
-        assert entry.name not in FEATURE_METADATA
-        assert entry.name not in FEATURE_NAMES
-        assert entry.required_fields
+    directions = {
+        "CASHFLOW_QUALITY": 1,
+        "ACCRUALS": -1,
+        "ASSET_GROWTH": -1,
+        "EARNINGS_ACCEL": 1,
+    }
+    for name, fields in required.items():
+        meta = FEATURE_METADATA[name]
+        assert meta.availability_rule, name
+        assert meta.hypothesis, name
+        assert meta.expected_direction == directions[name], name
+        assert meta.semantic_type == SemanticType.FUNDAMENTAL_LIKE, name
+        deps = resolve_depends_on(name, meta)
+        for field in fields:
+            assert field in deps, (name, field, deps)
+        assert deps, name  # L141 invariant: non-FACTOR_REGISTRY deps non-empty

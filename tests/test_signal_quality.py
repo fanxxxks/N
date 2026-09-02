@@ -404,9 +404,10 @@ def test_scorer_passes_healthy_signal_with_hard_gates():
     )
     assert score.eligible
     assert score.complexity_cost == pytest.approx(1.0)
-    assert score.complexity_penalty == pytest.approx(
-        score.complexity_cost * _reward().complexity_penalty
-    )
+    # v15 (contract docs/p11_reward_v15_contract.md §5.2/§6.3): the bare
+    # factor's bill (1.0) sits inside the complexity_free_bill free zone
+    # (default 3.0), so the scorer charges nothing.
+    assert score.complexity_penalty == pytest.approx(0.0)
 
 
 def test_scorer_complexity_gate_rejects_pathological_formula():

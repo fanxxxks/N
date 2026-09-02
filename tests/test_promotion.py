@@ -1,11 +1,12 @@
 """T4-01 contract tests: Champion/Challenger promotion gates.
 
-A challenger is promoted only when all five gates pass at once: data &
+A challenger is promoted only when all seven gates pass at once: data &
 formula P0, statistical significance, excess-return & risk constraints,
-cost/capacity stress, and at least one complete future paper-trading
-observation window.  These tests pin the contract before the
-implementation exists — every gate failure is a *reason*, and the
-verdict records the thresholds used.
+cost/capacity stress, at least one complete future paper-trading
+observation window, data-credibility tier (P2-03/P2-04), and feature
+registry status (P12: every feature registry-promotable).  These tests
+pin the contract before the implementation exists — every gate failure
+is a *reason*, and the verdict records the thresholds used.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from ashare_data.config import (
 )
 from ashare_model import evaluation
 from ashare_model.evaluation import PROTOCOL_VERSION, build_result
+from ashare_model.feature_registry import FEATURE_REGISTRY_VERSION
 from ashare_model.reward import REWARD_VERSION
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
 from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
@@ -787,3 +789,299 @@ def test_g1_does_not_check_model_version_or_searcher(tmp_path):
     artifact["searcher"] = "deliberately-unknown"
     gate = _g1_gate(artifact, tmp_path)
     assert gate["passed"], gate["reasons"]
+
+
+# --- P12: promotion gate G7 (feature_registry_status) -------------------------
+#
+# Preregistered by docs/p12_promotion_enforcement_contract.md (merged to
+# main @ 97a86fe): the challenger formula's features must all be
+# registry-promotable (``promotion_allowed`` and not ``deprecated``);
+# fail-closed on untraceable formulas.  The rejection reason strings are
+# the contract §5.2 preregistered literals.
+
+
+def _op_tok(name: str) -> int:
+    from ashare_model.vocab import FORMULA_VOCAB
+
+    return FORMULA_VOCAB.operator_offset + FORMULA_VOCAB.operator_names.index(name)
+
+
+def _registry_gate_evidence(verdict) -> str:
+    return "; ".join(
+        f"{name}={'PASS' if gate['passed'] else 'FAIL'}"
+        for name, gate in verdict["gates"].items()
+    )
+
+
+def _require_g7(verdict):
+    gate = verdict["gates"].get("feature_registry_status")
+    assert gate is not None, (
+        "P12 §1.1 structural gap: no feature_registry_status gate in the "
+        f"promotion verdict ({_registry_gate_evidence(verdict)}) — "
+        "feature registry status has zero consumers on the promotion path"
+    )
+    return gate
+
+
+def _combo_artifact(feature_name: str):
+    """A strong artifact whose champion formula is ``ADD(RET_1, <feature>)``.
+
+    Both features are Tier A (PIT_DAILY), so the data-tier gate passes
+    and any rejection is attributable to the feature-registry gate.
+    Returns ``(tokens, formula_text, artifact)``.
+    """
+    artifact = _strong_artifact()
+    tokens = [_tok("RET_1"), _tok(feature_name), _op_tok("ADD")]
+    text = f"RET_1 {feature_name} ADD"
+    for row in artifact["rows"]:
+        row["formula_text"] = text
+        row["formula"] = list(tokens)
+    artifact["top_trial"]["formula_text"] = text
+    return tokens, text, artifact
+
+
+def _paper_registry_for(tmp_path, tokens, text):
+    registry = PaperWindowRegistry(tmp_path / "paper.json")
+    registry.register(
+        formula_hash=formula_hash(tokens, text),
+        start="2026-02-01",
+        end="2026-06-30",
+        sessions=120,
+        config_sha256="cfg-1",
+        equity_path="data/sim_trades/",
+    )
+    return registry
+
+
+def test_g7_rejects_family3_not_promotable_formula(tmp_path):
+    """P12 §7 RED-1: a Tier-A combination formula embedding LIMIT_UP_CNT_5
+    (family ③, P9 adjudication: promotion_allowed=False) passes every
+    pre-existing gate but must be refused by the feature-registry gate."""
+    tokens, text, artifact = _combo_artifact("LIMIT_UP_CNT_5")
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry_for(tmp_path, tokens, text),
+        stress=_passing_stress(),
+    )
+    gate = _require_g7(verdict)
+    assert not gate["passed"]
+    assert (
+        "feature LIMIT_UP_CNT_5 is not promotion_allowed "
+        "(feature registry status)"
+    ) in gate["reasons"]
+    # Family ③ is not deprecated: no attached deprecation reason.
+    assert not any("deprecated" in r for r in gate["reasons"])
+    assert verdict["promoted"] is False
+    # The rejection must be attributable to G7 alone (Tier A formula).
+    assert verdict["gates"]["data_tier"]["passed"] is True
+
+
+def test_g7_rejects_deprecated_formula_loaded_from_artifact(tmp_path):
+    """P12 §7 RED-2: sampling no longer emits LIMIT_STREAK (deprecated,
+    P9 §7.3 conditional deprecation TRIGGERED), but the artifact loading
+    path can still carry it — exactly why the promotion gate must
+    enforce the registry status itself."""
+    tokens, text, artifact = _combo_artifact("LIMIT_STREAK")
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry_for(tmp_path, tokens, text),
+        stress=_passing_stress(),
+    )
+    gate = _require_g7(verdict)
+    assert not gate["passed"]
+    assert (
+        "feature LIMIT_STREAK is not promotion_allowed "
+        "(feature registry status)"
+    ) in gate["reasons"]
+    assert (
+        "feature LIMIT_STREAK is deprecated (feature registry status)"
+    ) in gate["reasons"]
+    assert verdict["promoted"] is False
+    assert verdict["gates"]["data_tier"]["passed"] is True
+
+
+def test_g7_rejects_bare_factor_baseline_row(tmp_path):
+    """P12 §7 RED-3: the baseline-row routing (``formula=None``,
+    ``formula_text=NAME``) must hit the registry gate symmetrically to
+    the G6 bare-factor path."""
+    artifact = _strong_artifact()
+    for row in artifact["rows"]:
+        row["formula_text"] = "LIMIT_UP_CNT_5"
+        row["formula"] = None
+    artifact["top_trial"]["formula_text"] = "LIMIT_UP_CNT_5"
+    registry = PaperWindowRegistry(tmp_path / "paper.json")
+    registry.register(
+        formula_hash=formula_hash(None, "LIMIT_UP_CNT_5"),
+        start="2026-02-01",
+        end="2026-06-30",
+        sessions=120,
+        config_sha256="cfg-1",
+        equity_path="data/sim_trades/",
+    )
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=registry,
+        stress=_passing_stress(),
+    )
+    gate = _require_g7(verdict)
+    assert not gate["passed"]
+    assert (
+        "feature LIMIT_UP_CNT_5 is not promotion_allowed "
+        "(feature registry status)"
+    ) in gate["reasons"]
+    assert verdict["promoted"] is False
+    # G6's feature_name routing still passes (LIMIT_UP_CNT_5 is Tier A).
+    assert verdict["gates"]["data_tier"]["passed"] is True
+
+
+def test_g7_fail_closed_on_undecodable_tokens(tmp_path):
+    """P12 §7 RED-4a: undecodable tokens fail closed without weakening
+    G6's existing untraceable-formula behavior."""
+    artifact = _strong_artifact()
+    for row in artifact["rows"]:
+        row["formula"] = [10**9]  # out-of-vocabulary token
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = _require_g7(verdict)
+    assert not gate["passed"]
+    assert any(
+        "no traceable formula for registry status" in r
+        for r in gate["reasons"]
+    )
+    policy = verdict["registry_status_policy"]
+    assert policy["report"]["traceable"] is False
+    assert policy["report"]["per_feature"] == {}
+    # G6's existing untraceable behavior is unchanged (no weakening).
+    assert not verdict["gates"]["data_tier"]["passed"]
+    assert any(
+        "no traceable formula" in r
+        for r in verdict["gates"]["data_tier"]["reasons"]
+    )
+
+
+def test_g7_fail_closed_on_unknown_feature_name(tmp_path):
+    """P12 §7 RED-4b: a feature name outside the registry vocabulary is
+    rejected, never silently skipped."""
+    artifact = _strong_artifact()
+    for row in artifact["rows"]:
+        row["formula_text"] = "NOT_IN_REGISTRY"
+        row["formula"] = None
+    artifact["top_trial"]["formula_text"] = "NOT_IN_REGISTRY"
+    registry = PaperWindowRegistry(tmp_path / "paper.json")
+    registry.register(
+        formula_hash=formula_hash(None, "NOT_IN_REGISTRY"),
+        start="2026-02-01",
+        end="2026-06-30",
+        sessions=120,
+        config_sha256="cfg-1",
+        equity_path="data/sim_trades/",
+    )
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=registry,
+        stress=_passing_stress(),
+    )
+    gate = _require_g7(verdict)
+    assert not gate["passed"]
+    assert any(
+        "no traceable formula for registry status" in r
+        for r in gate["reasons"]
+    )
+    assert not verdict["gates"]["data_tier"]["passed"]  # G6 refuses equally
+
+
+def test_g7_passes_registry_promotable_formula(tmp_path):
+    """P12 §7 RED-5: a promotable-feature formula passes G7 with the
+    per-feature report recorded; the pre-existing gates stay untouched."""
+    artifact = _strong_artifact()  # champion formula = bare RET_1
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = _require_g7(verdict)
+    assert gate["passed"] is True
+    policy = verdict["registry_status_policy"]
+    assert policy["feature_registry_version"] == FEATURE_REGISTRY_VERSION
+    assert policy["report"]["traceable"] is True
+    assert policy["report"]["per_feature"] == {
+        "RET_1": {"promotion_allowed": True, "deprecated": False}
+    }
+    assert verdict["promotion_rule_version"] == "2"
+    assert verdict["promoted"] is True
+
+
+def test_g7_rejects_p10_seed7_live_formula(tmp_path):
+    """P12 §1.3/§7 RED-6: the only P10 Stage-B/C formula that passed all
+    four OOS hard gates (random seed-7) embeds LIMIT_UP_CNT_5; G7 must
+    refuse it.  The formula also carries MARGIN_CROWD_60 (Tier B), so the
+    test runs the P2-03 explicit Tier A+B comparison (--allow-tier-b
+    path) where G6 passes: the rejection is then attributable to the
+    registry gate alone.  Tokens are read from the git-tracked P10
+    summary (provenance pin; the file is part of the repo tree)."""
+    import json as _json
+
+    summary_path = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "p10_searcher_comparison_20260901"
+        / "summary.json"
+    )
+    summary = _json.loads(summary_path.read_text(encoding="utf-8"))
+    row = next(
+        r
+        for r in summary["rows"]
+        if r["seed"] == 7 and r["searcher"] == "random"
+    )
+    tokens = list(row["selected"]["tokens"])
+    text = row["selected"]["formula_text"]
+    assert "LIMIT_UP_CNT_5" in text
+    artifact = _strong_artifact()
+    for r in artifact["rows"]:
+        r["formula_text"] = text
+        r["formula"] = list(tokens)
+        # t46 Plan A: the P10 campaign ran under grammar 5; the row-declared
+        # generation routes the bare tokens through the frozen grammar-5
+        # decode layout instead of the shifted grammar-6 feature block.
+        r["grammar_version"] = 5
+    artifact["top_trial"]["formula_text"] = text
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry_for(tmp_path, tokens, text),
+        stress=_passing_stress(),
+        allowed_data_tiers=("A", "B"),
+    )
+    gate = _require_g7(verdict)
+    assert not gate["passed"]
+    assert (
+        "feature LIMIT_UP_CNT_5 is not promotion_allowed "
+        "(feature registry status)"
+    ) in gate["reasons"]
+    assert verdict["promoted"] is False
+    # Tier A+B policy passes G6 — the gap G7 closes, exactly as §1.3.
+    assert verdict["gates"]["data_tier"]["passed"] is True
+
+
+def test_promotion_rule_version_pinned():
+    """P12 §7: the promotion gate set is versioned from v2 (G1-G6 were
+    the unversioned v1 era)."""
+    from ashare_model.promotion import PROMOTION_RULE_VERSION
+
+    assert PROMOTION_RULE_VERSION == "2"

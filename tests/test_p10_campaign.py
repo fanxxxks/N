@@ -74,8 +74,12 @@ def _model_cfg(max_len: int) -> ModelConfig:
     return ModelConfig(batch_size=2, train_steps=1, max_formula_len=max_len)
 
 
-def _campaign(populated_db, run_dir, *, seeds=(42, 7), budget: int = 16,
+def _campaign(populated_db, run_dir, *, seeds=(42, 7), budget: int = 24,
+              research_budget: int = 16, promotion_budget: int = 8,
               rl_steps: int = 8, max_len: int = 4, **kwargs):
+    # P14 §5.4: campaign rows are (seed, track, searcher) with per-track
+    # budgets; the toy split 16/8 keeps both track budgets divisible by the
+    # toy rl_steps of 8 (the formal split is 1200/800 of 2000).
     loader = AshareDataLoader(populated_db, _model_cfg(max_len))
     loader.load_data()
     return benchmark_campaign(
@@ -86,6 +90,8 @@ def _campaign(populated_db, run_dir, *, seeds=(42, 7), budget: int = 16,
         loader,
         seeds=tuple(seeds),
         budget=budget,
+        research_budget=research_budget,
+        promotion_budget=promotion_budget,
         rl_steps=rl_steps,
         train_end_date="2024-02-01",
         window_cap=(3, 30),
@@ -115,10 +121,15 @@ def _unary_chain(n_ops: int) -> list[int]:
 def test_p10_bumps_search_contract_and_bench_versions():
     # P10 §9: GP node-cap alignment changes the matched effective space
     # (SEARCH_CONTRACT 2->3); the campaign seed-list runner changes the
-    # bench schema (SEARCHER_BENCH 2->3). Pre/post results are never
-    # matched comparisons.
-    assert SEARCH_CONTRACT_VERSION == 3
-    assert SEARCHER_BENCH_VERSION == 3
+    # bench schema (SEARCHER_BENCH 2->3).
+    # P14 §6 (docs/p14_search_digest_preregistration.md, approved
+    # 2026-09-02) bumps SEARCH_CONTRACT_VERSION 3 -> 4 (punitive fitness/
+    # tell anchors, proposal length prior, research/promotion tracks) and
+    # SEARCHER_BENCH_VERSION 3 -> 4 (campaign track dimension with
+    # per-track budgets); pre/post results are never matched comparisons
+    # (whitelist §10.1 case 2, p14 §6 version table).
+    assert SEARCH_CONTRACT_VERSION == 4
+    assert SEARCHER_BENCH_VERSION == 4
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +213,20 @@ def test_p10_campaign_rows_ledger_and_identity(populated_db, tmp_path):
     assert payload["campaign_status"] == "completed"
     assert payload["not_run"] == []
     rows = payload["rows"]
-    assert [(r["seed"], r["searcher"]) for r in rows] == [
-        (seed, name) for seed in (42, 7) for name in P10_ROW_ORDER
+    tracks = ("research", "promotion_tier_a")
+    # P14 §5.4: rows are (seed, track, searcher) in that fixed order.
+    assert [(r["seed"], r["track"], r["searcher"]) for r in rows] == [
+        (seed, track, name)
+        for seed in (42, 7)
+        for track in tracks
+        for name in P10_ROW_ORDER
     ]
     for row in rows:
         assert row["completed"] is True
-        assert row["requested_budget"] == 16
+        # Per-track budgets (P14 §5.4): research 16, promotion 8.
+        assert row["requested_budget"] == (
+            16 if row["track"] == "research" else 8
+        )
         assert 0 < row["consumed_budget"] <= row["requested_budget"]
         assert row["consumed_budget"] == row["unique_semantic_evals"]
         assert row["proposal_count"] >= row["consumed_budget"]
@@ -227,19 +246,27 @@ def test_p10_campaign_rows_ledger_and_identity(populated_db, tmp_path):
         assert row["stagnation_reason"] is None or isinstance(
             row["stagnation_reason"], str
         )
-    # Identity: everything except the seed is identical across rows.
+        # P14 §4.7: every row carries its track and the length-prior
+        # profile; promotion rows carry the tier-A restriction record.
+        assert row["track"] in tracks
+        if row["track"] == "promotion_tier_a":
+            assert row["tier_restriction"]["tier"] == "A"
+        else:
+            assert row["tier_restriction"] is None
+    # Identity: within a track everything except the seed is identical.
     identity_keys = (
-        "requested_budget",
         "dataset_id",
         "window_cap",
         "train_end_date",
         "device",
         "max_formula_len",
     )
-    first = rows[0]
-    for row in rows[1:]:
-        for key in identity_keys:
-            assert row[key] == first[key], key
+    for track in tracks:
+        track_rows = [row for row in rows if row["track"] == track]
+        first = track_rows[0]
+        for row in track_rows[1:]:
+            for key in identity_keys:
+                assert row[key] == first[key], key
     assert {row["seed"] for row in rows} == {42, 7}
 
     # Append-only ledger: one closed trial per row, chain re-verified on load.
@@ -273,7 +300,11 @@ def test_p10_campaign_resume_retries_failed_rows(populated_db, tmp_path,
     first = _campaign(populated_db, run_dir, seeds=(42,))
     assert first["campaign_status"] == "failed"
     failed_rows = [r for r in first["rows"] if not r["completed"]]
-    assert [r["searcher"] for r in failed_rows] == ["tpe"]
+    # Both tpe rows (research + promotion track) fail under the stub.
+    assert [(r["track"], r["searcher"]) for r in failed_rows] == [
+        ("research", "tpe"),
+        ("promotion_tier_a", "tpe"),
+    ]
 
     monkeypatch.setattr(AshareTrainer, "train_search", real_train_search)
     resumed = _campaign(populated_db, run_dir, seeds=(42,))
@@ -287,22 +318,31 @@ def test_p10_campaign_resume_retries_failed_rows(populated_db, tmp_path,
     tpe_entries = [
         e for e in ledger.iter_entries() if e.algorithm == "searcher:tpe"
     ]
-    # Two trials (attempt + retry), each contributing a running entry
+    # Two rows × (attempt + retry) — each contributing a running entry
     # plus its terminal entry — nothing is rewritten in place.
     assert sorted(e.status for e in tpe_entries) == [
         "failed",
+        "failed",
+        "running",
+        "running",
         "running",
         "running",
         "succeeded",
+        "succeeded",
     ]
     tpe_trials = list(ledger.trials_for(algorithm="searcher:tpe"))
-    assert sorted(e.status for e in tpe_trials) == ["failed", "succeeded"]
+    assert sorted(e.status for e in tpe_trials) == [
+        "failed",
+        "failed",
+        "succeeded",
+        "succeeded",
+    ]
     gp_success = [
         e
         for e in ledger.iter_entries()
         if e.algorithm == "searcher:gp" and e.status == "succeeded"
     ]
-    assert len(gp_success) == 1
+    assert len(gp_success) == 2  # one per track
 
 
 def test_p10_campaign_wall_cap_stops_before_any_row(populated_db, tmp_path):
@@ -311,8 +351,10 @@ def test_p10_campaign_wall_cap_stops_before_any_row(populated_db, tmp_path):
     )
     assert payload["campaign_status"] == "stopped_wall_cap"
     assert payload["rows"] == []
-    assert [(r["seed"], r["searcher"]) for r in payload["not_run"]] == [
-        (42, name) for name in P10_ROW_ORDER
+    assert [(r["seed"], r["track"], r["searcher"]) for r in payload["not_run"]] == [
+        (42, track, name)
+        for track in ("research", "promotion_tier_a")
+        for name in P10_ROW_ORDER
     ]
     ledger = ExperimentLedger(
         tmp_path / "run" / "ledger.jsonl", run_id=payload["run_id"]
@@ -331,18 +373,29 @@ def test_p10_campaign_calibration_deviation_stops_after_seed_block(
         calibration_s_per_eval=tiny_rates,
     )
     assert payload["campaign_status"] == "stopped_calibration_deviation"
-    assert [(r["seed"], r["searcher"]) for r in payload["rows"]] == [
-        (42, name) for name in P10_ROW_ORDER
+    assert [(r["seed"], r["track"], r["searcher"]) for r in payload["rows"]] == [
+        (42, track, name)
+        for track in ("research", "promotion_tier_a")
+        for name in P10_ROW_ORDER
     ]
-    assert [(r["seed"], r["searcher"]) for r in payload["not_run"]] == [
-        (7, name) for name in P10_ROW_ORDER
+    assert [(r["seed"], r["track"], r["searcher"]) for r in payload["not_run"]] == [
+        (7, track, name)
+        for track in ("research", "promotion_tier_a")
+        for name in P10_ROW_ORDER
     ]
 
 
 def test_p10_campaign_resume_rejects_identity_drift(populated_db, tmp_path):
     _campaign(populated_db, tmp_path / "run", seeds=(42,))
     with pytest.raises(RuntimeError, match="identity"):
-        _campaign(populated_db, tmp_path / "run", seeds=(42,), budget=32)
+        _campaign(
+            populated_db,
+            tmp_path / "run",
+            seeds=(42,),
+            budget=32,
+            research_budget=16,
+            promotion_budget=16,
+        )
 
 
 def test_p10_campaign_payload_is_json_serializable(populated_db, tmp_path):

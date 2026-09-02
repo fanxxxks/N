@@ -147,8 +147,9 @@ def test_registry_version_is_pinned():
     # promotion semantics change (contract: docs/p7_maintainability_plan.md
     # §6.1, which supersedes the pinned v2 assertion on the requirement-
     # change path).  v5 (P9 §7 adjudication, measurement log
-    # 2026-09-01): whitelist §10.1 case 2.
-    assert FEATURE_REGISTRY_VERSION == 5
+    # 2026-09-01).  v6 (P13 §5.3/§6.1): family ⑤ unlocks — whitelist
+    # §10.1 case 2, pre-registered in docs/p13_fundamental_fields_contract.md.
+    assert FEATURE_REGISTRY_VERSION == 6
 
 
 def test_registry_records_data_tiers(tensor, mask):
@@ -206,8 +207,9 @@ def test_p9_registry_version_deprecations_and_pending_data():
     reasons and exposes the pending_data placeholders without adding them
     to the vocabulary.  v5 = the §7 adjudication (family ③ negative,
     LIMIT_STREAK conditional deprecation triggered, two second-pass
-    consolidations)."""
-    assert FEATURE_REGISTRY_VERSION == 5
+    consolidations).  v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤
+    unlocks; the pending set empties."""
+    assert FEATURE_REGISTRY_VERSION == 6
     p9_deprecated = (
         "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
         "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",
@@ -224,9 +226,65 @@ def test_p9_registry_version_deprecations_and_pending_data():
         assert record.deprecated, name
         assert not record.promotion_allowed, name
         assert record.deprecation_reason, name
+    # P13 §5.3 (whitelist §10.1 case 2): the family-⑤ placeholders are
+    # unlocked into the registry, so the pending_data summary is empty.
     summary = registry.summary()
-    assert set(summary["pending_data"]) == {
+    assert summary["pending_data"] == []
+
+
+def test_p13_family5_unlock_appends_vocabulary_without_id_shift():
+    """P13 §5.3/§4.4 (RED-5): the four family-⑤ features join the
+    vocabulary by *append* — the 73 pre-existing names keep their exact
+    order (token ids unchanged, legacy formulas parse identically) and the
+    registry records them as PIT-fundamental, promoted, not deprecated."""
+    from ashare_model.vocab import FEATURE_NAMES
+
+    # Frozen baseline of the pre-P13 vocabulary (independent authority:
+    # the committed pre-implementation registry).
+    _PRE_P13_FEATURE_NAMES = (
+        'RET_1', 'RET_5', 'RET_10', 'VOL_20', 'VOL_60', 'TURNOVER',
+        'TURNOVER_CHG', 'VOLUME_RATIO', 'VOLUME_IMPACT', 'AMPLITUDE',
+        'CLOSE_POSITION', 'MOMENTUM_20', 'MOMENTUM_60', 'REVERSAL_5', 'SKEW_20',
+        'KURT_20', 'PE_TTM', 'PB', 'PS_TTM', 'ROE', 'ROA', 'GROSS_MARGIN',
+        'NET_MARGIN', 'REVENUE_YOY', 'PROFIT_YOY', 'DEBT_RATIO', 'MARKET_CAP',
+        'DIVIDEND_YIELD', 'NORTHBOUND_CHG', 'MARGIN_BALANCE_CHG',
+        'LIMIT_UP_EVENT', 'LIMIT_DOWN_EVENT', 'INDUSTRY_MOMENTUM',
+        'OVERNIGHT_RET', 'INTRADAY_RET', 'ILLIQ_20', 'AMOUNT_SHARE', 'MAX_20',
+        'HIGH_52W', 'BETA_60', 'IVOL_60', 'RSQ_60', 'BIAS_20', 'RSI_14',
+        'ATR_14', 'MACD_DIF', 'MACD_DEA', 'SUSPEND_DAYS_60', 'LIST_AGE',
+        'RET_120', 'REVERSAL_60', 'REVERSAL_120', 'TURNOVER_MA5',
+        'TURNOVER_MA20', 'TURNOVER_STD20', 'LIMIT_STREAK', 'LIMIT_UP_CNT_20',
+        'LIMIT_BREAK', 'IND_REL_RET_5', 'IND_REL_RET_20', 'IND_REL_VOL_20',
+        'IND_REL_TURNOVER', 'IND_REL_RET_60', 'IND_REL_RET_120', 'LIQ_SHOCK_20',
+        'VOLUME_SHRINK_5_20', 'PV_DIV_20', 'LIMIT_UP_CNT_5',
+        'LIMIT_DOWN_STREAK', 'LIMIT_BREAK_5', 'CROWD_TURNOVER_60',
+        'CROWD_AMOUNT_60', 'MARGIN_CROWD_60',
+    )
+    family5 = [
         "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
-    }
-    for name in summary["pending_data"]:
-        assert name not in records
+    ]
+    # Append-only growth: 73 -> 77, existing prefix byte-identical.
+    assert len(FEATURE_NAMES) == 77
+    assert list(FEATURE_NAMES[:73]) == list(_PRE_P13_FEATURE_NAMES)
+    assert list(FEATURE_NAMES[73:]) == family5
+    # Sentinel id-parity (independently pinned from the pre-P13 registry):
+    assert FEATURE_NAMES[0] == "RET_1"
+    assert FEATURE_NAMES[16] == "PE_TTM"
+    assert FEATURE_NAMES[19] == "ROE"
+    assert FEATURE_NAMES[72] == "MARGIN_CROWD_60"
+    assert FEATURE_NAMES.index("MARGIN_CROWD_60") == 72
+
+    tensor = np.zeros((len(FEATURE_NAMES), 3, 4), dtype=np.float32)
+    registry = FeatureRegistry.build(
+        tensor,
+        np.ones((3, 4), dtype=bool),
+        calibration_slice=CalibrationSlice.of(4),
+    )
+    records = registry.records()
+    for name in family5:
+        record = records[name]
+        assert record.pit_level == PitLevel.PIT_FUNDAMENTAL, name
+        assert record.family == "fundamental", name
+        assert record.promotion_allowed is True, name
+        assert not record.deprecated, name
+        assert record.availability_rule, name

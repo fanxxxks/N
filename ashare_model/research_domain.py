@@ -36,7 +36,9 @@ from .vocab import FORMULA_VOCAB
 # cadences, baselines) or the per-domain reward/turnover defaults change.
 # v2 (P9): the eleven orthogonal family features join their domains
 # (docs/p9_factor_family_contract.md §5, APPROVED 2026-09-01).
-RESEARCH_DOMAIN_VERSION = 2
+# v3 (P13 §5.5): the four family-⑤ features join slow_fundamental
+# (docs/p13_fundamental_fields_contract.md, APPROVED 2026-09-02).
+RESEARCH_DOMAIN_VERSION = 3
 
 # Reserved compatible semantic: no domain defaults, pre-P6 behavior.
 UNIFIED_DOMAIN_ID = "unified"
@@ -191,6 +193,14 @@ _SLOW_FEATURES = (
     "DIVIDEND_YIELD",
     # Size (a slow persistent characteristic; daily-bar reconstruction).
     "MARKET_CAP",
+    # P13 family ⑤ (docs/p13_fundamental_fields_contract.md §5.5): the
+    # cash-flow quality / accruals / asset-growth / earnings-acceleration
+    # features are slow-fundamental by construction (report-period data,
+    # every_20_days/monthly execution points).
+    "CASHFLOW_QUALITY",
+    "ACCRUALS",
+    "ASSET_GROWTH",
+    "EARNINGS_ACCEL",
 )
 
 RESEARCH_DOMAINS: dict[str, ResearchDomain] = {
