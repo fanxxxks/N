@@ -17,16 +17,24 @@ from ashare_model.vocab import (
 
 
 def test_formula_vocab_consistency():
-    assert FORMULA_VOCAB.feature_count == len(FEATURE_NAMES)
-    assert FORMULA_VOCAB.operator_offset == 1 + len(FEATURE_NAMES)
+    # t46 Plan A (captain ruling): the grammar-6 feature append keeps the
+    # index-contiguous derivation -- features 1-77, operators 78-116,
+    # EOS 117 -- and legacy grammar-5 formulas are kept decodable through
+    # the frozen grammar-5 layout + by-name remap (see
+    # test_grammar5_seed7_decodes_via_frozen_layout_and_remap).
+    assert FORMULA_VOCAB.feature_count == len(FEATURE_NAMES) == 77
+    assert FORMULA_VOCAB.operator_offset == 78
     assert FORMULA_VOCAB.token_names[0] == "PAD"
     assert FORMULA_VOCAB.token_names[1] == FEATURE_NAMES[0]
-    assert FORMULA_VOCAB.size == len(FORMULA_VOCAB.token_names)
-    # The independent EOS token sits at the end of the token space so the
-    # pre-EOS feature/operator ids never shift.
+    assert FORMULA_VOCAB.size == len(FORMULA_VOCAB.token_names) == 118
     assert FORMULA_VOCAB.has_eos
-    assert FORMULA_VOCAB.eos_token_id == FORMULA_VOCAB.size - 1
+    assert FORMULA_VOCAB.eos_token_id == FORMULA_VOCAB.size - 1 == 117
     assert FORMULA_VOCAB.token_names[-1] == "EOS"
+    # Probe (a): the four family-⑤ features sit at token ids 74-77.
+    family5 = ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL")
+    for offset, name in enumerate(family5):
+        assert FEATURE_NAMES[73 + offset] == name
+        assert FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index(name) == 74 + offset
     # v6 vocabulary: the original 18 operators plus 4 cross-sectional
     # operators and 17 enumerated windows (5/10/60 + DELTA10/20).
     assert len(FORMULA_VOCAB.operator_names) == 39
@@ -34,6 +42,116 @@ def test_formula_vocab_consistency():
         "CORR20",
         "DOWNVOL20",
     )
+
+
+def test_grammar5_seed7_decodes_via_frozen_layout_and_remap():
+    """P13 amendment Plan A (t46): grammar-6 appended the family-⑤ features
+    to the feature block, so the operator/EOS ids shifted (74->78,
+    113->117).  grammar-5-era artifacts (the P10 campaign, seed-7) stay
+    decodable through the FROZEN grammar-5 layout + the by-name remap (P9
+    precedent); the frozen name lists are data, never a second semantic
+    path."""
+    from ashare_model.ir import decode as ir_decode
+    from ashare_model.vocab import GRAMMAR_V5_TOKEN_NAMES, GRAMMAR_V5_VOCAB
+
+    seed7 = [6, 99, 45, 68, 72, 73, 81, 83, 88, 105, 77, 113]
+
+    # The frozen layout reproduces the released grammar-5 shape exactly:
+    # 73 features + 39 operators + EOS = 114 tokens, EOS at 113.
+    assert len(GRAMMAR_V5_TOKEN_NAMES) == 114
+    assert GRAMMAR_V5_VOCAB.eos_token_id == 113
+    assert GRAMMAR_V5_VOCAB.feature_count == 73
+    assert GRAMMAR_V5_VOCAB.feature_names == tuple(FEATURE_NAMES[:73])
+
+    # Probe (d): seed-7 decodes against the frozen layout (never None), and
+    # the decoded names are exactly the pre-bump decode.
+    v5_names = tokens_to_names(seed7, GRAMMAR_V5_VOCAB)
+    assert v5_names is not None
+    assert "EOS" in v5_names
+
+    # Under the live grammar-6 layout the same integers decode DIFFERENTLY
+    # (the shift is real) -- which is why the frozen dispatch exists.
+    live_names = tokens_to_names(seed7, FORMULA_VOCAB)
+    assert live_names != v5_names
+
+    # Probe (e): the by-name remap upgrades the grammar-5 formula into the
+    # live layout; the decoded AST is semantically identical (Gap 4: full
+    # AST equality, not just length).
+    resolved = resolve_formula_tokens(
+        {"formula": seed7, "grammar_version": 5}, FORMULA_VOCAB
+    )
+    assert resolved != seed7  # operator/EOS ids moved (74->78, 113->117)
+    assert ir_decode(seed7, vocab=GRAMMAR_V5_VOCAB) == ir_decode(
+        resolved, vocab=FORMULA_VOCAB
+    )
+
+
+def test_action_mask_reaches_family5_features():
+    """Probes (b)+(c) (t46 Plan A): the live action mask treats the appended
+    family-⑤ feature ids as first-class features -- a mask restricted to
+    them is legal and a random walk under it emits those tokens."""
+    import random as py_random
+
+    import torch
+
+    from ashare_model.alphagpt import build_action_mask
+    from ashare_model.gp_search import (
+        _typed_expr,
+        build_pset,
+        tree_to_tokens,
+    )
+
+    from ashare_model.train_windows import sample_random_formulas
+
+    family_ids = [
+        FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index(name)
+        for name in ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL")
+    ]
+    assert family_ids == [74, 75, 76, 77]  # probe (a): contiguous append
+
+    pset = build_pset(FORMULA_VOCAB, feature_ids=family_ids)
+    py_random.seed(11)
+    for _ in range(50):
+        tree = _typed_expr(pset, 1, 2)
+        tokens = tree_to_tokens(tree, FORMULA_VOCAB)
+        for token in tokens:
+            if token < FORMULA_VOCAB.operator_offset:
+                assert token in family_ids  # probe (c): only family-⑤ features
+
+    # Probe (b): build_action_mask accepts the appended ids as feature_ids.
+    stack_sizes = torch.zeros(4, dtype=torch.long)
+    done = torch.zeros(4, dtype=torch.bool)
+    stack_types = torch.zeros(4, 6, dtype=torch.long)
+    mask = build_action_mask(
+        stack_sizes,
+        done,
+        0,
+        6,
+        FORMULA_VOCAB,
+        feature_ids=family_ids,
+        stack_types=stack_types,
+    )
+    allowed = (mask == 0.0)[0]  # first (only) batch row over the token axis
+    for token in family_ids:
+        assert bool(allowed[token]), token
+
+    # The random baseline sampler shares the same legality rules and never
+    # emits an out-of-scope feature token (PAD-after-EOS and operators/EOS
+    # are legal non-feature tokens).  Probe (c): the family-⑤ features are
+    # genuinely emitted.
+    sequences = sample_random_formulas(
+        42, FORMULA_VOCAB, 12, 300, feature_ids=family_ids
+    )
+    assert sequences
+    operator_offset = FORMULA_VOCAB.operator_offset
+    emitted_features = {
+        token
+        for seq in sequences
+        for token in seq
+        if 1 <= token < operator_offset
+    }
+    assert emitted_features, "the walk never emitted a family-⑤ feature"
+    assert emitted_features <= set(family_ids)
 
 
 def test_feature_version_pinned():
@@ -47,6 +165,9 @@ def test_feature_version_pinned():
     # v6 (P13 §5.3/§6.1, docs/p13_fundamental_fields_contract.md
     # APPROVED): family ⑤ appends 4 slow-fundamental names (73 -> 77);
     # whitelist §10.1 case 2.
+    # t46 Plan A: the appended names keep the contiguous feature block
+    # (ids 74-77) and legacy grammar-5 decoding goes through the frozen
+    # grammar-5 layout -- the t14 feature_version hash is restored.
     assert FORMULA_VOCAB.feature_version == "0e64ad614bfd"
     assert len(FORMULA_VOCAB.feature_version) == 12
     # v6 grammar: the v5 layout plus the P13 family-⑤ feature append.

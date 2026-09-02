@@ -230,12 +230,36 @@ NaN，由不变量 2 保证无效果）。覆盖率门是本契约验收步骤�
   （与 P1-5 的变化叠加，C 线审计基线 = post-P1-5 状态）。新旧 dataset_id
   如实记录于测量日志；跨 dataset_id 的测量禁止拼接结论（AGENTS §4.3）；
   族裁决测量（§8）只引用 post-backfill dataset_id。
-- **legacy 兼容**：词表追加不移位 → v5 时代 artifact 公式解析/执行逐位
-  不变（不变量 4）；无任何产物失效，无需迁移。
+- **legacy 兼容（§6.3 勘误修订）**：feature id 逐位不变；operator/EOS id
+  随 grammar-6 平移，grammar-5 legacy 公式经冻结布局 + grammar_version
+  分派按名重映射保持可解码（P9 先例）；无任何产物失效，无需迁移。
 - **DB 迁移**：幂等 additive；回滚 = 代码单 revert（§5.1），无数据删除、
   无历史改写。
 - **拒绝（fail-closed）**：覆盖率门不过 → 族不解锁（§5.4）；来源口径含糊
   → 停止修订契约（§9.2）；gates 红 → 不放行（§3.4）。
+
+### 6.3 勘误（t46，2026-09-02，captain 方案 A 裁决）
+
+§1.1/§4（不变量 4）/§6.1 原文的"77 名追加**不移位**"表述不准确，更正为：
+
+> **feature ID 不移位**（74–77 连续追加于 feature 块内）；**operator/EOS ID
+> 随 grammar-6 平移**（operator_offset 74→78、EOS 113→117）；grammar-5
+> legacy 公式的可解码性由**冻结 grammar-5 布局 + 按工件声明的
+> grammar_version 分派 + 按名重映射**保持（P9 by-name 先例；冻结名单是
+> 数据而非第二套语义实现）。不变量 4 相应修订为："feature id 逐位不变；
+> operator/EOS 经 grammar_version 分派按名重映射"。
+
+依据：reviewer-lead 侦察实证 vocab id 派生为硬性 index 连续制
+（feature_offset=1 → operator_offset=1+feature_count → eos=size−1），
+方案 B（尾部 4 名骑 EOS 之后）在该机制下需破坏 offset+index 解析并触及
+C 线所有权外的采样掩码（alphagpt.build_action_mask 按 feature_count 定
+尺寸、假设 features 连续分布于 [feature_offset, operator_offset)），
+级联超勘误量级，故撤销（t46 方案 B 提交 d0d41d8 的结构性部分由方案 A
+commit 回退；test_fundamental_scope stubs 保留）。legacy 分派落点：
+`vocab.resolve_formula_tokens`（裸 grammar-5 载荷 → 冻结布局）与
+`data_tier.formula_feature_names / formula_data_tier_report`、
+`feature_registry.formula_registry_status_report`、`promotion` G6/G7
+调用点的 grammar_version 穿递。GRammar 维持 6：布局真变、版本真升。
 
 ## 7. 预期 RED 测试清单（实现前先红；t14 落地，同 commit 注册分片）
 

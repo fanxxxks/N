@@ -31,7 +31,7 @@ import enum
 
 from .feature_registry import PitLevel, pit_level_of
 from .ir import decode, feature_names as ir_feature_names
-from .vocab import FEATURE_NAMES
+from .vocab import FEATURE_NAMES, GRAMMAR_V5_VOCAB
 
 # Bump when the tier schema, the mapping or the time rules change.
 DATA_TIER_VERSION = 1
@@ -92,14 +92,31 @@ def tier_features(tiers: tuple[DataTier, ...]) -> list[str]:
     return [name for name in FEATURE_NAMES if feature_tier(name) in wanted]
 
 
-def formula_feature_names(tokens) -> list[str] | None:
+def _grammar_vocab(grammar_version) -> FormulaVocab | None:
+    """Decode-reference vocabulary for a declared artifact grammar.
+
+    ``None`` (the live vocabulary) for every generation except grammar 5:
+    grammar-6 appended the family-⑤ features to the feature block and
+    shifted the operator/EOS ids, so grammar-5-era bare token lists decode
+    only against the frozen grammar-5 layout (t46 Plan A).
+    """
+
+    if grammar_version is None:
+        return None
+    return GRAMMAR_V5_VOCAB if int(grammar_version) == 5 else None
+
+
+def formula_feature_names(tokens, grammar_version=None) -> list[str] | None:
     """Distinct feature names referenced by a formula's token list.
 
-    Returns ``None`` when the token list is not a decodable formula.
+    ``grammar_version`` is the artifact-declared grammar generation: bare
+    grammar-5 token lists decode against the frozen grammar-5 layout
+    (t46 Plan A) instead of the shifted live vocabulary.  Returns ``None``
+    when the token list is not a decodable formula.
     """
 
     try:
-        ir = decode(tokens)
+        ir = decode(tokens, vocab=_grammar_vocab(grammar_version))
     except Exception:  # noqa: BLE001 - any structural failure = no formula.
         return None
     return sorted(ir_feature_names(ir))
@@ -108,6 +125,7 @@ def formula_feature_names(tokens) -> list[str] | None:
 def formula_data_tier_report(
     tokens=None,
     feature_name: str | None = None,
+    grammar_version=None,
 ) -> dict | None:
     """Trace a formula back to the tiers of its features.
 
@@ -119,7 +137,7 @@ def formula_data_tier_report(
     """
 
     if tokens is not None:
-        names = formula_feature_names(tokens)
+        names = formula_feature_names(tokens, grammar_version=grammar_version)
         if names is None:
             return None
     elif feature_name is not None:

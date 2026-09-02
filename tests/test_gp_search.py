@@ -211,3 +211,133 @@ def test_run_gp_baseline_uses_shared_budget_ledger():
     stats = evaluator.stats()
     assert stats["budget_used"] == 6
     assert stats["n_semantic_dedups"] >= 0
+
+
+# --- P14 §5.1/§5.2: punitive fitness for skipped proposals ------------------
+# Contract: docs/p14_search_digest_preregistration.md (search digest) —
+# skipped proposals (invalid / semantic-duplicate / claimed-before-flush)
+# must receive the run's worst registered finite reward (never the current
+# best): the old "neutral = best" anchor let invalid and duplicate
+# individuals tie with the best and drove the P10 population collapse
+# (GP consumed 5–14% of its budget).
+
+
+def test_evaluator_worst_reward_is_the_punitive_anchor():
+    evaluator = _evaluator(budget=8)
+    assert evaluator.worst_reward == float("-inf")  # nothing registered yet
+    vocab = FORMULA_VOCAB
+    ret1 = vocab.feature_offset + vocab.feature_names.index("RET_1")
+    ret5 = vocab.feature_offset + vocab.feature_names.index("RET_5")
+    add = vocab.operator_offset + vocab.operator_names.index("ADD")
+    s1, consumed1 = evaluator.propose((ret1, ret5, add, vocab.eos_token_id))
+    assert consumed1 and s1 is not None
+    s2, consumed2 = evaluator.propose((ret5, vocab.eos_token_id))
+    assert consumed2 and s2 is not None
+    vals = [float(s.val_reward) for s in (s1, s2)]
+    assert evaluator.worst_reward == min(vals)
+    assert evaluator.best_reward == max(vals)
+    # An invalid proposal registers nothing: the anchor is unchanged.
+    evaluator.propose(())
+    assert evaluator.worst_reward == min(vals)
+
+
+def test_evaluator_execute_none_proposals_never_break_best_so_far():
+    """T2-01 + p14 §5.1: an execution failure is not billed and produces
+    no reward, so it must not emit a best-so-far coordinate — the old code
+    registered it at a duplicate budget coordinate and crashed the
+    SearchResult construction (latent defect exposed by the p14 punitive
+    scenarios)."""
+
+    base = _context()
+    target = base["target"]
+    vocab = FORMULA_VOCAB
+    blocked_token = vocab.feature_offset + vocab.feature_names.index("RET_5")
+    ret1 = vocab.feature_offset + vocab.feature_names.index("RET_1")
+    eos = vocab.eos_token_id
+
+    def execute(tokens):
+        # Deterministic per-formula execution failure: RET_5 never executes.
+        if any(int(t) == blocked_token for t in tokens):
+            return None
+        rng = np.random.default_rng(sum(int(t) for t in tokens) % 1000 + 1)
+        return target + rng.normal(0, 0.02, size=target.shape)
+
+    evaluator = _evaluator(budget=8, execute=execute, fingerprint_execute=execute)
+    evaluator.propose((ret1, eos))  # bills (class 1)
+    score, consumed = evaluator.propose((blocked_token, eos))  # fails to execute
+    assert consumed is True and score is not None  # attempted, not billed
+    assert evaluator.budget_used == 1  # the failed execution is not billed
+    evaluator.propose((ret1, eos))  # canonical duplicate of the first
+    result = evaluator.finish(
+        backend="gp", seed=1, termination_reason="budget_exhausted"
+    )
+    coordinates = [x for x, _ in result.best_so_far]
+    assert coordinates == sorted(set(coordinates))  # strictly increasing
+
+
+def test_run_gp_baseline_punitive_and_neutral_arms_deterministic_under_pinned_threads(
+    monkeypatch,
+):
+    """FP-jitter guard (p14 §8-2; t49 repair-round-2, t24-ruling): both
+    anchors are pinned to single-threaded BLAS and each arm must be exactly
+    run-to-run deterministic (identical consumed budget and best-so-far).
+
+    History (recorded for t24/t31): the original t18 test asserted a
+    cross-arm consumption differential (punitive > neutral-best) on this
+    toy.  Empirically that differential is dominated by environment
+    nondeterminism, not by the anchor: across process hash seeds and BLAS
+    threading the pairs measured (punitive, neutral) = (288, 84), (115, 83)
+    and — fully pinned with PYTHONHASHSEED=0 + single-thread BLAS —
+    (60, 103), i.e. the direction itself flips.  A toy whose reachable
+    semantic-class space is this degenerate cannot carry a collapse
+    signature; asserting one was a t18 test-design error (§10.1: built on
+    an unstable oracle).  The collapse metric therefore stays where p14
+    §9 pre-registered it: the formal-run judgment (GP consumption >= 50%,
+    measured by the P10-faithful campaign on real data), not this unit
+    test.  This guard pins the deterministic part: the anchor mechanism is
+    unit-tested via ``test_evaluator_worst_reward_is_the_punitive_anchor``
+    and ``test_evaluator_execute_none_proposals_never_break_best_so_far``.
+    """
+
+    from threadpoolctl import threadpool_limits
+
+    saved_property = SemanticBudgetEvaluator.worst_reward
+    try:
+        with threadpool_limits(limits=1):
+            # Punitive anchor (p14 §5.1): run-to-run deterministic.
+            first = run_gp_baseline(
+                seed=7, evaluator=_evaluator(budget=300), max_formula_len=10
+            )
+            second = run_gp_baseline(
+                seed=7, evaluator=_evaluator(budget=300), max_formula_len=10
+            )
+            assert first.consumed_budget == second.consumed_budget
+            assert first.best_so_far == second.best_so_far
+            # Old anchor emulated (skipped proposals tied with the current
+            # best): equally deterministic.
+            monkeypatch.setattr(
+                SemanticBudgetEvaluator,
+                "worst_reward",
+                property(lambda self: self.best_reward),
+            )
+            third = run_gp_baseline(
+                seed=7, evaluator=_evaluator(budget=300), max_formula_len=10
+            )
+            fourth = run_gp_baseline(
+                seed=7, evaluator=_evaluator(budget=300), max_formula_len=10
+            )
+            assert third.consumed_budget == fourth.consumed_budget
+            assert third.best_so_far == fourth.best_so_far
+    finally:
+        SemanticBudgetEvaluator.worst_reward = saved_property
+
+
+def test_run_gp_baseline_punitive_fitness_deterministic():
+    first = run_gp_baseline(
+        seed=7, evaluator=_evaluator(budget=120), max_formula_len=10
+    )
+    second = run_gp_baseline(
+        seed=7, evaluator=_evaluator(budget=120), max_formula_len=10
+    )
+    assert first.best_so_far == second.best_so_far
+    assert first.consumed_budget == second.consumed_budget
