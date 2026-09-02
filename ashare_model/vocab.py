@@ -156,12 +156,15 @@ _FEATURE_NAMES_V4 = (
     "MARGIN_CROWD_60",
 )
 
-# v5 (P13, docs/p13_fundamental_fields_contract.md §5.3) appends the four
+# v5 (P13, docs/p13_fundamental_fields_contract.md §5.3) registers the four
 # family-⑤ slow-fundamental features (cash-flow quality, accruals, asset
 # growth, earnings acceleration) once their PIT data fields are registered.
-# Names are appended so every pre-v5 token id is stable (the same
-# discipline as v2/v3/v4); the family joins and leaves promotion as one
-# atomic unit (§8 族级裁决).
+# t46 B-fix: they sit at the END of the WHOLE token table -- AFTER the
+# operators and EOS -- so every grammar-5-era token id (features 1-73,
+# operators 74-112, EOS 113) keeps its exact meaning; appending them to the
+# feature block instead shifted the operator/EOS ids and broke legacy
+# formula decoding (t28 integration, seed-7 live regression).  The family
+# joins and leaves promotion as one atomic unit (§8 族级裁决).
 _FEATURE_NAMES_V5 = (
     "CASHFLOW_QUALITY",
     "ACCRUALS",
@@ -169,17 +172,15 @@ _FEATURE_NAMES_V5 = (
     "EARNINGS_ACCEL",
 )
 
-FEATURE_NAMES = tuple(
+# Head features occupy the contiguous pre-operator feature block (token ids
+# 1-73, unchanged since grammar v5); the family-⑤ tail rides after EOS.
+FEATURE_NAMES_HEAD = tuple(
     name
-    for name in (
-        _FEATURE_NAMES_V1
-        + _FEATURE_NAMES_V2
-        + _FEATURE_NAMES_V3
-        + _FEATURE_NAMES_V4
-        + _FEATURE_NAMES_V5
-    )
+    for name in _FEATURE_NAMES_V1 + _FEATURE_NAMES_V2 + _FEATURE_NAMES_V3 + _FEATURE_NAMES_V4
     if name not in FEATURE_ALIASES
 )
+
+FEATURE_NAMES = FEATURE_NAMES_HEAD + _FEATURE_NAMES_V5
 
 # P9 §4: approved deprecations (docs/p9_factor_family_contract.md §4.1,
 # APPROVED 2026-09-01).  Deprecated names keep their token ids and their
@@ -260,6 +261,11 @@ class FormulaVocab:
     # token ids and computations.  Only the live production vocabulary
     # carries these; toy/legacy vocabularies default to an empty set.
     deprecated_names: frozenset[str] = frozenset()
+    # P13 t46 B-fix: features riding at the END of the whole token table
+    # (AFTER the EOS token, ids eos+1..).  They keep the pre-operator
+    # feature block and every legacy token id stable; only grammar-6+
+    # artifacts may reference them.
+    tail_feature_names: tuple[str, ...] = ()
 
     @property
     def feature_count(self) -> int:
@@ -278,16 +284,22 @@ class FormulaVocab:
     def eos_token_id(self) -> int | None:
         """Id of the EOS token; ``None`` for legacy source vocabularies.
 
-        EOS sits at the end of the token space (``size - 1``) so the
-        pre-EOS feature/operator ids never shift: legacy bytecode keeps
-        its ids and only gains a trailing EOS when canonicalized.
+        EOS sits directly after the operator block (``feature_offset +
+        feature_count + operator_count``), so pre-EOS feature/operator ids
+        never shift even when tail features ride behind EOS (t46 B-fix).
+        With an empty tail this equals ``size - 1`` -- the historical
+        placement every pre-tail vocabulary relies on.
         """
-        return self.size - 1 if self.has_eos else None
+        if not self.has_eos:
+            return None
+        return self.feature_offset + len(self.feature_names) + len(self.operator_names)
 
     @property
     def token_names(self) -> tuple[str, ...]:
         names = ("PAD",) + self.feature_names + self.operator_names
-        return names + (("EOS",) if self.has_eos else ())
+        if self.has_eos:
+            names = names + ("EOS",)
+        return names + self.tail_feature_names
 
     @property
     def size(self) -> int:
@@ -307,6 +319,7 @@ class FormulaVocab:
                 "grammar": GRAMMAR_VERSION if self.has_eos else 1,
                 "features": list(self.feature_names),
                 "operators": list(self.operator_names),
+                "tail_features": list(self.tail_feature_names),
             },
             sort_keys=True,
         )
@@ -314,9 +327,10 @@ class FormulaVocab:
 
 
 FORMULA_VOCAB = FormulaVocab(
-    feature_names=FEATURE_NAMES,
+    feature_names=FEATURE_NAMES_HEAD,
     operator_names=tuple(cfg[0] for cfg in OPS_CONFIG),
     deprecated_names=DEPRECATED_FEATURE_NAMES,
+    tail_feature_names=_FEATURE_NAMES_V5,
 )
 
 
@@ -376,6 +390,10 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     if src_operators is None:
         src_operators = LEGACY_OPERATOR_NAMES
     src_operators = tuple(str(name) for name in src_operators)
+    # P13 t46 B-fix: grammar-6 artifacts may record the tail block they
+    # were sampled against; the key is additive and absent in every
+    # pre-tail payload.
+    src_tail = tuple(str(name) for name in payload.get("tail_feature_names", ()))
 
     # Payloads written by the v2 (EOS) grammar record ``grammar_version``;
     # older artifacts are remapped against the pinned v1 layout, where the
@@ -385,6 +403,7 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
         feature_names=src_features,
         operator_names=src_operators,
         has_eos=src_has_eos,
+        tail_feature_names=src_tail,
     )
     names = tokens_to_names(payload["formula"], src_vocab)
     if names is None:
@@ -403,6 +422,14 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
         elif name in FEATURE_ALIASES and FEATURE_ALIASES[name] in vocab.feature_names:
             resolved.append(
                 vocab.feature_offset + vocab.feature_names.index(FEATURE_ALIASES[name])
+            )
+        elif name in vocab.tail_feature_names:
+            # P13 t46 B-fix: tail features ride after EOS; ids are stable
+            # eos+1.. and never collide with any pre-tail token id.
+            if vocab.eos_token_id is None:
+                raise ValueError("formula references a tail feature against a legacy vocabulary")
+            resolved.append(
+                vocab.eos_token_id + 1 + vocab.tail_feature_names.index(name)
             )
         elif name in vocab.operator_names:
             resolved.append(vocab.operator_offset + vocab.operator_names.index(name))

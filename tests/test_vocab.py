@@ -17,16 +17,22 @@ from ashare_model.vocab import (
 
 
 def test_formula_vocab_consistency():
-    assert FORMULA_VOCAB.feature_count == len(FEATURE_NAMES)
-    assert FORMULA_VOCAB.operator_offset == 1 + len(FEATURE_NAMES)
+    # t46 B-fix (whitelist §10.1 case 2, captain-approved plan B): the
+    # family-⑤ tail rides AFTER EOS, so the layout invariant changes from
+    # "EOS at size-1" to "features 1-73 / operators 74-112 / EOS 113 /
+    # tail 114-117" -- every grammar-5-era token id keeps its meaning.
+    assert FORMULA_VOCAB.feature_count == 73
+    assert FORMULA_VOCAB.feature_count == len(FORMULA_VOCAB.feature_names)
+    assert len(FEATURE_NAMES) == 77
+    assert FORMULA_VOCAB.operator_offset == 74
     assert FORMULA_VOCAB.token_names[0] == "PAD"
     assert FORMULA_VOCAB.token_names[1] == FEATURE_NAMES[0]
-    assert FORMULA_VOCAB.size == len(FORMULA_VOCAB.token_names)
-    # The independent EOS token sits at the end of the token space so the
-    # pre-EOS feature/operator ids never shift.
+    assert FORMULA_VOCAB.size == len(FORMULA_VOCAB.token_names) == 118
     assert FORMULA_VOCAB.has_eos
-    assert FORMULA_VOCAB.eos_token_id == FORMULA_VOCAB.size - 1
-    assert FORMULA_VOCAB.token_names[-1] == "EOS"
+    assert FORMULA_VOCAB.eos_token_id == 113
+    assert FORMULA_VOCAB.token_names[113] == "EOS"
+    assert FORMULA_VOCAB.token_names[114:] == FORMULA_VOCAB.tail_feature_names
+    assert len(FORMULA_VOCAB.tail_feature_names) == 4
     # v6 vocabulary: the original 18 operators plus 4 cross-sectional
     # operators and 17 enumerated windows (5/10/60 + DELTA10/20).
     assert len(FORMULA_VOCAB.operator_names) == 39
@@ -34,6 +40,72 @@ def test_formula_vocab_consistency():
         "CORR20",
         "DOWNVOL20",
     )
+
+
+def test_grammar5_tokens_decode_identically_under_grammar6_layout():
+    """P13 amendment B-fix RED (t46): the four family-⑤ feature names sit
+    at the END of the WHOLE token table (after EOS, ids 114-117), so every
+    grammar-5-era token id (features 1-73, operators 74-112, EOS 113)
+    keeps its exact meaning under the grammar-6 layout.  The t28
+    integration proved the shift breaks legacy formulas (seed-7 live
+    regression); this property pins legacy decodability against both
+    layouts token by token."""
+    from ashare_model.vocab import _FEATURE_NAMES_V5
+
+    family5 = ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL")
+    assert _FEATURE_NAMES_V5 == family5
+
+    # Layout invariants (B-fix): head features 1-73, operators 74-112,
+    # EOS 113, tail features 114-117.
+    assert FORMULA_VOCAB.feature_count == 73
+    assert FORMULA_VOCAB.operator_offset == 74
+    assert FORMULA_VOCAB.eos_token_id == 113
+    assert FORMULA_VOCAB.size == 118
+    assert FORMULA_VOCAB.token_names[113] == "EOS"
+    assert FORMULA_VOCAB.token_names[114:] == family5
+    assert FORMULA_VOCAB.feature_names[-1] == "MARGIN_CROWD_60"
+    assert FORMULA_VOCAB.tail_feature_names == family5
+
+    # The grammar-5 reference layout: exactly the pre-P13 vocabulary.
+    grammar5_vocab = FormulaVocab(
+        feature_names=FEATURE_NAMES[:73],
+        operator_names=FORMULA_VOCAB.operator_names,
+        has_eos=True,
+    )
+    assert grammar5_vocab.eos_token_id == 113
+    assert grammar5_vocab.size == 114
+
+    # seed-7 and companions: grammar-5-era integer token sequences.
+    legacy_sequences = [
+        [6, 99, 45, 68, 72, 73, 81, 83, 88, 105, 77, 113],
+        [1, 74, 75, 113],
+        [112, 17, 113],
+    ]
+    for tokens in legacy_sequences:
+        old_names = tokens_to_names(tokens, grammar5_vocab)
+        new_names = tokens_to_names(tokens, FORMULA_VOCAB)
+        assert old_names is not None and new_names is not None, tokens
+        assert new_names == old_names, (tokens, old_names, new_names)
+
+    # seed-7 must decode to the SAME names the grammar-5 layout produced.
+    assert tokens_to_names(
+        [6, 99, 45, 68, 72, 73, 81, 83, 88, 105, 77, 113], grammar5_vocab
+    ) == tokens_to_names(
+        [6, 99, 45, 68, 72, 73, 81, 83, 88, 105, 77, 113], FORMULA_VOCAB
+    )
+
+    # Tail features resolve by name to 114-117: a grammar-6 payload that
+    # recorded the tail block it was sampled against remaps exactly.
+    tail_payload = {
+        "formula": [114, 115, 116, 117, 113],
+        "feature_names": list(FORMULA_VOCAB.feature_names),
+        "operator_names": list(FORMULA_VOCAB.operator_names),
+        "tail_feature_names": list(FORMULA_VOCAB.tail_feature_names),
+        "grammar_version": 6,
+    }
+    assert resolve_formula_tokens(tail_payload, FORMULA_VOCAB) == [
+        114, 115, 116, 117, 113,
+    ]
 
 
 def test_feature_version_pinned():
@@ -47,7 +119,10 @@ def test_feature_version_pinned():
     # v6 (P13 §5.3/§6.1, docs/p13_fundamental_fields_contract.md
     # APPROVED): family ⑤ appends 4 slow-fundamental names (73 -> 77);
     # whitelist §10.1 case 2.
-    assert FORMULA_VOCAB.feature_version == "0e64ad614bfd"
+    # t46 B-fix: the four names ride AFTER EOS (tail_feature_names joins
+    # the feature_version payload) -- re-pin within the unreleased v6
+    # generation, no grammar bump.
+    assert FORMULA_VOCAB.feature_version == "afbf06f3ba54"
     assert len(FORMULA_VOCAB.feature_version) == 12
     # v6 grammar: the v5 layout plus the P13 family-⑤ feature append.
     assert GRAMMAR_VERSION == 6
@@ -151,9 +226,13 @@ def test_tokens_to_names_rejects_out_of_range():
 
 
 def _sample_payload():
+    # Mirrors the real artifact writer (train.py): ``feature_names`` is the
+    # vocabulary's contiguous pre-operator feature block (the family-⑤
+    # tail rides after EOS under the t46 B-fix layout and is recorded
+    # separately once tail formulas enter artifacts).
     return {
         "formula": [1, 2, FORMULA_VOCAB.operator_offset],
-        "feature_names": list(FEATURE_NAMES),
+        "feature_names": list(FORMULA_VOCAB.feature_names),
         "operator_names": list(FORMULA_VOCAB.operator_names),
         "feature_version": FORMULA_VOCAB.feature_version,
     }
@@ -167,13 +246,16 @@ def test_resolve_formula_tokens_identity_with_metadata():
 def test_resolve_formula_tokens_remaps_by_name():
     # A formula trained on a reordered feature list must resolve to the ids
     # of the same *names* in the current vocabulary, never the same ids.
-    reordered = [FEATURE_NAMES[-1]] + list(FEATURE_NAMES[:-1])
+    # (t46 B-fix: the recorded list is the contiguous head block; tail
+    # features live after EOS and are exercised in the layout test.)
+    head = list(FORMULA_VOCAB.feature_names)
+    reordered = [head[-1]] + head[:-1]
     payload = _sample_payload()
     payload["feature_names"] = reordered
     payload["formula"] = [1, 2, FORMULA_VOCAB.operator_offset]
     resolved = resolve_formula_tokens(payload)
-    assert resolved[0] == 1 + FEATURE_NAMES.index(FEATURE_NAMES[-1])
-    assert resolved[1] == 1 + FEATURE_NAMES.index(FEATURE_NAMES[0])
+    assert resolved[0] == 1 + head.index(head[-1])
+    assert resolved[1] == 1 + head.index(head[0])
 
 
 def test_resolve_formula_tokens_legacy_payload_without_metadata():

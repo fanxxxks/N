@@ -62,7 +62,14 @@ def _earnings_frame() -> pd.DataFrame:
 
 
 class _FakeClient:
-    """Offline-free client stub: the whole-market earnings endpoint only."""
+    """Offline-free client stub: the whole-market earnings endpoint only.
+
+    P13 (whitelist §10.1 case 2, docs/p13_fundamental_fields_contract.md):
+    sync_fundamentals now also binds the cash-flow/balance-sheet bulk
+    endpoints (fundamentals.py), so the stub must carry them -- returning
+    empty frames keeps these scope tests exactly as narrow as before
+    (assertion strength unchanged; coverage only extended to the new
+    binding seam)."""
 
     offline = False
 
@@ -71,6 +78,12 @@ class _FakeClient:
 
     def get_earnings_report(self, quarter: str) -> pd.DataFrame:
         return self._earnings.copy()
+
+    def get_cash_flow_report(self, quarter: str) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    def get_balance_sheet(self, quarter: str) -> pd.DataFrame:
+        return pd.DataFrame()
 
     def get_financial_indicator(self, ts_code: str, start_year: int) -> pd.DataFrame:
         return pd.DataFrame()
