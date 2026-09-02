@@ -259,11 +259,12 @@ commit 回退；test_fundamental_scope stubs 保留）。legacy 分派落点：
 `vocab.resolve_formula_tokens`（裸 grammar-5 载荷 → 冻结布局）与
 `data_tier.formula_feature_names / formula_data_tier_report`、
 `feature_registry.formula_registry_status_report`、`promotion` G6/G7
-调用点的 grammar_version 穿递。GRammar 维持 6：布局真变、版本真升。
+调用点的 grammar_version 穿递。Grammar 维持 6：布局真变、版本真升。
 
 ### 6.4 追加（t57 F2，2026-09-02，contract-a 裁决书 (a)：按代扩展冻结布局表）
 
-§6.3 的分派机制按代扩展覆盖 grammar-2/3：新增**冻结 grammar-3 布局**
+本节为 §6.3 t57 追加段的实现侧明细。§6.3 的分派机制按代扩展覆盖
+grammar-2/3：新增**冻结 grammar-3 布局**
 （62 特征 = V1+V2+V3 块、39 算子、EOS=102；`_GRAMMAR_V3_FEATURE_NAMES`
 带 live 前缀断言守卫；`GRAMMAR_V3_VOCAB`/`GRAMMAR_V3_TOKEN_NAMES` 导出）。
 已知代与分派映射：**gv=2/3 → 冻结 grammar-3 布局；gv=4/5 → 冻结
