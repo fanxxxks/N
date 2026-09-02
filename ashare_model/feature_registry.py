@@ -390,7 +390,6 @@ class FeatureRegistry:
 def formula_registry_status_report(
     tokens=None,
     feature_name: str | None = None,
-    grammar_version=None,
 ) -> dict:
     """Registry promotability of a formula's features (P12 promotion G7).
 
@@ -422,7 +421,7 @@ def formula_registry_status_report(
         "traceable": False,
     }
     if tokens is not None:
-        names = formula_feature_names(tokens, grammar_version=grammar_version)
+        names = formula_feature_names(tokens)
         if names is None:
             return untraceable
     elif feature_name is not None:

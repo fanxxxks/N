@@ -230,36 +230,38 @@ NaN，由不变量 2 保证无效果）。覆盖率门是本契约验收步骤�
   （与 P1-5 的变化叠加，C 线审计基线 = post-P1-5 状态）。新旧 dataset_id
   如实记录于测量日志；跨 dataset_id 的测量禁止拼接结论（AGENTS §4.3）；
   族裁决测量（§8）只引用 post-backfill dataset_id。
-- **legacy 兼容（§6.3 勘误修订）**：feature id 逐位不变；operator/EOS id
-  随 grammar-6 平移，grammar-5 legacy 公式经冻结布局 + grammar_version
-  分派按名重映射保持可解码（P9 先例）；无任何产物失效，无需迁移。
+- **legacy 兼容（§6.3 勘误修订）**：feature id（74–77）与 operator/EOS id
+  均按 grammar-5 旧值位稳定（family-⑤ 尾部骑 EOS 之后 114–117），
+  grammar-5 legacy 公式解码零重映射成本；缺失/未知 grammar_version 的
+  载荷 fail-closed 拒绝解码（§6.3）；无任何产物失效，无需迁移。
 - **DB 迁移**：幂等 additive；回滚 = 代码单 revert（§5.1），无数据删除、
   无历史改写。
 - **拒绝（fail-closed）**：覆盖率门不过 → 族不解锁（§5.4）；来源口径含糊
   → 停止修订契约（§9.2）；gates 红 → 不放行（§3.4）。
 
-### 6.3 勘误（t46，2026-09-02，captain 方案 A 裁决）
+### 6.3 勘误（t46，2026-09-02，captain 终审：接受方案 B-泛化版）
 
 §1.1/§4（不变量 4）/§6.1 原文的"77 名追加**不移位**"表述不准确，更正为：
 
-> **feature ID 不移位**（74–77 连续追加于 feature 块内）；**operator/EOS ID
-> 随 grammar-6 平移**（operator_offset 74→78、EOS 113→117）；grammar-5
-> legacy 公式的可解码性由**冻结 grammar-5 布局 + 按工件声明的
-> grammar_version 分派 + 按名重映射**保持（P9 by-name 先例；冻结名单是
-> 数据而非第二套语义实现）。不变量 4 相应修订为："feature id 逐位不变；
-> operator/EOS 经 grammar_version 分派按名重映射"。
+> **全部 token id 逐位稳定**：family-⑤ 4 名（feature id 74–77 连续追加）
+> 之外，operator/EOS id 亦不移位——实现方式为 family-⑤ 尾部骑 EOS 之后
+> （id 114–117），eos_token_id 推导改为"算子块后位置"（对无尾部词表等于
+> size−1，完全向后兼容）。grammar-5 legacy 公式解码**零重映射成本**
+> （p12 迁移承诺直接满足；P9 by-name 先例的应用面收窄为尾部 payload 键）。
+> 不变量 4 相应修订为："全部既有 token id（feature/operator/EOS）逐位
+> 不变；新增特征尾部骑 EOS 之后。"
 
-依据：reviewer-lead 侦察实证 vocab id 派生为硬性 index 连续制
-（feature_offset=1 → operator_offset=1+feature_count → eos=size−1），
-方案 B（尾部 4 名骑 EOS 之后）在该机制下需破坏 offset+index 解析并触及
-C 线所有权外的采样掩码（alphagpt.build_action_mask 按 feature_count 定
-尺寸、假设 features 连续分布于 [feature_offset, operator_offset)），
-级联超勘误量级，故撤销（t46 方案 B 提交 d0d41d8 的结构性部分由方案 A
-commit 回退；test_fundamental_scope stubs 保留）。legacy 分派落点：
-`vocab.resolve_formula_tokens`（裸 grammar-5 载荷 → 冻结布局）与
-`data_tier.formula_feature_names / formula_data_tier_report`、
-`feature_registry.formula_registry_status_report`、`promotion` G6/G7
-调用点的 grammar_version 穿递。GRammar 维持 6：布局真变、版本真升。
+依据：方案 A（冻结 grammar-5 布局 + grammar_version 分派重映射）在
+reviewer-lead 侦察后曾被短期改判，但 impl-c-data 的 B-泛化实现
+（eos 推导泛化 + tail_feature_names 载体 + seed-7 双布局解码属性测试 +
+test_promotion 活体回归 81 批次绿）被终审接受——legacy 解码零重映射成本
+优于 A 的分派重映射路线；A 改判与四缺口清单整体作废（无重映射需求）。
+采样层接缝（尾部 4 名在 pset/action-mask 连续块分类下不可达）按 §12
+所有权升级为 t52（impl-b，alphagpt.py 属区）接线；接线前
+`test_research_domain` 两个尾部采样测试保持 RED（接缝的诚实文档）。
+严格 grammar 门（captain pre-ruling）：payload 缺失/未知 grammar_version
+→ fail-closed 拒绝重映射解码（`vocab.resolve_formula_tokens`）；已知
+5/6 解码正确。GRammar 维持 6：eos 推导机制变化由版本系统覆盖，无新 bump。
 
 ## 7. 预期 RED 测试清单（实现前先红；t14 落地，同 commit 注册分片）
 
