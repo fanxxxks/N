@@ -1055,6 +1055,10 @@ def test_g7_rejects_p10_seed7_live_formula(tmp_path):
     for r in artifact["rows"]:
         r["formula_text"] = text
         r["formula"] = list(tokens)
+        # t46 Plan A: the P10 campaign ran under grammar 5; the row-declared
+        # generation routes the bare tokens through the frozen grammar-5
+        # decode layout instead of the shifted grammar-6 feature block.
+        r["grammar_version"] = 5
     artifact["top_trial"]["formula_text"] = text
     verdict = _verdict(
         artifact,

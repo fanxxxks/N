@@ -59,11 +59,7 @@ def test_registry_covers_every_vocabulary_feature(tensor, mask):
     )
     records = registry.records()
     assert set(records) == set(FEATURE_NAMES)
-    # t46 B-fix (whitelist §10.1 case 2): the vocabulary's features are the
-    # head block plus the family-⑤ tail riding after EOS.
-    assert set(records) == (
-        set(FORMULA_VOCAB.feature_names) | set(FORMULA_VOCAB.tail_feature_names)
-    )
+    assert set(records) == set(FORMULA_VOCAB.feature_names)
 
 
 def test_records_carry_all_metadata_fields(tensor, mask):
