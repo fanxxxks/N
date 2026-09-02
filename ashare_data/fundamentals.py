@@ -42,7 +42,9 @@ from .db import AshareDB, sql_quoted_list
 from .processor import is_valid_a_share_code
 
 # Feature names produced by the point-in-time pipeline (MARKET_CAP is a
-# local daily-bar factor, not a PIT field).
+# local daily-bar factor, not a PIT field).  The four family-⑤ features
+# (P13, docs/p13_fundamental_fields_contract.md §5.3) consume the cash-flow
+# statement and balance-sheet fields synced alongside the earnings table.
 FUNDAMENTAL_PIT_NAMES = (
     "PE_TTM",
     "PB",
@@ -55,6 +57,10 @@ FUNDAMENTAL_PIT_NAMES = (
     "PROFIT_YOY",
     "DEBT_RATIO",
     "DIVIDEND_YIELD",
+    "CASHFLOW_QUALITY",
+    "ACCRUALS",
+    "ASSET_GROWTH",
+    "EARNINGS_ACCEL",
 )
 
 # Level fields that fill forward from their announcement date unchanged.
@@ -89,6 +95,21 @@ _STALE_AFTER_DAYS = 45
 # A quarter's report is final only after the announcement season ends;
 # refresh while the quarter is younger than this many days.
 _ANNOUNCING_WINDOW_DAYS = 120
+
+# Quarter-end month-day keys, oldest first (P13 §5.3 report-period
+# arithmetic for ASSET_GROWTH / EARNINGS_ACCEL).
+_QUARTER_ENDS = ("0331", "0630", "0930", "1231")
+
+
+def _shift_report_date(report_date: str, quarters: int) -> str:
+    """The quarter-end date ``quarters`` report periods before
+    ``report_date`` (exact period arithmetic: a missing report in between
+    stays missing instead of silently misaligning the pair)."""
+
+    ordinal = int(report_date[:4]) * 4 + _QUARTER_ENDS.index(report_date[4:])
+    ordinal -= quarters
+    year, index = divmod(ordinal, 4)
+    return f"{year:04d}{_QUARTER_ENDS[index]}"
 
 
 def _quarter_ends(start_year: int, end_inclusive: str) -> list[str]:
@@ -260,7 +281,8 @@ def _fetch_fundamental_rows(
         SELECT ts_code, report_date, announce_date, dividend_announce,
                eps_cum, bvps, roe, roa, gross_margin, net_margin,
                revenue_cum, profit_cum, revenue_yoy, profit_yoy,
-               debt_ratio, dividend_yield
+               debt_ratio, dividend_yield,
+               net_operate_cash_flow, total_assets
         FROM {config.fundamentals_table}
         WHERE ts_code IN ({quoted})
         """
@@ -361,6 +383,111 @@ def build_pit_frames(
             frames["PS_TTM"].iloc[stock_row] = np.where(
                 margin_series > 0, pe_row * margin_series, np.nan
             )
+
+        # --- P13 family ⑤ (docs/p13_fundamental_fields_contract.md §5.3) ---
+        # Cash-flow quality, accruals, asset growth and earnings
+        # acceleration.  Every TTM conversion goes through _ttm and every
+        # visibility through _ffill_from_announcements (the single PIT
+        # path); ratios join strictly on the report period (never
+        # misaligned), and a ratio is visible from the announce date of its
+        # latest contributing report.  Missing/incomplete inputs stay NaN
+        # (AGENTS §5.3) -- never a fabricated neutral value.
+        prof_ttm_by_report = dict(zip(prof_reports, prof_ttm))
+        cfo_reports, _, cfo_ttm = _ttm(sub_sorted, "net_operate_cash_flow")
+        cfo_ttm_by_report = dict(zip(cfo_reports, cfo_ttm))
+        ta_by_report = {
+            str(rep): ta
+            for rep, ta in zip(
+                sub_sorted["report_date"],
+                pd.to_numeric(sub_sorted["total_assets"], errors="coerce"),
+            )
+        }
+        announce_by_report = {
+            str(rep): (str(ann) if pd.notna(ann) else None)
+            for rep, ann in zip(sub["report_date"], sub["announce_date"])
+        }
+
+        def _g_of(report: str) -> float | None:
+            """TTM profit growth vs the report four periods earlier."""
+            profit = prof_ttm_by_report.get(report)
+            profit_prev = prof_ttm_by_report.get(_shift_report_date(report, 4))
+            if (
+                profit is None
+                or not np.isfinite(profit)
+                or profit_prev is None
+                or not np.isfinite(profit_prev)
+                or profit_prev <= 0
+            ):
+                return None
+            return profit / profit_prev - 1
+
+        quality_ann, quality_vals = [], []
+        accrual_ann, accrual_vals = [], []
+        growth_ann, growth_vals = [], []
+        accel_ann, accel_vals = [], []
+        for report in prof_reports:
+            announce = announce_by_report.get(report)
+            profit = prof_ttm_by_report.get(report)
+            cfo = cfo_ttm_by_report.get(report)
+            assets = ta_by_report.get(report)
+            if announce is None:
+                continue  # without its master date a row is never visible
+            if (
+                profit is not None
+                and np.isfinite(profit)
+                and profit > 0
+                and cfo is not None
+                and np.isfinite(cfo)
+            ):
+                quality_ann.append(announce)
+                quality_vals.append(cfo / profit)
+            if (
+                profit is not None
+                and np.isfinite(profit)
+                and cfo is not None
+                and np.isfinite(cfo)
+                and assets is not None
+                and np.isfinite(assets)
+                and assets > 0
+            ):
+                accrual_ann.append(announce)
+                accrual_vals.append((profit - cfo) / assets)
+            assets_prev = ta_by_report.get(_shift_report_date(report, 4))
+            announce_prev = announce_by_report.get(_shift_report_date(report, 4))
+            if (
+                announce_prev is not None
+                and assets is not None
+                and np.isfinite(assets)
+                and assets > 0
+                and assets_prev is not None
+                and np.isfinite(assets_prev)
+                and assets_prev > 0
+            ):
+                growth_ann.append(max(announce, announce_prev))
+                growth_vals.append(assets / assets_prev - 1)
+            growth_t = _g_of(report)
+            growth_prev = _g_of(_shift_report_date(report, 1))
+            if (
+                growth_t is not None
+                and growth_prev is not None
+                and np.isfinite(growth_t)
+                and np.isfinite(growth_prev)
+            ):
+                accel_ann.append(announce)
+                accel_vals.append(growth_t - growth_prev)
+
+        frames["CASHFLOW_QUALITY"].iloc[stock_row] = _ffill_from_announcements(
+            dates, quality_ann, quality_vals
+        )
+        frames["ACCRUALS"].iloc[stock_row] = _ffill_from_announcements(
+            dates, accrual_ann, accrual_vals
+        )
+        frames["ASSET_GROWTH"].iloc[stock_row] = _ffill_from_announcements(
+            dates, growth_ann, growth_vals
+        )
+        frames["EARNINGS_ACCEL"].iloc[stock_row] = _ffill_from_announcements(
+            dates, accel_ann, accel_vals
+        )
 
     return frames
 
@@ -508,6 +635,10 @@ def sync_fundamentals(
                 continue
         if df.empty:
             continue
+        # The universe filter applies to the cache path too: pre-P2-01
+        # caches hold whole-market rows, and reading them unfiltered would
+        # resurrect purged out-of-scope codes (t20 window-② incident).
+        df = df[df["ts_code"].isin(universe_set)]
         rows = [{c: row[c] for c in _EARNINGS_COLUMNS} for row in df.to_dict("records")]
         db.upsert_fundamentals(rows, config)
         total_rows += len(rows)
@@ -526,6 +657,63 @@ def sync_fundamentals(
         }
     except Exception:  # noqa: BLE001
         announce_map = {}
+
+    # P13 bulk supplements (docs/p13_fundamental_fields_contract.md §5.2):
+    # the cash-flow statement and the balance sheet mirror the earnings
+    # path -- whole-market per report period, universe-filtered before
+    # caching/storage, and joined to the earnings announce master.  Rows
+    # without a master match are dropped: a disclosure date is never
+    # guessed (the Sina-supplement discipline, generalized).
+    for section, fetcher in (
+        ("cash_flow", client.get_cash_flow_report),
+        ("balance_sheet", client.get_balance_sheet),
+    ):
+        written = 0
+        for quarter in quarters:
+            quarter_date = datetime.strptime(quarter, "%Y%m%d").date()
+            announcing = (
+                datetime.now().date() - quarter_date
+            ).days < _ANNOUNCING_WINDOW_DAYS
+            path = _fundamental_cache_path(config, f"{section}_{quarter}")
+            df = pd.DataFrame() if announcing else _read_cached(path)
+            if df.empty:
+                try:
+                    df = fetcher(quarter)
+                    if not df.empty:
+                        df = df[df["ts_code"].isin(universe_set)]
+                        _write_cached(path, df)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"{section} report failed for {quarter}: {exc}")
+                    failures += 1
+                    continue
+            if df.empty:
+                continue
+            # Same cache-path discipline as the earnings loop (t20
+            # window-② incident): filter before the master join.
+            df = df[df["ts_code"].isin(universe_set)]
+            rows: list[dict[str, Any]] = []
+            for row in df.to_dict("records"):
+                announce = announce_map.get(
+                    (str(row["ts_code"]), str(row["report_date"]))
+                )
+                if announce is None:
+                    continue  # no master match -> dropped, never guessed
+                payload: dict[str, Any] = {
+                    "ts_code": str(row["ts_code"]),
+                    "report_date": str(row["report_date"]),
+                    "announce_date": announce,
+                }
+                if "net_operate_cash_flow" in row:
+                    payload["net_operate_cash_flow"] = row["net_operate_cash_flow"]
+                if "total_assets" in row:
+                    payload["total_assets"] = row["total_assets"]
+                rows.append(payload)
+            if rows:
+                db.upsert_fundamentals(rows, config)
+                written += len(rows)
+        logger.info(
+            f"{section} reports synced: {len(quarters)} quarters, {written} rows"
+        )
 
     supplements = 0
     for code in universe:

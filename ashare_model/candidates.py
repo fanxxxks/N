@@ -85,7 +85,10 @@ class CandidateScore:
     rejection_reasons: tuple[str, ...]
     # T1-03: the AST complexity bill this candidate was charged (>= 1.0;
     # exactly 1.0 for bare factors).  Recorded in artifacts so the billing
-    # is auditable; ``complexity_penalty`` = penalty_rate * complexity_cost.
+    # is auditable; v15 semantics (contract
+    # docs/p11_reward_v15_contract.md §5.2): ``complexity_penalty`` = 0 at
+    # or below ``complexity_free_bill``, else
+    # ``penalty_rate * (complexity_cost - complexity_free_bill)``.
     complexity_cost: float = 0.0
     # T1-04 portfolio objectives (validation-window medians, the
     # selection quantities): annualized active IR, annualized risk
@@ -283,18 +286,25 @@ class CandidateScorer:
         self.reward_function = reward_function
 
     def complexity_penalty(self, spec: CandidateSpec) -> float:
-        """Penalty for formula complexity: ``rate * complexity_bill(ast)``.
+        """Complexity penalty of ``spec`` (v15 two-segment shape).
 
         The AST is the single source of truth: the bytecode is decoded once
         and the bill combines node count, depth, longest operator window
         and operation cost (T1-03; bare single-factor copies bill exactly
-        1.0, preserving the historical bare-factor nudge).  Invalid
-        bytecode bills as a bare factor — the formula is rejected anyway.
+        1.0).  Invalid bytecode bills as a bare factor — the formula is
+        rejected anyway.  v15 (contract ``docs/p11_reward_v15_contract.md``
+        §5.2): bills at or below ``complexity_free_bill`` pay nothing; above
+        it the excess bills ``complexity_penalty`` per unit (the v14
+        semantics linearly billed ``0.02 * bill`` from bill=1.0, which
+        capped every bill>1 combo strictly below a saturating bare factor).
+        This method is the only place the penalty is computed.
         """
 
-        return float(self.reward_config.complexity_penalty) * self.complexity_cost(
-            spec
-        )
+        bill = self.complexity_cost(spec)
+        free_bill = float(self.reward_config.complexity_free_bill)
+        if bill <= free_bill:
+            return 0.0
+        return float(self.reward_config.complexity_penalty) * (bill - free_bill)
 
     def complexity_cost(self, spec: CandidateSpec) -> float:
         """The AST complexity bill of ``spec`` (>= 1.0, auditable)."""

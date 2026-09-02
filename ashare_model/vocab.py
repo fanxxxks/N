@@ -156,10 +156,67 @@ _FEATURE_NAMES_V4 = (
     "MARGIN_CROWD_60",
 )
 
+# v5 (P13, docs/p13_fundamental_fields_contract.md §5.3) appends the four
+# family-⑤ slow-fundamental features (cash-flow quality, accruals, asset
+# growth, earnings acceleration) once their PIT data fields are registered.
+# Names are appended so every pre-v5 token id is stable (the same
+# discipline as v2/v3/v4); the family joins and leaves promotion as one
+# atomic unit (§8 族级裁决).
+_FEATURE_NAMES_V5 = (
+    "CASHFLOW_QUALITY",
+    "ACCRUALS",
+    "ASSET_GROWTH",
+    "EARNINGS_ACCEL",
+)
+
 FEATURE_NAMES = tuple(
     name
-    for name in _FEATURE_NAMES_V1 + _FEATURE_NAMES_V2 + _FEATURE_NAMES_V3 + _FEATURE_NAMES_V4
+    for name in (
+        _FEATURE_NAMES_V1
+        + _FEATURE_NAMES_V2
+        + _FEATURE_NAMES_V3
+        + _FEATURE_NAMES_V4
+        + _FEATURE_NAMES_V5
+    )
     if name not in FEATURE_ALIASES
+)
+
+# --- t46 Plan A: frozen grammar-5 layout (legacy decode reference) ----------
+#
+# grammar-6 appended the four family-⑤ features to the FEATURE block, so
+# the operator/EOS token ids shifted (74->78, 113->117).  grammar-5-era
+# artifacts (e.g. the P10 campaign, seed-7) carry integer tokens that are
+# only meaningful against the grammar-5 layout, and a bare token list has
+# no metadata to remap by name.  The grammar-5 layout is therefore frozen
+# here as DATA: decode dispatches on the artifact's declared
+# ``grammar_version`` (5 -> frozen layout, 6 -> live vocabulary) and the
+# existing by-name remap (P9 precedent) upgrades the formula.  The frozen
+# feature list below is the released grammar-5 feature block verbatim; the
+# operator names come from the single OPS source because v5->v6 changed
+# features only -- if a later generation ever changes operators, this
+# table must be literalized in the same commit.
+_GRAMMAR_V5_FEATURE_NAMES = (
+    "RET_1", "RET_5", "RET_10", "VOL_20", "VOL_60", "TURNOVER",
+    "TURNOVER_CHG", "VOLUME_RATIO", "VOLUME_IMPACT", "AMPLITUDE",
+    "CLOSE_POSITION", "MOMENTUM_20", "MOMENTUM_60", "REVERSAL_5", "SKEW_20",
+    "KURT_20", "PE_TTM", "PB", "PS_TTM", "ROE", "ROA", "GROSS_MARGIN",
+    "NET_MARGIN", "REVENUE_YOY", "PROFIT_YOY", "DEBT_RATIO", "MARKET_CAP",
+    "DIVIDEND_YIELD", "NORTHBOUND_CHG", "MARGIN_BALANCE_CHG",
+    "LIMIT_UP_EVENT", "LIMIT_DOWN_EVENT", "INDUSTRY_MOMENTUM",
+    "OVERNIGHT_RET", "INTRADAY_RET", "ILLIQ_20", "AMOUNT_SHARE", "MAX_20",
+    "HIGH_52W", "BETA_60", "IVOL_60", "RSQ_60", "BIAS_20", "RSI_14",
+    "ATR_14", "MACD_DIF", "MACD_DEA", "SUSPEND_DAYS_60", "LIST_AGE",
+    "RET_120", "REVERSAL_60", "REVERSAL_120", "TURNOVER_MA5",
+    "TURNOVER_MA20", "TURNOVER_STD20", "LIMIT_STREAK", "LIMIT_UP_CNT_20",
+    "LIMIT_BREAK", "IND_REL_RET_5", "IND_REL_RET_20", "IND_REL_VOL_20",
+    "IND_REL_TURNOVER", "IND_REL_RET_60", "IND_REL_RET_120", "LIQ_SHOCK_20",
+    "VOLUME_SHRINK_5_20", "PV_DIV_20", "LIMIT_UP_CNT_5",
+    "LIMIT_DOWN_STREAK", "LIMIT_BREAK_5", "CROWD_TURNOVER_60",
+    "CROWD_AMOUNT_60", "MARGIN_CROWD_60",
+)
+assert _GRAMMAR_V5_FEATURE_NAMES == tuple(FEATURE_NAMES)[: len(_GRAMMAR_V5_FEATURE_NAMES)], (
+    "the frozen grammar-5 feature list must stay a prefix of the live "
+    "vocabulary (grammar-6 only appends)"
 )
 
 # P9 §4: approved deprecations (docs/p9_factor_family_contract.md §4.1,
@@ -219,11 +276,13 @@ LEGACY_OPERATOR_NAMES = (
 # v4 (P9) appends the four orthogonal P9 families and removes the
 # deprecated features from the sampling space (they keep their token ids
 # and computations); v5 (P9 adjudication) adds the conditionally-deprecated
-# LIMIT_STREAK and the two second-pass consolidations to that set.
+# LIMIT_STREAK and the two second-pass consolidations to that set;
+# v6 (P13 §5.3/§6.1) appends the four family-⑤ slow-fundamental features
+# (append-only, no existing token id moves).
 # Bumping this constant changes
 # ``feature_version`` and therefore invalidates the token layout recorded
 # in older training artifacts (which resolve by name, so they still load).
-GRAMMAR_VERSION = 5
+GRAMMAR_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -298,6 +357,16 @@ FORMULA_VOCAB = FormulaVocab(
     deprecated_names=DEPRECATED_FEATURE_NAMES,
 )
 
+# t46 Plan A: the frozen grammar-5 layout as a decode-reference vocabulary
+# (see the frozen feature list above).  grammar-5-era bare token lists are
+# decoded against THIS layout and then remapped by name into the live
+# vocabulary; the flat name table is exported for display/audit tools.
+GRAMMAR_V5_VOCAB = FormulaVocab(
+    feature_names=_GRAMMAR_V5_FEATURE_NAMES,
+    operator_names=tuple(cfg[0] for cfg in OPS_CONFIG),
+)
+GRAMMAR_V5_TOKEN_NAMES = GRAMMAR_V5_VOCAB.token_names
+
 
 def tokens_to_names(tokens: Iterable[int], vocab: FormulaVocab | None = None) -> list[str] | None:
     """Map a postfix token sequence to its token names.
@@ -346,20 +415,34 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     if not isinstance(payload, dict) or "formula" not in payload:
         raise ValueError("formula payload has no 'formula' field")
 
-    src_features = payload.get("feature_names")
-    if src_features is None:
-        src_features = LEGACY_FEATURE_NAMES
-    src_features = tuple(str(name) for name in src_features)
-
-    src_operators = payload.get("operator_names")
-    if src_operators is None:
-        src_operators = LEGACY_OPERATOR_NAMES
-    src_operators = tuple(str(name) for name in src_operators)
-
     # Payloads written by the v2 (EOS) grammar record ``grammar_version``;
     # older artifacts are remapped against the pinned v1 layout, where the
-    # token after PAD is the first feature rather than EOS.
-    src_has_eos = int(payload.get("grammar_version", 1)) >= 2
+    # token after PAD is the first feature rather than EOS.  t46 Plan A: a
+    # BARE grammar-5 payload (no recorded name lists -- e.g. the P10
+    # campaign rows) dispatches to the frozen grammar-5 layout, because the
+    # grammar-6 feature append shifted the operator/EOS ids; the by-name
+    # remap then upgrades the formula into the live vocabulary (P9
+    # precedent -- the frozen list is data, not a second semantic path).
+    src_grammar = int(payload.get("grammar_version", 1))
+    src_has_eos = src_grammar >= 2
+    src_features = payload.get("feature_names")
+    src_operators = payload.get("operator_names")
+    if src_features is None:
+        if src_grammar == 5:
+            src_features = _GRAMMAR_V5_FEATURE_NAMES
+            if src_operators is None:
+                src_operators = tuple(cfg[0] for cfg in OPS_CONFIG)
+        elif src_grammar >= 6:
+            # grammar-6+ bare tokens were sampled against the live layout.
+            src_features = FEATURE_NAMES
+            if src_operators is None:
+                src_operators = tuple(cfg[0] for cfg in OPS_CONFIG)
+        else:
+            src_features = LEGACY_FEATURE_NAMES
+    if src_operators is None:
+        src_operators = LEGACY_OPERATOR_NAMES
+    src_features = tuple(str(name) for name in src_features)
+    src_operators = tuple(str(name) for name in src_operators)
     src_vocab = FormulaVocab(
         feature_names=src_features,
         operator_names=src_operators,

@@ -1,7 +1,7 @@
-"""Champion/Challenger promotion gates (T4-01, P2-03/P2-04).
+"""Champion/Challenger promotion gates (T4-01, P2-03/P2-04, P12).
 
 A challenger (the top stitched trial of a current protocol artifact) is
-promoted to champion **only** when all six gates pass at once:
+promoted to champion **only** when all seven gates pass at once:
 
 * **G1 data, formula & execution P0** — the artifact is current, bound to the
   immutable dataset, measured under a declared data regime on future or
@@ -25,9 +25,23 @@ promoted to champion **only** when all six gates pass at once:
   default ``("A",)``); Tier B is promotable only through an explicit
   separate comparison; Tier C (industry snapshot / ST approximation /
   placeholder) can never enter a promotion verdict.
+* **G7 feature registry status** (P12) — the challenger formula's
+  features must all be registry-promotable: every feature carries
+  ``promotion_allowed=True`` and none is ``deprecated``
+  (:func:`ashare_model.feature_registry.formula_registry_status_report`,
+  ``docs/p12_promotion_enforcement_contract.md``).  Fail-closed: an
+  untraceable formula (no tokens / undecodable / feature outside the
+  vocabulary) is a rejection, never a pass.
 
 Every gate reports ``passed`` plus human-readable ``reasons``, and the
 verdict records the thresholds used, so a refusal is auditable.
+
+Gate-set versions: G1-G6 were the unversioned **v1** era
+(``PROMOTION_RULE_VERSION`` did not exist); **v2** (P12,
+``docs/p12_promotion_enforcement_contract.md``) adds G7, and v2 verdicts
+record ``promotion_rule_version``.  The promotion-gate numbering
+(G1-G7) is independent of the data-quality gate numbering in
+``ashare_data/gates.py``.
 """
 
 from __future__ import annotations
@@ -57,6 +71,10 @@ from .evaluation import (
     stitch_oos_series,
     stitched_metrics,
 )
+from .feature_registry import (
+    FEATURE_REGISTRY_VERSION,
+    formula_registry_status_report,
+)
 from .reward import REWARD_VERSION
 from .regime import HoldoutViolation, RegimeRegistry
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
@@ -65,6 +83,12 @@ from ashare_portfolio.execution_spec import (
     portfolio_config_provenance,
     validate_portfolio_config_provenance,
 )
+
+# Version of the promotion gate-set semantics.  G1-G6 were the
+# unversioned v1 era (no constant existed); v2 (P12,
+# docs/p12_promotion_enforcement_contract.md) adds the G7
+# feature_registry_status gate.  Recorded in every verdict.
+PROMOTION_RULE_VERSION = "2"
 
 
 @dataclass(frozen=True)
@@ -355,10 +379,10 @@ def evaluate_challenger(
     today: str | None = None,
     backtest_config=None,
 ) -> dict:
-    """Apply the six promotion gates to a current protocol artifact.
+    """Apply the seven promotion gates to a current protocol artifact.
 
     Every gate returns ``{"passed": bool, "reasons": [...]}``; the
-    challenger is promoted only when all six pass.  ``allowed_data_tiers``
+    challenger is promoted only when all seven pass.  ``allowed_data_tiers``
     is the P2 data-tier policy (default Tier A only; Tier B requires an
     explicit separate comparison; Tier C raises).  ``today`` is injectable
     for tests (paper-window completion check).
@@ -560,7 +584,11 @@ def evaluate_challenger(
     if top_rows:
         last = top_rows[-1]
         tier_report = formula_data_tier_report(
-            tokens=last.get("formula"), feature_name=last.get("formula_text")
+            tokens=last.get("formula"),
+            feature_name=last.get("formula_text"),
+            # t46 Plan A: grammar-5-era artifacts decode against the frozen
+            # grammar-5 layout; the generation rides on the artifact row.
+            grammar_version=last.get("grammar_version"),
         )
     if tier_report is None:
         reasons.append(
@@ -575,6 +603,42 @@ def evaluate_challenger(
                     f"in the allowed tiers {list(allowed)}"
                 )
     gates["data_tier"] = _gate(not reasons, reasons)
+
+    # G7 -- feature registry status (P12): the challenger formula's
+    # features must all be registry-promotable (promotion_allowed, not
+    # deprecated).  Same top-trial source as G6, so the artifact loading
+    # path is covered by construction (newly sampled and historical
+    # formulas both arrive as artifact top rows).  Fail-closed: an
+    # untraceable formula or a registry gap is a rejection.  The
+    # promotion-gate numbering (G1-G7) is independent of the data-quality
+    # gate numbering in ashare_data/gates.py.
+    reasons = []
+    registry_report = None
+    if top_rows:
+        last = top_rows[-1]
+        registry_report = formula_registry_status_report(
+            tokens=last.get("formula"),
+            feature_name=last.get("formula_text"),
+            grammar_version=last.get("grammar_version"),
+        )
+    if registry_report is None or not registry_report["traceable"]:
+        reasons.append(
+            "no traceable formula for registry status; promotion requires "
+            "a formula whose every feature is registry-promotable"
+        )
+    else:
+        for name, status in sorted(registry_report["per_feature"].items()):
+            if not status["promotion_allowed"]:
+                reasons.append(
+                    f"feature {name} is not promotion_allowed "
+                    "(feature registry status)"
+                )
+                if status["deprecated"]:
+                    reasons.append(
+                        f"feature {name} is deprecated "
+                        "(feature registry status)"
+                    )
+    gates["feature_registry_status"] = _gate(not reasons, reasons)
 
     return {
         "promoted": all(g["passed"] for g in gates.values()),
@@ -595,6 +659,11 @@ def evaluate_challenger(
             "allowed_tiers": list(allowed),
             "formula_data_tier": tier_report,
             "time_rules": dict(TIER_TIME_RULES),
+        },
+        "promotion_rule_version": PROMOTION_RULE_VERSION,
+        "registry_status_policy": {
+            "feature_registry_version": FEATURE_REGISTRY_VERSION,
+            "report": registry_report,
         },
         "gates": gates,
         "thresholds": {

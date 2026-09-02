@@ -287,7 +287,8 @@ def test_version_pins():
     from ashare_model.search_contract import SEARCH_CONTRACT_VERSION
     from ashare_model.vocab import GRAMMAR_VERSION
 
-    assert GRAMMAR_VERSION == 5
+    assert GRAMMAR_VERSION == 6  # v6 (P13 §5.3/§6.1): family ⑤ appends 4
+    # features (whitelist §10.1 case 2, docs/p13_fundamental_fields_contract.md).
     assert SEARCH_CONTRACT_VERSION == 4
     assert PROTOCOL_VERSION == "25"
 

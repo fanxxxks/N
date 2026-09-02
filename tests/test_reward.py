@@ -9,7 +9,9 @@ from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_data.processor import open_to_open_returns, tradability_blocked_matrix
 from ashare_execution import ExecutionCostModel
 from ashare_model.backtest import AshareBacktestEngine
+from ashare_model.candidates import CandidateScorer, CandidateSpec
 from ashare_model.reward import (
+    REWARD_VERSION,
     batched_basket_rewards,
     formula_reward,
     icir_from_series,
@@ -20,6 +22,7 @@ from ashare_model.reward import (
     sortino_ratio,
 )
 from ashare_model.targets import causal_target_returns
+from ashare_model.vocab import FORMULA_VOCAB
 from ashare_portfolio.rebalance import RebalancePolicy
 
 
@@ -1107,3 +1110,254 @@ def test_reward_paths_reject_mask_shape_mismatch():
             np.zeros((3, 6)), np.zeros((3, 6)), cfg,
             universe_mask=np.ones((4, 6), dtype=bool),
         )
+
+
+# --- p11 reward v15 contract tests (RED-first; docs/p11_reward_v15_contract.md §5/§7) ----
+#
+# These tests are the executable projection of the pre-registered contract:
+# §5.4 constants and §7 RED-0..4.  RED-0 pins the v14 structural ceiling
+# defect version-conditionally (it passes on v14 AND on v15); RED-1..4 must
+# fail on v14 with a unique cause (the structural deficit / the too-narrow
+# band / the linear penalty / the missing pre-registered constants) and pass
+# once the v15 implementation lands.  The ceiling arithmetic mirrors the
+# production assembly exactly: reward.py clips the raw active-IR-minus-cost
+# term, and the single complexity-penalty path
+# (``CandidateScorer.complexity_penalty``) subtracts afterwards
+# (ashare_model/candidates.py ``score_many``).
+
+_P11_ADD = FORMULA_VOCAB.operator_offset  # ADD is operator 0 in the vocab
+
+
+def _feature_token(index: int) -> int:
+    """Vocabulary token id of the index-th feature (0-based)."""
+
+    return FORMULA_VOCAB.feature_offset + index
+
+
+def _add_tree_postfix(leaves: list[int]) -> list[int]:
+    """Postfix tokens of a balanced two-child ADD tree over ``leaves``."""
+
+    if len(leaves) == 1:
+        return [leaves[0]]
+    mid = len(leaves) // 2
+    return (
+        _add_tree_postfix(leaves[:mid])
+        + _add_tree_postfix(leaves[mid:])
+        + [_P11_ADD]
+    )
+
+
+def _p11_bill_tokens() -> dict[str, tuple[int, ...]]:
+    """Token forms whose AST complexity bills are pinned in RED-0/3/4.
+
+    Bills follow the documented complexity bill
+    ``1 + 0.25*(nodes-1) + 0.10*depth + 0.05*(window/60) + 0.10*(opcost-1)``
+    (ashare_model/complexity.py): bare = 1.0; ADD(X, X) = 1.70 (nodes 3,
+    depth 2, window 0, opcost 1); ((A+B)+(C+D)) = 3.0; ((A+B)+C)+D = 3.1;
+    the 7-leaf depth-5 ADD tree = 5.0; the 32-leaf perfect tree with 8
+    leaves extended one level = 25.0 (the max_complexity boundary).  The
+    tests assert these bills before consuming them, so a vocabulary change
+    cannot silently invalidate the pins.
+    """
+
+    bill_50 = [
+        _feature_token(0), _feature_token(1), _P11_ADD,
+        _feature_token(2), _P11_ADD,
+        _feature_token(3), _feature_token(4), _P11_ADD, _P11_ADD,
+        _feature_token(5), _feature_token(6), _P11_ADD, _P11_ADD,
+    ]
+    base = _add_tree_postfix([_feature_token(i) for i in range(32)])
+    bill_25: list[int] = []
+    extended = 0
+    for token in base:
+        if token < _P11_ADD and extended < 8:
+            bill_25.extend([token, _feature_token(32 + extended), _P11_ADD])
+            extended += 1
+        else:
+            bill_25.append(token)
+    assert extended == 8  # the 32-leaf perfect tree carries exactly 32 leaves
+    return {
+        "bare": (_feature_token(0),),
+        "combo": (_feature_token(0), _feature_token(0), _P11_ADD),
+        "bill30": (
+            _feature_token(0), _feature_token(1), _P11_ADD,
+            _feature_token(2), _feature_token(3), _P11_ADD, _P11_ADD,
+        ),
+        "bill31": (
+            _feature_token(0), _feature_token(1), _P11_ADD,
+            _feature_token(2), _P11_ADD, _feature_token(3), _P11_ADD,
+        ),
+        "bill50": tuple(bill_50),
+        "bill2500": tuple(bill_25),
+    }
+
+
+def test_structural_ceiling_tracks_version_contract():
+    """Contract §7 RED-0 (version-conditional defect pin).
+
+    The reward ceiling of a bill>1 combo relative to a bare factor sits
+    ``0.02 * (bill - 1)`` lower on v14 and identical on v15.  ADD(X, X)
+    bills exactly 1.70, so the v14 deficit is 0.02 * 0.70 = 0.014; the v15
+    zero-deficit branch is explicitly limited to bills within the
+    pre-registered ``complexity_free_bill``, which 1.70 satisfies.
+    """
+
+    rng = np.random.default_rng(3)
+    n_stocks, n_dates = 10, 30
+    target = rng.normal(size=(n_stocks, n_dates))
+    mask = np.ones_like(target, dtype=bool)
+    cfg = _cfg()
+    rc = _reward_cfg(cost_weight=0.0)  # cost isolated; running-version defaults
+    scorer = CandidateScorer(cfg, rc)
+    tokens = _p11_bill_tokens()
+    bare = CandidateSpec("p11-bare", "BARE", "contract", tokens["bare"])
+    combo = CandidateSpec("p11-combo", "ADD(X, X)", "contract", tokens["combo"])
+    assert scorer.complexity_cost(bare) == pytest.approx(1.0)
+    assert scorer.complexity_cost(combo) == pytest.approx(1.70)
+    # Both signals saturate the raw active IR (perfect rank alignment), so
+    # the two ceilings differ only by the complexity penalty.
+    bare_ceiling = (
+        formula_reward(target, target, cfg, rc, universe_mask=mask)
+        - scorer.complexity_penalty(bare)
+    )
+    combo_ceiling = (
+        formula_reward(2.0 * target, target, cfg, rc, universe_mask=mask)
+        - scorer.complexity_penalty(combo)
+    )
+    deficit = bare_ceiling - combo_ceiling
+    expected = 0.02 * 0.70 if REWARD_VERSION == "14" else 0.0
+    assert deficit == pytest.approx(expected, abs=1e-12), (
+        f"ceiling deficit {deficit!r} != pre-registered {expected!r} "
+        f"(bare={bare_ceiling!r}, combo={combo_ceiling!r}, "
+        f"REWARD_VERSION={REWARD_VERSION!r})"
+    )
+
+
+def test_v15_combo_ceiling_never_below_bare_factor():
+    """Contract §7 RED-1 (fails on v14, passes on v15).
+
+    A combo whose raw active IR equals the bare factor's (here both
+    saturate) must never score a lower ceiling.  On v14 the failure output
+    carries both ceilings — the structural-defect evidence the contract
+    requires the implementation report to preserve verbatim.
+    """
+
+    rng = np.random.default_rng(3)
+    n_stocks, n_dates = 10, 30
+    target = rng.normal(size=(n_stocks, n_dates))
+    mask = np.ones_like(target, dtype=bool)
+    cfg = _cfg()
+    rc = _reward_cfg(cost_weight=0.0)
+    scorer = CandidateScorer(cfg, rc)
+    tokens = _p11_bill_tokens()
+    bare = CandidateSpec("p11-bare", "BARE", "contract", tokens["bare"])
+    combo = CandidateSpec("p11-combo", "ADD(X, X)", "contract", tokens["combo"])
+    bare_ceiling = (
+        formula_reward(target, target, cfg, rc, universe_mask=mask)
+        - scorer.complexity_penalty(bare)
+    )
+    combo_ceiling = (
+        formula_reward(2.0 * target, target, cfg, rc, universe_mask=mask)
+        - scorer.complexity_penalty(combo)
+    )
+    assert combo_ceiling >= bare_ceiling, (
+        f"structural deficit: bare ceiling {bare_ceiling!r} > combo ceiling "
+        f"{combo_ceiling!r} (REWARD_VERSION={REWARD_VERSION!r})"
+    )
+
+
+def test_v15_reward_keeps_raw_active_ir_below_clip_high():
+    """Contract §7 RED-2 (fails on v14, passes on v15).
+
+    A raw active IR inside (1.0, 10.0) must reach the reward unscaled
+    (band re-widening, §5.1); the v14 default band truncates it to 1.0.
+    ``cost_weight=0`` isolates the band from the cost term; the explicit
+    precondition pins the deterministic calibration of the construction.
+    """
+
+    rng = np.random.default_rng(11)
+    n_stocks, n_dates = 6, 40
+    target = rng.normal(0.001, 0.01, size=(n_stocks, n_dates))
+    signal = target + rng.normal(0.0, 0.04, size=(n_stocks, n_dates))
+    cfg = _cfg()
+    rc = _reward_cfg(cost_weight=0.0)
+    rewards, _val, _icir, _vicir, objectives = batched_basket_rewards(
+        signal[None], target, cfg, rc,
+        universe_mask=np.ones_like(target, dtype=bool),
+    )
+    raw = float(objectives[0, 0])  # train-window active IR, pre-clip
+    assert 1.0 < raw < 10.0, f"calibration precondition failed: raw={raw!r}"
+    assert rewards[0] == pytest.approx(raw, abs=1e-12), (
+        f"reward {rewards[0]!r} != raw active IR {raw!r} "
+        f"(REWARD_VERSION={REWARD_VERSION!r}): band truncation"
+    )
+
+
+def test_v15_complexity_penalty_is_two_segment_non_monotonic():
+    """Contract §7 RED-3 (fails on v14, passes on v15).
+
+    The single penalty path returns 0 inside the pre-registered free zone
+    (bills 1.0 / 1.70 / 3.0), stays continuous at the boundary (right limit
+    0: bill 3.1 = free + 0.1 bills ``rate * 0.1``) and bills
+    ``rate * (bill - free)`` above it (5.0 -> 0.10, 25.0 -> 1.10).  The v14
+    linear ``0.02 * bill`` fails every pin.
+    """
+
+    scorer = CandidateScorer(_cfg(), _reward_cfg())
+    tokens = _p11_bill_tokens()
+    specs = {
+        name: CandidateSpec(f"p11-{name}", name, "contract", toks)
+        for name, toks in tokens.items()
+    }
+    pinned_bills = {
+        "bare": 1.0,
+        "combo": 1.70,
+        "bill30": 3.0,
+        "bill31": 3.1,
+        "bill50": 5.0,
+        "bill2500": 25.0,
+    }
+    for name, bill in pinned_bills.items():
+        assert scorer.complexity_cost(specs[name]) == pytest.approx(bill), name
+    expected_penalty = {
+        "bare": 0.0,
+        "combo": 0.0,
+        "bill30": 0.0,  # boundary is inclusive (free zone)
+        "bill31": 0.05 * 0.10,  # right limit at the boundary: continuous
+        "bill50": 0.05 * 2.0,
+        "bill2500": 0.05 * 22.0,
+    }
+    for name, penalty in expected_penalty.items():
+        actual = scorer.complexity_penalty(specs[name])
+        assert actual == pytest.approx(penalty), (
+            f"{name}: penalty {actual!r} != pre-registered {penalty!r} "
+            f"(REWARD_VERSION={REWARD_VERSION!r})"
+        )
+
+
+def test_v15_reward_config_invariants():
+    """Contract §7 RED-4 (fails on v14, passes on v15).
+
+    The pre-registered §5.4 constants plus the §4 invariants: the
+    invalid-formula sentinel stays outside the clip band, and the penalty
+    is continuous at ``complexity_free_bill`` (right limit 0) through the
+    public scorer path.
+    """
+
+    rc = RewardConfig()
+    assert rc.reward_clip_low == pytest.approx(-10.0)
+    assert rc.reward_clip_high == pytest.approx(10.0)
+    assert rc.bad_reward == pytest.approx(-20.0)
+    assert rc.complexity_penalty == pytest.approx(0.05)
+    assert hasattr(rc, "complexity_free_bill"), (
+        "pre-registered RewardConfig.complexity_free_bill missing "
+        f"(REWARD_VERSION={REWARD_VERSION!r})"
+    )
+    assert rc.complexity_free_bill == pytest.approx(3.0)
+    assert rc.bad_reward < rc.reward_clip_low
+    scorer = CandidateScorer(_cfg(), rc)
+    tokens = _p11_bill_tokens()
+    bill30 = CandidateSpec("p11-bill30", "bill30", "contract", tokens["bill30"])
+    bill31 = CandidateSpec("p11-bill31", "bill31", "contract", tokens["bill31"])
+    assert scorer.complexity_penalty(bill30) == 0.0
+    assert scorer.complexity_penalty(bill31) == pytest.approx(0.05 * 0.10)

@@ -159,9 +159,11 @@ def test_current_semantic_versions_are_pinned():
     # P6 contract §5 bumped PROTOCOL_VERSION 23 -> 24 (research-domain
     # dimension); P7-E contract §4 bumps 24 -> 25 (semantic-type sampling
     # legality narrows the candidate pool; measurement semantics
-    # unchanged).  Reward and execution semantics stay at their P3
-    # generations, and the bare-factor schema stays at P3 v3.
-    assert REWARD_VERSION == "14"
+    # unchanged).  Execution semantics stay at their P3 generation and the
+    # bare-factor schema stays at P3 v3; the p11 contract (§6.1/§6.3,
+    # §10.1 case 2) bumps the reward generation "14" -> "15" (band +/-10,
+    # bad_reward -20, two-segment complexity penalty).
+    assert REWARD_VERSION == "15"
     assert PROTOCOL_VERSION == "25"
     assert EXECUTION_SPEC_VERSION == 2
     assert BARE_FACTOR_BACKTEST_VERSION == 3
