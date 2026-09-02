@@ -144,6 +144,44 @@ class ArtifactRecord:
             raise RunStoreError(f"malformed artifact record: missing {exc}") from exc
 
 
+def read_registered_artifact(
+    run_dir: Path, index: dict[str, Any], artifact_id: str
+) -> dict[str, Any]:
+    """Load a registered artifact payload and verify its content hash.
+
+    Shared verification path for :meth:`RunHandle.read_artifact` and the
+    P8-06 lifecycle replay (one implementation — the index is the single
+    trust anchor; unregistered ids and content drift are contract
+    violations).
+    """
+
+    record = next(
+        (
+            ArtifactRecord.from_dict(entry)
+            for entry in index["artifacts"]
+            if entry["artifact_id"] == artifact_id
+        ),
+        None,
+    )
+    if record is None:
+        raise ArtifactNotRegisteredError(
+            f"artifact {artifact_id} is not registered in the index of "
+            f"{run_dir}; unregistered files are not trusted"
+        )
+    target = run_dir / record.path
+    if not target.is_file():
+        raise RunStoreError(
+            f"registered artifact {record.path} is missing from disk"
+        )
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    if content_hash("artifact", payload) != artifact_id:
+        raise RunStoreError(
+            f"artifact {record.path} content does not hash to its "
+            f"registered id {artifact_id}; evidence tampered or corrupted"
+        )
+    return payload
+
+
 class RunHandle:
     """Single-writer handle for one open run."""
 
@@ -238,32 +276,9 @@ class RunHandle:
         """Load a registered artifact, verifying content against its id."""
 
         self._require_open()
-        index = self._load_index()
-        record = next(
-            (
-                ArtifactRecord.from_dict(entry)
-                for entry in index["artifacts"]
-                if entry["artifact_id"] == artifact_id
-            ),
-            None,
+        return read_registered_artifact(
+            self.run_dir, self._load_index(), artifact_id
         )
-        if record is None:
-            raise ArtifactNotRegisteredError(
-                f"artifact {artifact_id} is not registered in the index of "
-                f"{self.run_dir}; unregistered files are not trusted"
-            )
-        target = self.run_dir / record.path
-        if not target.is_file():
-            raise RunStoreError(
-                f"registered artifact {record.path} is missing from disk"
-            )
-        payload = json.loads(target.read_text(encoding="utf-8"))
-        if content_hash("artifact", payload) != artifact_id:
-            raise RunStoreError(
-                f"artifact {record.path} content does not hash to its "
-                f"registered id {artifact_id}; evidence tampered or corrupted"
-            )
-        return payload
 
     def load_index(self) -> dict[str, Any]:
         self._require_open()
@@ -324,6 +339,25 @@ class RunStore:
     def _lock_path(self, spec_id: str, run_id: str) -> Path:
         return self._spec_dir(spec_id) / f"{run_id}{LOCK_SUFFIX}"
 
+    def _acquire_writer_lock(self, spec_id: str, run_id: str) -> None:
+        """Take the single-writer ``O_CREAT|O_EXCL`` lock (shared by
+        :meth:`open_run` and :meth:`attach_run`); recovery from a stale
+        lock is the explicit :meth:`clear_stale_lock` action, never
+        automatic."""
+
+        lock_path = self._lock_path(spec_id, run_id)
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError as exc:
+            raise RunLockedError(
+                f"run {spec_id}/{run_id} is already locked by a writer; "
+                "recovery is the explicit clear_stale_lock action"
+            ) from exc
+        try:
+            os.write(fd, f"pid={os.getpid()} created_at={_now()}\n".encode("utf-8"))
+        finally:
+            os.close(fd)
+
     # -- writer ---------------------------------------------------------------
 
     def open_run(self, spec: RunSpec, run_id: str | None = None) -> RunHandle:
@@ -337,18 +371,8 @@ class RunStore:
             raise RunStoreError("run_id must be a non-empty string")
         spec_dir = self._spec_dir(spec.spec_id)
         spec_dir.mkdir(parents=True, exist_ok=True)
+        self._acquire_writer_lock(spec.spec_id, run_id)
         lock_path = self._lock_path(spec.spec_id, run_id)
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError as exc:
-            raise RunLockedError(
-                f"run {spec.spec_id}/{run_id} is already locked by a writer; "
-                "recovery is the explicit clear_stale_lock action"
-            ) from exc
-        try:
-            os.write(fd, f"pid={os.getpid()} created_at={_now()}\n".encode("utf-8"))
-        finally:
-            os.close(fd)
         try:
             run_dir = self._run_dir(spec.spec_id, run_id)
             if run_dir.exists():
@@ -376,6 +400,30 @@ class RunStore:
             except FileNotFoundError:
                 pass
             raise
+        return RunHandle(self, spec, run_id, run_dir)
+
+    def attach_run(self, spec: RunSpec, run_id: str) -> RunHandle:
+        """Attach a single writer to an EXISTING run (P8-06 lifecycle
+        management continuation: the FAILED/RETIRED edges apply to runs
+        whose creating session already ended).  The stored
+        ``runspec.json`` must match ``spec`` exactly (write-once,
+        idempotent check); the same single-writer lock protocol as
+        :meth:`open_run` guards concurrent attachment.  Never creates a
+        run, never modifies the frozen layout."""
+
+        if not isinstance(spec, RunSpec):
+            raise RunStoreError("attach_run requires a frozen RunSpec instance")
+        if not str(run_id).strip():
+            raise RunStoreError("run_id must be a non-empty string")
+        run_dir = self._run_dir(spec.spec_id, run_id)
+        if not run_dir.is_dir():
+            raise RunStoreError(
+                f"run {spec.spec_id}/{run_id} does not exist under "
+                f"{self.runs_dir}; open_run creates new runs, attach_run "
+                "never does"
+            )
+        write_runspec_once(run_dir, spec)
+        self._acquire_writer_lock(spec.spec_id, run_id)
         return RunHandle(self, spec, run_id, run_dir)
 
     # -- recovery / readers -----------------------------------------------------

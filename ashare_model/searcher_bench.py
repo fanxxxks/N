@@ -63,18 +63,38 @@ from ashare_logging import export_log_txt, setup_run_logging
 
 from .admission import ADMISSION_WINDOW
 from .data_loader import AshareDataLoader
+from .data_tier import (
+    DATA_TIER_VERSION,
+    feature_tier,
+    formula_data_tier_report,
+)
 from .ir import canonical_tokens
 from .ledger import ExperimentLedger
 from .runspec import new_run_id
+from .search_length_prior import LENGTH_PRIOR_PROFILE as P14_LENGTH_PRIOR_PROFILE
 from .semantic_cache import SEMANTIC_CACHE_VERSION
 from .train import AshareTrainer, resolve_device
+from .vocab import FORMULA_VOCAB
 
-SEARCHER_BENCH_VERSION = 3
+# v4 (P14): campaign rows carry the research/promotion_tier_a track
+# dimension with per-track budgets and the proposal length-prior profile
+# (docs/p14_search_digest_preregistration.md §5.3/§5.4); v3 payloads stay
+# read-only legacy and are never matched against v4 campaigns.
+SEARCHER_BENCH_VERSION = 4
 
 SEARCHERS = ("gp", "tpe", "random", "rl")
 DEFAULT_WINDOW_CAP = (300, 400)
 MIN_BUDGET = 16  # the RL split needs budget >= 16 with budget % steps == 0
 RL_STEPS = 4
+
+# ---------------------------------------------------------------------------
+# P14 pre-registered search-digest constants
+# (docs/p14_search_digest_preregistration.md §5.4 — the research/promotion
+# budget separation; the contract is the single authority).
+# ---------------------------------------------------------------------------
+P14_TRACKS = ("research", "promotion_tier_a")
+P14_RESEARCH_BUDGET = 1200
+P14_PROMOTION_BUDGET = 800
 
 # ---------------------------------------------------------------------------
 # P10 pre-registered campaign constants
@@ -256,6 +276,45 @@ def _formula_len_histogram(search_result, vocab) -> dict[str, int]:
     return {str(length): counter[length] for length in sorted(counter)}
 
 
+def tier_a_feature_ids(vocab) -> list[int]:
+    """Samplable tier-A feature token ids (p14 §5.4 promotion track).
+
+    The intersection of the single tier authority
+    (``ashare_model.data_tier.feature_tier``) with the samplable
+    vocabulary — deprecated features are never legal to sample (grammar
+    v4+ rule), so they are excluded here.  No second tier mapping exists.
+    """
+
+    return [
+        vocab.feature_offset + index
+        for index, name in enumerate(vocab.feature_names)
+        if name not in vocab.deprecated_names and feature_tier(name).value == "A"
+    ]
+
+
+def _validate_promotion_tier_purity(search_result, vocab) -> None:
+    """p14 §5.4.4 (fail-closed): every billed candidate of a
+    ``promotion_tier_a`` row must trace to data tier A.  A violation fails
+    the row and the campaign — it is a search-space leak bug, never a
+    research result."""
+
+    for score in getattr(search_result, "scores", ()) or ():
+        tokens = getattr(score, "tokens", None)
+        if not tokens:
+            raise ValueError(
+                "promotion_tier_a purity violation: a billed candidate "
+                "carries no token list"
+            )
+        report = formula_data_tier_report(tokens=tokens)
+        if report is None or report["max_tier"] != "A":
+            raise ValueError(
+                "promotion_tier_a purity violation: candidate "
+                f"{getattr(score, 'formula_text', None)!r} traces to "
+                f"{report['max_tier'] if report else 'unknown'} tier "
+                f"(per-feature {report['per_feature'] if report else 'n/a'})"
+            )
+
+
 def _run_row(
     data_config,
     model_config,
@@ -271,10 +330,14 @@ def _run_row(
     train_end_date: str | None,
     window_cap: tuple[int, int],
     vm_device,
+    track: str = "research",
+    feature_ids: list[int] | None = None,
 ) -> dict:
-    """Run one (searcher, seed) row with a fresh trainer (fresh
+    """Run one (searcher, seed, track) row with a fresh trainer (fresh
     semantic-cache ledger) and return the recorded row dict.  A crash is
-    a recorded measurement (``completed`` False), never a raise."""
+    a recorded measurement (``completed`` False), never a raise.  A
+    ``promotion_tier_a`` row additionally fails closed when any billed
+    candidate traces beyond tier A (p14 §5.4.4)."""
 
     trainer = AshareTrainer(
         data_config,
@@ -282,6 +345,7 @@ def _run_row(
         backtest_config,
         loader=loader,
         reward_config=reward_config,
+        feature_ids=feature_ids,
     )
 
     def run():
@@ -316,9 +380,13 @@ def _run_row(
     search_result = None
     try:
         search_result, peak = measure_peak_rss(run)
+        if track == "promotion_tier_a":
+            _validate_promotion_tier_purity(search_result, trainer.vocab)
     except Exception as exc:  # a failed row is a measurement too
         error = f"{type(exc).__name__}: {exc}"
-        logger.error("searcher {} seed {} failed: {}", searcher, seed, error)
+        logger.error(
+            "searcher {} seed {} track {} failed: {}", searcher, seed, track, error
+        )
     wall = time.perf_counter() - started
     cache = getattr(trainer, "semantic_cache", None)
     evals = (
@@ -333,12 +401,23 @@ def _run_row(
     row = {
         "searcher": searcher,
         "seed": int(seed),
+        "track": track,
         "budget": budget,
         "requested_budget": budget,
         "consumed_budget": evals,
         "steps": steps,
         "batch_size": batch,
         "unique_semantic_evals": evals,
+        "length_prior_profile": P14_LENGTH_PRIOR_PROFILE,
+        "tier_restriction": (
+            {
+                "tier": "A",
+                "feature_count": len(tier_a_feature_ids(trainer.vocab)),
+                "data_tier_version": DATA_TIER_VERSION,
+            }
+            if track == "promotion_tier_a"
+            else None
+        ),
         "wall_seconds": wall,
         "wall_per_1000_evals": (
             wall / evals * 1000.0 if completed and evals > 0 else None
@@ -462,6 +541,8 @@ def benchmark_searchers(
             train_end_date=train_end_date,
             window_cap=window_cap,
             vm_device=vm_device,
+            track="research",  # single-run mode searches the full vocabulary
+            feature_ids=None,
         )
 
     policy = getattr(loader, "universe_policy", None)
@@ -519,6 +600,9 @@ def _campaign_identity(
     budget: int,
     seeds: tuple[int, ...],
     searchers: tuple[str, ...],
+    tracks: tuple[str, ...],
+    research_budget: int,
+    promotion_budget: int,
     rl_steps: int,
     window_cap: tuple[int, int],
     train_end_date: str | None,
@@ -532,6 +616,10 @@ def _campaign_identity(
         "budget": int(budget),
         "seeds": [int(seed) for seed in seeds],
         "searchers": list(searchers),
+        "tracks": list(tracks),
+        "research_budget": int(research_budget),
+        "promotion_budget": int(promotion_budget),
+        "length_prior_profile": P14_LENGTH_PRIOR_PROFILE,
         "rl_steps": int(rl_steps),
         "window_cap": [int(window_cap[0]), int(window_cap[1])],
         "train_end_date": train_end_date,
@@ -553,6 +641,8 @@ def benchmark_campaign(
     train_end_date: str | None,
     window_cap: tuple[int, int],
     run_dir,
+    research_budget: int | None = None,
+    promotion_budget: int | None = None,
     fold_index: int = P10_COMPARE_FOLD,
     rl_steps: int = P10_RL_STEPS,
     device: str | None = None,
@@ -561,21 +651,26 @@ def benchmark_campaign(
     config_hash: str | None = None,
     searchers: tuple[str, ...] = P10_ROW_ORDER,
 ) -> dict:
-    """P10 matched campaign (contract §4/§6/§7): ``seeds × searchers``
-    rows on the identical window/budget/evaluator with
+    """P14 matched campaign (p14 §5.4; circuit breakers per p10 §4/§6/§7):
+    ``seeds × tracks × searchers`` rows — a ``research`` track over the
+    full samplable vocabulary and a ``promotion_tier_a`` track over the
+    tier-A samplable vocabulary — on the identical window/evaluator with
 
+    * per-track budgets (research 1200 / promotion 800 by default; the
+      split must sum to ``budget`` — p14 §7.3);
     * a fresh trainer (fresh semantic-cache ledger) per row;
     * one append-only :class:`ExperimentLedger` trial per row attempt —
       failures stay in the chain, retries open new trials;
     * atomic per-row persistence of ``<run_dir>/campaign.json`` and
       resume that skips only rows whose latest attempt completed;
     * fail-closed circuit breakers: between-row wall cap, post-seed-block
-      calibration-deviation stop, identity-drift refusal on resume.
+      calibration-deviation stop, identity-drift refusal on resume, and
+      the promotion-track tier-purity validation (p14 §5.4.4).
 
     The returned payload is the campaign artifact (SEARCHER_BENCH_VERSION
-    3).  ``campaign_status == "completed"`` requires every planned row to
+    4).  ``campaign_status == "completed"`` requires every planned row to
     have completed; anything else must not be read as a matched
-    comparison.
+    comparison.  Matched comparisons are valid within a track only.
     """
 
     seeds = tuple(int(seed) for seed in seeds)
@@ -587,11 +682,24 @@ def benchmark_campaign(
     budget = int(budget)
     if budget <= 0:
         raise ValueError("budget must be positive")
-    if budget % int(rl_steps) != 0 or budget < MIN_BUDGET:
+    research_budget = (
+        P14_RESEARCH_BUDGET if research_budget is None else int(research_budget)
+    )
+    promotion_budget = (
+        P14_PROMOTION_BUDGET if promotion_budget is None else int(promotion_budget)
+    )
+    if (
+        research_budget <= 0
+        or promotion_budget <= 0
+        or research_budget + promotion_budget != budget
+    ):
         raise ValueError(
-            f"campaign budget must be >= {MIN_BUDGET} and divisible by "
-            f"rl_steps={rl_steps}, got {budget}"
+            f"campaign budget split mismatch: research_budget "
+            f"({research_budget}) + promotion_budget ({promotion_budget}) "
+            f"must both be positive and sum to budget ({budget}) (p14 §7.3)"
         )
+    if budget < MIN_BUDGET:
+        raise ValueError(f"campaign budget must be >= {MIN_BUDGET}, got {budget}")
     rates = dict(calibration_s_per_eval or P10_CALIBRATION_S_PER_EVAL)
     missing = [s for s in searchers if s not in rates]
     if missing:
@@ -603,10 +711,16 @@ def benchmark_campaign(
     vm_device = resolve_device(device)
     dataset_id = loader.dataset_id
 
+    def row_budget(track: str) -> int:
+        return research_budget if track == "research" else promotion_budget
+
     identity = _campaign_identity(
         budget=budget,
         seeds=seeds,
         searchers=searchers,
+        tracks=P14_TRACKS,
+        research_budget=research_budget,
+        promotion_budget=promotion_budget,
         rl_steps=rl_steps,
         window_cap=window_cap,
         train_end_date=train_end_date,
@@ -615,8 +729,11 @@ def benchmark_campaign(
         max_formula_len=int(model_config.max_formula_len),
     )
 
-    plan: list[tuple[int, str]] = [
-        (seed, searcher) for seed in seeds for searcher in searchers
+    plan: list[tuple[int, str, str]] = [
+        (seed, track, searcher)
+        for seed in seeds
+        for track in P14_TRACKS
+        for searcher in searchers
     ]
     if campaign_path.exists():
         with campaign_path.open(encoding="utf-8") as handle:
@@ -638,8 +755,8 @@ def benchmark_campaign(
             )
         run_id = str(recorded["run_id"])
         payload = recorded
-        latest: dict[tuple[int, str], dict] = {
-            (int(row["seed"]), str(row["searcher"])): row
+        latest: dict[tuple[int, str, str], dict] = {
+            (int(row["seed"]), str(row["track"]), str(row["searcher"])): row
             for row in recorded.get("rows", [])
         }
         logger.info(
@@ -670,7 +787,17 @@ def benchmark_campaign(
                 "wall_cap_s": wall_cap_s,
                 "calibration_s_per_eval": dict(rates),
                 "deviation_stop_ratio": P10_DEVIATION_STOP_RATIO,
-                "row_order": [f"{seed}:{searcher}" for seed, searcher in plan],
+                "row_order": [
+                    f"{seed}:{track}:{searcher}"
+                    for seed, track, searcher in plan
+                ],
+                "tier_restriction_provenance": {
+                    "track": "promotion_tier_a",
+                    "tier": "A",
+                    "authority": "ashare_model.data_tier.feature_tier",
+                    "data_tier_version": DATA_TIER_VERSION,
+                    "feature_count": len(tier_a_feature_ids(FORMULA_VOCAB)),
+                },
                 "rl_initialization": "random",
             },
             "rows": [],
@@ -692,7 +819,7 @@ def benchmark_campaign(
 
         block_rows = [
             row
-            for (row_seed, _), row in latest.items()
+            for (row_seed, _, _), row in latest.items()
             if row_seed == block_seed
         ]
         if not block_rows:
@@ -701,7 +828,9 @@ def benchmark_campaign(
             block_rows
         )
         block_planned = [
-            budget * float(rates[s]) for s_seed, s in plan if s_seed == block_seed
+            row_budget(track) * float(rates[s])
+            for s_seed, track, s in plan
+            if s_seed == block_seed
         ]
         projected_mean = sum(block_planned) / len(block_planned)
         if block_mean > P10_DEVIATION_STOP_RATIO * projected_mean:
@@ -716,24 +845,26 @@ def benchmark_campaign(
             return True
         return False
 
-    for index, (seed, searcher) in enumerate(plan):
-        done = latest.get((seed, searcher))
+    for index, (seed, track, searcher) in enumerate(plan):
+        done = latest.get((seed, track, searcher))
         if done is not None and done.get("completed") is True:
             continue  # resume: this row already has a terminal success
 
         if (
             wall_cap_s is not None
-            and time.perf_counter() - started_at + budget * float(rates[searcher])
+            and time.perf_counter() - started_at
+            + row_budget(track) * float(rates[searcher])
             > float(wall_cap_s)
         ):
             stopped_reason = "stopped_wall_cap"
             logger.error(
-                "campaign wall cap hit before row {}:{} (elapsed={:.1f}s "
+                "campaign wall cap hit before row {}:{}:{} (elapsed={:.1f}s "
                 "projected={:.1f}s cap={:.1f}s)",
                 seed,
+                track,
                 searcher,
                 time.perf_counter() - started_at,
-                budget * float(rates[searcher]),
+                row_budget(track) * float(rates[searcher]),
                 wall_cap_s,
             )
             break
@@ -746,19 +877,30 @@ def benchmark_campaign(
                 stopped_reason = "stopped_calibration_deviation"
                 break
 
+        if searcher == "rl" and row_budget(track) % int(rl_steps) != 0:
+            raise ValueError(
+                f"rl row budget {row_budget(track)} for track {track!r} is "
+                f"not divisible by rl_steps={rl_steps}"
+            )
         steps, batch = (
-            (rl_steps, budget // int(rl_steps))
+            (rl_steps, row_budget(track) // int(rl_steps))
             if searcher == "rl"
-            else (budget, 1)
+            else (row_budget(track), 1)
+        )
+        track_feature_ids = (
+            tier_a_feature_ids(FORMULA_VOCAB)
+            if track == "promotion_tier_a"
+            else None
         )
         trial_id = ledger.record_trial(
             algorithm=f"searcher:{searcher}",
-            candidate=f"{searcher}:{seed}",
+            candidate=f"{searcher}:{seed}:{track}",
             seed=seed,
             fold_train_end=train_end_date,
             payload={
-                "row_id": f"{seed}:{searcher}",
-                "requested_budget": budget,
+                "row_id": f"{seed}:{track}:{searcher}",
+                "track": track,
+                "requested_budget": row_budget(track),
                 "steps": steps,
                 "batch_size": batch,
             },
@@ -772,12 +914,14 @@ def benchmark_campaign(
                 loader,
                 searcher=searcher,
                 seed=seed,
-                budget=budget,
+                budget=row_budget(track),
                 steps=steps,
                 batch=batch,
                 train_end_date=train_end_date,
                 window_cap=window_cap,
                 vm_device=vm_device,
+                track=track,
+                feature_ids=track_feature_ids,
             )
         except Exception as exc:
             # _run_row records crashes as rows; reaching this handler
@@ -792,7 +936,7 @@ def benchmark_campaign(
                 f"({dataset_id} -> {row['dataset_id']}); fail-closed "
                 "(contract §6.4)"
             )
-        latest[(seed, searcher)] = row
+        latest[(seed, track, searcher)] = row
         if row["completed"]:
             ledger.complete_trial(
                 trial_id,
@@ -817,12 +961,14 @@ def benchmark_campaign(
         payload["not_run"] = [
             {
                 "seed": seed,
+                "track": track,
                 "searcher": searcher,
                 "status": "not_run",
                 "reason": stopped_reason,
             }
-            for seed, searcher in plan
-            if latest.get((seed, searcher), {}).get("completed") is not True
+            for seed, track, searcher in plan
+            if latest.get((seed, track, searcher), {}).get("completed")
+            is not True
         ]
     else:
         payload["not_run"] = []

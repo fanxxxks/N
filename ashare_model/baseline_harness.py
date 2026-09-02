@@ -26,6 +26,7 @@ shared production measurement path (scorer + engine), not a proxy:
 
 from __future__ import annotations
 
+import math
 from typing import Callable
 
 import numpy as np
@@ -264,6 +265,7 @@ class SemanticBudgetEvaluator:
         self._scores: list[CandidateScore] = []
         self._best_so_far: list[tuple[float, float]] = []
         self._best_reward = -float("inf")
+        self._worst_reward = float("inf")
         self._n_evaluated = 0
         self._n_invalid = 0
         self._n_semantic_dedups = 0
@@ -277,8 +279,9 @@ class SemanticBudgetEvaluator:
         Returns ``(score, consumed_budget)``.  ``score`` is ``None`` when
         the proposal was not evaluated (structurally invalid, degenerate,
         or a semantic class already claimed this run) — its fitness is the
-        caller's choice (e.g. the current best).  ``consumed_budget`` is
-        True exactly when a full evaluation happened.  With ``chunk == 1``
+        caller's choice, which per p14 §5.1 is the punitive worst-so-far
+        (:attr:`worst_reward`), never the current best.  ``consumed_budget``
+        is True exactly when a full evaluation happened.  With ``chunk == 1``
         the score is returned eagerly; with larger chunks it lands at the
         next :meth:`flush`.
         """
@@ -319,8 +322,14 @@ class SemanticBudgetEvaluator:
         self._n_evaluated += 1
         self._claimed.add(ckey)
         self._cache.put(ckey, None, fingerprint, bill)  # claim the class
-        self._claim_sequence.append(self._cache.budget_used)
         if signal is None:
+            # Execution failure (p14 §5.1, T2-01): no signal, no reward and
+            # no budget — only fingerprinted classes bill — so the failed
+            # proposal must NOT emit a best-so-far coordinate either (the
+            # old code registered it at a duplicate budget coordinate and
+            # crashed the SearchResult construction).  The class stays
+            # claimed (never re-evaluated); the search treats it as skipped
+            # and anchors it at :attr:`worst_reward`.
             self._n_invalid += 1
             score = self._scorer.score(
                 spec,
@@ -336,8 +345,8 @@ class SemanticBudgetEvaluator:
                 rebalance_mask=self._rebalance_mask,
             )
             self._cache.put(ckey, score, None)
-            self._register(score, x=self._claim_sequence[-1])
             return score, True
+        self._claim_sequence.append(self._cache.budget_used)
         self._pending.append((spec, np.asarray(signal, dtype=np.float64)))
         if len(self._pending) >= self._chunk:
             self.flush()
@@ -387,6 +396,9 @@ class SemanticBudgetEvaluator:
 
     def _register(self, score: CandidateScore, x: float) -> None:
         self._scores.append(score)
+        reward = float(score.val_reward)
+        if math.isfinite(reward) and reward < self._worst_reward:
+            self._worst_reward = reward
         if score.val_reward > self._best_reward:
             self._best_reward = float(score.val_reward)
         self._best_so_far.append((float(x), self._best_reward))
@@ -408,6 +420,17 @@ class SemanticBudgetEvaluator:
     @property
     def best_reward(self) -> float:
         return self._best_reward
+
+    @property
+    def worst_reward(self) -> float:
+        """Punitive anchor for skipped proposals (p14 §5.1): the minimum
+        finite ``val_reward`` registered so far, ``-inf`` before any finite
+        registration (maximally punitive for GP's fitness comparison; the
+        TPE path only tells it when Optuna can accept it — p14 §2.5)."""
+
+        if math.isfinite(self._worst_reward):
+            return self._worst_reward
+        return -float("inf")
 
     def stats(self) -> dict[str, int | str]:
         return {
