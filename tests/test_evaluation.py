@@ -46,7 +46,7 @@ from ashare_model.evaluation import (
 from ashare_model.reward import REWARD_VERSION, rank_ic_series
 from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
 from ashare_trading.golden import EXECUTION_SPEC_VERSION
-from ashare_model.vocab import FEATURE_NAMES
+from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 
 TEST_SPEC_ID = "a" * 64
 TEST_RUN_ID = "b" * 32
@@ -124,10 +124,7 @@ def test_epoch_slice_aligns_to_fold_indices(populated_db: DataConfig):
     fold = _fold(loader.dates)
     factors, raw, target, dates = epoch_slice(loader, fold)
     assert dates == loader.dates[fold.train_end_idx : fold.test_end_idx]
-    # t46 B-fix (whitelist §10.1 case 2): the factor tensor carries one row
-    # per FEATURE_NAMES member (77, head + family-⑤ tail); the vocab's
-    # feature_count now counts only the contiguous head block (73).
-    assert factors.shape == (len(FEATURE_NAMES), 3, len(dates))
+    assert factors.shape == (FORMULA_VOCAB.feature_count, 3, len(dates))
     assert target.shape == (3, len(dates))
     for key in ("open", "high", "low", "close", "pre_close", "volume"):
         assert raw[key].shape == (3, len(dates))

@@ -584,7 +584,11 @@ def evaluate_challenger(
     if top_rows:
         last = top_rows[-1]
         tier_report = formula_data_tier_report(
-            tokens=last.get("formula"), feature_name=last.get("formula_text")
+            tokens=last.get("formula"),
+            feature_name=last.get("formula_text"),
+            # t46 Plan A: grammar-5-era artifacts decode against the frozen
+            # grammar-5 layout; the generation rides on the artifact row.
+            grammar_version=last.get("grammar_version"),
         )
     if tier_report is None:
         reasons.append(
@@ -613,7 +617,9 @@ def evaluate_challenger(
     if top_rows:
         last = top_rows[-1]
         registry_report = formula_registry_status_report(
-            tokens=last.get("formula"), feature_name=last.get("formula_text")
+            tokens=last.get("formula"),
+            feature_name=last.get("formula_text"),
+            grammar_version=last.get("grammar_version"),
         )
     if registry_report is None or not registry_report["traceable"]:
         reasons.append(

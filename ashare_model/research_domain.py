@@ -325,13 +325,10 @@ def restrict_tensor(tensor, domain_id: str, vocab=None) -> np.ndarray:
     arr = np.asarray(tensor, dtype=np.float32)
     if arr.ndim != 3:
         raise ValueError(f"factor tensor must be 3-D, got {arr.ndim}-D")
-    # t46 B-fix: the factor tensor carries one row per FEATURE_NAMES member
-    # -- the head block plus the family-⑤ tail riding after EOS.
-    row_names = tuple(vocab.feature_names) + tuple(vocab.tail_feature_names)
-    if arr.shape[0] != len(row_names):
+    if arr.shape[0] != len(vocab.feature_names):
         raise ValueError(
             f"factor tensor has {arr.shape[0]} rows but the vocabulary "
-            f"has {len(row_names)} features"
+            f"has {len(vocab.feature_names)} features"
         )
     domain_id = str(domain_id)
     if domain_id == UNIFIED_DOMAIN_ID:
@@ -339,7 +336,7 @@ def restrict_tensor(tensor, domain_id: str, vocab=None) -> np.ndarray:
     domain = resolve_domain(domain_id)
     owned = set(domain.features)
     out = arr.copy()
-    for index, name in enumerate(row_names):
+    for index, name in enumerate(vocab.feature_names):
         if name not in owned:
             out[index] = 0.0
     return out
@@ -358,18 +355,8 @@ def feature_token_ids(domain_id: str, vocab=None) -> list[int] | None:
     if domain_id == UNIFIED_DOMAIN_ID:
         return None
     domain = resolve_domain(domain_id)
-    # t46 B-fix: the vocabulary's features are the contiguous head block
-    # plus the family-⑤ tail riding after EOS -- both blocks carry domain
-    # members and must be enumerated in token-table order.
-    ids: list[int] = [
+    return [
         vocab.feature_offset + index
         for index, name in enumerate(vocab.feature_names)
         if name in domain.features
     ]
-    if vocab.eos_token_id is not None:
-        ids.extend(
-            vocab.eos_token_id + 1 + index
-            for index, name in enumerate(vocab.tail_feature_names)
-            if name in domain.features
-        )
-    return ids

@@ -151,13 +151,14 @@ def test_formula_data_tier_report_invalid_tokens_is_none():
     assert formula_data_tier_report(tokens=[999999]) is None
 
 
-def test_formula_grammar5_tokens_decode_bit_stable_under_plan_b():
-    """t46 Plan B (accepted): a grammar-5-era bare token list (the P10
-    seed-7 formula, tokens read from the git-tracked P10 summary) decodes
-    IDENTICALLY with and without a declared grammar generation -- under
-    the B layout ids 0-113 are bit-stable, so legacy decodability costs
-    zero remapping (docs/p13_fundamental_fields_contract.md §6.1/§6.2
-    erratum)."""
+def test_formula_grammar5_tokens_decode_via_frozen_layout():
+    """t46 Plan A: a grammar-5-era bare token list (the P10 seed-7 formula,
+    tokens read from the git-tracked P10 summary) must decode against the
+    FROZEN grammar-5 layout when the artifact declares grammar_version=5 --
+    under the live grammar-6 layout the operator/EOS shift makes the same
+    integers structurally invalid, so the dispatch is the fail-closed
+    legacy-decodability path (docs/p13_fundamental_fields_contract.md
+    §6.1/§6.2 erratum)."""
     import json as _json
 
     from pathlib import Path
@@ -176,12 +177,18 @@ def test_formula_grammar5_tokens_decode_bit_stable_under_plan_b():
     )
     tokens = list(row["selected"]["tokens"])
 
-    expected = ["ATR_14", "CROWD_AMOUNT_60", "LIMIT_UP_CNT_5", "MARGIN_CROWD_60", "TURNOVER"]
-    assert formula_feature_names(tokens) == expected
-    report = formula_data_tier_report(tokens=tokens)
+    # With the declared generation the features trace correctly ...
+    names = formula_feature_names(tokens, grammar_version=5)
+    assert names is not None
+    assert "LIMIT_UP_CNT_5" in names
+    assert "MARGIN_CROWD_60" in names
+    report = formula_data_tier_report(tokens=tokens, grammar_version=5)
     assert report is not None
     assert report["per_feature"]["MARGIN_CROWD_60"] == "B"
-    assert report["per_feature"]["LIMIT_UP_CNT_5"] == "A"
+
+    # ... and without it the shifted live layout fails closed (None).
+    assert formula_feature_names(tokens) is None
+    assert formula_data_tier_report(tokens=tokens) is None
 
 
 def test_tier_features_filters_by_tier_set():
