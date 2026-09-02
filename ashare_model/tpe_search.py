@@ -18,14 +18,18 @@ stack-size paths.
 Evaluation is billed through the shared
 :class:`~ashare_model.baseline_harness.SemanticBudgetEvaluator`: only
 unique semantic evaluations consume budget; invalid, degenerate,
-duplicate and claimed proposals get the current best reward as a neutral
-value.  The search stops when the budget is exhausted or the proposal
+duplicate and claimed proposals get the run's punitive worst-so-far
+anchor (p14 §5.2 — never the current best, which poisoned the surrogate
+at the reward plateau).  The proposal distribution carries the per-
+position EOS length prior (p14 §5.3, profile ``p14-uniform-2-11-v1``).
+The search stops when the budget is exhausted or the proposal
 stream stalls (repeatedly re-proposing already-evaluated classes).
 """
 
 from __future__ import annotations
 
 import math
+import random
 
 import torch
 import optuna
@@ -35,6 +39,7 @@ from .baseline_harness import SemanticBudgetEvaluator
 from .feature_metadata import FEATURE_METADATA, SemanticType
 from .ops import OPS_CONFIG
 from .search_contract import SearchResult
+from .search_length_prior import sample_target_content_length
 from .semantic_sampling import from_id, resolve_output, type_id
 from .vocab import FormulaVocab
 
@@ -132,14 +137,31 @@ def run_tpe_baseline(
     )
     study = optuna.create_study(direction="maximize", sampler=sampler)
     choices = list(range(vocab.size))
+    # P14 §5.3: the per-trial target content length is drawn from the
+    # preregistered profile (p14-uniform-2-11-v1) on a run-local seeded
+    # stream — deterministic in the run seed, independent of Optuna's
+    # surrogate sampling.
+    length_rng = random.Random(seed)
 
     def propose(trial) -> tuple[int, ...]:
         tokens: list[int] = []
         stack, done = 0, False
         types: list[int] = []
-        for step in range(int(max_formula_len)):
+        # P14 §5.3: each trial draws a target content length from the
+        # preregistered profile (p14-uniform-2-11-v1) and walks under the
+        # matching effective position bound, so the mask forces EOS
+        # termination at the target — the induced proposal length
+        # distribution matches the profile while the legal set, the
+        # EOS-inclusive cap and the surrogate's index domain are untouched.
+        target_content = sample_target_content_length(
+            length_rng, max_formula_len
+        )
+        trial_max_len = (
+            max_formula_len if target_content is None else target_content + 1
+        )
+        for step in range(int(trial_max_len)):
             legal = _legal_tokens(
-                vocab, stack, done, step, max_formula_len, feature_ids,
+                vocab, stack, done, step, trial_max_len, feature_ids,
                 stack_types=types,
             )
             if not legal:
@@ -156,10 +178,15 @@ def run_tpe_baseline(
             study.tell(trial, float(score.val_reward))
         else:
             # Skipped proposals (duplicate, degenerate or claimed classes)
-            # and non-finite rewards get the current best as a neutral
-            # value: they neither help nor hurt the surrogate (Optuna
-            # rejects NaN objectives outright).
-            study.tell(trial, evaluator.best_reward)
+            # and non-finite rewards get the run's punitive worst-so-far
+            # anchor — strictly no better than every evaluated proposal —
+            # so the surrogate learns to avoid duplicate-generating regions
+            # (p14 §5.2; the old "current best" tell poisoned the surrogate
+            # at the reward plateau).  Optuna 4.9.0 accepts ±inf objectives
+            # (telling NaN would fail the trial with a UserWarning) — the
+            # punitive path never sends NaN: non-finite real scores route
+            # here too.
+            study.tell(trial, evaluator.worst_reward)
 
     stall = 0
     batch: list = []

@@ -20,8 +20,15 @@ from .candidates import CandidateScore
 # EOS-inclusive budget (node cap = max_formula_len - 1; previously
 # max_len // 2, which under-restricted GP to 7 total tokens at the
 # production max_len of 12) — docs/p10_searcher_fairness_contract.md §4.3.
-# v2 and v3 results are never matched comparisons.
-SEARCH_CONTRACT_VERSION = 3
+# v4 (P14): search-digest changes — GP/TPE skipped proposals receive the
+# punitive worst-so-far anchor (never the current best, which collapsed GP
+# to 5–14% consumption and poisoned the TPE surrogate at the reward
+# plateau), the TPE/random proposal distributions carry the per-position
+# EOS length prior (profile p14-uniform-2-11-v1), and the bench campaign
+# separates research / promotion_tier_a tracks with per-track budgets —
+# docs/p14_search_digest_preregistration.md §5/§6.  v3 and v4 results are
+# never matched comparisons.
+SEARCH_CONTRACT_VERSION = 4
 
 TERMINATION_REASONS = frozenset(
     {
