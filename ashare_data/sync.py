@@ -8,7 +8,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
+import sys
+import threading
+import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +37,13 @@ from .db import AshareDB, sql_quoted_list
 from .manifest import build_dataset_manifest, save_manifest
 from .processor import is_valid_a_share_code, normalize_daily_bars
 from .universe import member_bar_coverage
-from ashare_logging import export_log_txt, setup_run_logging
+from ashare_logging import (
+    canonical_config_sha256,
+    emit_run_identity,
+    export_log_txt,
+    new_log_run_id,
+    setup_run_logging,
+)
 
 
 def _project_root() -> Path:
@@ -209,6 +220,15 @@ def sync_all(
         config.sync_fundamentals = sync_fundamentals
     if sync_capital_flow is not None:
         config.sync_capital_flow = sync_capital_flow
+    # IP-11 (03-F-07): the identity quadruple (run_id / git commit / config
+    # sha256 / source versions) is the run log's first content line — only
+    # the pipeline's own "Run logging configured" line precedes it.
+    emit_run_identity(
+        run_id=new_log_run_id(),
+        config_sha256=canonical_config_sha256(config),
+        versions=_source_versions(),
+        project_root=_project_root(),
+    )
     config.data_dir.mkdir(parents=True, exist_ok=True)
     config.parquet_dir.mkdir(parents=True, exist_ok=True)
 
@@ -373,6 +393,11 @@ def sync_all(
             "purged_rows": purged,
             "purged_parquet": purged_parquet,
             "dataset_id": manifest.dataset_id,
+            # IP-11 fixed summary key set (03-F-07): the sync path currently
+            # produces no duplicate/suppression events; the keys stay 0 so
+            # tail summaries remain fixed-shape and cross-entry comparable.
+            "duplicates": 0,
+            "suppressed": 0,
             **fundamental_stats,
             **capital_stats,
         }
@@ -463,6 +488,73 @@ def backfill_member_bars(
     return result
 
 
+_EXIT_GUARD_TIMEOUT_S = 10.0
+
+
+def _guard_process_exit(timeout: float = _EXIT_GUARD_TIMEOUT_S) -> None:
+    """Loud exit guard for the sync entry (IP-11 / review finding F-08).
+
+    On 2026-09-02 a sync completed fully (DB closed, manifest saved, logs
+    exported) yet the interpreter hung at exit and needed a manual kill.
+    The likely cause is a surviving non-daemon third-party thread; this
+    guard turns that silent hang into bounded, loud evidence:
+
+    * every surviving non-daemon thread is logged at ERROR together with
+      its stack (the root-cause record for the next occurrence);
+    * a bounded join waits up to ``timeout`` seconds for survivors to
+      finish and reports them finished when they do;
+    * only after the timeout a forced ``os._exit(3)`` fires — deliberately
+      after the log export, so the report is durable first.  The exit is
+      never silent: the ERROR lines above name the threads and their
+      stacks, and exit code 3 marks a forced shutdown.
+
+    Static root-cause audit (2026-09-03, no real sync run - stateful
+    operations stay separately authorized): all in-repo thread creation on
+    the sync path is daemon-scoped (``akshare_client._call_with_timeout``);
+    ``baostock`` login/logout is paired around queries (logout skipped only
+    on error paths - recorded, not fixed here); DuckDB connections close in
+    ``finally``; loguru sinks are synchronous.  The definitive culprit is
+    therefore captured by this guard at the next authorized real sync.
+
+    Runs on the success path only: during exception unwinding a forced
+    exit would swallow the traceback (forbidden).
+    """
+
+    current = threading.current_thread()
+    survivors = [
+        thread
+        for thread in threading.enumerate()
+        if thread is not current and not thread.daemon and thread.is_alive()
+    ]
+    if not survivors:
+        return
+    frames = sys._current_frames()
+    for thread in survivors:
+        stack = (
+            "".join(traceback.format_stack(frames.get(thread.ident)))
+            or "<no stack captured>\n"
+        )
+        logger.error(
+            f"sync exit guard: non-daemon thread alive at exit "
+            f"name={thread.name} ident={thread.ident}\n{stack}"
+        )
+    deadline = time.monotonic() + timeout
+    for thread in survivors:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    still_alive = [thread.name for thread in survivors if thread.is_alive()]
+    if not still_alive:
+        logger.warning(
+            "sync exit guard: surviving threads finished within the timeout"
+        )
+        return
+    logger.error(
+        f"sync exit guard: forcing process exit after {timeout}s; "
+        f"threads still alive: {still_alive}"
+    )
+    logger.complete()
+    os._exit(3)
+
+
 def main() -> None:
     setup_run_logging(run_name="sync")
     parser = argparse.ArgumentParser(description="Sync A-share data via AkShare")
@@ -480,6 +572,7 @@ def main() -> None:
         help="Skip the margin/Shenwan-industry sync",
     )
     args = parser.parse_args()
+    failed = False
     try:
         result = sync_all(
             args.config,
@@ -489,8 +582,16 @@ def main() -> None:
             sync_capital_flow=False if args.no_capital_flow else None,
         )
         logger.success(f"Sync complete: {result}")
+    except BaseException:
+        # Never fire the exit guard during exception unwinding: a forced
+        # exit here would swallow the traceback (F-08 forbids silent
+        # swallows).  Failure-path shutdown keeps the standard behaviour.
+        failed = True
+        raise
     finally:
         export_log_txt(run_name="sync")
+        if not failed:
+            _guard_process_exit()
 
 
 if __name__ == "__main__":

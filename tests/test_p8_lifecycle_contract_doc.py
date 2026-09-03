@@ -125,3 +125,89 @@ def test_agents_md_carries_pending_activation_block() -> None:
         "lifecycle hard constraints must be marked pending lifecycle v1 "
         "activation until P8-15 flips them to mandatory"
     )
+
+
+# -- IP-02 contract revision anchors (2026-09-03) ------------------------------
+#
+# The IP-02 contract revision (approval basis: the user-approved
+# AlphaGPT-improvement-plan-20260903.md IP-02 [02-INT-01][02-INT-02]
+# [02-INT-07][02-INT-08][05-⑤], staging-table change per
+# campaign_closure_decisions_20260902.md ⑤) fixed three stale spots in the
+# contract. These guards pin the revised invariants so they cannot drift
+# back. They strengthen the guard set; nothing is weakened or removed
+# (§10.1 whitelist category 2: requirement/contract changed first, tests
+# synced with evidence in the same commit).
+#
+# * Promotion gates are G1-G7 (``ashare_model/promotion.py``,
+#   ``PROMOTION_RULE_VERSION = "2"``; G7 feature registry status added by
+#   P12, authority ``docs/p12_promotion_enforcement_contract.md``). The two
+#   G numbering spaces (data qualification vs promotion) both span G1-G7
+#   but remain independent spaces.
+# * ``PROMOTED -> RETIRED`` is activated with the P8-06 row
+#   (``ashare_model/lifecycle.py`` ``ACTIVATED_EDGES`` activates every legal
+#   "-> RETIRED" edge; PROMOTED is unreachable at P8-06, so this is not
+#   fail-open) and must not be listed a second time in the P8-09 row.
+# * ``REBALANCE_POLICY_VERSION`` is consumed by ``ashare_model/runspec.py``
+#   (RunSpec version collection) and must not be enumerated as consumerless;
+#   ``TARGET_CONTRACT_VERSION`` (``ashare_model/targets.py``) still has no
+#   consumer and keeps the independent-retirement-task annotation.
+
+
+def test_promotion_gate_numbering_is_g1_g7() -> None:
+    text = _contract_text()
+    stale = [mark for mark in ("晋级门禁 G1–G6", "晋级门禁 G1-G6") if mark in text]
+    assert not stale, (
+        "stale promotion-gate numbering in the contract: promotion.py gates "
+        'are G1-G7 (PROMOTION_RULE_VERSION = "2", G7 added by P12)'
+    )
+    assert "晋级门禁 G1–G7" in text, (
+        "the promotion-gate space must be named G1-G7"
+    )
+    assert "数据资格 G1–G7" in text, (
+        "the data-qualification space must stay explicitly distinguished "
+        "from the promotion-gate space (two independent G numbering spaces)"
+    )
+    assert 'PROMOTION_RULE_VERSION = "2"' in text, (
+        "the promotion gate-set semantic version must be cited"
+    )
+    assert "docs/p12_promotion_enforcement_contract.md" in text, (
+        "the P12 promotion-enforcement contract must be cited as the G7 "
+        "authority"
+    )
+
+
+def test_staged_activation_promoted_retired_is_unambiguous() -> None:
+    lines = _contract_text().splitlines()
+    p806 = [line for line in lines if line.startswith("| P8-06 ")]
+    p809 = [line for line in lines if line.startswith("| P8-09 ")]
+    assert len(p806) == 1 and len(p809) == 1, (
+        "the staged activation table must have exactly one P8-06 row and "
+        "one P8-09 row"
+    )
+    assert "PROMOTED -> RETIRED" in p806[0], (
+        "PROMOTED -> RETIRED must be explicitly covered by the P8-06 row "
+        "(ACTIVATED_EDGES activates every legal -> RETIRED edge; "
+        "campaign_closure_decisions_20260902.md ⑤)"
+    )
+    assert "PROMOTED -> RETIRED" not in p809[0], (
+        "the P8-09 row must not re-list PROMOTED -> RETIRED: the edge has "
+        "exactly one activation stage (P8-06)"
+    )
+
+
+def test_retirement_ledger_matches_runspec_consumers() -> None:
+    text = _contract_text()
+    s13 = text.split("## 13. Retirement", 1)[1]
+    consumerless_claims = s13.split("勘误", 1)[0]
+    assert "REBALANCE_POLICY_VERSION" not in consumerless_claims, (
+        "REBALANCE_POLICY_VERSION is consumed by ashare_model/runspec.py "
+        "(RunSpec version collection) and must not be listed consumerless"
+    )
+    assert "TARGET_CONTRACT_VERSION" in consumerless_claims, (
+        "TARGET_CONTRACT_VERSION (ashare_model/targets.py) still has no "
+        "consumer and keeps the independent retirement-task annotation"
+    )
+    assert "runspec.py" in s13, (
+        "the erratum must cite the consumer evidence (ashare_model/"
+        "runspec.py)"
+    )

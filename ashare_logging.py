@@ -1,10 +1,14 @@
 """Run logging helpers for AlphaGPT.
 
 The project already uses :mod:`loguru` for console logging. This module adds
-two conveniences needed for reproducible runs and test sessions:
+conveniences needed for reproducible runs and test sessions:
 
 * an in-memory sink that keeps the latest formatted records;
-* :func:`export_log_txt` which writes those records to a plain ``.txt`` file.
+* :func:`export_log_txt` which writes those records to a plain ``.txt`` file;
+* the critical-path run-identity header (IP-11 / AGENTS §4.5):
+  :func:`emit_run_identity` prints the ``run_id`` / git commit / config
+  sha256 / version-set quadruple as one fixed-format line through the same
+  pipeline — never a second telemetry path.
 
 Call :func:`setup_run_logging` at the start of a real run or a pytest session
 and :func:`export_log_txt` at the end.  The default log directory is
@@ -13,8 +17,14 @@ and :func:`export_log_txt` at the end.  The default log directory is
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import json
 import os
+import subprocess
 import sys
+import uuid
+from collections.abc import Mapping
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -105,6 +115,104 @@ def get_log_text() -> str:
     """Return the current in-memory log buffer as plain text."""
 
     return "\n".join(_LOG_LINES)
+
+
+def new_log_run_id() -> str:
+    """Log correlation id for critical-path entries below ``ashare_model``.
+
+    Same shape as ``ashare_model.runspec.new_run_id()`` (``uuid4().hex``)
+    but defined here because ``ashare_data`` must not import
+    ``ashare_model`` (AGENTS §9 dependency direction; IP-12 removes the
+    existing reverse edge).  This is a log-correlation identity only:
+    formal research run identities stay owned by
+    ``ashare_model.runspec`` (P8) and no artifact consumes this value.
+    """
+
+    return uuid.uuid4().hex
+
+
+def git_commit(project_root: str | Path | None = None) -> str | None:
+    """Current ``HEAD`` commit of the repository at ``project_root``.
+
+    The capture point for run-identity headers (IP-11).  Returns ``None``
+    when git is unavailable or the directory is not a repository — the
+    header renders that as ``unknown`` instead of guessing.  Artifact
+    manifests keep their own provenance capture; consolidating those into
+    this helper is a separate mechanical task, deliberately not done here.
+    """
+
+    root = (
+        Path(project_root)
+        if project_root is not None
+        else Path(__file__).resolve().parent
+    )
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    commit = proc.stdout.strip()
+    return commit or None
+
+
+def canonical_config_sha256(config: Any) -> str:
+    """SHA-256 over the canonical JSON of an effective config.
+
+    Dataclasses are expanded via ``dataclasses.asdict``; values JSON cannot
+    represent (e.g. ``Path``) render through ``str``.  ``sort_keys`` plus
+    compact separators make the hash order-independent and stable, so
+    equivalent representations of the same effective config hash equal.
+    """
+
+    payload = (
+        dataclasses.asdict(config)
+        if dataclasses.is_dataclass(config) and not isinstance(config, type)
+        else config
+    )
+    text = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def emit_run_identity(
+    *,
+    run_id: str,
+    config_sha256: str | None = None,
+    versions: Mapping[str, str] | None = None,
+    commit: str | None = None,
+    project_root: str | Path | None = None,
+) -> str:
+    """Emit the critical-path identity header (AGENTS §4.5, IP-11/F-07).
+
+    One fixed-format ``INFO`` line through the standard loguru pipeline::
+
+        run identity: run_id=<id> git_commit=<sha|unknown> \
+config_sha256=<hex|none> versions=<sorted-compact-json>
+
+    ``commit`` defaults to :func:`git_commit` captured at emission time.
+    Returns the emitted message so callers and contract tests can assert
+    on it.
+    """
+
+    if commit is None:
+        commit = git_commit(project_root)
+    rendered_versions = json.dumps(
+        dict(versions or {}), sort_keys=True, separators=(",", ":"), default=str
+    )
+    line = (
+        f"run identity: run_id={run_id} "
+        f"git_commit={commit or 'unknown'} "
+        f"config_sha256={config_sha256 or 'none'} "
+        f"versions={rendered_versions}"
+    )
+    logger.info(line)
+    return line
 
 
 def export_log_txt(

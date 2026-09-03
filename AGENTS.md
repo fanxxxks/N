@@ -23,7 +23,8 @@
 | 运行态/晋级/模拟交易 | §3.2、§4、§8 | fail closed；同一 run/campaign 身份 |
 
 单一权威指针（细节以目标为准，本文不复制第二份）：预注册契约见 `docs/`
-下 p2–p10 程序契约；环境搭建、目录导览、命令速查见
+下 p2 起编号程序契约，完整索引见 `docs/CONTRACTS.md`（新增契约文件须同
+commit 登记索引）；环境搭建、目录导览、命令速查见
 `docs/PROJECT_ONBOARDING.md`；因子/算子元数据见注册表生成的
 `docs/feature_registry.md`；测试分片权威为 `scripts/check_test_shards.py`
 （新测试文件必须同 commit 注册进分片，否则 fail-closed 红）；版本所有者名单

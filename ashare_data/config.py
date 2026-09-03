@@ -530,7 +530,9 @@ def _resolve_protocol_domain(
     domain_id = str(proto_raw.get("domain", "unified"))
     if domain_id == "unified":
         return domain_id, None
-    from ashare_model.research_domain import resolve_domain
+    # IP-12 (01-A2): resolve the domain from the shared bottom-tier data
+    # module — ``ashare_data`` must not import ``ashare_model``.
+    from ashare_domain import resolve_domain
 
     return domain_id, resolve_domain(domain_id)
 
@@ -560,8 +562,6 @@ def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
                 f"not a legal execution point of domain {domain.id!r} "
                 "(docs/p6_research_domain_contract.md §1.2)"
             )
-        from ashare_model.research_domain import domain_of_feature
-
         out_of_domain = [
             name
             for name in baseline_signals

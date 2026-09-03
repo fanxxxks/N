@@ -54,7 +54,12 @@ from .matching import SimBroker
 from .orders import build_orders, target_shares_from_weights
 from .portfolio import SimulationPortfolio
 from .signals import clear_stop_signal, stop_requested
-from ashare_logging import export_log_txt, setup_run_logging
+from ashare_logging import (
+    canonical_config_sha256,
+    emit_run_identity,
+    export_log_txt,
+    setup_run_logging,
+)
 
 
 def _project_root() -> Path:
@@ -654,6 +659,20 @@ def main() -> None:
     try:
         root = _project_root()
         raw = load_config(args.config, project_root=root)
+        from ashare_model.runspec import new_run_id
+        from ashare_model.versions import PROTOCOL_VERSION
+        from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
+
+        # IP-11 (03-F-07): identity quadruple as the first content line;
+        # the full version matrix travels with the run's artifacts.
+        emit_run_identity(
+            run_id=new_run_id(),
+            config_sha256=canonical_config_sha256(raw),
+            versions={
+                "protocol_version": PROTOCOL_VERSION,
+                "execution_spec_version": EXECUTION_SPEC_VERSION,
+            },
+        )
         data_config = make_data_config(raw, root)
         ProductionGateRunner(data_config, min_eligible=args.min_eligible).require_production()
         model_config = make_model_config(raw)

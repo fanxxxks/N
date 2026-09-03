@@ -13,10 +13,23 @@ requirements:
   so a clean environment and CI never depend on a CUDA wheel; machines
   with an NVIDIA GPU replace torch via this file.  ``--check`` verifies
   its torch base version stays aligned with ``requirements.txt``.
-* ``requirements.lock`` — the full frozen environment (every installed
-  distribution, generated via ``importlib.metadata``; equivalent to a
-  ``pip freeze`` snapshot).  Developer machines reproduce the working
-  environment with ``pip install -r requirements.lock``.
+* ``requirements.lock`` — the full frozen closure (every installed
+  distribution, captured via ``importlib.metadata`` from the interpreter
+  that last ran this script).  The committed lock is a snapshot of that
+  generating environment — a clean CI-faithful venv (provenance:
+  ``docs/test_runtime_measurement_log.md``).  It matches **neither**
+  persistent local environment of a development machine (e.g. a GPU
+  development environment with a CUDA torch, or a separate CPU
+  environment used to produce gate evidence); the environment identity
+  behind a piece of evidence comes from the per-run records in the
+  measurement logs, not from this lock.  Do **not** reproduce a machine
+  with ``pip install -r requirements.lock``: the torch pin in the lock
+  is the ``+cpu`` wheel (P0-06) and wholesale installation would
+  override a locally installed CUDA torch (observed with
+  ``2.11.0+cu128``).  Developer machines review lock<->environment
+  drift with the read-only ``scripts/lock_audit.py`` — run it under
+  each local interpreter to audit every environment separately — and
+  align per package via individually authorized commands.
 
 Usage:
     python scripts/freeze_lock.py            # regenerate all lock files
@@ -26,10 +39,14 @@ Usage:
 ``--check`` exits 1 when any generated *pin* file differs from the
 committed one, so CI can gate on lock drift (the pin files are portable:
 CI installs exactly those pins, so the check passes there).  The full
-``requirements.lock`` is a developer-machine snapshot (platform-specific
-packages included); ``--check-full`` additionally verifies it and is meant
-for the machine that generated it.  Regeneration is deterministic: pins
-come from ``importlib.metadata`` of the current interpreter.
+``requirements.lock`` is the snapshot of the environment that generated it
+(platform-specific packages included); ``--check-full`` additionally
+verifies it and is meaningful on a machine whose installed environment
+matches that closure (clean CI-faithful venvs, or a dev machine after an
+authorized per-package alignment).  On other machines use the read-only
+``scripts/lock_audit.py`` to report the drift instead.  Regeneration is
+deterministic: pins come from ``importlib.metadata`` of the current
+interpreter.
 
 Torch normalization (P0-06): the installed torch on a GPU machine carries
 a CUDA local version (e.g. ``2.11.0+cu128``), but the base pin file must

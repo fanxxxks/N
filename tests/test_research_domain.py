@@ -526,3 +526,33 @@ def test_p9_research_domain_version_and_single_domain_assignments():
     }
     for name, domain_id in expectations.items():
         assert domain_of_feature(name).id == domain_id, name
+
+
+def test_research_domain_data_home_and_facade_surface():
+    """IP-12 (01-A2): the pure domain data (registry table, legal
+    execution points) lives in the shared bottom-tier module
+    ``ashare_domain`` — importable by ``ashare_data.config`` without a
+    reverse dependency.  ``ashare_model.research_domain`` remains the
+    contract-named module (p6 §"新增模块") and keeps single ownership of
+    ``RESEARCH_DOMAIN_VERSION`` (runspec's version index and the registry
+    doc generation read it here); the facade re-exports the data objects
+    by identity so every existing consumer surface is unchanged."""
+
+    import ashare_domain
+    import ashare_model.research_domain as facade
+
+    # Data home is the single definition; the facade re-exports the same
+    # objects (identity, not copies).
+    assert facade.RESEARCH_DOMAINS is ashare_domain.RESEARCH_DOMAINS
+    assert facade.ResearchDomain is ashare_domain.ResearchDomain
+    assert facade.UNIFIED_DOMAIN_ID is ashare_domain.UNIFIED_DOMAIN_ID
+    assert facade.resolve_domain is ashare_domain.resolve_domain
+    assert facade.domain_of_feature is ashare_domain.domain_of_feature
+    # No second version owner: the const stays in the facade module only.
+    assert not hasattr(ashare_domain, "RESEARCH_DOMAIN_VERSION")
+    # The facade keeps the model-side behavior surface.
+    for name in ("restrict_tensor", "feature_token_ids"):
+        assert callable(getattr(facade, name))
+    # Unknown ids still fail fast through the facade.
+    with pytest.raises(ValueError):
+        facade.resolve_domain("no_such_domain")

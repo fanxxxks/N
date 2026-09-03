@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -308,3 +309,28 @@ def test_validate_baseline_signals_unknown_name_raises():
         "ROE",
         "MOMENTUM_20",
     ]
+
+
+def test_ashare_data_package_has_no_reverse_model_imports():
+    """IP-12 (01-A2) fail-closed guard: ``ashare_data`` is the bottom layer
+    of the §9 dependency graph and must never import ``ashare_model`` —
+    not even lazily inside a function body (A2's two original offenders
+    were function-level imports that a runtime-only check would miss)."""
+
+    package_root = Path(__file__).resolve().parents[1] / "ashare_data"
+    offenders: list[str] = []
+    for path in sorted(package_root.rglob("*.py")):
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if re.search(r"\bfrom\s+ashare_model\b", stripped) or re.search(
+                r"\bimport\s+ashare_model\b", stripped
+            ):
+                offenders.append(f"{path.name}:{lineno}: {stripped}")
+    assert offenders == [], (
+        "ashare_data must not depend on ashare_model (AGENTS §9, IP-12): "
+        + "; ".join(offenders)
+    )

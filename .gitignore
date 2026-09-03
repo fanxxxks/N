@@ -15,6 +15,9 @@ config/.webapi_token
 # Runtime config overrides (edited via the web UI; baseline stays in git)
 config/runtime_overrides.yaml
 
+# AgentTeams runtime state (team.json, inboxes; local coordination, never commit)
+.agent-teams/
+
 # Large local data & artifacts (regenerable; never commit)
 data/
 *.duckdb

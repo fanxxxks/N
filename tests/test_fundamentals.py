@@ -792,6 +792,57 @@ def test_balance_sheet_endpoint_uses_stock_zcfz_em(monkeypatch):
     assert df.iloc[0]["announce_date"] == "20240430"
 
 
+def test_cash_flow_endpoint_uses_stock_xjll_em(monkeypatch):
+    """IP-08 (04-TC-02): symmetric attribute pinning for the cash-flow bulk
+    endpoint — ``get_cash_flow_report`` must resolve exactly
+    ``stock_xjll_em``, mirroring the balance-sheet pin above.  Upstream
+    renames must surface here, not only during a real sync.  Both
+    directions are pinned:
+
+    1. present: the fake endpoint is called with the quarter and the
+       Eastmoney columns map to the canonical frame (statutory season-end
+       announce anchor, A-share code);
+    2. renamed away: with ``stock_xjll_em`` absent the client raises
+       AkShareUnavailable after its bounded retries — the explicit failure
+       path, never a silent degradation to an empty frame.
+    """
+    import akshare
+
+    from ashare_data.akshare_client import AkShareClient, AkShareUnavailable
+
+    calls: dict[str, str] = {}
+
+    def fake_xjll(date: str):
+        calls["stock_xjll_em"] = date
+        return pd.DataFrame(
+            [{"股票代码": "000001", "经营性现金流-现金流量净额": 74.0}]
+        )
+
+    # raising=True: if a future akshare drops or renames the attribute, the
+    # pin itself fails at setup — the upstream-rename tripwire.
+    monkeypatch.setattr(akshare, "stock_xjll_em", fake_xjll, raising=True)
+
+    # request_retries=1: the rename tripwire below must fail fast; the
+    # AkShareUnavailable contract is independent of the retry count.
+    cfg = config_module.DataConfig(
+        start_date="2024-01-01", end_date="2024-12-31", request_retries=1
+    )
+    client = AkShareClient(cfg)  # online path; the patched module answers
+    df = client.get_cash_flow_report("20240331")
+    assert calls == {"stock_xjll_em": "20240331"}
+    assert df.iloc[0]["ts_code"] == "000001.SZ"
+    assert df.iloc[0]["net_operate_cash_flow"] == 74.0
+    # Statutory season-end anchor, not the endpoint's announcement column.
+    assert df.iloc[0]["announce_date"] == "20240430"
+
+    # Rename tripwire: with the attribute absent the client fails loudly —
+    # bounded retries exhausted -> AkShareUnavailable — never an empty
+    # frame (the generic sync-level except cannot mask this seam).
+    monkeypatch.delattr(akshare, "stock_xjll_em", raising=False)
+    with pytest.raises(AkShareUnavailable):
+        client.get_cash_flow_report("20240331")
+
+
 def test_sync_cache_path_filters_out_of_scope_codes(tmp_path: Path):
     """P13 amendment RED (t20 window-② incident, A②): the cache-read path
     must apply the same universe filter as the fetch path — the pre-P2-01
@@ -855,3 +906,108 @@ def test_sync_cache_path_filters_out_of_scope_codes(tmp_path: Path):
     assert set(rows["ts_code"]) == {"000001.SZ"}
     r = rows[rows["ts_code"] == "000001.SZ"].iloc[0]
     assert r["net_operate_cash_flow"] == pytest.approx(74.0)
+
+
+def test_sync_balance_sheet_cache_filters_out_of_scope_rows(tmp_path: Path):
+    """IP-08 (04-TC-03, 05-③b): the balance-sheet section of the dual-endpoint
+    bulk consumption loop in ashare_data/fundamentals.py must apply the same
+    cache-path universe discipline as earnings/cash-flow — a whole-market
+    balance-sheet cache (pre-P2-01 artifact shape) must not refresh purged
+    out-of-scope rows.  Independent red capability: the sibling cache test
+    above writes only earnings and cash-flow fixtures, so a regression
+    scoped to the balance_sheet cache read had no failing guard.
+
+    The out-of-scope code carries a historical master row (a purged code
+    keeps its table history), so the announce-master join alone cannot mask
+    a filter regression: the cached 600000.SH row would otherwise flow
+    through the join and overwrite the stored NULL total_assets.
+    """
+    cfg = _data_config(tmp_path)
+    universe = ["000001.SZ"]  # 600000.SH was purged from the universe
+    cache_dir = cfg.parquet_dir / "fundamental"
+    cache_dir.mkdir(parents=True)
+    # A stale whole-market balance-sheet cache, full client return shape.
+    # The cache rows carry a bogus announcement column (20240501): visibility
+    # comes from the earnings master only, never from the endpoint column.
+    pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "report_date": "20231231",
+                "announce_date": "20240501",
+                "total_assets": 1200.0,
+            },
+            {
+                "ts_code": "600000.SH",
+                "report_date": "20231231",
+                "announce_date": "20240501",
+                "total_assets": 9.0e12,
+            },
+        ]
+    ).to_parquet(cache_dir / "balance_sheet_20231231.parquet", index=False)
+    client = _StubFundamentalClient({}, {}, {})  # cache path is the only source
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        # Historical masters: 000001.SZ is in scope; 600000.SH is a purged
+        # code that keeps its earnings history (and master) in the table.
+        db.upsert_fundamentals(
+            [
+                _row("000001.SZ", "20231231", "20240430", roe=10.0),
+                _row("600000.SH", "20231231", "20240430"),
+            ],
+            cfg,
+        )
+        sync_fundamentals(client, db, cfg, universe)
+        rows = db.query(f"SELECT * FROM {cfg.fundamentals_table}")
+    assert set(rows["ts_code"]) == {"000001.SZ", "600000.SH"}
+    r1 = rows[rows["ts_code"] == "000001.SZ"].iloc[0]
+    r600 = rows[rows["ts_code"] == "600000.SH"].iloc[0]
+    # The in-scope cache row lands on the master-joined history row.
+    assert r1["total_assets"] == pytest.approx(1200.0)
+    # The earnings-sourced field is untouched by the balance-sheet write
+    # (coalescing upsert: one section never wipes another section's fields).
+    assert r1["roe"] == pytest.approx(10.0)
+    # The master's announce date wins; the cache row's own announcement
+    # column (20240501) is never used for visibility.
+    assert r1["announce_date"] == "20240430"
+    # The out-of-scope cache row must not refresh the purged code's history.
+    assert np.isnan(r600["total_assets"])
+
+
+def test_sync_balance_sheet_cache_missing_total_assets_column_stays_null(
+    tmp_path: Path,
+):
+    """IP-08 (04-TC-03): a balance-sheet cache written before the
+    total_assets column existed (missing-column artifact) must not fabricate
+    a value: the loop's column guard omits the field and the stored row
+    keeps NULL total_assets — fail-closed transition state, never a neutral
+    0 (AGENTS §5.3)."""
+    cfg = _data_config(tmp_path)
+    universe = ["000001.SZ"]
+    cache_dir = cfg.parquet_dir / "fundamental"
+    cache_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "report_date": "20231231",
+                "announce_date": "20240501",
+            },
+        ]
+    ).to_parquet(cache_dir / "balance_sheet_20231231.parquet", index=False)
+    client = _StubFundamentalClient({}, {}, {})
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        db.upsert_fundamentals(
+            [_row("000001.SZ", "20231231", "20240430", roe=10.0)], cfg
+        )
+        sync_fundamentals(client, db, cfg, universe)
+        rows = db.query(f"SELECT * FROM {cfg.fundamentals_table}")
+    assert len(rows) == 1
+    row = rows.iloc[0]
+    # The cache row was consumed (identity and master visibility intact)
+    # but the missing column stays NULL — never fabricated.
+    assert row["ts_code"] == "000001.SZ"
+    assert row["announce_date"] == "20240430"
+    assert row["roe"] == pytest.approx(10.0)
+    assert np.isnan(row["total_assets"])
