@@ -64,6 +64,7 @@ from .targets import causal_target_returns
 from .time_contract import FoldTimeContract
 from .tpe_search import run_tpe_baseline
 from .train import AshareTrainer, validation_start, validation_windows
+from .versions import PROTOCOL_VERSION
 from .vm import StackVM
 from .vocab import FEATURE_NAMES, FORMULA_VOCAB
 
@@ -471,11 +472,8 @@ def _search_evaluator(
     domain scores never mix with other domains.
     """
 
-    # Late binding through the facade: PROTOCOL_VERSION's single home is
-    # the leaf module ashare_model.versions (IP-07a), re-exported by the
-    # facade and recorded in every artifact.
-    from ashare_model import evaluation as _facade  # noqa: PLC0415
-
+    # PROTOCOL_VERSION binds its single home ashare_model.versions at
+    # module level (IP-07a/IP-15): no late binding, nothing patches it.
     return SemanticBudgetEvaluator(
         target=window.target,
         realized_ret=window.realized_ret,
@@ -489,7 +487,7 @@ def _search_evaluator(
         execute=window.execute,
         fingerprint_execute=window.fingerprint_execute,
         dataset_id=loader.dataset_id,
-        protocol_version=_facade.PROTOCOL_VERSION,
+        protocol_version=PROTOCOL_VERSION,
         window_id=search_window_id(fold, seed, domain_id=domain_id),
         tie_break_keys=window.tie_break_keys,
         adv=window.adv,

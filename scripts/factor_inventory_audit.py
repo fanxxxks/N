@@ -346,13 +346,13 @@ def main(argv: list[str] | None = None) -> int:
 
     from ashare_model.alphagpt import MODEL_VERSION
     from ashare_model.data_tier import DATA_TIER_VERSION
-    from ashare_model.evaluation import PROTOCOL_VERSION
     from ashare_model.feature_registry import FEATURE_REGISTRY_VERSION
     if profile["include_factor_compute"]:
         from ashare_model.factors import FACTOR_COMPUTE_VERSION
     from ashare_model.research_domain import RESEARCH_DOMAIN_VERSION
     from ashare_model.reward import REWARD_VERSION
     from ashare_model.search_contract import SEARCH_CONTRACT_VERSION
+    from ashare_model.versions import PROTOCOL_VERSION
     from ashare_model.vocab import GRAMMAR_VERSION
     from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
     from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION

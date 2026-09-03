@@ -16,7 +16,7 @@ from ashare_data.config import (
 )
 from ashare_data.db import AshareDB
 from ashare_data.processor import open_to_open_returns
-from ashare_model import evaluation
+from ashare_model import evaluation, reward as reward_module
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.evaluation import (
@@ -658,7 +658,7 @@ def test_top_trial_ignores_val_reward(monkeypatch):
     ]
     assert top_trial(rows)["candidate"] == "A"
     agg_before = aggregate_results(rows)
-    monkeypatch.setattr(evaluation, "REWARD_VERSION", "999")
+    monkeypatch.setattr(reward_module, "REWARD_VERSION", "999")
     assert aggregate_results(rows) == agg_before
     assert top_trial(rows)["candidate"] == "A"
 
@@ -1156,7 +1156,7 @@ def test_dsr_noise_rows_insignificant_and_decoupled(monkeypatch):
         k: v for k, v in dsr_from_rows(rows).items() if k != "best_candidate"
     }
     assert after == before
-    monkeypatch.setattr(evaluation, "REWARD_VERSION", "999")
+    monkeypatch.setattr(reward_module, "REWARD_VERSION", "999")
     assert (
         {k: v for k, v in dsr_from_rows(rows).items() if k != "best_candidate"}
         == before
