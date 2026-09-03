@@ -1,7 +1,7 @@
 """Tests for the searcher cost benchmark (P1-04/P1-05).
 
 Contract (docs/p4_search_transformer_contract.md §3,
-SEARCHER_BENCH_VERSION 2):
+SEARCHER_BENCH_VERSION 4):
 
 * Four searchers (gp / tpe / random / rl) run on the SAME capped window
   (``prepare_window`` window_cap), same nominal budget, same seed.

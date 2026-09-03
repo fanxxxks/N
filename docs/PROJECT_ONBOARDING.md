@@ -3,6 +3,7 @@
 > 分析日期：2026-08-27（Asia/Shanghai）  
 > 分析基线：<code>main</code> @ <code>c5b801e936f6ef6cdba4c80ff1e81d12a7387ca6</code>（原始基线）
 > 核验更新：2026-08-28（Asia/Shanghai）；核验基线 <code>main</code> @ <code>80918fa</code>（c5b801e 之后合入 P0/P1/P2 三个阶段，见 §0.3；本文已按当前仓库状态修订）  
+> 货币性核验更新：2026-09-03（IP-06，分支 <code>improve/docs</code> @ <code>28bfefb</code>）：版本/计数声明与代码常量全量重新核对（reward v15、77 基础特征、晋级门禁 G1–G7、grammar/feature-registry/searcher-bench/research-domain 常量、词表 118 token），dataset_id 改为以 manifest 现行为准的指针式声明  
 > 分析方式：源码、配置、测试、历史实验、现有 DuckDB 与本地运行时产物的静态/只读核查。除创建本文档外，没有执行数据同步、训练、回测、模拟盘、归档、部署或任何项目业务数据/运行时写操作。  
 > 文档定位：帮助刚接手项目的开发者在不误用旧产物、不破坏本地数据的前提下，快速建立正确的系统心智模型。
 
@@ -11,7 +12,7 @@
 AlphaGPT 当前是一套本地优先、单用户、纯 A 股横截面因子研究与模拟盘系统。它不直接预测价格，而是：
 
 1. 从 AkShare/BaoStock 拉取 A 股行情、指数历史成分、财务和资金数据；
-2. 构造 62 个基础因子；
+2. 构造 77 个基础因子；
 3. 在 39 个算子组成的后缀公式语言中搜索可解释公式；
 4. 用统一的 PIT 股票池、交易可行性和费用模型评分；
 5. 产出策略 JSON，随后用于回测、研究协议和纸面模拟交易；
@@ -23,10 +24,10 @@ AlphaGPT 当前是一套本地优先、单用户、纯 A 股横截面因子研�
 |---|---|---|
 | 这是模块化单体/分层批处理系统，不是微服务，也不是在线预测服务 | 主流程由 CLI 驱动，模块之间大量通过 DuckDB、Parquet、JSON 和文件锁衔接 | [README.md](../README.md#L45)、[webapi/app.py](../webapi/app.py#L1)、[ashare_data/sync.py](../ashare_data/sync.py#L197) |
 | 当前生产默认搜索器是强类型 GP，不是 Transformer/RL | RL 保留为实验选项，但准入实验失败；不要把项目简称为“RL 生产系统” | [config/ashare_config.yaml](../config/ashare_config.yaml#L42)、[docs/phase2_measurement_log.md](phase2_measurement_log.md#L130)、[ashare_model/train.py](../ashare_model/train.py#L1223) |
-| 当前奖励实现是 v14：稀疏因果标签驱动 IC/质量门，逐日组合收益独立消费相邻 open 收益；主项仍是组合主动 IR 减精确年化费用 | P3 将标签、全局调仓日历和统一 PortfolioConstructor 接入训练/验证；仍以源码与 P3 契约为准 | [ashare_model/reward.py](../ashare_model/reward.py)、[docs/p3_portfolio_contract.md](p3_portfolio_contract.md)、[config/ashare_config.yaml](../config/ashare_config.yaml) |
+| 当前奖励实现是 v15：主项仍是组合主动 IR 减精确年化费用，稀疏因果标签与相邻 open 逐日收益消费沿用 P3 语义；v15 把 reward 带宽放宽到 ±10（bad_reward −20）并把复杂度惩罚改为两段式（bill≤3 免罚、超出按 0.05/单位），移除 v14 的结构性封顶 | P11 区分度重构（契约 [docs/p11_reward_v15_contract.md](p11_reward_v15_contract.md)、测量 [docs/p11_reward_v15_measurement_log.md](p11_reward_v15_measurement_log.md)）；P3 将标签、全局调仓日历和统一 PortfolioConstructor 接入训练/验证；仍以源码与契约为准 | [ashare_model/reward.py](../ashare_model/reward.py)、[docs/p3_portfolio_contract.md](p3_portfolio_contract.md)、[config/ashare_config.yaml](../config/ashare_config.yaml) |
 | 本机数据库的 G1-G7 生产门禁当前全部通过 | PIT 成分、上市日、日历、最小股票数和历史成员 bar 覆盖目前可用；这不等价于策略或产物可用于决策 | [ashare_data/gates.py](../ashare_data/gates.py#L1)、[scripts/check_production_gates.py](../scripts/check_production_gates.py) |
 | 本机现有策略、回测和协议产物彼此不一致且全部落后于当前源码代际 | 看板目前可能把不同公式、不同版本、不同数据时间的结果拼在一起；接手后不能直接引用这些数字 | [data/best_ashare_strategy.json](../data/best_ashare_strategy.json)、[data/backtest_result.json](../data/backtest_result.json)、[data/protocol_result.json](../data/protocol_result.json) |
-| 当前没有可称为最终 holdout 的历史区间，也没有当前 v22/v14 的显著 alpha 证据 | 2021-2026 已被反复查看，只能算开发/验证数据；v20 selfcheck 曾显示 DSR=0.000、max-t p=1.0000（无显著候选） | [docs/phase4_measurement_log.md](phase4_measurement_log.md#L15)、[docs/phase5_measurement_log.md](phase5_measurement_log.md#L17) |
+| 当前没有可称为最终 holdout 的历史区间，也没有当前 v25/v15 的显著 alpha 证据 | 2021-2026 已被反复查看，只能算开发/验证数据；v20 selfcheck 曾显示 DSR=0.000、max-t p=1.0000（无显著候选） | [docs/phase4_measurement_log.md](phase4_measurement_log.md#L15)、[docs/phase5_measurement_log.md](phase5_measurement_log.md#L17) |
 | P3 已把 QP optimizer 作为 `PortfolioConstructor` 的可选方法接入 reward、回测和模拟主链；生产默认仍是 equal_weight | 方法由 `backtest.portfolio_method` 显式选择；两种方法共享排名缓冲、阻断和后处理，不存在第二套生产 constructor | [ashare_portfolio/constructor.py](../ashare_portfolio/constructor.py)、[ashare_portfolio/optimizer.py](../ashare_portfolio/optimizer.py)、[docs/p3_portfolio_contract.md](p3_portfolio_contract.md) |
 | 项目面向研究和 paper trading，不连接真实券商 | 所有成交由本地模拟撮合器生成，状态保存在 JSON；没有实盘下单适配器 | [ashare_trading/matching.py](../ashare_trading/matching.py)、[ashare_trading/run_sim.py](../ashare_trading/run_sim.py#L83) |
 
@@ -43,7 +44,7 @@ AlphaGPT 当前是一套本地优先、单用户、纯 A 股横截面因子研�
 | DuckDB | 786,444,288 bytes；日线 4,874,595 行，2015-01-05 至 2026-08-21 |
 | 股票/成分 | 5,539 只股票元数据（P2-01 清除 7 个 900xxx B 股脏行）；2,574 条 PIT 成分区间 |
 | 生产门禁 | G1-G7 全部通过；每年最少 eligible 股票数 473；2,426 个有效成员区间中零 bar 区间为 0 |
-| 数据集清单 | <code>dataset_manifest</code> 1 行 + <code>dataset_manifest_cache</code> 129 行；dataset_id <code>b927074a455a…</code>（11,003,350 行 / 8 表，P0 构建，P2 purge 后沿用） |
+| 数据集清单 | <code>dataset_manifest</code> 1 行 + <code>dataset_manifest_cache</code> 129 行（2026-08-28 快照，行数可能随重建变化）；dataset_id 以 <code>dataset_manifest</code> 现行为准：最近实测 <code>b7b4dd4b…</code>（2026-09-01 P11 测量绑定，见 [docs/p11_reward_v15_measurement_log.md](p11_reward_v15_measurement_log.md)），旧值 <code>b927074a455a…</code> 已随 t20 manifest 重建退役 |
 | STOP 信号 | 根目录现有被忽略的 <code>STOP_SIGNAL</code>，内容为 <code>STOP</code> |
 | 协议治理文件 | <code>holdout_registry.json</code>、<code>paper_windows.json</code>、<code>promotion_verdict.json</code> 不存在；<code>experiment_ledger.jsonl</code> 已存在（10 行 selfcheck 记录，见 P0/P1 日志） |
 
@@ -65,12 +66,12 @@ AlphaGPT 当前是一套本地优先、单用户、纯 A 股横截面因子研�
 
 | 产物 | 当前内容 | 与当前源码的差异 |
 |---|---|---|
-| [data/best_ashare_strategy.json](../data/best_ashare_strategy.json) | 公式为 <code>(VOL_20 CORR60 (ATR_14 ADD MAX3((RET_10 ADD (PS_TTM MUL TS_RANK20(DIVIDEND_YIELD))))))</code>，方向 -1，reward v10 | 已由 <code>scripts/stamp_legacy_artifacts.py</code> 盖章 legacy（无 searcher / reward v10≠14 / 无 protocol/execution/constructor/config provenance / 无 model_version / 无 dataset_id，2026-08-27T10:31:32Z）；当前 reward v14 |
+| [data/best_ashare_strategy.json](../data/best_ashare_strategy.json) | 公式为 <code>(VOL_20 CORR60 (ATR_14 ADD MAX3((RET_10 ADD (PS_TTM MUL TS_RANK20(DIVIDEND_YIELD))))))</code>，方向 -1，reward v10 | 已由 <code>scripts/stamp_legacy_artifacts.py</code> 盖章 legacy（无 searcher / reward v10≠15 / 无 protocol/execution/constructor/config provenance / 无 model_version / 无 dataset_id，2026-08-27T10:31:32Z）；当前 reward v15 |
 | [data/backtest_result.json](../data/backtest_result.json) | 公式为 <code>LIMIT_BREAK</code>，2015-01-06 至 2026-08-14，累计收益 -100%，Sharpe -1.956 | 公式与当前策略 JSON 不同；无 <code>dataset_id</code>；属于旧 schema |
-| [data/protocol_result.json](../data/protocol_result.json) | protocol v12、reward v10、60 行候选 | 已盖章 legacy（protocol v12≠25 / reward v10≠14 / 无 execution/constructor/config provenance / 无 dataset_id / 无 stitched / 无 ledger）；当前 protocol v25、reward v14；没有 stitched OOS、dataset、ledger 或 data-regime 块 |
+| [data/protocol_result.json](../data/protocol_result.json) | protocol v12、reward v10、60 行候选 | 已盖章 legacy（protocol v12≠25 / reward v10≠15 / 无 execution/constructor/config provenance / 无 dataset_id / 无 stitched / 无 ledger）；当前 protocol v25、reward v15；没有 stitched OOS、dataset、ledger 或 data-regime 块 |
 | [data/sim_portfolio_state.json](../data/sim_portfolio_state.json) | 2,822 个权益点、28,179 笔成交、最后日期 2026-08-14 | 旧状态没有 <code>last_exec_date</code>、公式、配置版本或 <code>dataset_id</code>；续跑时可能把新策略接到旧权益曲线上 |
 
-结论：当前 UI 只能视为“历史文件查看器”，不能被当作一组同源、同版本、可复现的研究结果。任何策略判断前，应先核对数据 manifest（当前已存在，dataset_id <code>b927074a455a…</code>），再按当前版本重新训练、回测、执行 v25 协议，并通过六道晋级门禁。
+结论：当前 UI 只能视为“历史文件查看器”，不能被当作一组同源、同版本、可复现的研究结果。任何策略判断前，应先核对数据 manifest 的当前 dataset_id（最近实测 <code>b7b4dd4b…</code>，以 manifest 现行为准），再按当前版本重新训练、回测、执行 v25 协议，并通过七道晋级门禁（G1–G7）。
 
 ### 0.3 自基线以来的变更（P0 / P1 / P2）
 
@@ -198,11 +199,11 @@ flowchart LR
         PQ[(Parquet 缓存)]
         Gates[ProductionGateRunner G1-G7]
         Loader[AshareDataLoader]
-        Factor[62 因子 + PIT 预处理]
+        Factor[77 因子 + PIT 预处理]
         Search[GP / Random / RL / TPE]
         VM[AST + StackVM]
-        Score[Reward v14 + CandidateSelector]
-        Backtest[回测与 v22 评价协议]
+        Score[Reward v15 + CandidateSelector]
+        Backtest[回测与 v25 评价协议]
         Optimizer[独立 QP 组合优化器]
         Sim[SimulationRunner + SimBroker]
         Artifacts[(JSON / PT / 日志 / 实验档案)]
@@ -317,7 +318,7 @@ flowchart TD
     P --> Q
     Q --> S[稀疏 IC/质量门 + 复杂度/容量门禁]
     S --> T[策略 JSON + execution provenance]
-    T --> R[回测 / v22 协议 / 模拟盘]
+    T --> R[回测 / v25 协议 / 模拟盘]
 ~~~
 
 同步入口见 [ashare_data/sync.py](../ashare_data/sync.py#L197)，PIT 导入见 [scripts/import_pit_universe.py](../scripts/import_pit_universe.py#L1)，统一门禁见 [ashare_data/gates.py](../ashare_data/gates.py#L1)，加载和目标构造见 [ashare_model/data_loader.py](../ashare_model/data_loader.py#L184)。
@@ -399,13 +400,13 @@ API 管理器启动时会清理旧 STOP；直接 CLI 只有带 <code>--resume</c
 
 | 契约 | 说明 | 实现 |
 |---|---|---|
-| 因子张量 | <code>[feature, stock, date]</code>，当前为 62 个 feature | [ashare_model/factors.py](../ashare_model/factors.py#L828) |
+| 因子张量 | <code>[feature, stock, date]</code>，当前为 77 个 feature | [ashare_model/factors.py](../ashare_model/factors.py#L828) |
 | 信号/目标/universe | <code>[stock, date]</code> | [ashare_model/data_loader.py](../ashare_model/data_loader.py#L299) |
-| 公式 | stack-only postfix；独立 EOS 终止，PAD 仅在 EOS 后；当前词表 103 token | [ashare_model/vocab.py](../ashare_model/vocab.py#L162)、[ashare_model/ir.py](../ashare_model/ir.py) |
+| 公式 | stack-only postfix；独立 EOS 终止，PAD 仅在 EOS 后；当前词表 118 token（77 特征 + 39 算子 + PAD/EOS） | [ashare_model/vocab.py](../ashare_model/vocab.py#L162)、[ashare_model/ir.py](../ashare_model/ir.py) |
 | 成分区间 | <code>[in_date, out_date)</code> 半开区间，可多次进出指数 | [ashare_data/universe.py](../ashare_data/universe.py#L205) |
 | 收益标签与资金曲线 | 调仓 signal 日 t；t+1 开盘进入；t+1+horizon 开盘退出，稀疏目标为 <code>open[t+1+horizon]/open[t+1]-1</code>；资金曲线始终消费相邻 open 日收益 | [ashare_model/targets.py](../ashare_model/targets.py)、[ashare_model/time_contract.py](../ashare_model/time_contract.py)、[ashare_portfolio/rebalance.py](../ashare_portfolio/rebalance.py) |
 | 训练/验证 | 策略梯度只读 IS 头部；验证尾部切成 4 个子窗，以中位数选公式 | [ashare_model/train.py](../ashare_model/train.py#L880) |
-| 评价 trial | v20 起（当前 v22）一个 trial 是一个 <code>(candidate, seed)</code> 跨折拼接 OOS 序列，不是一折一行 | [docs/phase4_measurement_log.md](phase4_measurement_log.md#L23) |
+| 评价 trial | v20 起（当前 v25）一个 trial 是一个 <code>(candidate, seed)</code> 跨折拼接 OOS 序列，不是一折一行 | [docs/phase4_measurement_log.md](phase4_measurement_log.md#L23) |
 | PIT 选择 | 信号日和入场日必须 eligible；退出成员通过正常卖出路径处理 | [ashare_model/reward.py](../ashare_model/reward.py#L17)、[ashare_model/backtest.py](../ashare_model/backtest.py#L65) |
 | no-signal | 可选截面少于两个不同值时保持原仓，不做信号驱动换手 | [ashare_model/reward.py](../ashare_model/reward.py#L36)、[ashare_trading/run_sim.py](../ashare_trading/run_sim.py#L283) |
 
@@ -485,7 +486,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 
 | 级别 | 文件 | 职责 |
 |---|---|---|
-| 核心 | [feature_registry.py](../ashare_model/feature_registry.py) | 62 个基础特征的稳定顺序、别名、家族、必需列和 warm-up 元数据 |
+| 核心 | [feature_registry.py](../ashare_model/feature_registry.py) | 77 个基础特征的稳定顺序、别名、家族、必需列和 warm-up 元数据 |
 | 核心 | [factors.py](../ashare_model/factors.py) | 基础因子计算、PIT 截面预处理、滚动 CAPM、技术/行业/事件因子 |
 | 核心 | [ops.py](../ashare_model/ops.py) | 39 个公式算子的实现、元数/窗口配置；JUMP 使用因果 trailing baseline |
 | 核心 | [vocab.py](../ashare_model/vocab.py) | feature/operator token 布局、EOS/PAD、feature_version、旧词表按名迁移 |
@@ -493,7 +494,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 核心 | [vm.py](../ashare_model/vm.py) | StackVM；执行后缀 token、PIT 截面算子和最终按日 z-score |
 | 核心 | [alphagpt.py](../ashare_model/alphagpt.py)、[imitation.py](../ashare_model/imitation.py) | Looped Transformer、actor/critic；v3 先做 baseline-elite teacher forcing，随后重建 optimizer 进入 RL |
 | 核心 | [train.py](../ashare_model/train.py) | RL/GP/random 统一训练窗口、语义预算、候选选择、策略/模型产物写入 |
-| 核心 | [reward.py](../ashare_model/reward.py) | reward v14；稀疏因果标签用于 IC/质量门，相邻 open 逐日收益用于资金曲线，统一 constructor 与精确费用 |
+| 核心 | [reward.py](../ashare_model/reward.py) | reward v15；稀疏因果标签用于 IC/质量门，相邻 open 逐日收益用于资金曲线，统一 constructor 与精确费用；v15 起带宽 ±10、复杂度惩罚两段式（bill≤3 免罚） |
 | 核心 | [candidates.py](../ashare_model/candidates.py) | CandidateSpec/Score、方向对称评分、质量/复杂度/容量门禁、选择 |
 | 核心 | [complexity.py](../ashare_model/complexity.py) | AST 节点、深度、最长窗口和操作成本的复杂度账单 |
 | 核心 | [signal_quality.py](../ashare_model/signal_quality.py) | HAC 有效样本 ICIR、block bootstrap、覆盖率/活跃度/符号稳定性 |
@@ -510,17 +511,17 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 评价 | [pareto.py](../ashare_model/pareto.py) | 多目标 Pareto frontier 辅助 |
 | 治理 | [ledger.py](../ashare_model/ledger.py) | append-only JSONL 试验账本、序列和 SHA-256 hash chain |
 | 治理 | [regime.py](../ashare_model/regime.py) | dev cutoff、预锁 final slice、dataset 绑定和违规拒绝 |
-| 治理 | [promotion.py](../ashare_model/promotion.py) | Champion/Challenger 六门晋级（+data_tier）与成本/容量压力网格 |
+| 治理 | [promotion.py](../ashare_model/promotion.py) | Champion/Challenger 七门晋级（G1–G7，含 data_tier 门）与成本/容量压力网格 |
 | 时间 | [time_contract.py](../ashare_model/time_contract.py) | t/t+1/t+2 和 fold 内标签边界 |
 | 诊断 | [diagnostics.py](../ashare_model/diagnostics.py) | 因子覆盖率、rank-IC、相关性报告 |
 | 实验 | [experiment_tracking.py](../ashare_model/experiment_tracking.py) | 可选 MLflow；无 URI/无包时结构化 no-op |
 | 版本 | [artifact_versions.py](../ashare_model/artifact_versions.py) | MODEL/REWARD/PROTOCOL/DATA_TIER/TIER_REPORT 等版本常量唯一来源（P0 新增） |
-| 研究域 | [research_domain.py](../ashare_model/research_domain.py) | RESEARCH_DOMAIN_VERSION=1；按预测周期拆分研究域：特征全量划分（24/25/12）、每域目标周期/执行周期/Reward 参数/换手约束、域限制张量与采样 token 集（P6 新增） |
+| 研究域 | [research_domain.py](../ashare_model/research_domain.py) | RESEARCH_DOMAIN_VERSION=3；按预测周期拆分研究域（short/medium/slow 三域；特征划分与各域参数以 research_domain.py 为准，废弃特征不归属任何域）、每域目标周期/执行周期/Reward 参数/换手约束、域限制张量与采样 token 集（P6 新增；v3 纳入 P13 第⑤族基本面特征） |
 | 数据分层 | [data_tier.py](../ashare_model/data_tier.py) | DATA_TIER_VERSION=1；PitLevel→DataTier 映射、各档可用时间规则、<code>formula_data_tier_report</code> 公式追溯 API（P2 新增） |
 | 分层报告 | [tier_reports.py](../ashare_model/tier_reports.py) | TIER_REPORT_VERSION=1；A/A+B/all 分层诊断与消融报告（P2 新增） |
 | 测量 | [cost_matrix.py](../ashare_model/cost_matrix.py) | FEE_MATRIX_VERSION=1；资金×持仓数×换手率费用矩阵（P1 新增） |
 | 测量 | [bare_factor_backtest.py](../ashare_model/bare_factor_backtest.py) | BARE_FACTOR_BACKTEST_VERSION=3；固定 daily/weekly × equal_weight/optimizer 四象限，逐象限记录 P3 provenance、收益、风险、换手、订单与成本 |
-| 测量 | [searcher_bench.py](../ashare_model/searcher_bench.py) | SEARCHER_BENCH_VERSION=2；四后端请求/实耗预算、终止/停滞、best-so-far、时间与峰值内存 |
+| 测量 | [searcher_bench.py](../ashare_model/searcher_bench.py) | SEARCHER_BENCH_VERSION=4；四后端请求/实耗预算、终止/停滞、best-so-far、时间与峰值内存 |
 | 诊断 | [research_doctor.py](../ashare_model/research_doctor.py) | 只读研究医生：门禁、依赖与运行量估算，输出 data/research_doctor.json（P0 新增） |
 | 兼容 | [ir.py](../ashare_model/ir.py)、[vocab.py](../ashare_model/vocab.py) | 旧 token/裸因子迁移和别名解析 |
 | 包入口 | [__init__.py](../ashare_model/__init__.py) | 包标识 |
@@ -530,20 +531,27 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 组件 | 版本 |
 |---|---:|
 | 模型 | <code>MODEL_VERSION = 3</code>（v3 记录 elite-imitation 初始化；v2 checkpoint 明确拒绝晋级并重训） |
-| 奖励 | <code>REWARD_VERSION = 14</code>（v14 分离稀疏研究标签与逐日组合收益） |
+| 奖励 | <code>REWARD_VERSION = 15</code>（v15 放宽 reward 带宽至 ±10、复杂度惩罚改两段式（bill≤3 免罚）并移除 v14 结构性封顶，契约见 [docs/p11_reward_v15_contract.md](p11_reward_v15_contract.md)；v14 曾分离稀疏研究标签与逐日组合收益） |
 | 评价协议 | <code>PROTOCOL_VERSION = 25</code>（v25 用语义类型约束采样候选池（P7-E）；v24 增加研究域维度并记录 research_domain；v23 统一四搜索器预算、终止与 best-so-far 结果语义） |
-| 公式语法 | <code>GRAMMAR_VERSION = 3</code>（v3 使 action mask 类型感知（P7-E）；v2 引入独立 EOS 与 stack-only postfix 语法） |
-| feature registry | 3（v3 起记录携带作者研究元数据与 horizon/cost/depends_on 派生三元组（P7 D1，仅描述性）；v2 起逐特征记录 data_tier） |
+| 公式语法 | <code>GRAMMAR_VERSION = 6</code>（v4/v5 词表扩至 73 特征、v6 起为 77 特征现行词表；v3 使 action mask 类型感知（P7-E）；v2 引入独立 EOS 与 stack-only postfix 语法） |
+| feature registry | 6（生成视图见 [docs/feature_registry.md](feature_registry.md)；v3 起记录携带作者研究元数据与 horizon/cost/depends_on 派生三元组（P7 D1，仅描述性）；v2 起逐特征记录 data_tier） |
 | data tier | 1（ashare_model/data_tier.py，P2 新增） |
 | tier report | 1（ashare_model/tier_reports.py，P2 新增） |
-| fee matrix / searcher bench | 1 / 2（P1 新增测量模块；searcher bench v2 起统一四后端 SearchResult 与唯一语义预算口径，契约见 docs/p4_search_transformer_contract.md §3） |
+| fee matrix / searcher bench | 1 / 4（P1 新增测量模块；searcher bench v2 起统一四后端 SearchResult 与唯一语义预算口径，契约见 docs/p4_search_transformer_contract.md §3） |
 | bare factor backtest | 3（v2 记录完整执行 provenance；v3 固定四象限 schema） |
 | portfolio constructor | 1（ashare_portfolio/constructor.py） |
 | rebalance policy | 2（v2 新增 every_20_days 与 monthly 频率，P6） |
-| research domain | 1（ashare_model/research_domain.py，P6 新增） |
+| research domain | 3（ashare_model/research_domain.py，P6 新增；v3 纳入 P13 第⑤族基本面特征） |
 | execution spec | 2（ashare_portfolio/execution_spec.py） |
 | semantic cache | 1 |
 | dataset manifest | 1 |
+
+> 货币性注记（IP-06）：本表数字与正文各处版本/计数声明必须与代码常量一致，以各常量所有者
+> 模块为权威（如 <code>reward.REWARD_VERSION</code>、<code>evaluation.PROTOCOL_VERSION</code>、
+> <code>vocab.GRAMMAR_VERSION</code>、<code>feature_registry.FEATURE_REGISTRY_VERSION</code>、
+> <code>research_domain.RESEARCH_DOMAIN_VERSION</code>、<code>searcher_bench.SEARCHER_BENCH_VERSION</code>
+> 及 promotion 的 G1–G7 门禁集合）。发现漂移时以代码为准，并在同一 commit 修订本表；
+> 自动化 drift guard 为后续中期项。
 
 ### 4.5 ashare_portfolio：统一组合构造与黄金规范
 
@@ -666,7 +674,7 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | 正式生产门禁 | [gates.py](../ashare_data/gates.py) | DB + DataConfig | <code>GateResult</code>/<code>UniverseContractStatus</code> |
 | PIT 股票池 | [universe.py](../ashare_data/universe.py)、[data_loader.py](../ashare_model/data_loader.py) | 成分区间、上市日、日历、bar presence | mask + reason codes |
 | 基本面/资金数据 | [fundamentals.py](../ashare_data/fundamentals.py)、[capital_flow.py](../ashare_data/capital_flow.py) | AkShare/DB | PIT 宽表 |
-| 62 基础因子 | [feature_registry.py](../ashare_model/feature_registry.py)、[factors.py](../ashare_model/factors.py) | 行情/PIT 宽表/universe | 因子张量 |
+| 77 基础因子 | [feature_registry.py](../ashare_model/feature_registry.py)、[factors.py](../ashare_model/factors.py) | 行情/PIT 宽表/universe | 因子张量 |
 | 公式语言和执行 | [ir.py](../ashare_model/ir.py)、[vocab.py](../ashare_model/vocab.py)、[ops.py](../ashare_model/ops.py)、[vm.py](../ashare_model/vm.py) | token + factor tensor | 标准化信号 |
 | GP 默认搜索 | [gp_search.py](../ashare_model/gp_search.py)、[train.py](../ashare_model/train.py#L979) | 统一语义预算 | 最优 CandidateScore |
 | Random/RL/TPE 实验搜索 | [train.py](../ashare_model/train.py)、[tpe_search.py](../ashare_model/tpe_search.py)、[evaluation.py](../ashare_model/evaluation.py) | 同一搜索空间/预算 | 候选与协议行 |
@@ -674,9 +682,9 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | 训练奖励 | [reward.py](../ashare_model/reward.py) + [ashare_execution.py](../ashare_execution.py) | basket、基准、交易阻塞、费用 | reward/ICIR/objectives |
 | 因子诊断/消融 | [diagnostics.py](../ashare_model/diagnostics.py)、[scripts/ablate_families.py](../scripts/ablate_families.py) | 因子张量 | factor_report/ablation JSON |
 | 回测 | [backtest.py](../ashare_model/backtest.py) | 策略信号、行情、mask | 净值、指标、持仓、基准 |
-| Nested walk-forward 评价 | [evaluation.py](../ashare_model/evaluation.py) | 候选、fold、seed、全局 rebalance mask、因果 target | protocol v22 JSON（data_tier + execution/constructor/config provenance） |
+| Nested walk-forward 评价 | [evaluation.py](../ashare_model/evaluation.py) | 候选、fold、seed、全局 rebalance mask、因果 target | protocol v25 JSON（data_tier + execution/constructor/config provenance） |
 | 试验账本/数据区间治理 | [ledger.py](../ashare_model/ledger.py)、[regime.py](../ashare_model/regime.py) | trial/fold/dataset | hash-chain ledger、registry |
-| 策略晋级 | [promotion.py](../ashare_model/promotion.py) | v22/v14/v2 当前协议、paper windows、当前数据与组合 provenance | 六门 verdict（+data_tier，默认 A-only） |
+| 策略晋级 | [promotion.py](../ashare_model/promotion.py) | protocol v25 / reward v15 / execution v2 / constructor v1 当前版本、paper windows、当前数据与组合 provenance | 七门 verdict（G1–G7，默认 A-only） |
 | 统一组合构造 | [constructor.py](../ashare_portfolio/constructor.py) | signal、前仓、PIT/阻断 mask、资本、配置 | PortfolioOutput；equal_weight/optimizer 共用后处理 |
 | QP 组合优化 | [optimizer.py](../ashare_portfolio/optimizer.py) | alpha、前仓、风险/暴露/ADV | PortfolioSolution；由 constructor 的 optimizer 方法消费 |
 | 回测/撮合黄金一致性 | [golden.py](../ashare_trading/golden.py) | 回测目标权重和原始 bar | ParityReport |
@@ -692,9 +700,9 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 | 裸因子固定回测 | [bare_factor_backtest.py](../ashare_model/bare_factor_backtest.py) | 七裸因子 | data/bare_factor_backtest.json（P1） |
 | 搜索器成本测量 | [searcher_bench.py](../ashare_model/searcher_bench.py) | 四搜索器、统一语义预算 | data/searcher_bench.json（P1） |
 
-### 5.1 62 个基础因子
+### 5.1 77 个基础因子
 
-当前稳定顺序和 feature version 来自 [ashare_model/feature_registry.py](../ashare_model/feature_registry.py) 与 [ashare_model/vocab.py](../ashare_model/vocab.py#L213)。当前 <code>feature_version = 29ac4001dd3c</code>。
+当前稳定顺序和 feature version 来自 [ashare_model/feature_registry.py](../ashare_model/feature_registry.py) 与 [ashare_model/vocab.py](../ashare_model/vocab.py#L213)。<code>feature_version</code> 是注册表派生的 hash，随注册表版本（当前 v6）变化，以运行时计算值为准，本文不固化快照；生成视图见 [docs/feature_registry.md](feature_registry.md)。
 
 逐特征元数据（家族、Tier、PIT 级别、语义类型、推荐周期、预期方向、计算成本、依赖、可用时间规则、经济假设）**由注册表生成**，见 [docs/feature_registry.md](feature_registry.md)——P7 D3 起手工名单已退役，禁止在文档中重建第二份名单（漂移守卫测试会拒绝）。
 
@@ -803,7 +811,7 @@ API 没有数据同步、训练、回测、协议评价或晋级路由，这些�
 | <code>run_protocol</code> | <code>(loader,data_cfg,model_cfg,bt_cfg,reward_cfg,proto_cfg,tier_name,...)</code> | evaluation CLI |
 | <code>ExperimentLedger</code> | <code>(path, run_id=None)</code>；<code>trial/finalize</code> | protocol 自动试验账本 |
 | <code>RegimeRegistry</code> | <code>(path, regime=None)</code>；<code>assert_folds_clear/assert_final_evaluation</code> | protocol/晋级数据边界 |
-| <code>evaluate_challenger</code> | 读取协议产物 + current dataset + paper window；<code>allowed_data_tiers=("A",)</code> | 六门晋级（+data_tier；<code>--allow-tier-b</code> 单独对照） |
+| <code>evaluate_challenger</code> | 读取协议产物 + current dataset + paper window；<code>allowed_data_tiers=("A",)</code> | 七门晋级（G1–G7；<code>--allow-tier-b</code> 单独对照） |
 | <code>PortfolioConstructor.construct</code> | <code>(signal,prev_weights,eligible,buy_blocked,sell_blocked,stable_keys,capital,rebalance_due,... ) → PortfolioOutput</code> | reward/backtest/golden/simulation 唯一生产组合路径 |
 | <code>PortfolioOptimizer.solve</code> | <code>(alpha,prev_weights,capital=...,cov=None,industries=None,beta=None,size=None,adv=None) → PortfolioSolution</code> | constructor 的 optimizer 后端及独立约束测试 |
 | <code>ExecutionCostModel.rebalance_cost</code> | <code>(buy_weights,sell_weights,capital) → ExecutionCosts</code> | reward/backtest/golden |
