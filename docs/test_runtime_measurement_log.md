@@ -335,3 +335,88 @@ message 与评审记录（测量日志只承载测量与门禁命令矩阵本身
   provenance 不变）。
 - 复核：修复后同一 xdist 日志 D2 检查 = 0 net-new（exit 0）——本地
   `-n auto` 门禁与 warning 基线完全兼容；CI 串行分片形态同理。
+
+## 终树串行门禁（2026-09-03，main @ 28bfefb，IP-01 终树 push-ready 证据链）
+
+- 被测实现：`28bfefbc3d959320c31cbb5f2466fb8c5935bcf5`
+  （main，`docs: add P11 reward v15 measurement log …`，ahead 59）。
+- 工作树状态：tracked 干净；既有未跟踪文件 `.agent-teams/`、
+  `docs/p5_implementation_plan.md`、`papers/`（任务前已存在，未触碰）。
+- 命令：`python -m pytest -q tests`（串行，无 `-n auto`；CI 4 分片并集的
+  严格串行等价形态）。
+- 解释器核实（IP-01 前置项）：`D:\minequant\.venv`（onboarding 引用）实测
+  torch `2.11.0+cu128` 且 `cuda_available=True`——上文 L13-16 登记的
+  CPU/CUDA 契约偏差仍在。若采用：5 项登记在册 CUDA skipif 基线
+  （test_ops 1 / test_train 2 / test_vm 2，
+  `skipif(not torch.cuda.is_available())`）将在 GPU 执行，破坏 skipped=5
+  基线形态，且 GPU 路径 warning 对 D2 基线（provenance = miniconda CPU
+  env）构成环境伪差。首轮曾以 .venv 起跑约 10 分钟，核实后中止、不计入
+  证据。本门禁按本日志环境口径采用 CPU 路径解释器。
+- 环境：Windows 11 / Python 3.13.12（`C:\ProgramData\miniconda3\python.exe`，
+  torch `2.11.0+cpu`）/ pytest 9.1.1 / pytest-xdist 3.8.0（在装未用）/
+  pandas 3.0.5 / numpy 2.5.2 / duckdb 1.5.5 / requests 2.33.1 /
+  akshare 1.18.91 / scipy 1.18.0 / openpyxl 3.1.5 / PyYAML 6.0.3。
+  共享 miniconda 仍为超集环境（lock 外残留如 matplotlib 3.10.9，PR3 已证
+  零代码 import；`pip check` 失败为 PR1 披露的既有登记状态）。
+- 结果（2026-09-03 10:27:18–10:52:44 +08）：**1475 passed, 5 skipped,
+  632 warnings in 1521.33s（0:25:21）**，exit 0。原始产物：
+  `logs/gate_28bfefb.txt`（logs/ 按仓库口径 gitignore 不入库；路径与
+  完整性在此登记：6094 字节，SHA256
+  `8D04CD8A11E7199F8669EC1D80F4D8419A33B05D9DDC362B751119309AE4FEED`）。
+  证据完整性披露：捕获经 pwsh `Tee-Object` 管道时主体被写成 UTF-16LE
+  与 UTF-8 表头混编，已做字符级转码统一为 UTF-8；转码后 warnings
+  summary、汇总行与 D2 解析均完整可读，控制台流与转码后文件内容一致。
+  后续 gate 捕获应改用 `cmd /c "... > file 2>&1"` 先例（B1 重测口径）
+  规避该编码缺陷。
+- 计数勾稽：passed 1332（4156de4，D2 基线）→ 1475（+143）；区间内
+  tests/ 新增合同测试文件含 test_agents_md_budget、test_ci_sharding、
+  test_p10_adjudication、test_p10_campaign 等（`git diff --name-status
+  4156de4 28bfefb -- tests/`：37 files changed），符合"passed 只允许随
+  新增合同测试增加"不变量；skipped 5 持平（登记在册 CUDA skipif 基线，
+  CPU 路径守恒）；warnings 614 → 632（+18 实例）。
+- D2 归并检查：`python scripts/ci_warning_merge.py --check --baseline
+  docs/ci_warning_baseline.json --logs logs/gate_28bfefb.txt` →
+  **exit 1（净新增行）**。差集 5 消失 / 8 净新增，逐项解释后全部归约为
+  三类机制，**warning 类别/消息模板级零新增**：
+  1. 调用点行号漂移 3 对（`git show 4156de4:` 逐行对照，发射语句未变、
+     仅行号移动）：`reward.py:615→629`（All-NaN slice，
+     `capacity_full[:, output_col] = np.nanmax(util, axis=1)`，+14 行）；
+     `reward.py:712→726`（Mean of empty slice，
+     `np.nanmean(capacity, axis=1)`，+14 行）；`data_loader.py:86→87`
+     （UniverseDevelopmentFallbackWarning，
+     `self._universe_contract = resolve_universe_contract(`，+1 行）。
+     numpy（`_function_base_impl.py:3036/3037/4608`）与 osqp
+     （`interface.py:405`）行号与类别不变。
+  2. 同类别实例的触发测试集合变化 4 行：`test_random_search_row_shape` /
+     `test_random_search_is_deterministic` 两节点自 summary 消失（两测试
+     仍在套件内且通过），同组实例改由
+     `test_run_protocol_records_universe_policy`、
+     `test_run_protocol_rows_and_determinism`（evaluation 内归因移动）与
+     基线生成后合并的 P10/P14 合同测试
+     `test_p10_campaign_rows_ledger_and_identity`、
+     `test_p14_campaign_runs_research_and_promotion_tracks` 触发。
+     归因移动机制未做归因实验，本条只记录机器事实。
+  3. 单数组计数头伪影 1 行：`tests/test_train.py: 1 warning`——test_train
+     的 All-NaN 实例 2→1，组头由复数（"2 warnings"，被
+     `COUNT_HEADER_RE` 排除）翻为单数（"1 warning"，该正则只匹配复数），
+     逃逸排除规则进入集合对比。系 `ci_warning_merge.py` 已知解析器缺陷
+     （IP-09"单数头"的运行态实证），非新增 warning。
+- 实例级勾稽（组计数头口径，两份原始日志在案）：osqp 组
+  553 = 500+2+16+2+33，逐文件守恒（组间零净变）；标量减组 27→37
+  （+10：gp_search +2、p10_campaign +7、searcher_bench +1）；All-NaN 组
+  17→23（+6：p10_campaign +7、train −1）；Mean-of-empty 组 2→4（归因
+  移动）；divide 与 UDFW 组不变。合计 +18 = 632−614，勾稽闭合。
+  基线再生成（`--write-baseline`）属 IP-10（t18，warning 债务一次性
+  收敛与基线重置）范围；本条目不改写 `docs/ci_warning_baseline.json`。
+- 未运行项（本任务范围外，留待 t20 终验或用户授权后）：ubuntu/py3.12
+  CI 形态（4 分片 matrix + test-warning-merge 归并 job）、web job
+  （`npm ci`/`npm ls --depth=0`/`npm run build`）、`pip check`、
+  `freeze_lock --check`、`compileall -j 0`；push 未执行（用户裁决 U1）。
+- push-ready 摘要：终树 main @ 28bfefb 串行全量绿（1475/5/632，exit 0，
+  墙钟 25:21，机器负载含并行 worktree 门禁、墙钟仅记录不横比）；D2
+  类别/模板级零新增，差集逐项可解释（行号漂移 ×3、归因变化 ×4、单数头
+  解析器伪影 ×1）；skipped 基线形态守恒；解释器按环境契约取 CPU 路径。
+  **本摘要不构成"可 push/已完整验证"宣告**：§10.2 CI-equivalent
+  mandatory 矩阵（ubuntu/py3.12、web job、基线重置后的 warning 归并
+  job）未在本任务运行；push 决策留待用户授权，剩余环节由 t20 终验收口。
+- 研究结论边界：engineering run type；不产生也不声称任何研究结论。
