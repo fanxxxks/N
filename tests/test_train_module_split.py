@@ -7,6 +7,16 @@ including the monkeypatch surface (``batched_basket_rewards`` patched on
 the ``train`` module namespace) — must remain an attribute of
 ``ashare_model.train``, and moved names must be the *same objects* as the
 extracted module's (no second copy, no drift).
+
+Convention (IP-15, mirroring the evaluation facade's registered rule):
+new code imports from the ``train_*`` submodule that owns the name —
+``train_loop`` / ``train_search_run`` / ``train_artifacts`` /
+``train_windows`` — never from the ``train`` facade, so the facade's
+re-export body can retire when the registered consumer list drains.  The
+registered monkeypatch surface (batched_basket_rewards, score_chunk_size,
+logger on the module namespace; ``AshareTrainer.train`` / ``.train_search``
+class attributes; ``trainer.vm.execute`` instances) is the t16 registry;
+it moves only together with its consumer tests.
 """
 
 from __future__ import annotations
