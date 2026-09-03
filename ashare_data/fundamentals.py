@@ -133,14 +133,22 @@ def _fundamental_cache_path(config, name: str) -> Path:
     return config.parquet_dir / "fundamental" / f"{name}.parquet"
 
 
+class FundamentalCacheMiss(Exception):
+    """A fundamental cache file exists but is unreadable (IP-05).
+
+    Typed expected-miss marker: callers refetch instead of treating the
+    corruption as an empty fundamentals history."""
+
+
 def _read_cached(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     try:
         return pd.read_parquet(path)
     except Exception as exc:  # noqa: BLE001
-        logger.warning(f"Failed to read fundamental cache {path}: {exc}")
-        return pd.DataFrame()
+        # IP-05: an unreadable cache is a typed expected-miss, never a
+        # silent empty frame indistinguishable from "no data".
+        raise FundamentalCacheMiss(f"{path}: {exc}") from exc
 
 
 def _write_cached(path: Path, df: pd.DataFrame) -> None:
@@ -170,7 +178,17 @@ def _cached_or_fetch(
         if not df.empty:
             _write_cached(path, df)
         return df
-    return _read_cached(path)
+    try:
+        return _read_cached(path)
+    except FundamentalCacheMiss as exc:
+        # Typed expected-miss (IP-05): a corrupt cache drives the same
+        # refetch path as staleness instead of permanently masquerading
+        # as an empty fundamentals history.
+        logger.warning(f"fundamental cache unreadable, refetching: {exc}")
+        df = fetcher()
+        if not df.empty:
+            _write_cached(path, df)
+        return df
 
 
 def _single_periods(rows: pd.DataFrame, col: str) -> list[tuple[str, float]]:

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 import numpy as np
 import torch
+from loguru import logger
 
 from ashare_data.capital_flow import build_capital_frames, build_industry_member_frame
 from ashare_data.config import DataConfig, ModelConfig, make_data_config
@@ -302,11 +304,16 @@ class AshareDataLoader:
         self.target_ret = torch.tensor(target, dtype=torch.float32)
         # Bind this load to the immutable dataset manifest (None when the
         # database predates T1-01 manifests; artifact consumers treat None
-        # as legacy, never as a match for any id).
+        # as legacy, never as a match for any id).  Only the expected
+        # storage failure (missing manifest tables / unusable DB) is
+        # swallowed; resolver programming errors propagate (IP-05).
         try:
             with AshareDB(self.config.duckdb_path, read_only=True) as db:
                 self.dataset_id = resolve_dataset_id(db, self.config)
-        except Exception:  # noqa: BLE001 - manifest tables may not exist.
+        except duckdb.Error as exc:
+            logger.warning(
+                f"dataset manifest unavailable (legacy database?): {exc}"
+            )
             self.dataset_id = None
         return self
 

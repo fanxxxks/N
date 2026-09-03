@@ -40,6 +40,47 @@ def _row(ts_code, report_date, announce_date, **fields):
     return row
 
 
+def test_read_cached_corrupt_file_raises_typed_expected_miss(
+    tmp_path: Path,
+):
+    """IP-05 side item: an unreadable fundamental cache is a typed,
+    visible expected-miss (FundamentalCacheMiss) instead of a silent
+    empty frame that downstream code cannot distinguish from 'no data'."""
+    from ashare_data import fundamentals as fundamentals_module
+
+    path = fundamentals_module._fundamental_cache_path(_data_config(tmp_path), "income")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("definitely not a parquet file", encoding="utf-8")
+    with pytest.raises(fundamentals_module.FundamentalCacheMiss):
+        fundamentals_module._read_cached(path)
+
+
+def test_cached_or_fetch_refetches_when_cache_is_corrupt(tmp_path: Path):
+    """IP-05 side item: the expected-miss marker drives the same refetch
+    path as staleness — a corrupt cache can never permanently masquerade
+    as an empty fundamentals history."""
+    from ashare_data import fundamentals as fundamentals_module
+
+    cfg = _data_config(tmp_path)
+    path = fundamentals_module._fundamental_cache_path(cfg, "income")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("corrupt", encoding="utf-8")
+    fetched = pd.DataFrame(
+        [_row("000001.SZ", "20240331", "20240426", total_assets=1.0)]
+    )
+    calls: list[int] = []
+
+    def fetcher() -> pd.DataFrame:
+        calls.append(1)
+        return fetched
+
+    result = fundamentals_module._cached_or_fetch(cfg, "income", fetcher)
+    assert calls == [1]
+    assert not result.empty
+    # The refetched payload replaced the corrupt cache bytes.
+    assert not fundamentals_module._read_cached(path).empty
+
+
 def _populate(db: AshareDB, cfg, rows: list[dict]) -> None:
     db.create_schema(cfg)
     db.upsert_fundamentals(rows, cfg)
