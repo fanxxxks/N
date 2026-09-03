@@ -33,8 +33,7 @@ from ashare_data.config import (
 from ashare_data.gates import ProductionGateRunner
 from ashare_data.processor import open_to_open_returns
 
-from .alphagpt import MODEL_VERSION, AlphaGPTModel, build_action_mask
-from .artifact_schemas import StrategyArtifact
+from .alphagpt import AlphaGPTModel, build_action_mask
 from .candidates import (
     PARETO_OBJECTIVES,
     CandidateScore,
@@ -46,12 +45,10 @@ from .candidates import (
 )
 from .complexity import complexity_bill
 from .data_loader import AshareDataLoader
-from .data_tier import formula_data_tier_report
 from .reward import (
     REWARD_VERSION,
     batched_basket_rewards,
 )
-from .research_domain import RESEARCH_DOMAIN_VERSION
 from .semantic_sampling import advance_stack_state
 from .rl_diagnostics import (
     aggregate_rl_run,
@@ -73,6 +70,7 @@ from .search_backends import (
 )
 from .search_contract import SearchRequest, SearchResult
 from .time_contract import TrainingTimeContract
+from .train_artifacts import write_trainer_artifact
 from .train_windows import (
     _TrainWindow,
     _project_root,
@@ -82,7 +80,7 @@ from .train_windows import (
     validation_windows,
 )
 from .vm import StackVM, formula_decode
-from .vocab import FORMULA_VOCAB, GRAMMAR_VERSION
+from .vocab import FORMULA_VOCAB
 from .versions import PROTOCOL_VERSION
 from ashare_portfolio.rebalance import RebalancePolicy
 from ashare_portfolio.execution_spec import execution_provenance
@@ -888,153 +886,21 @@ class AshareTrainer:
         seed: int,
         requested_budget: int,
     ) -> list[int] | None:
-        """Write the standard training artifact (selection + strategy JSON +
-        the policy checkpoint for RL runs) for the current selection.
+        """Delegate to :func:`train_artifacts.write_trainer_artifact`.
 
-        P8-05: the strategy artifact is a lifecycle-bound boundary artifact —
-        the run resolves its frozen RunSpec, opens a RunStore run and
-        persists through :func:`write_boundary_artifact` (content-addressed,
-        fail-closed identity, atomic convenience mirror).  The strategy
-        JSON stays at its historical path as the display mirror.
+        B2 (IP-07b): the artifact-boundary code moved by reason-to-change
+        to ``train_artifacts``; the method stays on the facade class so
+        callers and class-attribute patches keep one stable seam.
         """
 
-        selected = self.selection_result.selected
-        if selected is None:
-            return None
-        # ``evaluation`` imports this module at module level; resolve lazily.
-        from .artifact_writer import write_boundary_artifact  # noqa: PLC0415
-        from .identity import candidate_id  # noqa: PLC0415
-        from .run_store import RunStore  # noqa: PLC0415
-        from .runspec import resolve_runtime_runspec  # noqa: PLC0415
-
-        score_payload = selected.to_dict()
-        score_payload.pop("tokens", None)
-        # P8-05: the searcher-internal candidate label is a diagnostic only;
-        # the lifecycle candidate identity (identity.candidate_id over
-        # spec_id + tokens + direction) is stamped by the formal writer.
-        searcher_candidate_label = score_payload.pop("candidate_id", None)
-        output = {
-            "formula": self.best_tokens,
-            **score_payload,
-            "searcher_candidate_label": searcher_candidate_label,
-            "history": self.history,
-            "searcher": searcher,
-            # Reproducibility provenance: the policy stays on CPU, so
-            # (init_seed, seed) reproduce the same sampled formulas on any
-            # machine; ``device`` records where the VM executed.
-            "init_seed": self.init_seed,
-            "device": str(vm_device),
-            "model_version": MODEL_VERSION,
-            # Vocabulary provenance: the formula is always remapped by name
-            # on load, so later vocabulary additions cannot silently
-            # reinterpret these token ids.
-            "feature_names": list(self.vocab.feature_names),
-            "operator_names": list(self.vocab.operator_names),
-            "feature_version": self.vocab.feature_version,
-            "grammar_version": GRAMMAR_VERSION,
-            # Reward provenance: reward values are only comparable within
-            # the same scoring implementation generation.
-            "reward_version": REWARD_VERSION,
-            # T2-01 provenance: the evaluation-budget ledger generation and
-            # the unique semantic evaluations this run actually performed.
-            "protocol_version": PROTOCOL_VERSION,
-            # P6 provenance: the research domain this strategy was searched
-            # in (reserved compatible semantic "unified" by default) and
-            # the registry generation its defaults resolve from.
-            "research_domain": self.domain_id,
-            "research_domain_version": RESEARCH_DOMAIN_VERSION,
-            **execution_provenance(self.backtest_config),
-            "semantic_cache_version": SEMANTIC_CACHE_VERSION,
-            "unique_semantic_evals": self.semantic_cache.budget_used,
-            "semantic_cache_stats": self.semantic_cache.stats(),
-            "search_contract_version": (
-                self.search_result.contract_version if self.search_result else None
-            ),
-            "search_result": (
-                self.search_result.to_dict() if self.search_result else None
-            ),
-            # P2-02: the strategy formula traces back to the credibility
-            # tiers of its features (``None`` when nothing is traceable).
-            "data_tier": formula_data_tier_report(tokens=self.best_tokens),
-            # Data provenance: the immutable dataset manifest this formula
-            # was selected on (None for pre-T1-01 databases).
-            "dataset_id": self.loader.dataset_id,
-        }
-        if searcher == "rl":
-            output.update(
-                {
-                    "rl_initialization": self.rl_initialization,
-                    "imitation": (
-                        self.imitation_result.to_dict()
-                        if self.imitation_result is not None
-                        else None
-                    ),
-                    "experimental": self.rl_initialization == "random",
-                }
-            )
-        out_path = self.data_config.data_dir / "best_ashare_strategy.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        # P8-05: resolve the frozen RunSpec for this run and persist through
-        # the RunStore-bound formal writer.  A formal strategy artifact
-        # requires a resolved dataset identity (T1-01 manifest); a legacy
-        # database without one is refused here, fail-closed.
-        if not self.loader.dataset_id:
-            from .artifact_schemas import ArtifactSchemaError  # noqa: PLC0415
-
-            raise ArtifactSchemaError(
-                "formal strategy artifacts require a resolved dataset_id "
-                "(dataset manifest); migrate the database with "
-                "`python -m ashare_data.manifest` before training"
-            )
-        spec = resolve_runtime_runspec(
-            dataset_id=self.loader.dataset_id,
-            data_cutoff=self.loader.dates[-1],
-            data_config=self.data_config,
-            backtest_config=self.backtest_config,
-            requested_budget=int(requested_budget),
-            # Training evaluates a single validation tail; the campaign's
-            # fold plan is carried by the protocol run's own spec.
-            n_folds=1,
-            research_domain=self.domain_id,
-            seeds=tuple(sorted({int(self.init_seed), int(seed)})),
+        return write_trainer_artifact(
+            self,
+            contract=contract,
+            vm_device=vm_device,
             searcher=searcher,
-            max_formula_len=int(self.model_config.max_formula_len),
-            # The clean-tree SPEC_LOCKED evidence gate activates with the
-            # lifecycle stages (P8-06+); the spec still records the exact
-            # git commit and dependency-lock hash.
-            require_clean_tree=False,
+            seed=seed,
+            requested_budget=requested_budget,
         )
-        cand = candidate_id(spec.spec_id, self.best_tokens, output["direction"])
-        if self.search_result is not None and self.search_result.elite_archive is not None:
-            from .elite_archive import write_elite_archive  # noqa: PLC0415
-
-            archive_path = write_elite_archive(
-                self.data_config.data_dir / "search_elite_archive.json",
-                self.search_result.elite_archive,
-            )
-            logger.info("search.elite_archive path={}", archive_path)
-        store = RunStore(self.data_config.data_dir)
-        with store.open_run(spec) as handle:
-            write_boundary_artifact(
-                handle,
-                artifact_type="strategy",
-                model_cls=StrategyArtifact,
-                payload=output,
-                candidate_id=cand,
-                convenience_path=out_path,
-            )
-        if searcher == "rl":
-            # The checkpoint is the RL policy only: the non-RL searchers
-            # are not models, so no .pt is written for them.
-            torch.save(
-                self.model.state_dict(),
-                self.data_config.data_dir / "ashare_model.pt",
-            )
-        logger.success(
-            f"Search complete (searcher={searcher}); "
-            f"best formula saved to {out_path}"
-        )
-        return self.best_tokens
 
     def _training_contract(
         self, train_end_date: str | None = None
