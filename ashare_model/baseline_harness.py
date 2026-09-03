@@ -45,7 +45,7 @@ from .ir import FormulaSyntaxError, canonical_ast, canonical_tokens
 from .reward import REWARD_VERSION, _pearson, _rankdata
 from .semantic_cache import SemanticCache
 from .search_contract import SearchResult
-from .train import sample_random_formulas
+from .train_windows import sample_random_formulas
 from .vm import formula_decode
 from .vocab import FormulaVocab, FORMULA_VOCAB
 

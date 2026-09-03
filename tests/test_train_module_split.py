@@ -78,6 +78,34 @@ def _train_chain_modules() -> list[Path]:
     return [Path(train.__file__)] + sorted(package_dir.glob("train_*.py"))
 
 
+def test_train_chain_has_no_unregistered_lazy_imports():
+    """IP-07a2 (t21): the train chain is clean of accidental lazy imports.
+    The ONLY registered ``# noqa: PLC0415`` in the chain is the
+    ``_facade_logger`` seam in ``train_loop.py`` — a call-time facade
+    import required by the ``train_module.logger`` monkeypatch surface
+    (IP-15 registry).  Any other lazy import (e.g. the historical
+    baseline_harness cycle break, removed in t21 by re-pointing
+    baseline_harness to ``train_windows``) fails this guard."""
+
+    found: list[str] = []
+    for module_path in _train_chain_modules():
+        rel = module_path.name
+        for lineno, line in enumerate(
+            module_path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if "noqa: PLC0415" in line:
+                found.append(f"{rel}:{lineno}")
+                if rel != "train_loop.py":
+                    raise AssertionError(
+                        f"unregistered lazy import at {rel}:{lineno}: "
+                        f"{line.strip()}"
+                    )
+    assert len(found) == 1 and found[0].startswith("train_loop.py:"), (
+        "train-chain lazy imports must be only the registered "
+        f"_facade_logger seam in train_loop.py; found: {found}"
+    )
+
+
 def test_train_artifacts_reexport_identity():
     """B2 (IP-07b): artifact persistence moved by reason-to-change to
     ``train_artifacts``; the facade re-exports the same function object
