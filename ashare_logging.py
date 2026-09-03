@@ -23,6 +23,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
+import traceback
 import uuid
 from collections.abc import Mapping
 from collections import deque
@@ -178,6 +181,92 @@ def canonical_config_sha256(config: Any) -> str:
         payload, sort_keys=True, separators=(",", ":"), default=str
     )
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+_EXIT_GUARD_TIMEOUT_S = 10.0
+
+
+def guard_process_exit(
+    timeout: float = _EXIT_GUARD_TIMEOUT_S, *, force_exit: bool = True
+) -> None:
+    """Loud exit guard for critical-path interpreter shutdown (IP-11/F-08).
+
+    Two observed members of one root-cause family: the 2026-09-02 sync
+    completed fully (DB closed, manifest saved, logs exported) yet the
+    interpreter hung at exit and needed a manual kill, and a 2026-09-03
+    pytest session ran to completion but lagged in teardown until a
+    10-minute timeout killed it (rerun clean).  Likely cause: a surviving
+    non-daemon thread or a handle that survives interpreter-teardown
+    cleanup.  This guard turns that silent hang into bounded, loud
+    evidence at both entries:
+
+    * every surviving non-daemon thread is logged at ERROR together with
+      its stack (the root-cause record for the next occurrence);
+    * a bounded join waits up to ``timeout`` seconds for survivors to
+      finish and reports them finished when they do;
+    * ``force_exit=True`` (stateful critical-path entries such as sync):
+      only after the timeout a forced ``os._exit(3)`` fires — deliberately
+      after the log export, so the report is durable first.  The exit is
+      never silent: the ERROR lines above name the threads and their
+      stacks, and exit code 3 marks a forced shutdown.
+    * ``force_exit=False`` (test entry): detect and log only, never
+      force — the terminal report and CI result are published after
+      teardown, and a forced exit there would swallow them; the survivor
+      WARNING explicitly warns that the exit may lag.
+
+    Static audit of this pipeline (2026-09-03): all sinks are synchronous
+    (no ``enqueue``), the memory sink is a bounded deque, and the file
+    sink's rotation/retention run inline — loguru spawns no threads here,
+    so any survivor comes from a third-party import on the critical path
+    (in-repo sync-path thread creation is daemon-scoped; baostock's
+    error-path logout gap is recorded as a follow-up).  C-level suspects
+    (extension/handle teardown) are invisible to this guard and need the
+    captured stacks from the next occurrence.
+
+    Runs on the success path only: during exception unwinding a forced
+    exit would swallow the traceback (forbidden).
+    """
+
+    current = threading.current_thread()
+    survivors = [
+        thread
+        for thread in threading.enumerate()
+        if thread is not current and not thread.daemon and thread.is_alive()
+    ]
+    if not survivors:
+        return
+    frames = sys._current_frames()
+    for thread in survivors:
+        stack = (
+            "".join(traceback.format_stack(frames.get(thread.ident)))
+            or "<no stack captured>\n"
+        )
+        logger.error(
+            f"exit guard: non-daemon thread alive at exit "
+            f"name={thread.name} ident={thread.ident}\n{stack}"
+        )
+    deadline = time.monotonic() + timeout
+    for thread in survivors:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    still_alive = [thread.name for thread in survivors if thread.is_alive()]
+    if not still_alive:
+        logger.warning(
+            "exit guard: surviving threads finished within the timeout"
+        )
+        return
+    if not force_exit:
+        logger.warning(
+            f"exit guard: threads still alive after the bounded join and "
+            f"the exit may lag ({still_alive}); not forcing exit in this "
+            f"entry — see the ERROR stacks above"
+        )
+        return
+    logger.error(
+        f"exit guard: forcing process exit after {timeout}s; "
+        f"threads still alive: {still_alive}"
+    )
+    logger.complete()
+    os._exit(3)
 
 
 def emit_run_identity(

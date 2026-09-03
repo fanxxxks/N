@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import threading
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -102,3 +104,89 @@ def test_emit_run_identity_renders_unknown_and_none_defaults(tmp_path: Path):
         r"config_sha256=none versions=\{\}",
         line,
     ), line
+
+
+def test_exit_guard_noop_without_survivors():
+    # Main thread only: the guard is a silent no-op.
+    from ashare_logging import guard_process_exit
+
+    guard_process_exit(timeout=0.1)
+
+
+def test_exit_guard_joins_threads_that_finish_in_time():
+    from ashare_logging import guard_process_exit
+
+    done = threading.Event()
+
+    def worker():
+        time.sleep(0.05)
+        done.set()
+
+    thread = threading.Thread(target=worker, name="guard-finishes")
+    thread.start()
+    guard_process_exit(timeout=10.0)
+    assert done.is_set()
+    assert not thread.is_alive()
+
+
+def test_exit_guard_forces_loud_exit_after_timeout(monkeypatch, tmp_path):
+    """F-08 (sync entry, force_exit=True): a surviving non-daemon thread
+    must never hang the interpreter silently — its stack is logged at
+    ERROR and the exit is forced loudly after the bounded join."""
+    from ashare_logging import guard_process_exit
+
+    release = threading.Event()
+    started = threading.Event()
+
+    def hang():
+        started.set()
+        release.wait(30)
+
+    thread = threading.Thread(target=hang, name="guard-hangs")
+    thread.start()
+    assert started.wait(5)
+    setup_run_logging(log_dir=tmp_path, run_name="guard", reset=True)
+    forced: list[int] = []
+    monkeypatch.setattr("os._exit", lambda code=0: forced.append(code))
+    try:
+        guard_process_exit(timeout=0.2)
+    finally:
+        release.set()
+        thread.join(5)
+    assert forced == [3]
+    text = get_log_text()
+    assert "guard-hangs" in text  # survivor named in the ERROR report
+    assert "forcing process exit" in text
+    assert "in hang" in text  # the survivor's stack is the evidence
+
+
+def test_exit_guard_detect_only_never_forces(monkeypatch, tmp_path):
+    """F-08 (pytest entry, force_exit=False): the session finalizer must
+    name a surviving non-daemon thread in the (immediately exported) log
+    but must NOT force-exit — the terminal report and CI result are
+    published after teardown and a forced exit would swallow them."""
+    from ashare_logging import guard_process_exit
+
+    release = threading.Event()
+    started = threading.Event()
+
+    def hang():
+        started.set()
+        release.wait(30)
+
+    thread = threading.Thread(target=hang, name="guard-detect-only")
+    thread.start()
+    assert started.wait(5)
+    setup_run_logging(log_dir=tmp_path, run_name="guard2", reset=True)
+    forced: list[int] = []
+    monkeypatch.setattr("os._exit", lambda code=0: forced.append(code))
+    try:
+        guard_process_exit(timeout=0.2, force_exit=False)
+    finally:
+        release.set()
+        thread.join(5)
+    assert forced == []  # detect-only: the forced path never fires
+    text = get_log_text()
+    assert "guard-detect-only" in text  # survivor named with its stack
+    assert "in hang" in text
+    assert "exit may lag" in text  # explicit, bounded, non-fatal warning
