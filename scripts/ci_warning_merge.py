@@ -31,12 +31,19 @@ from pathlib import Path
 
 START_MARK = "warnings summary"
 END_MARKS = ("slowest", "durations:", "short test summary")
-SUMMARY_RE = re.compile(r"(\d+) passed(?:, (\d+) skipped)?(?:, (\d+) warnings)? in ")
+# ``warnings?``: pytest spells the count in the singular when a run (or a
+# block) produced exactly one warning; the plural-only spellings let a
+# "1 warning" totals line escape the summary grammar entirely (IP-09,
+# 04-TC-05) and leak the "tests/test_x.py: 1 warning" group header into
+# the comparison (t1 serial gate runtime evidence: the train All-NaN
+# block flipped 2 warnings -> 1 warning and went net-new).
+SUMMARY_RE = re.compile(r"(\d+) passed(?:, (\d+) skipped)?(?:, (\d+) warnings?)? in ")
 # Group-count headers ("tests/test_x.py: 500 warnings") carry instance
 # multiplicity, which is documented as non-comparable across xdist and
 # serial shapes (PR3 criterion); the location/message lines carry the
-# actual warning kinds and stay in the section.
-COUNT_HEADER_RE = re.compile(r"^tests/\S*: \d+ warnings$")
+# actual warning kinds and stay in the section.  The singular spelling
+# ("tests/test_x.py: 1 warning") is the same non-comparable header.
+COUNT_HEADER_RE = re.compile(r"^tests/\S*: \d+ warnings?$")
 
 # In-repo package/tool anchors: a warnings-summary location is normalized
 # to start at the last of these, so a Windows dev tree (D:\...\),
@@ -201,10 +208,14 @@ def write_baseline(out_path: Path, from_log: Path, provenance: str) -> int:
     payload = {
         "provenance": provenance,
         "total_warnings": warnings,
-        "section_lines": sorted(section),
+        # Deduplicated: compare() is set-based, so duplicates never changed
+        # enforcement, but the committed artifact must not carry instance
+        # multiplicity (the t1 serial gate produced the same node header
+        # once per warning block; IP-09).
+        "section_lines": sorted(set(section)),
     }
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    print(f"wrote {out_path} ({warnings} warnings, {len(section)} section lines)")
+    print(f"wrote {out_path} ({warnings} warnings, {len(set(section))} section lines)")
     return 0
 
 
