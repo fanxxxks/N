@@ -1,9 +1,25 @@
-"""Factor inventory audit measurement run (team task t5, 2026-09-01).
+"""Factor inventory audit measurement tool — single parameterized harness.
 
-RESEARCH DIAGNOSTIC -- not promotion evidence.  Final audit of the POST-P9
-v4 vocabulary (73 features: 62 pre-P9 + 11 orthogonal-family additions;
-9 deprecated members stay computed and measurable) on the real local
-DuckDB history through the project's single semantic paths only:
+Consolidates the two formerly duplicated audit scripts (IP-14 concept
+convergence; they were mutual ~600-line copies differing only in the
+generation profile):
+
+* ``docs/factor_inventory_audit_20260831/audit_run.py`` (t2, 2026-08-31,
+  62-feature baseline; frozen in git history at commit 23c82f4);
+* ``docs/factor_inventory_audit_v4_20260901/audit_run_v4.py`` (t5,
+  2026-09-01, 73-feature post-P9 v4 audit; frozen in git history at
+  commit d6a034d).
+
+The per-directory ``metrics.json`` / ``audit_report*.md`` measurement
+evidence stays in place; ``COMPATIBILITY.md`` in each directory points
+here.  Per the p13 contract freeze
+(``docs/p13_fundamental_fields_contract.md`` §3.3) the historical scripts
+are never edited — adjudication re-tests run THIS script (a new script)
+against a profile, never the frozen evidence.
+
+RESEARCH DIAGNOSTIC -- not promotion evidence.  Measures the factor
+vocabulary on the real local DuckDB history through the project's single
+semantic paths only:
 
 * data + universe mask : ashare_model.data_loader.AshareDataLoader (strict PIT
   contract, no dev fallback);
@@ -14,7 +30,9 @@ DuckDB history through the project's single semantic paths only:
   same FactorContext (isfinite before the neutral 0-fill);
 * PIT frames           : ashare_data.fundamentals.build_pit_frames /
   ashare_data.capital_flow.build_capital_frames (the loader's own builders);
-* rank IC / ICIR       : ashare_model.reward.rank_ic_series / icir_from_series;
+* rank IC / ICIR       : ashare_model.reward.rank_ic_series / icir_from_series
+  (the single rank-correlation semantic path; IP-14 also routes the
+  factor-vs-size exposure Spearman through it);
 * cost estimate        : ashare_model.cost_matrix.round_trip_cost under the
   shared BacktestConfig fee schedule.
 
@@ -30,12 +48,18 @@ evaluated on the pooled correlation matrix computed here for memory reasons
 and cross-checked against feature_registry._correlation_clusters on a
 date-subsample.
 
-Writes one JSON artifact (metrics + provenance).  The narrative report is
-authored separately from this JSON.  Read-only with respect to the database.
+Writes one JSON artifact (metrics + provenance) into the profile's evidence
+directory (override with ``--out-dir``).  The narrative report is authored
+separately from this JSON.  Read-only with respect to the database.
+
+Usage:
+    python scripts/factor_inventory_audit.py --generation v1
+    python scripts/factor_inventory_audit.py --generation v4
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import sys
@@ -45,7 +69,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -74,20 +98,77 @@ from ashare_model.factors import (  # noqa: E402
     NEUTRAL_FEATURE_NAMES,
 )
 from ashare_model.reward import (  # noqa: E402
-    _pearson,
-    _rankdata,
     icir_from_series,
     rank_ic_series,
 )
 from ashare_model.vocab import FEATURE_NAMES  # noqa: E402
 
-OUT_DIR = Path(__file__).resolve().parent
 HORIZONS = (1, 2, 3, 5, 10, 15, 20)
 MIN_STOCKS = 10
 IS_CUTOFF = "20220101"
 BASELINE_SIGNALS = ("REVERSAL_5", "RSQ_60", "ILLIQ_20", "OVERNIGHT_RET",
                     "MOMENTUM_20", "ROE", "TURNOVER")
 CORR_REPORT_THRESHOLD = 0.7
+
+# Generation profiles: the complete v1 -> v4 delta of the retired scripts
+# (feature-count expectation + provenance strings + v4-only vocabulary
+# assertions and the factor-compute version entry).  Everything else is
+# shared code, so each profile reproduces its original JSON schema exactly.
+_PROFILES: dict[str, dict] = {
+    "v1": {
+        "out_dirname": "factor_inventory_audit_20260831",
+        "expected_features": 62,
+        "audit_generation": None,
+        "baseline_predecessor": None,
+        "manifest_note": (
+            "manifest rebuild pending (t1 blocker); id computed read-only"
+        ),
+        "check_v4_tail": False,
+        "include_factor_compute": False,
+    },
+    "v4": {
+        "out_dirname": "factor_inventory_audit_v4_20260901",
+        "expected_features": 73,
+        "audit_generation": "v4 (P9 post-implementation final audit, task t5)",
+        "baseline_predecessor": (
+            "docs/factor_inventory_audit_20260831/metrics.json "
+            "(t2, 62-feature baseline)"
+        ),
+        "manifest_note": (
+            "manifest persisted 2026-08-31T15:23:51Z (t10); "
+            "id computed read-only matches"
+        ),
+        "check_v4_tail": True,
+        "include_factor_compute": True,
+    },
+}
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Factor inventory audit measurement harness (research "
+            "diagnostic; --generation selects the historical profile)."
+        )
+    )
+    parser.add_argument(
+        "--generation",
+        choices=sorted(_PROFILES),
+        required=True,
+        help=(
+            "audit generation profile: v1 = t2 62-feature baseline "
+            "(2026-08-31), v4 = t5 73-feature post-P9 audit (2026-09-01)"
+        ),
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=None,
+        help=(
+            "output directory for metrics.json (default: the profile's "
+            "evidence directory under docs/)"
+        ),
+    )
+    return parser.parse_args(argv)
 
 
 def jdefault(obj):
@@ -197,13 +278,6 @@ def quintile_turnover(z_row: np.ndarray, mask: np.ndarray, h: int,
     }
 
 
-def cross_sectional_spearman(a: np.ndarray, b: np.ndarray) -> float:
-    ok = np.isfinite(a) & np.isfinite(b)
-    if int(ok.sum()) < MIN_STOCKS:
-        return np.nan
-    return _pearson(_rankdata(a[ok]), _rankdata(b[ok]))
-
-
 def union_find_clusters(corr: np.ndarray, names: list[str],
                         threshold: float) -> dict[str, str]:
     """Connected components at |corr| >= threshold (the registry's semantics)."""
@@ -229,9 +303,12 @@ def union_find_clusters(corr: np.ndarray, names: list[str],
     return {name: f"c{k}" for k, g in enumerate(groups) for name in g}
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     t_start = time.time()
     provenance: dict = {}
+
+    args = _parse_args(argv)
+    profile = _PROFILES[args.generation]
 
     raw = load_config(None, project_root=ROOT)
     config = make_data_config(raw, ROOT)
@@ -242,17 +319,22 @@ def main() -> int:
     dates = list(loader.dates)
     years = [d[:4] for d in dates]
     mask = np.asarray(loader.universe_mask, dtype=bool)
-    tensor = loader.factor_tensor.numpy().astype(np.float32)  # [62, S, T]
+    tensor = loader.factor_tensor.numpy().astype(np.float32)  # [n_f, S, T]
     open_np = loader.raw_data_cache["open"].numpy().astype(np.float64)
 
     n_f, s_n, t_n = tensor.shape
-    # P9 v4 vocabulary: 73 features (62 pre-v4 + 11 P9 additions, tail),
-    # deprecated members still computed and therefore still measurable.
-    from ashare_model.vocab import DEPRECATED_FEATURE_NAMES, _FEATURE_NAMES_V4
+    assert n_f == len(FEATURE_NAMES) == profile["expected_features"], (
+        f"expected {profile['expected_features']} features, got {n_f}"
+    )
+    if profile["check_v4_tail"]:
+        # P9 v4 vocabulary: 73 features (62 pre-v4 + 11 P9 additions, tail),
+        # deprecated members still computed and therefore still measurable.
+        from ashare_model.vocab import DEPRECATED_FEATURE_NAMES, _FEATURE_NAMES_V4
 
-    assert n_f == len(FEATURE_NAMES) == 73, f"expected 73 features, got {n_f}"
-    assert list(FEATURE_NAMES[-len(_FEATURE_NAMES_V4):]) == list(_FEATURE_NAMES_V4)
-    assert set(DEPRECATED_FEATURE_NAMES) <= set(FEATURE_NAMES)
+        assert list(FEATURE_NAMES[-len(_FEATURE_NAMES_V4):]) == list(
+            _FEATURE_NAMES_V4
+        )
+        assert set(DEPRECATED_FEATURE_NAMES) <= set(FEATURE_NAMES)
     assert mask.shape == (s_n, t_n)
     is_oos = np.array([d >= IS_CUTOFF for d in dates])
     is_mask_flat = np.broadcast_to(is_oos, (s_n, t_n)).reshape(-1)
@@ -265,8 +347,9 @@ def main() -> int:
     from ashare_model.alphagpt import MODEL_VERSION
     from ashare_model.data_tier import DATA_TIER_VERSION
     from ashare_model.evaluation import PROTOCOL_VERSION
-    from ashare_model.factors import FACTOR_COMPUTE_VERSION
     from ashare_model.feature_registry import FEATURE_REGISTRY_VERSION
+    if profile["include_factor_compute"]:
+        from ashare_model.factors import FACTOR_COMPUTE_VERSION
     from ashare_model.research_domain import RESEARCH_DOMAIN_VERSION
     from ashare_model.reward import REWARD_VERSION
     from ashare_model.search_contract import SEARCH_CONTRACT_VERSION
@@ -277,7 +360,10 @@ def main() -> int:
     provenance["versions"] = {
         "protocol": PROTOCOL_VERSION, "reward": REWARD_VERSION,
         "model": MODEL_VERSION, "grammar": GRAMMAR_VERSION,
-        "factor_compute": FACTOR_COMPUTE_VERSION,
+        **(
+            {"factor_compute": FACTOR_COMPUTE_VERSION}
+            if profile["include_factor_compute"] else {}
+        ),
         "feature_registry": FEATURE_REGISTRY_VERSION,
         "data_tier": DATA_TIER_VERSION,
         "research_domain": RESEARCH_DOMAIN_VERSION,
@@ -286,14 +372,20 @@ def main() -> int:
         "portfolio_constructor": PORTFOLIO_CONSTRUCTOR_VERSION,
         "rebalance_policy": REBALANCE_POLICY_VERSION,
     }
+    generation_fields: dict = {}
+    if profile["audit_generation"] is not None:
+        generation_fields["audit_generation"] = profile["audit_generation"]
+    if profile["baseline_predecessor"] is not None:
+        generation_fields["baseline_predecessor"] = profile[
+            "baseline_predecessor"
+        ]
     provenance.update({
         "run_type": "research_diagnostic (not promotion evidence)",
-        "audit_generation": "v4 (P9 post-implementation final audit, task t5)",
-        "baseline_predecessor": "docs/factor_inventory_audit_20260831/metrics.json (t2, 62-feature baseline)",
+        **generation_fields,
         "dataset_window": [dates[0], dates[-1]],
         "n_stocks": int(s_n), "n_dates": int(t_n),
         "dataset_id_computed_unpersisted": dataset_id_current,
-        "manifest_note": "manifest persisted 2026-08-31T15:23:51Z (t10); id computed read-only matches",
+        "manifest_note": profile["manifest_note"],
         "is_oos_split": {"is": f"< {IS_CUTOFF}", "oos": f">= {IS_CUTOFF}"},
         "min_stocks": MIN_STOCKS,
         "baseline_signals": list(BASELINE_SIGNALS),
@@ -357,15 +449,21 @@ def main() -> int:
     n_groups = max(len(ind_groups), 1)
 
     def exposure_of(vals: np.ndarray, fin: np.ndarray) -> dict:
-        size_rhos: list[float] = []
+        # Size exposure rides the single rank-correlation semantic path
+        # (reward.rank_ic_series; IP-14): its per-day eligible set --
+        # universe_mask & isfinite(target) & isfinite(signal), min_stocks
+        # on the intersection -- is exactly the set the retired local
+        # cross_sectional_spearman wrapper evaluated, so the rho values are
+        # bit-identical (parity property test: tests/test_reward.py).
+        size_rhos = rank_ic_series(
+            vals[None], log_cap, min_stocks=MIN_STOCKS, universe_mask=mask
+        )[0]
+        sr = size_rhos[np.isfinite(size_rhos)]
         ind_r2: list[float] = []
         for t in range(t_n):
             col_ok = fin[:, t]
             if int(col_ok.sum()) < MIN_STOCKS:
                 continue
-            rho = cross_sectional_spearman(vals[col_ok, t], log_cap[col_ok, t])
-            if np.isfinite(rho):
-                size_rhos.append(rho)
             ii = ind_idx[col_ok]
             good = ii >= 0
             if int(good.sum()) < MIN_STOCKS:
@@ -384,7 +482,6 @@ def main() -> int:
             total = float(np.sum((y - grand) ** 2)) / float(y.size)
             if total > 1e-12:
                 ind_r2.append(between / total)
-        sr = np.asarray(size_rhos, dtype=float)
         r2 = np.asarray(ind_r2, dtype=float)
         return {
             "size_spearman_mean": float(sr.mean()) if sr.size else None,
@@ -606,7 +703,11 @@ def main() -> int:
         },
         "runtime_seconds": round(time.time() - t_start, 1),
     }
-    out = OUT_DIR / "metrics.json"
+    out_dir = (
+        Path(args.out_dir) if args.out_dir
+        else ROOT / "docs" / profile["out_dirname"]
+    )
+    out = out_dir / "metrics.json"
     out.write_text(json.dumps(metrics, ensure_ascii=False, indent=1, default=jdefault),
                    encoding="utf-8")
     print(f"WROTE {out} in {metrics['runtime_seconds']}s", flush=True)

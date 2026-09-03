@@ -12,6 +12,8 @@ from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.candidates import CandidateScorer, CandidateSpec
 from ashare_model.reward import (
     REWARD_VERSION,
+    _pearson,
+    _rankdata,
     batched_basket_rewards,
     formula_reward,
     icir_from_series,
@@ -1361,3 +1363,58 @@ def test_v15_reward_config_invariants():
     bill31 = CandidateSpec("p11-bill31", "bill31", "contract", tokens["bill31"])
     assert scorer.complexity_penalty(bill30) == 0.0
     assert scorer.complexity_penalty(bill31) == pytest.approx(0.05 * 0.10)
+
+
+def _rank_ic_reference_day(
+    signal_col: np.ndarray, target_col: np.ndarray, mask_col: np.ndarray,
+    min_stocks: int,
+) -> float:
+    """The documented per-day rank-IC definition, as a plain loop: the
+    eligible set is universe_mask & isfinite(target) & isfinite(signal),
+    min_stocks applies to the intersection, and rho is Pearson over
+    average ranks (NaN on degenerate/under-identified days).  Independent
+    of the implementation's vectorization; the primitives are the shared
+    _pearson/_rankdata the contract names."""
+
+    valid = mask_col & np.isfinite(target_col) & np.isfinite(signal_col)
+    if int(valid.sum()) < min_stocks:
+        return np.nan
+    return _pearson(_rankdata(signal_col[valid]), _rankdata(target_col[valid]))
+
+
+def test_rank_ic_series_matches_per_day_reference_semantics():
+    """IP-14 parity anchor for the consolidated factor-inventory audit
+    tool: rank_ic_series's per-day eligible set and rho values must equal
+    the documented definition above -- bit-identical -- across random,
+    tie-heavy, NaN-bearing and under-identified windows.  The retired
+    audit-script wrapper (finite-pair filter + _pearson(_rankdata(...)))
+    evaluated exactly this set, so this pins the single semantic path the
+    consolidated tool now rides."""
+
+    rng = np.random.default_rng(1409)
+    s, t, min_stocks = 24, 12, 10
+    for trial in range(8):
+        signals = rng.normal(size=(3, s, t))
+        target = rng.normal(size=(s, t))
+        mask = rng.random((s, t)) < 0.85
+        signals[rng.random((3, s, t)) < 0.1] = np.nan
+        target[rng.random((s, t)) < 0.05] = np.nan
+        if trial % 2 == 0:
+            signals[0] = np.round(signals[0])  # tie-heavy rows
+        if trial == 2:
+            signals[1, :, 3] = 1.0  # constant slice -> degenerate day
+        if trial == 4:
+            mask[:, 9] = False  # guaranteed under-identified day
+        out = rank_ic_series(signals, target, min_stocks=min_stocks,
+                             universe_mask=mask)
+        assert out.shape == (3, t)
+        for b in range(3):
+            for day in range(t):
+                ref = _rank_ic_reference_day(
+                    signals[b, :, day], target[:, day], mask[:, day],
+                    min_stocks,
+                )
+                if np.isnan(ref):
+                    assert np.isnan(out[b, day]), (trial, b, day)
+                else:
+                    assert out[b, day] == ref, (trial, b, day)

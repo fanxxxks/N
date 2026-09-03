@@ -85,3 +85,30 @@ def test_local_full_suite_gate_runs_parallel() -> None:
 
     assert PYTEST_GATE_CMD in AGENTS
     assert PYTEST_GATE_CMD in _onboarding_recommended_commands()
+
+
+def test_docs_contains_no_executable_python() -> None:
+    """IP-14 (docs hygiene): docs/ carries measurement evidence, narrative
+    reports and contracts only -- runnable code lives in scripts/ (or
+    proper packages).  The factor-inventory audit harnesses were
+    consolidated into scripts/factor_inventory_audit.py with per-directory
+    COMPATIBILITY.md pointers; this drift guard keeps docs/ .py-free."""
+
+    py_files = sorted(
+        p.relative_to(ROOT).as_posix()
+        for p in (ROOT / "docs").rglob("*.py")
+    )
+    assert not py_files, f"executable .py files under docs/: {py_files}"
+
+
+def test_audit_harness_consolidation_pointers_exist() -> None:
+    """IP-14: both audit evidence directories keep their COMPATIBILITY.md
+    pointer to the consolidated tool, and the consolidated tool exists."""
+
+    for marker in (
+        "docs/factor_inventory_audit_20260831/COMPATIBILITY.md",
+        "docs/factor_inventory_audit_v4_20260901/COMPATIBILITY.md",
+    ):
+        assert (ROOT / marker).is_file(), f"missing pointer: {marker}"
+    assert (ROOT / "scripts" / "factor_inventory_audit.py").is_file()
+    assert (ROOT / "scripts" / "limit_incidence_probe.py").is_file()

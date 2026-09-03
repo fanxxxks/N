@@ -5,7 +5,11 @@ limit-ups, intraday breaks and sealed limit-downs occur per session, so the
 family-3 (limit-event conditional) contract can commit to event definitions
 with known cross-sectional incidence.  Run:
 
-    python docs/factor_inventory_audit_20260831/limit_incidence_probe.py
+    python scripts/limit_incidence_probe.py
+
+(IP-14 moved this probe out of docs/ — see
+docs/factor_inventory_audit_20260831/COMPATIBILITY.md; the historical copy
+lives in git history at commit 23c82f4.)
 """
 
 from __future__ import annotations
