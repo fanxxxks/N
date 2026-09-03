@@ -717,3 +717,48 @@ engineering run type；不构成任何研究/收益结论。
   （G8 测试注入缝）并在含 d4f0011 增量的精确 tip 上重跑全量串行 +
   D2；全量绿且零警告守恒后方可宣告 push-ready。
 - 研究结论边界：engineering run type；不产生也不声称任何研究结论。
+
+## 终验 push-target 门禁（2026-09-03，main @ 6e72f4c，t23/t21/t24 全部并入后的最终终验）
+
+- 被测实现：`6e72f4c0091db9c2593b617dcec4e956d4660cf1`（main tip =
+  push 对象；含 16 IP 全部交付 + t23 夹具修复 + t21 懒导入清算 +
+  t24 lock 新基线 + p16 治理归档）。工作树 tracked 干净；既有未跟踪
+  `docs/p5_implementation_plan.md`、`papers/`（任务前已存在）。
+- 命令：`python -m pytest -q tests`（串行，`cmd /c` 完整重定向，IP-10
+  口径）。解释器 = CPU 路径（`C:\ProgramData\miniconda3\python.exe`，
+  torch `2.11.0+cpu`，cuda False），与 U9 裁决及基线 provenance 一致。
+- 结果（2026-09-03 18:17–18:45 +08）：**1548 passed, 6 skipped, 0
+  warnings in 1696.42s（0:28:16）**，exit 0。原始产物
+  `logs/gate_6e72f4c.txt`（2363 字节，SHA256
+  `51121787D9C45B8741D7922BC90DC7333413EF44BD86C8C7A64FBA2CCE92C8DF`；
+  全绿零警告形态，无 warnings summary section）。
+- 计数勾稽（精确闭合）：1547 collected（7f2d76a 终验口径：1539 passed
+  + 8 failed）+ 1（d4f0011 `test_train_module_split` 新用例）= 1548
+  collected ✓；passed +9 = 8（t23 修复的原 G8 formal-entry 失败项全部
+  转绿）+ 1（新用例）✓；skipped 6 持平（5 CUDA skipif + 1 IP-04 登记
+  守卫）✓；warnings 0 持平 ✓。
+- D2 归并检查：`--check --expect 1 --baseline docs/ci_warning_baseline.json
+  --logs logs/gate_6e72f4c.txt` → **exit 0 "baseline holds"**——零警告
+  债务形态在 push 对象 tip 守恒。
+- 修复口径披露（t23，测试修改白名单第 2 类 = 需求变更经契约）：8 项
+  formal-entry 测试的合成 fixture 改为 today-relative（dcccb1a conftest
+  机制化 +60 行；7e44a40 扩展至全部 8 项，"hybrid, mechanism-driven"），
+  断言本体未弱化、仅 fixture 日历/数据锚定测试日，满足 p16 契约 G8
+  语义；治理链 = p16 契约（1745773）→ 2f5e18b 批准归档。t21 生产改动
+  （15ea468 train-chain 懒导入清算 + runspec 属主重指向，baseline_
+  harness/runspec/train_search_run）随本全量覆盖验证。
+- lock 新基线增量说明：t24 重生成 `requirements.lock`（唯一 diff =
+  scs==3.3.0 → 3.2.11，yanked pin 退役；requirements.txt/-optional 零
+  变化）。本门禁解释器为 miniconda CPU（U9 裁决门禁口径；其 38 包
+  既有超集漂移为已裁决"不对齐"状态，不影响门禁证据口径）；lock 侧
+  t19 lock-watchdog 的首次远端 schedule 触发待 push 后验证。
+- 未运行项：ubuntu/py3.12 CI 形态（4 分片 matrix + test-warning-merge
+  归并 job）、web job（`npm ci`/`npm ls --depth=0`/`npm run build`）、
+  `pip check`、`freeze_lock --check`、`compileall -j 0`；真实 sync
+  验证（G8 真实墙钟测量 + IP-11 F-08 退出归因）仍待授权；push 本身由
+  captain 按用户裁决 U1 执行（不在本条目范围内）。
+- **push-ready 判定：成立**——全量绿（exit 0）+ D2 exit 0（零警告
+  守恒）+ skipped 基线守恒 + 被测 SHA = push 对象 tip（6e72f4c，运行
+  期间 tip 无移动）+ 计数精确闭合。本条目为该 tip 的本地串行门禁
+  证据；ubuntu/py3.12 与 web 形态仍属 push 后 CI 验证范围（§10.2）。
+- 研究结论边界：engineering run type；不产生也不声称任何研究结论。
