@@ -83,6 +83,7 @@ from .train_windows import (
 )
 from .vm import StackVM, formula_decode
 from .vocab import FORMULA_VOCAB, GRAMMAR_VERSION
+from .versions import PROTOCOL_VERSION
 from ashare_portfolio.rebalance import RebalancePolicy
 from ashare_portfolio.execution_spec import execution_provenance
 from . import ir as ir_module
@@ -756,8 +757,6 @@ class AshareTrainer:
         selection_path = self.data_config.data_dir / "training_selection.json"
         if save_artifacts:
             selection_path.parent.mkdir(parents=True, exist_ok=True)
-            from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
-
             selection_payload = {
                 "reward_version": REWARD_VERSION,
                 "protocol_version": PROTOCOL_VERSION,
@@ -903,7 +902,6 @@ class AshareTrainer:
         if selected is None:
             return None
         # ``evaluation`` imports this module at module level; resolve lazily.
-        from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
         from .artifact_writer import write_boundary_artifact  # noqa: PLC0415
         from .identity import candidate_id  # noqa: PLC0415
         from .run_store import RunStore  # noqa: PLC0415
@@ -1154,10 +1152,7 @@ class AshareTrainer:
         # reused across datasets or measurement generations, and its budget
         # counts **unique semantic evaluations** — structurally identical
         # (canonical AST hash) and numerically equivalent (calibration
-        # fingerprint) formulas never bill twice.  ``evaluation`` imports
-        # this module at module level, so its constant is resolved lazily.
-        from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
-
+        # fingerprint) formulas never bill twice.
         self.semantic_cache = SemanticCache(
             dataset_id=self.loader.dataset_id,
             reward_version=REWARD_VERSION,
@@ -1356,7 +1351,6 @@ class AshareTrainer:
         # Lazily imported: baseline_harness imports this module for uniform
         # random formula sampling, so the cycle is broken at call time.
         from .baseline_harness import SemanticBudgetEvaluator  # noqa: PLC0415
-        from .evaluation import PROTOCOL_VERSION  # noqa: PLC0415
 
         def execute(tokens) -> np.ndarray | None:
             signal = self.vm.execute(tokens, window.factor_tensor)

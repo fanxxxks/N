@@ -9,8 +9,10 @@ definitions, statistical corrections or search backends change.
 
 Monkeypatch compatibility: ``build_result`` reads ``PROTOCOL_VERSION`` and
 ``REWARD_VERSION`` **through the facade at call time** — tests pin versions
-via ``monkeypatch.setattr(evaluation, "REWARD_VERSION", ...)`` and the
-facade remains the protocol version's single home.
+via ``monkeypatch.setattr(evaluation, "REWARD_VERSION", ...)``.  Since
+IP-07a the protocol version's single home is the leaf module
+``ashare_model.versions``; the facade re-exports it and remains the
+late-binding read path.
 """
 
 from __future__ import annotations
@@ -198,8 +200,9 @@ def build_result(
     """
 
     # Late binding through the facade: tests pin versions via
-    # ``monkeypatch.setattr(evaluation, "REWARD_VERSION", ...)`` and the
-    # facade is PROTOCOL_VERSION's single home.
+    # ``monkeypatch.setattr(evaluation, "REWARD_VERSION", ...)``.
+    # PROTOCOL_VERSION's single home is ashare_model.versions (IP-07a);
+    # the facade re-exports it and stays the late-binding read path.
     from ashare_model import evaluation as _facade  # noqa: PLC0415
 
     if backtest_config is None:

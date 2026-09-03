@@ -472,7 +472,8 @@ def _search_evaluator(
     """
 
     # Late binding through the facade: PROTOCOL_VERSION's single home is
-    # the facade module (recorded in every artifact).
+    # the leaf module ashare_model.versions (IP-07a), re-exported by the
+    # facade and recorded in every artifact.
     from ashare_model import evaluation as _facade  # noqa: PLC0415
 
     return SemanticBudgetEvaluator(
