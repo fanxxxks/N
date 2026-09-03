@@ -971,7 +971,7 @@ flowchart LR
 | 默认搜索 | gp | RL 准入失败后的生产默认 |
 | 默认预算 | 150 × 256；公式最长 12 | unique semantic evaluations 上限通常为 steps × batch |
 | 验证 | 尾部 35%，4 子窗中位数 | 与 IS 学习窗隔离 |
-| reward | clip [-1,1]、cost weight 1、complexity 0.02、max complexity 25 | YAML 未列字段继承 dataclass |
+| reward | clip ±10（<code>bad_reward</code> −20）、cost weight 1、complexity 两段式（<code>free_bill≤3</code> 免罚、超出 0.05/单位）、max complexity 25（v15） | YAML 未列字段继承 dataclass（[config.py](../ashare_data/config.py#L133)） |
 | 质量门禁 | val reward ≥0、val ICIR ≥.05、8 IC days、coverage .2、activity .05、sign stability .5 | 详见 RewardConfig |
 | 容量 | position / execution-day ADV ≤ .25 | 需要 loader 提供 dollar volume |
 | 协议 | 5 个年度 OOS fold × 3 seed | 2021-2025 OOS |
