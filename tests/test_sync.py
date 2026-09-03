@@ -468,3 +468,53 @@ def test_sync_all_emits_identity_header_first(tmp_path: Path):
     assert match, header
     versions = json.loads(match.group(2))
     assert set(versions) == {"akshare", "duckdb", "sync_tool"}
+
+
+def test_exit_guard_noop_without_survivors():
+    # Main thread only: the guard is a silent no-op.
+    sync._guard_process_exit(timeout=0.1)
+
+
+def test_exit_guard_joins_threads_that_finish_in_time():
+    done = threading.Event()
+
+    def worker():
+        time.sleep(0.05)
+        done.set()
+
+    thread = threading.Thread(target=worker, name="guard-finishes")
+    thread.start()
+    sync._guard_process_exit(timeout=10.0)
+    assert done.is_set()
+    assert not thread.is_alive()
+
+
+def test_exit_guard_forces_loud_exit_after_timeout(monkeypatch, tmp_path):
+    """F-08: a surviving non-daemon thread must never hang the interpreter
+    silently — its stack is logged at ERROR and the exit is forced loudly
+    (never a silent ``os._exit`` swallow)."""
+    from ashare_logging import get_log_text, setup_run_logging
+
+    release = threading.Event()
+    started = threading.Event()
+
+    def hang():
+        started.set()
+        release.wait(30)
+
+    thread = threading.Thread(target=hang, name="guard-hangs")
+    thread.start()
+    assert started.wait(5)
+    setup_run_logging(log_dir=tmp_path, run_name="guard", reset=True)
+    forced: list[int] = []
+    monkeypatch.setattr(sync.os, "_exit", lambda code=0: forced.append(code))
+    try:
+        sync._guard_process_exit(timeout=0.2)
+    finally:
+        release.set()
+        thread.join(5)
+    assert forced == [3]
+    text = get_log_text()
+    assert "guard-hangs" in text  # survivor named in the ERROR report
+    assert "forcing process exit" in text
+    assert "in hang" in text  # the survivor's stack is the evidence
