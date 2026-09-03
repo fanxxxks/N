@@ -335,3 +335,42 @@ message 与评审记录（测量日志只承载测量与门禁命令矩阵本身
   provenance 不变）。
 - 复核：修复后同一 xdist 日志 D2 检查 = 0 net-new（exit 0）——本地
   `-n auto` 门禁与 warning 基线完全兼容；CI 串行分片形态同理。
+
+## IP-03 F2-(a) 公平性重探针记录（2026-09-03，树 eaeb898）
+
+决策⑥（t59）重探针义务的机器化触发首次执行（IP-03，改进计划选项 a+b
+并用）：两探针固化为 `ashare_model/research_doctor.py` 的
+`gather_fairness_probes()` 预检项（实现 commit `eaeb898`，分解为 5 项
+机器断言），doctor 每次运行即在当前树实跑；基线
+`docs/fairness_probe_baseline.json` 记录词汇指纹 `0e64ad614bfd`
+（grammar-6），指纹不一致即触发重探流程（doctor warning，冻结布局
+断言同时变红 = doctor error，fail-closed）。
+
+- 环境：Windows，Python 3.13.12（`D:\minequant\.venv\Scripts\python.exe`，
+  torch 2.11.0+cu128 / deap 1.4.4 / duckdb 1.5.5）；工作树
+  `D:\minequant\wt-contract`（分支 improve/contract，HEAD = 被测实现
+  `eaeb898e87c6941173059dbbbbd783ba7cb6c0b1`，tracked 干净）。
+- 性质：engineering（在树确定性检查，只读）；不构成任何研究/收益结论。
+- 命令与结果：
+  1. `python -m pytest -q tests/test_research_doctor.py` → **19 passed**
+     （含 `test_fairness_probes_live_on_current_tree` 在树实跑钉）。
+     RED 证据：实现暂存（git stash）时 `-k fairness` → **4 failed /
+     1 passed**，失败恰为 4 条新增测试，唯一通过项为"节缺省兼容"守卫
+     （其断言对象即改动前形态，属预期）。
+  2. `python -m ashare_model.research_doctor`（`ASHARE_DUCKDB_PATH`
+     指向主检出生产库，只读连接）→ **exit 0 / HEALTHY：fairness
+     probes 5/5 PASS（vocab fingerprint 0e64ad614bfd）**；G1–G7 formal
+     7/7 PASS；dataset_id `b7b4dd4b…`（manifest v1，10,918,703 行）；
+     warning = baseline missing——由本记录与基线文件收口。
+- 探针判定（与决策⑥/t59 口径一致，本树实测）：family-⑤ ids =
+  [74, 75, 76, 77]（CASHFLOW_QUALITY / ACCRUALS / ASSET_GROWTH /
+  EARNINGS_ACCEL）；`build_action_mask(feature_ids=[74..77])` step-0
+  合法集恰为该四元；全词表 mask step-0 合法特征 65 = 77 − 12
+  deprecated、零泄漏；GP `build_pset` 限制终端恰为族⑤ 4 名（无重复）、
+  全词表唯一终端 65、零 deprecated 终端。
+- 未运行项：全量 pytest（evidence-runner 统一窗口，勿并行）；doctor
+  的 gates/data 值仅为 2026-09-03 当次快照，不构成数据新鲜度结论
+  （G8 未实现，见 docs/p16_data_freshness_gate_contract.md）。
+- 后续：正式运行重启前置 = "doctor fairness probes PASS on the run
+  tree"（改进计划 §4.4 前置 iii 的机器化落点）；checklist 文档归集属
+  IP-16（t12）。决策台账⑥的状态更新属用户持有文件，留待用户/captain。
