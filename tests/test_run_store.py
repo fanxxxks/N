@@ -393,10 +393,12 @@ _CONTRACT_PATH = Path(__file__).resolve().parents[1] / (
 
 
 def _gate_checks(ok=True):
-    """Seven G1..G7 checks using the producer's real naming convention."""
+    """Eight G1..G8 checks using the producer's real naming convention
+    (p16: the data-qualification space is G1–G8 once the freshness gate
+    lands; the completeness rule demands all eight)."""
     return [
         {"name": f"G{i} synthetic check", "ok": ok, "detail": "ok" if ok else "fail"}
-        for i in range(1, 8)
+        for i in range(1, 9)
     ]
 
 
@@ -669,6 +671,58 @@ def test_lifecycle_gate_fail_refused_with_evidence_preserved(tmp_path):
     assert writer.current_state == "SPEC_LOCKED"
     types = [e["artifact_type"] for e in handle.load_index()["artifacts"]]
     assert types.count("data_qualification_report") == 1  # evidence preserved
+
+
+def test_lifecycle_rejects_seven_gate_report_as_incomplete(tmp_path):
+    """p16 §4.1: the completeness rule is G1–G8 — a report carrying only
+    the pre-G8 seven checks must be refused (fail-closed against a
+    verdict that would silently ignore the freshness gate)."""
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    report = _clean_data_report(spec)
+    report["gate_checks"] = _gate_checks(ok=True)[:7]
+    report["gate_result_hash"] = lifecycle.content_hash(
+        "gate_result",
+        {
+            "mode": report["mode"],
+            "degraded": report["degraded"],
+            "checks": report["gate_checks"],
+        },
+    )
+    with pytest.raises(lifecycle.DataQualificationError, match="incomplete"):
+        writer.qualify_data(report)
+
+
+def test_lifecycle_rejects_failed_g8_check(tmp_path):
+    """p16 §6.4: a failing G8 must refuse DATA_QUALIFIED with the check
+    named in the error (never silently swallowed by the verdict)."""
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    report = _clean_data_report(spec)
+    checks = _gate_checks(ok=True)
+    checks[-1]["ok"] = False
+    checks[-1]["detail"] = "daily 20260821 vs reference 20260901, lag=8 > 3"
+    report["gate_checks"] = checks
+    report["gate_result_hash"] = lifecycle.content_hash(
+        "gate_result",
+        {
+            "mode": report["mode"],
+            "degraded": report["degraded"],
+            "checks": report["gate_checks"],
+        },
+    )
+    with pytest.raises(lifecycle.DataQualificationError, match="G8"):
+        writer.qualify_data(report)
 
 
 def test_lifecycle_degraded_or_dev_or_missing_days_refused(tmp_path):

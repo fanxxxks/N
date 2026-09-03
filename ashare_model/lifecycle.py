@@ -453,11 +453,11 @@ def _require_non_empty_str(payload: dict[str, Any], key: str, what: str) -> str:
 
 
 def _gate_check_names(checks: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
-    """Map G1..G7 from the producer's naming convention (``G<n> ...``)."""
+    """Map G1..G8 from the producer's naming convention (``G<n> ...``)."""
 
     found: dict[int, dict[str, Any]] = {}
     for check in checks:
-        match = re.match(r"^G([1-7])\b", str(check.get("name", "")))
+        match = re.match(r"^G([1-8])\b", str(check.get("name", "")))
         if match is not None:
             found.setdefault(int(match.group(1)), check)
     return found
@@ -473,8 +473,8 @@ def build_data_qualification_report(
     coverage: float,
 ) -> dict[str, Any]:
     """Build the §5.1 ``DataQualificationReport`` payload from a real
-    :class:`ashare_data.gates.GateResult` (the G1–G7 authority — 判定逻辑
-    零复制).
+    :class:`ashare_data.gates.GateResult` (the G1–G8 authority — 判定逻辑
+    零复制; G8 freshness added by p16).
 
     ``degraded_sources.loader_frames`` is truthfully
     :data:`LOADER_FRAME_SOURCE_UNTYPED` until the data layer grows a typed
@@ -497,7 +497,7 @@ def build_data_qualification_report(
         "checks": checks,
     }
     min_eligible = spec.resolved_thresholds.get("min_eligible")
-    completed = set(_gate_check_names(checks)) == set(range(1, 8))
+    completed = set(_gate_check_names(checks)) == set(range(1, 9))
     return {
         "report_schema_version": 1,
         "spec_id": spec.spec_id,
@@ -563,11 +563,11 @@ def _validate_data_report(report: dict[str, Any], spec: RunSpec) -> None:
     if not isinstance(checks, list) or not checks:
         raise DataQualificationError("gate_checks must be a non-empty list")
     found = _gate_check_names(checks)
-    if set(found) != set(range(1, 8)):
+    if set(found) != set(range(1, 9)):
         raise DataQualificationError(
             f"gate evaluation incomplete: G checks found {sorted(found)}"
         )
-    failed = [found[i] for i in range(1, 8) if not found[i].get("ok")]
+    failed = [found[i] for i in range(1, 9) if not found[i].get("ok")]
     if failed:
         raise DataQualificationError(
             "gate check failed: "

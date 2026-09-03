@@ -6,10 +6,12 @@
 生命周期硬约束标注"待 lifecycle v1 激活"，在 P8-15 正式激活前不改变任何
 现行行为。
 
-术语约定（两个互不相同的 G 编号空间，编号范围恰好同为 G1–G7，禁止混用）：
+术语约定（两个互不相同的 G 编号空间，禁止混用；数据资格空间为 G1–G8，
+晋级门禁空间为 G1–G7，范围自 G8 落地起不再重合）：
 
-- **数据资格 G1–G7**：`ashare_data/gates.py` 的 `ProductionGateRunner`
-  （CLI 入口 `scripts/check_production_gates.py`）。
+- **数据资格 G1–G8**：`ashare_data/gates.py` 的 `ProductionGateRunner`
+  （CLI 入口 `scripts/check_production_gates.py`；G8 数据新鲜度由 p16
+  引入，权威契约 `docs/p16_data_freshness_gate_contract.md`）。
 - **晋级门禁 G1–G7**：`ashare_model/promotion.py` 的 `evaluate_challenger`
   （G1 data/formula P0、G2 统计显著性、G3 超额收益与风险、G4 成本与容量
   压力、G5 paper window、G6 数据可信度 tier、G7 feature registry
@@ -28,7 +30,7 @@
 2. 研究状态无处可查：一个 run 处于什么阶段（数据是否合格、搜索是否准入、
    OOS 是否锁定、paper 是否完成）只能靠人工翻 `data/*.json` 和运行时内存
    判断，没有 append-only 事件来源，也没有可重放的状态。
-3. 证据不落地：`ProductionGateRunner` 的 G1–G7 结果是内存冻结 dataclass，
+3. 证据不落地：`ProductionGateRunner` 的 G1–G8 结果是内存冻结 dataclass，
    从不持久化、从不 hash（`research_doctor` 仅在显式 `--output` 时写一份
    无 schema 版本的报告）；RL admission verdict 只被
    `scripts/admission_experiment.py` 写入 `experiments/`，没有任何生产代码
@@ -104,7 +106,7 @@ status 表示；spec 级"campaign 视图"只是跨 run 的只读投影。状态�
 |---|---|---|---|
 | `IDEA` | 研究假设已记录 | IdeaRecord（类型化）：假设、范围、经济机制、非目标；hash 登记 | P8-04 RunStore |
 | `SPEC_LOCKED` | 预注册冻结 | frozen RunSpec artifact（`RUNSPEC_SCHEMA_VERSION = 1`）+ spec_id + clean Git commit + dependency lock hash | P8-03 RunSpec factory |
-| `DATA_QUALIFIED` | 数据资格通过 | DataQualificationReport：dataset ID（`resolve_dataset_id`）、数据截止日（manifest `date_range` 上界）、预期与实际交易日、缺失交易日列表、G1–G7 原始 `GateCheck` 结果 + hash、coverage、degraded 状态与原因 | `ashare_data.gates` + manifest（复用；报告持久化为新增） |
+| `DATA_QUALIFIED` | 数据资格通过 | DataQualificationReport：dataset ID（`resolve_dataset_id`）、数据截止日（manifest `date_range` 上界）、预期与实际交易日、缺失交易日列表、G1–G8 原始 `GateCheck` 结果 + hash、coverage、degraded 状态与原因 | `ashare_data.gates` + manifest（复用；报告持久化为新增） |
 | `FACTOR_SET_QUALIFIED` | 因子集资格通过 | FactorQualificationReport（§5.2 七项检查的原始结果 + hash） | feature_registry / data_tier / research_domain / baseline_harness（复用） |
 | `SEARCH_PLAN_ADMITTED` | 搜索计划准入 | SearchAdmissionEvidence（§5.3） | search_contract / admission（复用；RL verdict 封装引用） |
 | `OOS_QUALIFIED` | OOS 资格通过 | OOSQualificationEvidence：未 taint 的锁定 OOS 窗口 + lock hash、预注册统计/成本门 resolved 阈值 | P8-08（统计与成本口径复用 eval_corrections/promotion） |
@@ -176,21 +178,21 @@ PROMOTED             -> RETIRED
 ### 5.1 Data Qualified（P8-06/07）
 
 `DataQualificationReport`（类型化 schema）**必须复用
-`ProductionGateRunner`**，不得复制 G1–G7 任何判定逻辑。报告至少含：
+`ProductionGateRunner`**，不得复制 G1–G8 任何判定逻辑。报告至少含：
 spec_id、dataset ID、data cutoff、预期交易日（日历推导）与实际交易日、
-缺失交易日列表、G1–G7 每项原始 `GateCheck(name, ok, detail)` 结果 + 整体
+缺失交易日列表、G1–G8 每项原始 `GateCheck(name, ok, detail)` 结果 + 整体
 hash、coverage、degraded 状态与原因（含 loader frame 降级——现状只写日
 志，P8-06 起必须进入类型化字段）。
 
 verdict 机器规则：
 
-- pass：formal 模式 G1–G7 全部 ok，且缺失交易日列表为空（每个缺失日都由
+- pass：formal 模式 G1–G8 全部 ok，且缺失交易日列表为空（每个缺失日都由
   日历证明为非交易日的情形不算缺失），且无未披露 degraded。
 - **dev/degraded 不能 Data Qualified**：`--dev` 模式结果（`degraded=True`）
   或任何降级未消除 ⇒ 拒绝转换。
 - 任一 G fail（结果完整）⇒ `REJECTED`；G 无法完成运行 ⇒ `FAILED`。
 
-G1–G7 结果持久化（含 mode、min_eligible、`UniverseContractStatus` 摘要、
+G1–G8 结果持久化（含 mode、min_eligible、`UniverseContractStatus` 摘要、
 dataset_id、git commit）是该转换的必要证据；现状"结果只存在于内存/stdout"
 必须在 P8-06 修复。
 

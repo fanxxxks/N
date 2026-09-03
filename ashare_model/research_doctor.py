@@ -5,7 +5,7 @@ Aggregates the repository's research state into one report:
 * **code** — git commit / branch / dirty flag (read-only git queries);
 * **data** — the content-addressed ``dataset_id`` of the current database
   (latest dataset manifest) plus manifest metadata;
-* **gates** — the G1–G7 production gate outcome (``ProductionGateRunner``,
+* **gates** — the G1–G8 production gate outcome (``ProductionGateRunner``,
   formal mode, read-only queries);
 * **fairness_probes** — the F2-(a) fairness re-probe obligation
   (``campaign_closure_decisions_20260902.md`` ⑥ / t59, machine-triggered by
@@ -25,7 +25,7 @@ Aggregates the repository's research state into one report:
 
 Conflict rules (severity ``error`` -> exit code 1):
 
-* any G1–G7 gate fails;
+* any G1–G8 gate fails;
 * any F2-(a) fairness probe fails, or the probe harness cannot run
   (torch/deap/vocab import) — formal runs are blocked until the probes
   pass on the actual tree; a stale or missing probe baseline is reported
@@ -517,7 +517,7 @@ def gather_fundamental_coverage(data_config) -> dict[str, Any]:
 
 
 def gather_gates(data_config, min_eligible: int = 100) -> dict[str, Any]:
-    """G1–G7 outcome through the same runner every formal entry uses."""
+    """G1–G8 outcome through the same runner every formal entry uses."""
 
     result = ProductionGateRunner(
         data_config, min_eligible=min_eligible

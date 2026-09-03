@@ -141,8 +141,8 @@ def test_agents_md_carries_pending_activation_block() -> None:
 # * Promotion gates are G1-G7 (``ashare_model/promotion.py``,
 #   ``PROMOTION_RULE_VERSION = "2"``; G7 feature registry status added by
 #   P12, authority ``docs/p12_promotion_enforcement_contract.md``). The two
-#   G numbering spaces (data qualification vs promotion) both span G1-G7
-#   but remain independent spaces.
+#   G numbering spaces are independent: data qualification spans G1-G8
+#   since G8 (data freshness, p16) landed, promotion stays G1-G7.
 # * ``PROMOTED -> RETIRED`` is activated with the P8-06 row
 #   (``ashare_model/lifecycle.py`` ``ACTIVATED_EDGES`` activates every legal
 #   "-> RETIRED" edge; PROMOTED is unreachable at P8-06, so this is not
@@ -163,9 +163,10 @@ def test_promotion_gate_numbering_is_g1_g7() -> None:
     assert "晋级门禁 G1–G7" in text, (
         "the promotion-gate space must be named G1-G7"
     )
-    assert "数据资格 G1–G7" in text, (
+    assert "数据资格 G1–G8" in text, (
         "the data-qualification space must stay explicitly distinguished "
-        "from the promotion-gate space (two independent G numbering spaces)"
+        "from the promotion-gate space (two independent G numbering spaces; "
+        "G8 data freshness added by p16)"
     )
     assert 'PROMOTION_RULE_VERSION = "2"' in text, (
         "the promotion gate-set semantic version must be cited"

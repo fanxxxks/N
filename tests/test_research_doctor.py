@@ -52,7 +52,7 @@ def _green(legacy: bool = False, reasons: tuple[str, ...] = ()) -> dict:
             "ok": True,
             "degraded": False,
             "checks": [
-                {"name": f"G{i}", "ok": True, "detail": "ok"} for i in range(1, 8)
+                {"name": f"G{i}", "ok": True, "detail": "ok"} for i in range(1, 9)
             ],
         },
         artifacts=[
@@ -261,7 +261,7 @@ def cli_env(monkeypatch):
         "gather_gates",
         lambda cfg, min_eligible=100: {
             "mode": "formal", "ok": True, "degraded": False,
-            "checks": [{"name": f"G{i}", "ok": True, "detail": "ok"} for i in range(1, 8)],
+            "checks": [{"name": f"G{i}", "ok": True, "detail": "ok"} for i in range(1, 9)],
         },
     )
     monkeypatch.setattr(
