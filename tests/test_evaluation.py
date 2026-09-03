@@ -998,8 +998,13 @@ def test_run_protocol_rejects_unknown_baseline(populated_db: DataConfig):
 # --- CLI smoke --------------------------------------------------------------
 
 
-def test_cli_smoke(tmp_path, populated_db: DataConfig):
+def test_cli_smoke(tmp_path, fresh_populated_db):
     import yaml
+
+    # t23: today-relative fixture axis (G8 freshness); fold dates derive
+    # from the same axis positions the historical 2024-01-01 config used.
+    populated_db, dates = fresh_populated_db
+    train_end, test_end = dates[6], dates[17]
 
     cfg_path = tmp_path / "config.yaml"
     out_path = tmp_path / "protocol_result.json"
@@ -1014,7 +1019,7 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig):
                 "model": {"max_formula_len": 6},
                 "protocol": {
                     "folds": [
-                        {"train_end": "2024-01-10", "test_end": "2024-01-25"}
+                        {"train_end": train_end, "test_end": test_end}
                     ],
                     "seeds": [42],
                     "screening": {"steps": 1, "batch_size": 256},
@@ -1254,10 +1259,15 @@ def test_load_trial_rows_reads_protocol_artifacts(tmp_path):
     assert load_trial_rows(None) == []
 
 
-def test_cli_confirmation_smoke(tmp_path, populated_db: DataConfig):
+def test_cli_confirmation_smoke(tmp_path, fresh_populated_db):
     """The confirmation tier records its own steps/batch in the artifact."""
 
     import yaml
+
+    # t23: today-relative fixture axis (G8 freshness); fold dates derive
+    # from the same axis positions the historical 2024-01-01 config used.
+    populated_db, dates = fresh_populated_db
+    train_end, test_end = dates[6], dates[17]
 
     cfg_path = tmp_path / "config.yaml"
     out_path = tmp_path / "confirmation_result.json"
@@ -1272,7 +1282,7 @@ def test_cli_confirmation_smoke(tmp_path, populated_db: DataConfig):
                 "model": {"max_formula_len": 6},
                 "protocol": {
                     "folds": [
-                        {"train_end": "2024-01-10", "test_end": "2024-01-25"}
+                        {"train_end": train_end, "test_end": test_end}
                     ],
                     "seeds": [42],
                     "confirmation": {"steps": 1, "batch_size": 256},
@@ -1303,8 +1313,14 @@ def test_cli_confirmation_smoke(tmp_path, populated_db: DataConfig):
     assert payload["steps"] == 1 and payload["batch_size"] == 256
 
 
-def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
+def test_cli_selfcheck_smoke(tmp_path, fresh_populated_db):
     import yaml
+
+    # t23: today-relative fixture axis (G8 freshness); fold dates derive
+    # from the same axis positions the historical 2024-01-01 config used.
+    populated_db, dates = fresh_populated_db
+    train_end1, test_end1 = dates[6], dates[17]
+    train_end2, test_end2 = dates[17], dates[28]
 
     cfg_path = tmp_path / "config.yaml"
     out_path = tmp_path / "selfcheck_result.json"
@@ -1318,8 +1334,8 @@ def test_cli_selfcheck_smoke(tmp_path, populated_db: DataConfig):
                     "min_listed_sessions": 1,
                 "protocol": {
                     "folds": [
-                        {"train_end": "2024-01-10", "test_end": "2024-01-25"},
-                        {"train_end": "2024-01-25", "test_end": "2024-02-10"},
+                        {"train_end": train_end1, "test_end": test_end1},
+                        {"train_end": train_end2, "test_end": test_end2},
                     ],
                 },
             }
