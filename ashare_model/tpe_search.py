@@ -37,13 +37,11 @@ import optuna
 from .alphagpt import build_action_mask
 from .baseline_harness import SemanticBudgetEvaluator
 from .feature_metadata import FEATURE_METADATA, SemanticType
-from .ops import OPS_CONFIG
+from .ops import OPERATOR_ARITY
 from .search_contract import SearchResult
 from .search_length_prior import sample_target_content_length
 from .semantic_sampling import from_id, resolve_output, type_id
 from .vocab import FormulaVocab
-
-_OPERATOR_ARITY = {name: arity for name, _, arity in OPS_CONFIG}
 
 
 def _legal_tokens(
@@ -99,7 +97,7 @@ def _advance(
         return stack + 1, types, done
     op_index = token - vocab.operator_offset
     name = vocab.operator_names[op_index]
-    arity = _OPERATOR_ARITY[name]
+    arity = OPERATOR_ARITY[name]
     arg_types = tuple(from_id(i) for i in types[len(types) - arity :])
     del types[len(types) - arity :]
     types.append(type_id(resolve_output(name, arg_types)))

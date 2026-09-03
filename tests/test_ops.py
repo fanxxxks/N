@@ -558,3 +558,34 @@ def test_masked_cs_ops_match_cpu_on_cuda():
         assert torch.equal(torch.isnan(cpu), torch.isnan(gpu.cpu()))
         finite = ~torch.isnan(cpu)
         assert torch.allclose(cpu[finite], gpu.cpu()[finite], atol=1e-4, rtol=1e-4)
+
+
+def test_operator_arity_single_exit():
+    """IP-14 (01-A8): the derived operator-name -> arity table has ONE
+    exit: ``ops.OPERATOR_ARITY``.  ``ir.py`` and ``tpe_search.py`` used to
+    keep private re-derivations of the same comprehension from OPS_CONFIG
+    (drift-prone duplicate derivations); they must import the single
+    export instead.  ``operator_registry`` keeps deriving its own registry
+    metadata from OPS_CONFIG by its own single-source contract
+    (operator_registry.py docstring) and is intentionally untouched."""
+
+    import importlib
+
+    ops = importlib.import_module("ashare_model.ops")
+    ir = importlib.import_module("ashare_model.ir")
+    tpe = importlib.import_module("ashare_model.tpe_search")
+
+    expected = {name: arity for name, _, arity in ops.OPS_CONFIG}
+    assert ops.OPERATOR_ARITY == expected
+    assert ops.OPERATOR_ARITY["ADD"] == 2
+    assert ops.OPERATOR_ARITY["GATE"] == 3
+    assert not hasattr(ir, "_OPERATOR_ARITY"), (
+        "ir must import ops.OPERATOR_ARITY, not re-derive it"
+    )
+    assert not hasattr(tpe, "_OPERATOR_ARITY"), (
+        "tpe_search must import ops.OPERATOR_ARITY, not re-derive it"
+    )
+    # functional spot-check through the consumers' public paths
+    assert ir._arity_of("ADD") == 2
+    with pytest.raises(ir.FormulaSyntaxError):
+        ir._arity_of("NO_SUCH_OP")

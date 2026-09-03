@@ -43,7 +43,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Iterable, Union
 
-from .ops import OPS_CONFIG
+from .ops import OPERATOR_ARITY
 from .vocab import FormulaVocab
 
 
@@ -81,13 +81,10 @@ class Ternary:
 
 FormulaIR = Union[Feature, Unary, Binary, Ternary]
 
-# Operator name -> arity, from the single operator table (ops.OPS_CONFIG).
-_OPERATOR_ARITY = {name: arity for name, _, arity in OPS_CONFIG}
-
 
 def _arity_of(op: str) -> int:
     try:
-        return _OPERATOR_ARITY[op]
+        return OPERATOR_ARITY[op]
     except KeyError as exc:
         raise FormulaSyntaxError(f"unknown operator {op!r}") from exc
 
@@ -262,7 +259,7 @@ def postfix_valid(tokens: Iterable[int], vocab: FormulaVocab | None = None) -> b
         op_index = token - vocab.operator_offset
         if not (0 <= op_index < len(vocab.operator_names)):
             return False
-        arity = _OPERATOR_ARITY[vocab.operator_names[op_index]]
+        arity = OPERATOR_ARITY[vocab.operator_names[op_index]]
         if stack < arity:
             return False
         stack = stack - arity + 1

@@ -448,3 +448,11 @@ OPS_CONFIG = [
 # names are a subset of OPS_CONFIG (e.g. toy test vocabularies) stays
 # correctly aligned.
 OPS_BY_NAME = {name: (fn, arity) for name, fn, arity in OPS_CONFIG}
+
+# Operator name -> arity: the single derived-arity exit.  Every consumer
+# needing an arity lookup imports this table instead of re-deriving it
+# from OPS_CONFIG (ir.py / tpe_search.py previously kept drift-prone
+# private copies; IP-14).  operator_registry derives its own registry
+# metadata from OPS_CONFIG by its own single-source contract and is
+# unaffected.
+OPERATOR_ARITY = {name: arity for name, _, arity in OPS_CONFIG}
