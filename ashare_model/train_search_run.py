@@ -30,6 +30,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from .baseline_harness import SemanticBudgetEvaluator
 from .elite_archive import load_elite_archive
 from .imitation import pretrain_on_elites
 from .search_backends import (
@@ -229,11 +230,12 @@ class SearchRunnerMixin:
     def _build_search_evaluator(self, *, searcher: str, window, budget: int):
         """Wire the shared semantic-budget evaluator for one non-RL run:
         the VM executor, the trainer's own calibration fingerprint
-        executor and the trainer's semantic cache as the budget ledger."""
+        executor and the trainer's semantic cache as the budget ledger.
 
-        # Lazily imported: baseline_harness imports this module for uniform
-        # random formula sampling, so the cycle is broken at call time.
-        from .baseline_harness import SemanticBudgetEvaluator  # noqa: PLC0415
+        The evaluator import is top-level (t21): baseline_harness now
+        imports ``sample_random_formulas`` from ``train_windows`` — its
+        last module-level train-facade edge is gone, so the historical
+        call-time cycle break has no surviving reason."""
 
         def execute(tokens) -> np.ndarray | None:
             signal = self.vm.execute(tokens, window.factor_tensor)

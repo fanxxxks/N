@@ -53,7 +53,10 @@ _VERSION_IMPORTS: dict[str, tuple[str, str]] = {
     "research_domain_version": ("ashare_model.research_domain", "RESEARCH_DOMAIN_VERSION"),
     "grammar_version": ("ashare_model.vocab", "GRAMMAR_VERSION"),
     "model_version": ("ashare_model.alphagpt", "MODEL_VERSION"),
-    "protocol_version": ("ashare_model.evaluation", "PROTOCOL_VERSION"),
+    # IP-07a2 (t21): PROTOCOL_VERSION's single home is the leaf module
+    # ashare_model.versions; the evaluation facade re-export remains for
+    # the frozen compat surface but is no longer the owner index entry.
+    "protocol_version": ("ashare_model.versions", "PROTOCOL_VERSION"),
     "reward_version": ("ashare_model.reward", "REWARD_VERSION"),
     "search_contract_version": ("ashare_model.search_contract", "SEARCH_CONTRACT_VERSION"),
     "semantic_cache_version": ("ashare_model.semantic_cache", "SEMANTIC_CACHE_VERSION"),
