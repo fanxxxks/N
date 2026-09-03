@@ -9,6 +9,7 @@ gatherers are stubbed for exit-code/output tests.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -285,6 +286,11 @@ def cli_env(monkeypatch):
     monkeypatch.setattr(
         doctor, "gather_dependencies", lambda: {"deap": "1.4.4", "torch": "2.11.0+cu128"}
     )
+    monkeypatch.setattr(
+        doctor,
+        "gather_fairness_probes",
+        lambda root: _green_probe_section(),
+    )
 
 
 def test_cli_healthy_exits_zero_and_prints_json(capsys, cli_env):
@@ -314,3 +320,111 @@ def test_cli_output_writes_report_file(tmp_path, capsys, cli_env):
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["healthy"] is True
     assert payload["data"]["dataset_id"] == "d1"
+
+
+# -- IP-03: F2-(a) fairness re-probe (campaign_closure_decisions_20260902.md ⑥) -
+
+
+def _green_probe_section(
+    fingerprint: str = "0e64ad614bfd", baseline: str = "match"
+) -> dict:
+    """All-green fairness_probes section for pure build_report tests."""
+
+    baseline_payload = None
+    if baseline == "match":
+        baseline_payload = {
+            "vocab_fingerprint": fingerprint,
+            "code_commit": "abc123",
+            "recorded_at": "t",
+            "evidence": "docs/test_runtime_measurement_log.md",
+        }
+    elif baseline == "stale":
+        baseline_payload = {
+            "vocab_fingerprint": "deadbeef0000",
+            "code_commit": "old",
+            "recorded_at": "t",
+            "evidence": "docs/test_runtime_measurement_log.md",
+        }
+    return {
+        "vocab_fingerprint": fingerprint,
+        "probes": [
+            {"name": name, "ok": True, "detail": "ok"}
+            for name in (
+                "frozen_vocab_layout",
+                "action_mask_family5_step0_exact",
+                "action_mask_full_vocab_deprecated_excluded",
+                "gp_pset_family5_terminals",
+                "gp_pset_full_vocab_terminal_count",
+            )
+        ],
+        "baseline": baseline_payload,
+        "baseline_stale": baseline == "stale",
+        "all_ok": True,
+    }
+
+
+def test_failing_fairness_probe_is_error_and_blocks_readiness():
+    section = _green_probe_section()
+    section["probes"][1]["ok"] = False
+    section["probes"][1]["detail"] = "step-0 legal set [1, 74]"
+    section["all_ok"] = False
+    report = _report(fairness_probes=section)
+    assert report["healthy"] is False
+    errors = _errors(report)
+    assert any(
+        "F2-(a) fairness probe action_mask_family5_step0_exact failed" in e
+        for e in errors
+    )
+    assert "fairness_probes" in report
+
+
+def test_fairness_probe_baseline_missing_warns_but_stays_healthy():
+    report = _report(fairness_probes=_green_probe_section(baseline="none"))
+    warnings_ = [
+        f["message"] for f in report["findings"] if f["severity"] == "warning"
+    ]
+    assert any("no fairness probe baseline recorded" in w for w in warnings_)
+    assert report["healthy"] is True
+
+
+def test_fairness_probe_baseline_stale_warns_but_stays_healthy():
+    report = _report(fairness_probes=_green_probe_section(baseline="stale"))
+    warnings_ = [
+        f["message"] for f in report["findings"] if f["severity"] == "warning"
+    ]
+    assert any("fairness probe baseline is stale" in w for w in warnings_)
+    assert report["healthy"] is True
+
+
+def test_fairness_probe_section_absent_keeps_report_compatible():
+    # Callers that do not gather the section keep the previous report
+    # shape: no fairness_probes key, no findings.
+    report = _report()
+    assert "fairness_probes" not in report
+    assert report["healthy"] is True
+
+
+def test_fairness_probes_live_on_current_tree():
+    """IP-03 / decision ⑥: the two t59 fairness probes pass on THIS tree.
+
+    This is the option-b pin working inside the option-a pre-check: the
+    frozen layout constants in ``gather_fairness_probes`` (grammar-6
+    fingerprint 0e64ad614bfd, family-⑤ ids 74-77, 65 = 77-12 samplable)
+    turn RED whenever the vocabulary layout legally evolves.  That is the
+    designed fail-closed re-probe trigger, NOT a flaky test: after a legal
+    vocabulary change, re-run the probes on the new layout, refresh
+    docs/fairness_probe_baseline.json and append the evidence record to
+    docs/test_runtime_measurement_log.md (decision ⑥ re-probe flow, IP-03).
+    """
+
+    root = Path(__file__).resolve().parents[1]
+    section = doctor.gather_fairness_probes(root)
+    assert section["vocab_fingerprint"] == "0e64ad614bfd"
+    assert section["all_ok"] is True, section["probes"]
+    assert [p["name"] for p in section["probes"]] == [
+        "frozen_vocab_layout",
+        "action_mask_family5_step0_exact",
+        "action_mask_full_vocab_deprecated_excluded",
+        "gp_pset_family5_terminals",
+        "gp_pset_full_vocab_terminal_count",
+    ]
