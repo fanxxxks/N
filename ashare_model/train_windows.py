@@ -408,6 +408,47 @@ def prepare_training_window(
         rebalance_mask,
         train_universe_mask,
     )
+    reward_chunk = _bind_semantic_ledger(
+        trainer,
+        contract=contract,
+        val_windows=val_windows,
+        policy=policy,
+        factor_tensor=factor_tensor,
+        stock_slice=stock_slice,
+        train_end_idx=train_end_idx,
+    )
+    return _TrainWindow(
+        contract=contract,
+        train_end_idx=train_end_idx,
+        val_windows=val_windows,
+        val_start=val_start,
+        train_signal_range=train_signal_range,
+        factor_tensor=factor_tensor,
+        vm_device=vm_device,
+        train_universe_mask=train_universe_mask,
+        target_ret=target_ret,
+        realized_ret=realized_ret,
+        rebalance_mask=rebalance_mask,
+        blocked_buy=blocked_buy,
+        blocked_sell=blocked_sell,
+        reward_chunk=reward_chunk,
+    )
+
+
+def _bind_semantic_ledger(
+    trainer,
+    *,
+    contract,
+    val_windows: list[tuple[int, int]],
+    policy: RebalancePolicy,
+    factor_tensor: torch.Tensor,
+    stock_slice: slice,
+    train_end_idx: int,
+) -> int:
+    """Bind the evaluation-budget ledger (the semantic cache), the
+    calibration fingerprint executor and the streamed-reward chunk size
+    onto the trainer; returns the chunk size (contiguous extraction of
+    the historical ``prepare_window`` tail)."""
 
     # T2-01: the semantic cache is the evaluation-budget ledger.  Its
     # key carries the full evaluation context (dataset_id, reward and
@@ -440,20 +481,81 @@ def prepare_training_window(
     # ``monkeypatch.setattr(train_module, "score_chunk_size", ...)``
     # surface in tests/test_train.py keeps late-binding (B3, IP-07b).
     signal_bytes = factor_tensor.shape[1] * train_end_idx * 8
-    reward_chunk = trainer._reward_chunk_size(signal_bytes)
-    return _TrainWindow(
-        contract=contract,
-        train_end_idx=train_end_idx,
-        val_windows=val_windows,
-        val_start=val_start,
-        train_signal_range=train_signal_range,
-        factor_tensor=factor_tensor,
-        vm_device=vm_device,
-        train_universe_mask=train_universe_mask,
-        target_ret=target_ret,
-        realized_ret=realized_ret,
-        rebalance_mask=rebalance_mask,
-        blocked_buy=blocked_buy,
-        blocked_sell=blocked_sell,
-        reward_chunk=reward_chunk,
-    )
+    return trainer._reward_chunk_size(signal_bytes)
+
+
+class WindowPreparationMixin:
+    """Window-binding seams of ``AshareTrainer`` (B3/B5, IP-07b): the
+    facade entry points delegate to this module's functions and helpers.
+    Methods stay class attributes of the composed trainer, so callers and
+    class-attribute patches keep one stable surface."""
+
+    def prepare_window(
+        self,
+        train_end_date: str | None,
+        vm_device: torch.device,
+        window_cap: tuple[int, int] | None = None,
+    ) -> "_TrainWindow":
+        """Delegate to :func:`prepare_training_window` (B3, IP-07b)."""
+
+        return prepare_training_window(
+            self, train_end_date, vm_device, window_cap
+        )
+
+    def _training_contract(
+        self, train_end_date: str | None = None
+    ) -> TrainingTimeContract:
+        return TrainingTimeContract.resolve(
+            self.loader.dates,
+            train_end_date or self.backtest_config.train_end_date,
+            horizon=self.backtest_config.target_horizon,
+        )
+
+    def _validation_start(self, train_end_idx: int) -> int:
+        """First index of the validation tail inside the training window.
+
+        Delegates to the module-level :func:`validation_start` so the
+        protocol's random-search baseline can share the exact selection
+        windows without instantiating a trainer.
+        """
+        return validation_start(train_end_idx, self.model_config)
+
+    def _validation_windows(
+        self,
+        train_end_idx: int,
+        *,
+        rebalance_mask: np.ndarray | None = None,
+    ) -> list[tuple[int, int]]:
+        """Independent validation sub-windows covering the training tail.
+
+        Delegates to the module-level :func:`validation_windows`.
+        """
+        return validation_windows(
+            train_end_idx,
+            self.model_config,
+            rebalance_mask=rebalance_mask,
+        )
+
+    @staticmethod
+    def _window_id(
+        contract,
+        val_windows: list[tuple[int, int]],
+        policy: RebalancePolicy,
+        domain_id: str = "unified",
+    ) -> str:
+        """Deterministic id of the training window: the exact columns the
+        semantic-cache key binds scores to.  A non-unified research domain
+        (P6 §4.3) appends its id so domain scores never mix with unified
+        or other-domain scores."""
+
+        val = "|".join(f"{a}:{b}" for a, b in val_windows)
+        domain = (
+            ""
+            if str(domain_id) == "unified"
+            else f":domain:{str(domain_id)}"
+        )
+        return (
+            f"train:{contract.train_signal_start}:{contract.train_signal_end}:"
+            f"label:{contract.train_label_end}:frequency:{policy.frequency}:"
+            f"horizon:{policy.horizon}:val:{val}{domain}"
+        )
