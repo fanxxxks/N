@@ -450,14 +450,26 @@ def test_check_tolerates_sectionless_complete_log(tmp_path: Path) -> None:
 
 
 def test_committed_baseline_is_structurally_valid() -> None:
+    """IP-10 04/05: the committed baseline is the machine-auditable warning
+    artifact.  The collapse reset it to an intentionally empty state, so
+    the anchor is structural self-consistency -- NOT a threshold (IP-10:
+    threshold metrics rot and stay out of CI gates)."""
+
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
     payload = json.loads(BASELINE.read_text(encoding="utf-8"))
-    assert payload["total_warnings"] > 0
-    assert payload["section_lines"], "baseline warnings section is empty"
-    # IP-09: the baseline source moved from the 4156de4 PR3 gate to the
-    # 28bfefb t1 serial gate (regeneration required by the comparator's
-    # singular-header fix); the assertion keeps pinning the exact source
-    # sha of the current baseline (same strength, new requirement).
-    assert "provenance" in payload and "28bfefb" in payload["provenance"]
+    assert isinstance(payload["total_warnings"], int)
+    assert payload["total_warnings"] >= 0
+    assert isinstance(payload["section_lines"], list)
+    # Kind inventory self-consistency: the recorded set is exactly what
+    # the committed section lines imply.
+    assert payload["kind_set"] == sorted(
+        module._warning_kinds(payload["section_lines"])
+    )
+    assert payload["kind_set_size"] == len(payload["kind_set"])
+    # IP-09/IP-10: the assertion keeps pinning the exact source sha of
+    # the current baseline (same strength, new requirement: the source
+    # moved to the t18 post-collapse serial gate at 9d7b40a).
+    assert "provenance" in payload and "9d7b40a" in payload["provenance"]
 
 
 def test_baseline_lines_are_environment_independent() -> None:
