@@ -6,13 +6,15 @@
 生命周期硬约束标注"待 lifecycle v1 激活"，在 P8-15 正式激活前不改变任何
 现行行为。
 
-术语约定（两个互不相同的 G 编号空间，禁止混用）：
+术语约定（两个互不相同的 G 编号空间，编号范围恰好同为 G1–G7，禁止混用）：
 
 - **数据资格 G1–G7**：`ashare_data/gates.py` 的 `ProductionGateRunner`
   （CLI 入口 `scripts/check_production_gates.py`）。
-- **晋级门禁 G1–G6**：`ashare_model/promotion.py` 的 `evaluate_challenger`
-  （data/formula P0、统计显著性、超额收益与风险、成本与容量压力、paper
-  window、数据可信度 tier）。
+- **晋级门禁 G1–G7**：`ashare_model/promotion.py` 的 `evaluate_challenger`
+  （G1 data/formula P0、G2 统计显著性、G3 超额收益与风险、G4 成本与容量
+  压力、G5 paper window、G6 数据可信度 tier、G7 feature registry
+  status）；门禁集语义版本 `PROMOTION_RULE_VERSION = "2"`（G7 由 P12
+  引入，权威契约 `docs/p12_promotion_enforcement_contract.md`）。
 
 ## 0. 问题陈述
 
@@ -107,7 +109,7 @@ status 表示；spec 级"campaign 视图"只是跨 run 的只读投影。状态�
 | `SEARCH_PLAN_ADMITTED` | 搜索计划准入 | SearchAdmissionEvidence（§5.3） | search_contract / admission（复用；RL verdict 封装引用） |
 | `OOS_QUALIFIED` | OOS 资格通过 | OOSQualificationEvidence：未 taint 的锁定 OOS 窗口 + lock hash、预注册统计/成本门 resolved 阈值 | P8-08（统计与成本口径复用 eval_corrections/promotion） |
 | `PAPER_OBSERVING` | paper 观察中 | spec_id + candidate_id + account_id 绑定事件、observation lineage 初始化、公式/方向/费用/资金/execution/constructor hash 固定 | P8-09 |
-| `PROMOTED` | 晋级完成 | 完整 paper window、晋级门禁 G1–G6 全部通过、strategy/protocol/backtest/paper 全链路 lineage 一致 | `promotion.evaluate_challenger`（复用） |
+| `PROMOTED` | 晋级完成 | 完整 paper window、晋级门禁 G1–G7 全部通过、strategy/protocol/backtest/paper 全链路 lineage 一致 | `promotion.evaluate_challenger`（复用） |
 | `REJECTED` | 研究门完整证据但未通过 | 对应门禁的完整证据 artifact + fail verdict + 未过条款标识 | 各资格门禁 |
 | `FAILED` | 基础设施、资源或运行故障 | 故障事件：error class、阶段、资源指标、日志引用；**无**完整门禁证据 | operational handler |
 | `RETIRED` | 被替代或停止使用 | 退役事件：原因、可选替代 spec_id；既有证据只读保留 | administrative |
@@ -161,10 +163,10 @@ PROMOTED             -> RETIRED
 
 | 阶段 | 激活的边 |
 |---|---|
-| P8-06 | `IDEA -> SPEC_LOCKED`、`SPEC_LOCKED -> DATA_QUALIFIED`、各态 `-> FAILED`、各态 `-> RETIRED` |
+| P8-06 | `IDEA -> SPEC_LOCKED`、`SPEC_LOCKED -> DATA_QUALIFIED`、各态 `-> FAILED`、各态 `-> RETIRED`（`PROMOTED -> RETIRED` 属于"各态 `-> RETIRED`"，随本阶段激活，与 `ashare_model/lifecycle.py ACTIVATED_EDGES` 口径一致；P8-06 下 `PROMOTED` 不可达，无 fail-open 风险） |
 | P8-07 | `DATA_QUALIFIED -> FACTOR_SET_QUALIFIED`、`FACTOR_SET_QUALIFIED -> SEARCH_PLAN_ADMITTED` |
 | P8-08 | `SEARCH_PLAN_ADMITTED -> OOS_QUALIFIED`、各门禁态 `-> REJECTED` |
-| P8-09 | `OOS_QUALIFIED -> PAPER_OBSERVING`、`PAPER_OBSERVING -> PROMOTED`、`PROMOTED -> RETIRED` |
+| P8-09 | `OOS_QUALIFIED -> PAPER_OBSERVING`、`PAPER_OBSERVING -> PROMOTED`（`PROMOTED` 的唯一出边已在 P8-06 行激活，不在此重复列出） |
 
 ## 5. 资格门禁的精确机器标准
 
@@ -372,5 +374,15 @@ pytest 相对 base（6099e9f）passed 只增不减；无新增 warning/skip/xfai
 防漂移）：ledger `run-{timestamp}` 命名与无版本 ledger（P8-04）；strategy
 artifact 搜索器内部 `candidate_id` 作为正式身份（P8-05）；run_sim 的
 warn-and-continue resume 路径与 equity 10000 条截断（P8-09，lifecycle-
-bound 账户）；`TARGET_CONTRACT_VERSION`、`REBALANCE_POLICY_VERSION` 等
-无消费者常量（记录为后续独立小任务，不在 P8 范围内顺手处理）。
+bound 账户）；`TARGET_CONTRACT_VERSION` 等无消费者常量（记录为后续独立
+小任务，不在 P8 范围内顺手处理）。
+
+勘误（2026-09-03，IP-02 契约修订；批准依据：改进计划 IP-02 与
+campaign_closure_decisions_20260902.md ⑤）：上文原将
+`REBALANCE_POLICY_VERSION` 与 `TARGET_CONTRACT_VERSION` 并列为"无消费
+者常量"。经检索，`ashare_portfolio/rebalance.py` 定义的
+`REBALANCE_POLICY_VERSION` 自 P8-03 起由 `ashare_model/runspec.py` 的
+RunSpec 版本采集消费（`_VERSION_IMPORTS` 的 `rebalance_policy_version`
+项），已具备真实消费方，移出无消费者清单、不再登记退役；
+`TARGET_CONTRACT_VERSION`（`ashare_model/targets.py`）经同一检索仍无
+消费者，维持独立退役小任务路径标注。
