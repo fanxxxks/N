@@ -1,0 +1,49 @@
+# IP-04 (04-TC-08): low-frequency lock watchdog.  Weekly + manual only --
+# the push/PR CI (ci.yml) stays fast and runs --check (pin files) per leg.
+#
+# Why a separate job that installs requirements.lock: freeze_lock
+# --check-full regenerates the full freeze of the running interpreter and
+# byte-compares it against the committed lock, so the only environment
+# that can satisfy it is one built FROM the lock (a pins-only install
+# never brings in lock-only packages such as cloudpickle, and its
+# transitive versions float).  On CI that lock-built environment is the
+# clean closure: this job anchors (1) every locked name==version stays
+# resolvable and installable today (supply-chain drift: yanked or
+# disappeared wheels), (2) pip installs exactly the locked set (no
+# resolver deviation), (3) the closure is internally compatible
+# (pip check).  The torch pin is the P0-06 +cpu wheel, so the install
+# mirrors the base pin file's PyTorch CPU index directive.
+#
+# The dev-machine-only lock-audit guard (tests/test_lock_files.py,
+# ALPHAGPT_LOCK_AUDIT_STRICT opt-in) is unaffected: it runs in the regular
+# test shards, whose environment still installs the pin files and never
+# requirements.lock.
+
+name: lock-watchdog
+
+on:
+  schedule:
+    # Weekly, Mondays 03:17 UTC (off-peak minute).
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  lock-full-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Build the exact locked closure (P0-06: the torch pin is the +cpu
+      # wheel, resolved through the PyTorch CPU index).
+      - name: Install the locked closure
+        run: pip install -r requirements.lock --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Verify closure compatibility
+        run: python -m pip check
+
+      - name: Verify the full lock matches the installed closure
+        run: python scripts/freeze_lock.py --check-full
