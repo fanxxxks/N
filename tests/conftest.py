@@ -11,7 +11,12 @@ import pytest
 from ashare_data.config import BacktestConfig, DataConfig
 from ashare_data.db import AshareDB
 from ashare_data.manifest import build_dataset_manifest, save_manifest
-from ashare_logging import export_log_txt, setup_run_logging, worker_log_suffix
+from ashare_logging import (
+    export_log_txt,
+    guard_process_exit,
+    setup_run_logging,
+    worker_log_suffix,
+)
 
 
 DEFAULT_CODES = ["000001.SZ", "600000.SH", "300001.SZ"]
@@ -50,6 +55,12 @@ def make_bars(
 def _run_logging():
     setup_run_logging(run_name="pytest")
     yield
+    # F-08 companion coverage (IP-11): the 2026-09-03 pytest exit lag and
+    # the sync tail hang are one root-cause family.  Name any surviving
+    # non-daemon thread (with its stack) in this session log — exported
+    # right below — before interpreter teardown.  Detect-only: a forced
+    # exit here would swallow the terminal report / CI result.
+    guard_process_exit(timeout=5.0, force_exit=False)
     project_root = Path(__file__).resolve().parents[1]
     # Per-worker export target (PR3/B2+C2): each xdist worker exports its
     # own buffer to its own file; serial runs keep logs/pytest.txt.

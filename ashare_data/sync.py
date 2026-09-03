@@ -8,12 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
-import sys
-import threading
-import time
-import traceback
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +36,7 @@ from ashare_logging import (
     canonical_config_sha256,
     emit_run_identity,
     export_log_txt,
+    guard_process_exit,
     new_log_run_id,
     setup_run_logging,
 )
@@ -488,73 +484,6 @@ def backfill_member_bars(
     return result
 
 
-_EXIT_GUARD_TIMEOUT_S = 10.0
-
-
-def _guard_process_exit(timeout: float = _EXIT_GUARD_TIMEOUT_S) -> None:
-    """Loud exit guard for the sync entry (IP-11 / review finding F-08).
-
-    On 2026-09-02 a sync completed fully (DB closed, manifest saved, logs
-    exported) yet the interpreter hung at exit and needed a manual kill.
-    The likely cause is a surviving non-daemon third-party thread; this
-    guard turns that silent hang into bounded, loud evidence:
-
-    * every surviving non-daemon thread is logged at ERROR together with
-      its stack (the root-cause record for the next occurrence);
-    * a bounded join waits up to ``timeout`` seconds for survivors to
-      finish and reports them finished when they do;
-    * only after the timeout a forced ``os._exit(3)`` fires — deliberately
-      after the log export, so the report is durable first.  The exit is
-      never silent: the ERROR lines above name the threads and their
-      stacks, and exit code 3 marks a forced shutdown.
-
-    Static root-cause audit (2026-09-03, no real sync run - stateful
-    operations stay separately authorized): all in-repo thread creation on
-    the sync path is daemon-scoped (``akshare_client._call_with_timeout``);
-    ``baostock`` login/logout is paired around queries (logout skipped only
-    on error paths - recorded, not fixed here); DuckDB connections close in
-    ``finally``; loguru sinks are synchronous.  The definitive culprit is
-    therefore captured by this guard at the next authorized real sync.
-
-    Runs on the success path only: during exception unwinding a forced
-    exit would swallow the traceback (forbidden).
-    """
-
-    current = threading.current_thread()
-    survivors = [
-        thread
-        for thread in threading.enumerate()
-        if thread is not current and not thread.daemon and thread.is_alive()
-    ]
-    if not survivors:
-        return
-    frames = sys._current_frames()
-    for thread in survivors:
-        stack = (
-            "".join(traceback.format_stack(frames.get(thread.ident)))
-            or "<no stack captured>\n"
-        )
-        logger.error(
-            f"sync exit guard: non-daemon thread alive at exit "
-            f"name={thread.name} ident={thread.ident}\n{stack}"
-        )
-    deadline = time.monotonic() + timeout
-    for thread in survivors:
-        thread.join(max(0.0, deadline - time.monotonic()))
-    still_alive = [thread.name for thread in survivors if thread.is_alive()]
-    if not still_alive:
-        logger.warning(
-            "sync exit guard: surviving threads finished within the timeout"
-        )
-        return
-    logger.error(
-        f"sync exit guard: forcing process exit after {timeout}s; "
-        f"threads still alive: {still_alive}"
-    )
-    logger.complete()
-    os._exit(3)
-
-
 def main() -> None:
     setup_run_logging(run_name="sync")
     parser = argparse.ArgumentParser(description="Sync A-share data via AkShare")
@@ -591,7 +520,10 @@ def main() -> None:
     finally:
         export_log_txt(run_name="sync")
         if not failed:
-            _guard_process_exit()
+            # F-08: after the log export, bound the interpreter exit so a
+            # surviving non-daemon thread becomes loud evidence, not a
+            # silent hang (shared guard, sync entry = force path).
+            guard_process_exit()
 
 
 if __name__ == "__main__":
