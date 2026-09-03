@@ -625,8 +625,20 @@ def simulate_basket_daily_returns_batch(
                 ) / adv[:, exec_col][None, :]
             util = np.where(adv[None, :, exec_col] > 0, util, np.nan)
             util = np.where(target > 0, util, np.nan)
-            with np.errstate(invalid="ignore"):
-                capacity_full[:, output_col] = np.nanmax(util, axis=1)
+            # IP-10 01 (04-TC-07, itemized in
+            # docs/test_runtime_measurement_log.md): days whose utilization
+            # is all-NaN contribute NaN directly -- nanmax would emit
+            # "All-NaN slice encountered" for exactly those rows while
+            # returning the identical NaN, so the mask removes the warning
+            # source without touching any value (fail-closed NaN stays
+            # NaN; golden parity guards value identity).
+            has_finite_util = np.isfinite(util).any(axis=1)
+            day_capacity = np.full(util.shape[0], np.nan, dtype=np.float64)
+            if has_finite_util.any():
+                day_capacity[has_finite_util] = np.nanmax(
+                    util[has_finite_util], axis=1
+                )
+            capacity_full[:, output_col] = day_capacity
         capital *= 1.0 + net
         prev = target
 
@@ -722,11 +734,18 @@ def _portfolio_objectives(
             if turnover.shape[1] > 0
             else np.zeros(turnover.shape[0], dtype=np.float64)
         )
-    avg_capacity = (
-        np.nanmean(capacity, axis=1)
-        if capacity is not None
-        else np.full(net.shape[0], np.nan, dtype=np.float64)
-    )
+    # IP-10 01: same explicit all-NaN mask as the per-day capacity above --
+    # nanmean emits "Mean of empty slice" for all-NaN rows while returning
+    # the identical NaN, so the mask removes the warning source and keeps
+    # every finite-row mean untouched.
+    avg_capacity = np.full(net.shape[0], np.nan, dtype=np.float64)
+    if capacity is not None:
+        has_finite_capacity = np.isfinite(capacity).any(axis=1)
+        if has_finite_capacity.any():
+            avg_capacity[has_finite_capacity] = np.nanmean(
+                np.asarray(capacity, dtype=np.float64)[has_finite_capacity],
+                axis=1,
+            )
     return np.column_stack([active_ir, exposure, avg_turnover, avg_capacity])
 
 

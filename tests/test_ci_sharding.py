@@ -382,6 +382,73 @@ def test_ci_warning_merge_step_pins_matrix_leg_count() -> None:
     )
 
 
+def test_write_baseline_records_kind_set(tmp_path: Path) -> None:
+    """IP-10 (05): the baseline gains a machine-readable kind inventory —
+    ``kind_set`` (sorted unique warning categories) and ``kind_set_size``
+    (its length).  A recorded, reviewable metric only: per IP-10 the
+    threshold stays OUT of every CI hard gate (threshold metrics rot);
+    the contract test anchors the artifact's self-consistency."""
+
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    text = "\n".join(
+        [
+            "============================== warnings summary ===============================",
+            "tests/test_train.py: 1 warning",
+            "  D:\\minequant\\AlphaGPT\\ashare_model\\reward.py:629: "
+            "RuntimeWarning: All-NaN slice encountered",
+            "tests/test_manifest.py::test_sync_records_dataset_id",
+            "  D:\\minequant\\AlphaGPT\\ashare_model\\data_loader.py:87: "
+            "UniverseDevelopmentFallbackWarning: development universe fallback enabled",
+            "  site-packages/osqp/interface.py:405: PendingDeprecationWarning: boom",
+            "    warnings.warn(",
+            "2 passed, 3 warnings in 0.50s",
+        ]
+    )
+    log = tmp_path / "pytest_serial.log"
+    log.write_text(text + "\n", encoding="utf-8")
+    out = tmp_path / "baseline.json"
+    assert module.write_baseline(out, log, "provenance") == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["kind_set"] == [
+        "PendingDeprecationWarning",
+        "RuntimeWarning",
+        "UniverseDevelopmentFallbackWarning",
+    ]
+    assert payload["kind_set_size"] == 3
+    # Self-consistency: the recorded set is exactly what the committed
+    # section lines imply.
+    assert payload["kind_set"] == sorted(
+        module._warning_kinds(payload["section_lines"])
+    )
+
+
+def test_check_tolerates_sectionless_complete_log(tmp_path: Path) -> None:
+    """IP-10 (04): after the warning-debt collapse a fully clean pytest run
+    emits NO warnings-summary section at all — that is a legitimate empty
+    section, not a broken artifact.  check() must distinguish a log with
+    a valid totals line but no section (zero warnings, empty section,
+    passes) from a truncated artifact without even the totals line
+    (fail closed, unchanged)."""
+
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps({"total_warnings": 0, "section_lines": []}),
+        encoding="utf-8",
+    )
+    complete = tmp_path / "pytest-clean.log"
+    complete.write_text("3 passed in 0.50s\n", encoding="utf-8")
+    assert module.check(baseline, [complete], expect=1) == 0, (
+        "a complete log with zero warnings has no summary section; "
+        "that is an empty section, not a missing artifact"
+    )
+    truncated = tmp_path / "pytest-truncated.log"
+    truncated.write_text("...\npartial output without a totals line\n", encoding="utf-8")
+    assert module.check(baseline, [truncated], expect=1) == 1, (
+        "a truncated log without even the totals line must fail closed"
+    )
+
+
 def test_committed_baseline_is_structurally_valid() -> None:
     payload = json.loads(BASELINE.read_text(encoding="utf-8"))
     assert payload["total_warnings"] > 0

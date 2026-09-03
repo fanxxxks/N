@@ -45,6 +45,24 @@ SUMMARY_RE = re.compile(r"(\d+) passed(?:, (\d+) skipped)?(?:, (\d+) warnings?)?
 # ("tests/test_x.py: 1 warning") is the same non-comparable header.
 COUNT_HEADER_RE = re.compile(r"^tests/\S*: \d+ warnings?$")
 
+# A warnings-summary location line carries its category in the pytest
+# "path:line: Category: message" shape; message continuations, node
+# headers and the section banner do not.  IP-10 05: the kind inventory is
+# recorded in the baseline (kind_set / kind_set_size) as a reviewable
+# metric -- deliberately NOT a CI hard gate (threshold metrics rot).
+WARNING_KIND_RE = re.compile(r": ([A-Z][A-Za-z0-9]*(?:Warning|Error|Exception)):")
+
+
+def _warning_kinds(lines: list[str]) -> list[str]:
+    """Sorted unique warning categories carried by the given lines."""
+
+    kinds: set[str] = set()
+    for line in lines:
+        match = WARNING_KIND_RE.search(line)
+        if match:
+            kinds.add(match.group(1))
+    return sorted(kinds)
+
 # In-repo package/tool anchors: a warnings-summary location is normalized
 # to start at the last of these, so a Windows dev tree (D:\...\),
 # a Linux CI checkout (/home/runner/work/...) and any other machine
@@ -153,12 +171,24 @@ def check(baseline_path: Path, log_paths: list[Path], expect: int | None = None)
             f"expected {expect} shard log(s) but got {len(log_paths)} - "
             "a matrix leg is missing its artifact; fail closed"
         )
-    runs = {p.name: parse_warnings_section(p.read_text(encoding="utf-8")) for p in log_paths}
-    missing = [p.name for p in log_paths if not runs[p.name]]
-    if missing:
+    runs: dict[str, list[str]] = {}
+    totals: dict[str, tuple[int, int, int] | None] = {}
+    for p in log_paths:
+        text = p.read_text(encoding="utf-8")
+        runs[p.name] = parse_warnings_section(text)
+        try:
+            totals[p.name] = parse_summary_totals(text)
+        except ValueError:
+            totals[p.name] = None
+    # A log without a warnings-summary section is legitimate iff it is a
+    # complete run: after the IP-10 collapse a fully clean run emits no
+    # section at all.  A log without even the totals line is truncated -
+    # fail closed (the original guard, narrowed to what it protects).
+    broken = [p.name for p in log_paths if totals[p.name] is None]
+    if broken:
         print(
-            "shard log(s) without a warnings summary section: "
-            + ", ".join(sorted(missing))
+            "shard log(s) without a pytest totals line (truncated artifact): "
+            + ", ".join(sorted(broken))
             + " - fail closed",
             file=sys.stderr,
         )
@@ -166,8 +196,7 @@ def check(baseline_path: Path, log_paths: list[Path], expect: int | None = None)
     result = compare(runs, baseline)
 
     passed = skipped = warnings = 0
-    for path in log_paths:
-        p, s, w = parse_summary_totals(path.read_text(encoding="utf-8"))
+    for name, (p, s, w) in totals.items():
         passed += p
         skipped += s
         warnings += w
@@ -205,9 +234,12 @@ def write_baseline(out_path: Path, from_log: Path, provenance: str) -> int:
     text = from_log.read_text(encoding="utf-8")
     section = parse_warnings_section(text)
     _, _, warnings = parse_summary_totals(text)
+    kinds = _warning_kinds(section)
     payload = {
         "provenance": provenance,
         "total_warnings": warnings,
+        "kind_set": kinds,
+        "kind_set_size": len(kinds),
         # Deduplicated: compare() is set-based, so duplicates never changed
         # enforcement, but the committed artifact must not carry instance
         # multiplicity (the t1 serial gate produced the same node header
@@ -215,7 +247,10 @@ def write_baseline(out_path: Path, from_log: Path, provenance: str) -> int:
         "section_lines": sorted(set(section)),
     }
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    print(f"wrote {out_path} ({warnings} warnings, {len(set(section))} section lines)")
+    print(
+        f"wrote {out_path} ({warnings} warnings, "
+        f"{len(set(section))} section lines, {len(kinds)} kinds)"
+    )
     return 0
 
 
