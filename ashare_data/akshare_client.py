@@ -219,6 +219,16 @@ class AkShareClient:
         return pd.read_json(path, orient="records", dtype=False)
 
     def get_trade_calendar(self) -> list[str]:
+        """Open-session calendar (``YYYYMMDD`` strings, sorted).
+
+        p16 §3: the online path fails closed — fetch failure or an empty
+        provider result raises :class:`AkShareUnavailable`; the Mon-Fri
+        ``bdate_range`` approximation must never impersonate (or be
+        persisted as) the A-share trading calendar.  The ``bdate_range``
+        fallback survives only in the ``offline=True`` fixture path below
+        (test-only calendar source for fixture-less offline clients).
+        """
+
         if self.offline:
             df = self._load_fixture("calendar")
             if df is not None:
@@ -239,11 +249,15 @@ class AkShareClient:
             dates = [d for d in dates if d <= end]
             if dates:
                 return dates
+            raise AkShareUnavailable(
+                "trade calendar fetch returned no sessions"
+            )
+        except AkShareUnavailable:
+            raise
         except Exception as exc:  # noqa: BLE001
-            logger.warning(f"Trade calendar unavailable, using business days: {exc}")
-        return pd.bdate_range(self.config.start_date, self.config.end_date).strftime(
-            "%Y%m%d"
-        ).tolist()
+            raise AkShareUnavailable(
+                f"trade calendar unavailable: {exc}"
+            ) from exc
 
     def get_stock_list(self) -> pd.DataFrame:
         if self.offline:
