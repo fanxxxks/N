@@ -28,12 +28,21 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SHARD_SCRIPT = ROOT / "scripts" / "check_test_shards.py"
 MERGE_SCRIPT = ROOT / "scripts" / "ci_warning_merge.py"
 BASELINE = ROOT / "docs" / "ci_warning_baseline.json"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+LOCK_WATCHDOG = ROOT / ".github" / "workflows" / "lock-watchdog.yml"
+
+
+def _workflow_triggers(parsed: dict) -> dict:
+    """Return a workflow's trigger mapping.  PyYAML parses the ``on:``
+    key as the YAML 1.1 boolean ``True``; accept both spellings."""
+
+    return parsed.get(True, parsed.get("on", {}))
 
 
 def _load_script(path: Path, name: str):
@@ -112,6 +121,58 @@ def test_ci_matrix_and_guard_stay_in_sync_with_script() -> None:
         assert name in matrix_line, f"CI matrix is missing shard {name}"
     assert "check_test_shards.py --check" in text, "union guard step missing"
     assert "check_test_shards.py --emit" in text, "shard emit invocation missing"
+
+
+def test_lock_watchdog_anchors_the_lock_closure_weekly() -> None:
+    """IP-04 (04-TC-08): a low-frequency watchdog installs the full
+    requirements.lock closure and re-verifies it (``freeze_lock
+    --check-full`` + ``pip check``).  Rationale: --check-full regenerates
+    the full freeze of the running interpreter and byte-compares it
+    against the committed lock, so the only environment that can satisfy
+    it is one built FROM the lock — a pins-only install can never match
+    (lock-only packages such as cloudpickle are absent, and the resolved
+    transitives float).  On CI that lock-built environment is the clean
+    closure, so the job anchors (1) every locked name==version stays
+    resolvable and installable today, (2) pip installs exactly the locked
+    set (no resolver deviation), (3) the closure is internally
+    compatible.  Weekly + manual dispatch keeps the regular push/PR CI
+    fast: ci.yml must NOT gain a schedule, and the watchdog lives in its
+    own workflow file.  The torch pin is the P0-06 +cpu wheel, so the
+    install mirrors the base pin file's PyTorch CPU index directive."""
+
+    parsed = yaml.safe_load(LOCK_WATCHDOG.read_text(encoding="utf-8"))
+    triggers = _workflow_triggers(parsed)
+    assert set(triggers) == {"schedule", "workflow_dispatch"}, (
+        f"the watchdog must be weekly + manual only, got: {sorted(triggers)}"
+    )
+    jobs = parsed["jobs"]
+    assert list(jobs) == ["lock-full-audit"], sorted(jobs)
+    steps = jobs["lock-full-audit"]["steps"]
+    runs = " ".join(step.get("run", "") for step in steps)
+    assert "pip install -r requirements.lock" in runs, (
+        "the watchdog must build the locked closure itself"
+    )
+    assert "--extra-index-url https://download.pytorch.org/whl/cpu" in runs, (
+        "the +cpu torch pin resolves through the PyTorch CPU index (P0-06)"
+    )
+    assert "pip check" in runs, "closure compatibility must be verified"
+    assert "python scripts/freeze_lock.py --check-full" in runs, (
+        "the full-freeze byte comparison is the watchdog's core check"
+    )
+    setups = [
+        step
+        for step in steps
+        if step.get("uses", "").startswith("actions/setup-python")
+    ]
+    assert setups and setups[0]["with"]["python-version"] == "3.12", (
+        "the closure must be verified on the CI runtime version"
+    )
+
+    # Separation contract: the regular push/PR CI stays schedule-free.
+    ci = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    assert set(_workflow_triggers(ci)) == {"push", "pull_request"}, (
+        "the weekly watchdog must not slow or attach to the regular CI"
+    )
 
 
 # -------------------------------------------------------------- D2 warnings
