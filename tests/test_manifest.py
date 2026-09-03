@@ -254,6 +254,7 @@ def test_sync_records_dataset_id(tmp_path):
 
     from ashare_model.data_loader import AshareDataLoader
     from ashare_data.config import ModelConfig
+    from ashare_data.universe import UniverseDevelopmentFallbackWarning
 
     # The offline sync writes only snapshot constituents, so the loader
     # must use the explicit development universe fallback (strict mode
@@ -261,7 +262,11 @@ def test_sync_records_dataset_id(tmp_path):
     loader = AshareDataLoader(
         cfg, ModelConfig(), allow_development_universe_fallback=True
     )
-    loader.load_data()
+    # IP-10 03: the fallback warning is a pinned contract signal, not
+    # unaccounted noise -- the loader MUST warn when it falls back to the
+    # development universe (fail-closed discipline, AGENTS 5.3).
+    with pytest.warns(UniverseDevelopmentFallbackWarning):
+        loader.load_data()
     assert loader.dataset_id == dataset_id
 
 

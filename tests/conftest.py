@@ -22,6 +22,24 @@ from ashare_logging import (
 DEFAULT_CODES = ["000001.SZ", "600000.SH", "300001.SZ"]
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """IP-10 02 (04-TC-07): itemized, targeted warning filter -- NOT a
+    global silencer (AGENTS 10.1).  The OSQP PendingDeprecationWarning
+    ("The default value of raise_error will change to True in the
+    future.") fires 553x per full run from CVXPY's internal solver
+    construction (ashare_portfolio/optimizer.py passes
+    ``solver=cp.OSQP``; osqp's own API default is unreachable from our
+    call site without changing solver semantics -- the explicit
+    ``raise_error`` pin is the portfolio lane's / upstream's decision).
+    The exact message + category match keeps every OTHER
+    PendingDeprecationWarning visible; the disposition is itemized in
+    docs/test_runtime_measurement_log.md."""
+    config.addinivalue_line(
+        "filterwarnings",
+        "ignore:The default value of raise_error will change to True in the future\\.:PendingDeprecationWarning",
+    )
+
+
 def make_bars(
     n_dates: int = 40,
     ts_codes: list[str] | None = None,

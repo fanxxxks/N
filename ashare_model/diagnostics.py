@@ -173,7 +173,14 @@ def correlation_summary(
         block = tensor[:, sel, day].astype(np.float64)
         if np.count_nonzero(block) == 0:
             continue
-        corr = np.corrcoef(block)
+        # IP-10 01 (itemized in docs/test_runtime_measurement_log.md): a
+        # constant cross-section makes corrcoef's internal stddev division
+        # 0/0 ("invalid value encountered in divide"); the NaN result is
+        # exactly what the nan_to_num below contracts to 0, so the
+        # FP-state warning is muted at the call site (np.errstate never
+        # changes the computed values).
+        with np.errstate(invalid="ignore"):
+            corr = np.corrcoef(block)
         # A constant cross-section (e.g. a neutral placeholder, or the very
         # first return) has undefined correlation: contribute 0, never NaN.
         corr = np.nan_to_num(corr, nan=0.0)

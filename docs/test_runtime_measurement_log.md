@@ -459,3 +459,72 @@ message 与评审记录（测量日志只承载测量与门禁命令矩阵本身
 - 后续：正式运行重启前置 = "doctor fairness probes PASS on the run
   tree"（改进计划 §4.4 前置 iii 的机器化落点）；checklist 文档归集属
   IP-16（t12）。决策台账⑥的状态更新属用户持有文件，留待用户/captain。
+
+## IP-10 warning 债务一次性收敛与基线重置（2026-09-03，树 9d7b40a）
+
+被测实现：`9d7b40a`（improve/ci-tests worktree `D:\minequant\wt-ci`，
+tracked 干净；收敛实现 = `6e7623a` part-1 + `9d7b40a` part-1b 修正）。
+engineering run type；不构成任何研究/收益结论。
+
+- 命令：`cmd /c "C:\ProgramData\miniconda3\python.exe -m pytest -q tests
+  > logs\gate_9d7b40a.txt 2>&1"`（串行全量，CPU 路径解释器，与 IP-01
+  终树门禁同口径）。
+- 结果（2026-09-03）：**1513 passed, 6 skipped, 0 warnings in
+  1689.99s（0:28:09）**，exit 0。原始产物
+  `logs/gate_9d7b40a.txt`（logs/ gitignore 不入库），SHA256
+  `9B64E0749E706E31BB43AB8C896142000017428A55C71372094DBF72766D0430`；
+  **日志中不存在 warnings summary section**（零警告运行的 pytest 形态）。
+- 逐类处置（632 → 0，对照 IP-09 重置基线 t1 口径）：
+  1. **osqp PendingDeprecationWarning（553 实例）**：CVXPY 内部求解器
+     构造触发（`ashare_portfolio/optimizer.py:317` 传
+     `solver=cp.OSQP`，`raise_error` 默认值翻转属 osqp API 面，从调用点
+     不可达且显式钉扎属求解器语义变更）。处置 =
+     `tests/conftest.py::pytest_configure` 定向 filterwarnings（精确
+     message + category 匹配，非全局）；任何其他
+     PendingDeprecationWarning 保持可见。
+  2. **reward NaN RuntimeWarning 族**：
+     - `reward.py` 容量审计 nanmax/nanmean（All-NaN slice 23 +
+       Mean of empty slice 4）：numpy nanfunctions 的 warnings.warn 型，
+       errstate 不可抑制 → 显式全 NaN 行 mask（有有限值的行 nanmax/
+       nanmean 结果逐值恒等，全 NaN 行直接 NaN）；golden parity 守卫。
+     - `signal_quality.py` summarize_signal_quality_batch 的
+       `np.quantile(window_icirs, 0.25)`（标量减 37 实例）：robust_icir
+       对退化窗口合法返回 ±inf，分位点落在双 inf 次序统计量时 numpy
+       quantile lerp 计算 inf−inf（`_function_base_impl.py:4608`）返回
+       NaN → 调用点 `np.errstate(invalid="ignore")`（值不变）。
+     - `diagnostics.py:176` `np.corrcoef`（invalid divide 14 实例）：
+       常数截面使 stddev 除法 0/0，NaN 结果由既有 `nan_to_num` 契约为 0
+       （:177-179 既有注释 + test_correlation_summary_survives_constant_
+       cross_sections 即设计证明）→ 调用点 errstate。
+  3. **UniverseDevelopmentFallbackWarning（1 实例）**：契约钉扎——
+     `tests/test_manifest.py::test_sync_records_dataset_id` 以
+     `pytest.warns` 断言 loader 回退必须告警（§5.3 fail-closed 纪律的
+     可执行投影）。
+- **首轮归因修正记录**：part-1（`6e7623a`）曾将标量减族归因于
+  `eval_metrics.py` 摘要 quantile 并包 errstate；gate_6e7623a
+  （1513/6/37，exit 0，SHA256
+  `6FB641EB76322A49929C0D70F0C8AE3418FCF1C084F3EE78E1C77724B01C8952`）
+  证伪该归因（残余 37 = 全部标量减族）——该处 values 上游已被
+  `math.isfinite` 过滤（eval_metrics.py:300-302），warning 不可达，
+  wrap 为死代码，已在 `9d7b40a` 撤销并改包真实源。归因方法论教训：
+  numpy 内部行号（:4608 _lerp）≠ 我们的调用点，须以 warning-as-error
+  traceback 或逐套件消去法定位。
+- **skip 基线 5 → 6**：+1 = `tests/test_lock_files.py:302` IP-04
+  lock 审计 dev-machine 守卫（data-infra 线合并引入，自带
+  `ALPHAGPT_LOCK_AUDIT_STRICT=1` opt-in 说明，机器登记在册）；本分支
+  未新增任何 skip。CUDA skipif 5 项在 CPU 解释器下守恒。
+- **passed 勾稽**：1475（28bfefb t1）→ 1513（+38：IP-04/IP-05/IP-11
+  等线合并带来的合同测试）；本分支未新增测试文件。
+- **比较器增强（IP-10 ⑤）**：`--write-baseline` 落盘机读
+  `kind_set`/`kind_set_size`（本基线 = 空集/0）；`check()` 区分
+  "完整日志但零警告"（合法空 section，通过）与"无 totals 行的截断
+  产物"（fail-closed 守卫收窄到其保护对象）。阈值类指标不入 CI 强
+  门禁（契约测试仅锚定自洽性）。
+- **基线重置（IP-10 ④）**：`--write-baseline` 自 gate_9d7b40a →
+  `docs/ci_warning_baseline.json` = 0 warnings / 0 section lines /
+  0 kinds；`--check --expect 1 --baseline … --logs gate_9d7b40a.txt`
+  → **exit 0 "baseline holds"**。
+- 未运行项：ubuntu/py3.12 CI 形态（4 分片 + 归并 job）、web job、
+  `pip check`、`freeze_lock --check`；push 未执行（未授权）。
+- 研究结论边界：engineering run type；本条目不产生也不声称任何研究
+  结论。
