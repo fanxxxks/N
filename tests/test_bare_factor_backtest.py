@@ -178,7 +178,12 @@ def test_direction_uses_training_window_rule(populated_db: DataConfig):
     assert payload["factors"][0]["direction"] in (1, -1)
 
 
-def test_cli_smoke_writes_versioned_payload(tmp_path, populated_db: DataConfig):
+def test_cli_smoke_writes_versioned_payload(
+    tmp_path, populated_db: DataConfig, production_gate_asof
+):
+    """t23: in-process formal entry — the G8 evaluation day is injected
+    through the p16-reserved seam (production_gate_asof) so the gates
+    evaluate the fixture's synthetic era deterministically."""
     cfg_path = tmp_path / "config.yaml"
     out_path = tmp_path / "bare_factor_backtest.json"
     cfg_path.write_text(

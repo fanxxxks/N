@@ -502,15 +502,24 @@ def test_cli_promotion_rejects_noncurrent_protocol_artifact(tmp_path, payload):
 
 
 def test_cli_promotion_refuses_legacy_artifact_without_dataset(
-    tmp_path, populated_db
+    tmp_path, fresh_populated_db
 ):
     """End-to-end promotion CLI: an artifact without a dataset_id is
-    refused at the P0 gate (legacy measurements cannot be promoted)."""
+    refused at the P0 gate (legacy measurements cannot be promoted).
+
+    t23: the promotion CLI runs in a SUBPROCESS, so the G8 freshness gate
+    (p16, t13) cannot be monkeypatched — the fixture axis is
+    today-relative instead (fresh_populated_db) and the fold dates derive
+    from the same axis positions the historical 2024-01-01 config used.
+    """
     import json as _json
     import subprocess
     import sys
 
     import yaml
+
+    populated_db, dates = fresh_populated_db
+    train_end, test_end = dates[6], dates[17]
 
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(
@@ -524,7 +533,7 @@ def test_cli_promotion_refuses_legacy_artifact_without_dataset(
                 "model": {"max_formula_len": 6},
                 "protocol": {
                     "folds": [
-                        {"train_end": "2024-01-10", "test_end": "2024-01-25"}
+                        {"train_end": train_end, "test_end": test_end}
                     ],
                 },
             }

@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 
@@ -56,6 +57,15 @@ def repo(tmp_path):
     (tmp_path / "config" / "ashare_config.yaml").write_text(
         config_text, encoding="utf-8"
     )
+    # t23: the seeded calendar/daily window ends at the real clock's last
+    # business day — the G8 freshness gate (p16, t13) evaluates against
+    # the real clock inside the archive_run SUBPROCESS (monkeypatch
+    # cannot cross the process boundary), so the seeded era must track
+    # today instead of a fixed 2024 date.
+    seed_dates = pd.bdate_range(
+        end=pd.Timestamp.today().normalize(), periods=2
+    ).strftime("%Y%m%d").tolist()
+    d0, d1 = seed_dates[0], seed_dates[1]
     data_config = DataConfig(
         data_dir=tmp_path / "data",
         duckdb_path=tmp_path / "data" / "ashare.duckdb",
@@ -73,8 +83,8 @@ def repo(tmp_path):
             data_config,
         )
         db.upsert_calendar(
-            [{"trade_date": "20240101", "is_open": True},
-             {"trade_date": "20240102", "is_open": True}],
+            [{"trade_date": d0, "is_open": True},
+             {"trade_date": d1, "is_open": True}],
             data_config,
         )
         db.upsert_constituents(
@@ -102,14 +112,14 @@ def repo(tmp_path):
                     "adj_factor": 1.0,
                 }
                 for code in ("000001.SZ", "600000.SH")
-                for date in ("20240101", "20240102")
+                for date in (d0, d1)
             ],
             data_config,
         )
     metrics = {
         "formula_text": "TURNOVER_CHG MUL RET_5",
         "metrics": {"sharpe": 1.5, "max_drawdown": 0.2},
-        "dates": ["20240101", "20240102"],
+        "dates": [d0, d1],
         "equity": [1.0, 1.02],
     }
     (tmp_path / "data" / "result.json").write_text(json.dumps(metrics), encoding="utf-8")
