@@ -43,9 +43,24 @@ def pytest_configure(config: pytest.Config) -> None:
 def make_bars(
     n_dates: int = 40,
     ts_codes: list[str] | None = None,
+    end: str | None = None,
 ) -> tuple[list[str], list[str], pd.DataFrame]:
+    """Synthetic bars on a business-day axis.
+
+    Default axis starts at 2024-01-01 (the historical fixture window).
+    ``end`` anchors the axis so the LAST session is ``end`` (or the last
+    business day before it) — the t23 today-relative variant for CLI
+    smoke fixtures: the G8 freshness gate (p16 contract, t13) evaluates
+    bar staleness against the real clock, so smoke fixtures must never
+    rot with it.
+    """
+
     ts_codes = ts_codes or DEFAULT_CODES
-    dates = pd.bdate_range("2024-01-01", periods=n_dates).strftime("%Y%m%d").tolist()
+    if end is None:
+        dates = pd.bdate_range("2024-01-01", periods=n_dates)
+    else:
+        dates = pd.bdate_range(end=end, periods=n_dates)
+    dates = dates.strftime("%Y%m%d").tolist()
     rows = []
     for code in ts_codes:
         for i, date in enumerate(dates):
@@ -167,6 +182,49 @@ def _populate_db(
 def populated_db(data_config: DataConfig, bars_data) -> DataConfig:
     dates, ts_codes, bars = bars_data
     return _populate_db(data_config, dates, ts_codes, bars, persist_manifest=True)
+
+
+@pytest.fixture
+def fresh_data_config(tmp_path: Path) -> DataConfig:
+    """Today-relative data window (t23): ``end_date`` is the real clock's
+    date so the pre-listed calendar horizon satisfies the G8 freshness
+    gate (p16 contract, t13) for CLI smoke fixtures."""
+
+    end = pd.Timestamp.today().normalize()
+    start = end - pd.Timedelta(days=90)
+    return DataConfig(
+        data_dir=tmp_path,
+        duckdb_path=tmp_path / "ashare.duckdb",
+        parquet_dir=tmp_path / "parquet",
+        start_date=start.strftime("%Y-%m-%d"),
+        end_date=end.strftime("%Y-%m-%d"),
+        index_codes=["000300.SH"],
+        index_names=["沪深300"],
+        min_listed_sessions=1,
+    )
+
+
+@pytest.fixture
+def fresh_bars_data():
+    """Bars whose last session is today (or the last business day before
+    it) — G8-fresh by construction, never rotting with the clock."""
+
+    return make_bars(end=pd.Timestamp.today().normalize().strftime("%Y-%m-%d"))
+
+
+@pytest.fixture
+def fresh_populated_db(
+    fresh_data_config: DataConfig, fresh_bars_data
+) -> tuple[DataConfig, list[str]]:
+    """Today-relative variant of ``populated_db`` (t23); returns the data
+    config plus the session axis so tests can derive fold dates from the
+    same positions the historical 2024-01-01 axis used."""
+
+    dates, ts_codes, bars = fresh_bars_data
+    cfg = _populate_db(
+        fresh_data_config, dates, ts_codes, bars, persist_manifest=True
+    )
+    return cfg, dates
 
 
 @pytest.fixture
