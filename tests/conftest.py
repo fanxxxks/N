@@ -218,13 +218,38 @@ def fresh_populated_db(
 ) -> tuple[DataConfig, list[str]]:
     """Today-relative variant of ``populated_db`` (t23); returns the data
     config plus the session axis so tests can derive fold dates from the
-    same positions the historical 2024-01-01 axis used."""
+    same positions the historical 2024-01-01 axis used.  Used by tests
+    whose formal entry runs in a SUBPROCESS (monkeypatch cannot cross the
+    process boundary)."""
 
     dates, ts_codes, bars = fresh_bars_data
     cfg = _populate_db(
         fresh_data_config, dates, ts_codes, bars, persist_manifest=True
     )
     return cfg, dates
+
+
+@pytest.fixture
+def production_gate_asof(monkeypatch, bars_data) -> str:
+    """t23 option (a) for IN-PROCESS formal-entry tests: inject the G8
+    evaluation day through the p16-reserved test-only seam
+    (``ProductionGateRunner.require_production(*, today=...)`` —
+    production callers never pass it and no config surface can override
+    it).  The injected day is the fixture bars' max session, so the gates
+    evaluate the synthetic era deterministically — no real wall clock
+    anywhere.  Subprocess-entry tests must use ``fresh_populated_db``
+    instead (monkeypatch cannot cross process boundaries)."""
+
+    from ashare_data.gates import ProductionGateRunner
+
+    era = bars_data[0][-1]
+    real = ProductionGateRunner.require_production
+
+    def _asof(self, *, today: str | None = None):
+        return real(self, today=today or era)
+
+    monkeypatch.setattr(ProductionGateRunner, "require_production", _asof)
+    return era
 
 
 @pytest.fixture
