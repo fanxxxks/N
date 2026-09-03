@@ -78,7 +78,7 @@ jobs:
           path: shard-logs
 
       - name: Enforce warning baseline (net-new = fail)
-        run: python scripts/ci_warning_merge.py --check --baseline docs/ci_warning_baseline.json --logs shard-logs/pytest-*.log
+        run: python scripts/ci_warning_merge.py --check --expect 4 --baseline docs/ci_warning_baseline.json --logs shard-logs/pytest-*.log
 
   web:
     runs-on: ubuntu-latest

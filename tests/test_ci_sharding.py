@@ -230,11 +230,167 @@ def test_warning_merge_ignores_group_count_headers(tmp_path: Path) -> None:
     assert run.disappeared == []
 
 
+def test_parse_excludes_singular_group_count_header() -> None:
+    """IP-09 (04-TC-05): singular group-count headers must be excluded too.
+
+    Runtime evidence (t1 serial gate @ 28bfefb, logs/gate_28bfefb.txt):
+    the train All-NaN block dropped from two instances to one, so pytest
+    emitted ``tests/test_train.py: 1 warning`` — the plural-only
+    COUNT_HEADER_RE let that header escape into the comparison as a
+    net-new line (pure instance multiplicity, non-comparable per the
+    PR3 criterion).  Flip coverage: 0 (no header), 1 (singular), 2
+    (plural) must all leave only the location/message lines.
+    """
+
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    singular_text = "\n".join(
+        [
+            "============================== warnings summary ===============================",
+            "tests/test_train.py: 1 warning",
+            "  D:\\minequant\\AlphaGPT\\ashare_model\\reward.py:629: "
+            "RuntimeWarning: All-NaN slice encountered",
+            "    capacity_full[:, output_col] = np.nanmax(util, axis=1)",
+            "1475 passed, 5 skipped, 632 warnings in 1521.33s (0:25:21)",
+        ]
+    )
+    section = module.parse_warnings_section(singular_text)
+    assert not any("test_train.py: 1 warning" in line for line in section), (
+        "singular count header carries instance multiplicity and must be excluded"
+    )
+    assert any("reward.py:629" in line for line in section), (
+        "the location line itself must stay in the section"
+    )
+    assert not any("passed," in line for line in section), (
+        "the totals line must stay excluded"
+    )
+
+    # 0-case: a block with no count header at all keeps its location lines.
+    headerless_text = "\n".join(
+        [
+            "============================== warnings summary ===============================",
+            "  site-packages/osqp/interface.py:405: PendingDeprecationWarning: boom",
+            "    warnings.warn(",
+            "1475 passed, 5 skipped, 632 warnings in 1521.33s (0:25:21)",
+        ]
+    )
+    section_headerless = module.parse_warnings_section(headerless_text)
+    assert any("interface.py:405" in line for line in section_headerless)
+
+    # 2->1 flip: the plural spelling keeps behaving as before.
+    plural_text = singular_text.replace(
+        "tests/test_train.py: 1 warning", "tests/test_train.py: 2 warnings"
+    )
+    section_plural = module.parse_warnings_section(plural_text)
+    assert not any("test_train.py: 2 warnings" in line for line in section_plural)
+    assert any("reward.py:629" in line for line in section_plural)
+
+
+def test_parse_summary_totals_accepts_singular_warning() -> None:
+    """IP-09 (04-TC-05): pytest writes ``1 warning`` (singular) when a run
+    produced exactly one warning; the plural-only SUMMARY_RE failed to
+    match such a totals line at all — parse_summary_totals raised
+    ValueError and the totals line leaked into the section (it never
+    terminated it).  Flip coverage: 0/1/2 warnings and skipped variants.
+    """
+
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    assert module.parse_summary_totals("3 passed in 0.50s") == (3, 0, 0)
+    assert module.parse_summary_totals("5 passed, 2 skipped in 0.50s") == (5, 2, 0)
+    assert module.parse_summary_totals("1 passed, 1 warning in 0.50s") == (1, 0, 1)
+    assert module.parse_summary_totals(
+        "1 passed, 1 skipped, 1 warning in 0.50s"
+    ) == (1, 1, 1)
+    assert module.parse_summary_totals("2 passed, 2 warnings in 0.50s") == (2, 0, 2)
+    assert module.parse_summary_totals(
+        "1475 passed, 5 skipped, 632 warnings in 1521.33s (0:25:21)"
+    ) == (1475, 5, 632)
+
+
+def test_section_end_terminates_on_singular_totals_line() -> None:
+    """IP-09: the run-varying totals line must terminate the warnings
+    section regardless of its warning-count spelling; with the plural-only
+    SUMMARY_RE a ``1 warning`` totals line leaked into the section and
+    every such comparison went net-new by construction."""
+
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    text = "\n".join(
+        [
+            "============================== warnings summary ===============================",
+            "  site-packages/osqp/interface.py:405: PendingDeprecationWarning: boom",
+            "    warnings.warn(",
+            "1 passed, 1 warning in 0.50s",
+        ]
+    )
+    section = module.parse_warnings_section(text)
+    assert not any("passed," in line for line in section), (
+        "a singular-spelled totals line must still terminate the section"
+    )
+    assert any("interface.py:405" in line for line in section)
+
+
+def test_write_baseline_dedupes_section_lines(tmp_path: Path) -> None:
+    """IP-09: the committed baseline is a reviewable artifact; the t1
+    serial gate produced repeated normalized lines (the same node header
+    once per warning block — 7 headers x 2 blocks — and
+    ``tests/test_core.py: 1 warning`` twice in the leaked predecessor).
+    compare() is set-based so duplicates never changed enforcement, but
+    write_baseline must emit the deduplicated set so the artifact itself
+    carries no multiplicity."""
+
+    module = _load_script(MERGE_SCRIPT, "ci_warning_merge")
+    text = "\n".join(
+        [
+            "============================== warnings summary ===============================",
+            "tests/test_diagnostics.py::test_factor_report_smoke",
+            "  site-packages/numpy/lib/_function_base_impl.py:3036: RuntimeWarning: x",
+            "tests/test_diagnostics.py::test_factor_report_smoke",
+            "  site-packages/numpy/lib/_function_base_impl.py:3037: RuntimeWarning: y",
+            "1 passed, 1 warning in 0.50s",
+        ]
+    )
+    log = tmp_path / "pytest_serial.log"
+    log.write_text(text + "\n", encoding="utf-8")
+    out = tmp_path / "baseline.json"
+    assert module.write_baseline(out, log, "test provenance") == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    lines = payload["section_lines"]
+    assert len(lines) == len(set(lines)), "section_lines must be deduplicated"
+    assert lines == sorted(set(lines)), "section_lines must stay sorted"
+    assert payload["total_warnings"] == 1, (
+        "the singular-spelled totals must count as one warning"
+    )
+
+
+def test_ci_warning_merge_step_pins_matrix_leg_count() -> None:
+    """IP-09 (04-TC-06): the merge job must pass --expect with the matrix
+    leg count; without it a missing shard log silently weakens the union
+    (the R3-F3b fail-closed fix existed in the script but was never wired
+    into CI)."""
+
+    text = CI_WORKFLOW.read_text(encoding="utf-8")
+    merge_line = next(
+        (
+            line
+            for line in text.splitlines()
+            if "ci_warning_merge.py --check" in line
+        ),
+        "",
+    )
+    assert merge_line, "warning merge step is missing from ci.yml"
+    assert "--expect 4" in merge_line, (
+        "the merge step must fail closed on a missing matrix leg (--expect 4)"
+    )
+
+
 def test_committed_baseline_is_structurally_valid() -> None:
     payload = json.loads(BASELINE.read_text(encoding="utf-8"))
     assert payload["total_warnings"] > 0
     assert payload["section_lines"], "baseline warnings section is empty"
-    assert "provenance" in payload and "4156de4" in payload["provenance"]
+    # IP-09: the baseline source moved from the 4156de4 PR3 gate to the
+    # 28bfefb t1 serial gate (regeneration required by the comparator's
+    # singular-header fix); the assertion keeps pinning the exact source
+    # sha of the current baseline (same strength, new requirement).
+    assert "provenance" in payload and "28bfefb" in payload["provenance"]
 
 
 def test_baseline_lines_are_environment_independent() -> None:
