@@ -42,7 +42,7 @@ from .candidates import (
 )
 from .complexity import complexity_bill
 from .ir import FormulaSyntaxError, canonical_ast, canonical_tokens
-from .reward import REWARD_VERSION
+from .reward import REWARD_VERSION, _pearson, _rankdata
 from .semantic_cache import SemanticCache
 from .search_contract import SearchResult
 from .train import sample_random_formulas
@@ -119,27 +119,27 @@ def oos_active_ir(
 
 
 def _spearman(a: np.ndarray, b: np.ndarray) -> float:
-    def ranks(x: np.ndarray) -> np.ndarray:
-        order = np.argsort(x, kind="mergesort")
-        x_sorted = x[order]
-        obs = np.empty(x.size, dtype=bool)
-        obs[0] = True
-        np.not_equal(x_sorted[1:], x_sorted[:-1], out=obs[1:])
-        dense = np.cumsum(obs) - 1
-        counts = np.bincount(dense)
-        cum = np.cumsum(counts)
-        avg = (cum - counts + 1 + cum) / 2.0
-        out = np.empty_like(dense)
-        out[order] = avg[dense]
-        return out
+    """Spearman rank correlation: Pearson over average ranks (ties share
+    the mean of their ranks).
 
-    ra, rb = ranks(a), ranks(b)
-    ra = ra - ra.mean()
-    rb = rb - rb.mean()
-    den = float(np.sqrt((ra @ ra) * (rb @ rb)))
-    if den <= 0.0:
-        return 0.0
-    return float(ra @ rb) / den
+    Single semantic path (IP-14): the average ranks and the correlation
+    step delegate to ``reward._rankdata`` / ``reward._pearson`` -- the same
+    primitives behind ``rank_ic_series`` -- instead of a local rederivation.
+    A degenerate zero-variance input keeps this harness's historical 0.0
+    contract: ``reward._pearson`` reports zero-variance days as NaN (its
+    cross-sectional IC convention), which is mapped back here.  On the
+    harness's real input domain (distinct float64 reward / OOS-IR values
+    from :func:`reward_oos_correlation`) results are bit-identical to the
+    retired local implementation; tie-heavy inputs additionally lose the
+    retired copy's latent average-rank truncation bias (parity and
+    definition evidence: ``tests/test_baseline_harness.py``).
+    """
+
+    rho = _pearson(
+        _rankdata(np.asarray(a, dtype=np.float64)),
+        _rankdata(np.asarray(b, dtype=np.float64)),
+    )
+    return 0.0 if math.isnan(rho) else rho
 
 
 def reward_oos_correlation(

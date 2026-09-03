@@ -23,6 +23,7 @@ import pytest
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.baseline_harness import (
+    _spearman,
     oos_active_ir,
     reward_oos_correlation,
     run_matched_baseline,
@@ -436,3 +437,131 @@ def test_completion_gate_reward_correlates_with_oos_active_ir():
     assert result["n"] == 24
     assert result["rho"] > 0.4, result
     assert result["p_value"] < 0.05, result
+
+
+def _spearman_frozen_local(a: np.ndarray, b: np.ndarray) -> float:
+    """The pre-IP-14 local ``_spearman`` of baseline_harness, frozen
+    verbatim as the bit-parity oracle for the consolidated version.
+
+    IP-14 retires this copy in favour of ``reward._rankdata`` /
+    ``reward._pearson`` (the single rank-correlation semantic path).  The
+    frozen copy documents two facts the tests pin:
+    * on tie-free inputs it is bit-identical to the delegated version
+      (identical average-rank algorithm, identical dot products);
+    * on tie-heavy inputs its rank vector came from assigning average-rank
+      floats into an ``int`` array (``np.empty_like(dense)``), which numpy
+      truncates -- a latent truncation bias the consolidation removes.
+    """
+
+    def ranks(x: np.ndarray) -> np.ndarray:
+        order = np.argsort(x, kind="mergesort")
+        x_sorted = x[order]
+        obs = np.empty(x.size, dtype=bool)
+        obs[0] = True
+        np.not_equal(x_sorted[1:], x_sorted[:-1], out=obs[1:])
+        dense = np.cumsum(obs) - 1
+        counts = np.bincount(dense)
+        cum = np.cumsum(counts)
+        avg = (cum - counts + 1 + cum) / 2.0
+        out = np.empty_like(dense)
+        out[order] = avg[dense]
+        return out
+
+    ra, rb = ranks(a), ranks(b)
+    ra = ra - ra.mean()
+    rb = rb - rb.mean()
+    den = float(np.sqrt((ra @ ra) * (rb @ rb)))
+    if den <= 0.0:
+        return 0.0
+    return float(ra @ rb) / den
+
+
+def _average_ranks_oracle(x: np.ndarray) -> np.ndarray:
+    """Definition-based average ranks, written independently of
+    ``reward._rankdata`` (explicit group loop, no scatter trick) so the
+    Spearman oracle below does not re-encode the implementation."""
+
+    x = np.asarray(x, dtype=np.float64)
+    order = np.argsort(x, kind="stable")
+    xs = x[order]
+    ranks_sorted = np.empty(x.size, dtype=np.float64)
+    i = 0
+    while i < x.size:
+        j = i
+        while j + 1 < x.size and xs[j + 1] == xs[i]:
+            j += 1
+        # mean of the 1-based ranks i+1 .. j+1
+        ranks_sorted[i: j + 1] = (i + j + 2) / 2.0
+        i = j + 1
+    out = np.empty(x.size, dtype=np.float64)
+    out[order] = ranks_sorted
+    return out
+
+
+def _spearman_oracle(a: np.ndarray, b: np.ndarray) -> float:
+    """Spearman by definition: Pearson over average ranks, 0.0 when a side
+    is degenerate (zero variance) -- the harness's historical contract."""
+
+    ra = _average_ranks_oracle(a)
+    rb = _average_ranks_oracle(b)
+    ra = ra - ra.mean()
+    rb = rb - rb.mean()
+    den = float(np.sqrt((ra @ ra) * (rb @ rb)))
+    if den <= 0.0:
+        return 0.0
+    return float(ra @ rb) / den
+
+
+def test_spearman_tie_free_bit_parity():
+    """IP-14 guard: on the harness's real input domain (distinct float64
+    reward / OOS-IR values, as built by ``reward_oos_correlation``) the
+    delegated ``_spearman`` is bit-identical to the frozen pre-change
+    algorithm, including NaN-containing inputs; degenerate zero-variance
+    inputs keep the historical 0.0 contract (``reward._pearson``'s NaN
+    convention is mapped back)."""
+
+    rng = np.random.default_rng(1407)
+    cases = [
+        (rng.normal(size=50), rng.normal(size=50)),
+        (np.array([1.0, 2.0]), np.array([2.0, 1.0])),
+    ]
+    for a, b in cases:
+        assert _spearman(a, b) == _spearman_frozen_local(a, b)
+    a = rng.normal(size=30)
+    a[3] = np.nan
+    a[7] = np.nan
+    b = rng.normal(size=30)
+    b[11] = np.nan
+    assert _spearman(a, b) == _spearman_frozen_local(a, b)
+    const = np.ones(20)
+    assert _spearman(const, rng.normal(size=20)) == 0.0
+    assert _spearman(const, const) == 0.0
+
+
+def test_spearman_matches_average_rank_definition():
+    """IP-14 (01-A6): ``_spearman`` must implement Spearman's definition --
+    Pearson over *average* ranks -- through the shared reward primitives.
+    The retired local copy truncated average ranks to integers on tied
+    inputs (float ranks assigned into an ``int`` array), so tie-heavy
+    inputs are asserted against the definition oracle here; the delegated
+    implementation agrees with the oracle everywhere, tie-free inputs
+    included."""
+
+    rng = np.random.default_rng(1408)
+    cases = [
+        # heavy ties: integers on a small grid
+        (rng.integers(0, 4, size=40).astype(float),
+         rng.integers(0, 4, size=40).astype(float)),
+        # all-identical block inside one side
+        (np.concatenate([np.full(10, 1.0), rng.normal(size=15)]),
+         rng.normal(size=25)),
+    ]
+    for a, b in cases:
+        assert _spearman(a, b) == _spearman_oracle(a, b)
+        assert _spearman(b, a) == _spearman_oracle(b, a)
+    # tie-free inputs stay bit-identical to the definition oracle too
+    for _ in range(5):
+        a = rng.normal(size=33)
+        b = rng.normal(size=33)
+        assert _spearman(a, b) == _spearman_oracle(a, b)
+        assert _spearman(a, b) == _spearman_frozen_local(a, b)
