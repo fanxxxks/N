@@ -31,7 +31,6 @@ from ashare_data.config import (
     make_reward_config,
 )
 from ashare_data.gates import ProductionGateRunner
-from ashare_data.processor import open_to_open_returns
 
 from .alphagpt import AlphaGPTModel, build_action_mask
 from .candidates import (
@@ -55,14 +54,7 @@ from .rl_diagnostics import (
     gradient_l2_norm,
     summarize_rl_step,
 )
-from .targets import causal_target_returns
-from .semantic_cache import (
-    SEMANTIC_CACHE_VERSION,
-    CalibrationSlice,
-    SemanticCache,
-    SemanticCacheKey,
-    make_calibration_execute,
-)
+from .semantic_cache import SEMANTIC_CACHE_VERSION, SemanticCacheKey
 from .search_backends import (
     get_search_backend,
     log_search_start,
@@ -74,6 +66,7 @@ from .train_artifacts import write_trainer_artifact
 from .train_windows import (
     _TrainWindow,
     _project_root,
+    prepare_training_window,
     resolve_device,
     sample_random_formulas,
     validation_start,
@@ -917,146 +910,28 @@ class AshareTrainer:
         vm_device: torch.device,
         window_cap: tuple[int, int] | None = None,
     ) -> "_TrainWindow":
-        """Bind everything the searchers (RL, random, GP) need about the
-        training window: the factor tensor, VM masks, target, windows, the
-        semantic-budget cache and the calibration fingerprint executor.
+        """Delegate to :func:`train_windows.prepare_training_window`.
 
-        Shared by :meth:`train` (RL) and :meth:`train_search` (the
-        non-RL backends) so every searcher measures the identical window.
-
-        ``window_cap`` is a measurement override ``(stocks, dates)`` that
-        slices the window head for tractable experiments (the admission
-        tier): every searcher then measures the identical capped window,
-        and the validation windows / signal range are re-derived inside
-        the cap.  The cap is recorded by callers that persist results.
+        B3 (IP-07b): the window-binding code moved by reason-to-change
+        into ``train_windows`` (the B1 module), split into contiguous
+        stage helpers with unchanged side-effect order; the method stays
+        on the facade class as the stable seam for every searcher entry
+        point.
         """
 
-        contract = self._training_contract(train_end_date)
-        train_end_idx = contract.train_label_end
-        stock_slice = slice(None)
-        if window_cap is not None:
-            stocks, dates = int(window_cap[0]), int(window_cap[1])
-            if stocks <= 0 or dates <= 0:
-                raise ValueError("window_cap must be positive (stocks, dates)")
-            stock_slice = slice(0, stocks)
-            train_end_idx = min(train_end_idx, dates)
-        # The capped window's signal end reserves the exact entry+holding
-        # context declared by the target contract.
-        train_signal_end = min(
-            contract.train_signal_end,
-            max(0, train_end_idx - contract.exit_offset),
+        return prepare_training_window(
+            self, train_end_date, vm_device, window_cap
         )
-        policy = RebalancePolicy.from_config(self.backtest_config)
-        full_rebalance_mask = policy.rebalance_mask(self.loader.dates)
-        rebalance_mask = full_rebalance_mask[:train_end_idx]
-        # Hold out the tail of the training window for out-of-sample best
-        # formula selection, split into independent sub-windows; the best
-        # formula is decided on the *median* validation reward so a single
-        # lucky tail stretch cannot win the selection.
-        val_windows = self._validation_windows(
-            train_signal_end,
-            rebalance_mask=rebalance_mask,
-        )
-        # The *learning* window is the in-sample head only: the policy
-        # gradient scores candidates on columns strictly before the first
-        # validation window, so the selection data never doubles as the
-        # training signal (val rewards rank formulas; IS rewards teach the
-        # policy — two jobs, two windows).
-        val_start = validation_start(train_signal_end, self.model_config)
-        train_signal_range = (contract.train_signal_start, val_start)
-        factor_tensor = self.loader.factor_tensor[
-            :, stock_slice, :train_end_idx
-        ].to(vm_device)
-        # The VM executes on the compute device; the industry-group tensor
-        # for CS_NEUTRALIZE and the PIT eligibility mask for the
-        # cross-sectional operators move with the factor stack (the loader
-        # always builds the mask in load_data, so there is no fallback).
-        industry_codes = getattr(self.loader, "industry_codes", None)
-        self.vm.industry_codes = (
-            industry_codes[stock_slice, :train_end_idx].to(vm_device)
-            if industry_codes is not None
-            else None
-        )
-        universe_mask = self.loader.universe_mask
-        self.vm.universe_mask = torch.tensor(
-            universe_mask[stock_slice, :train_end_idx],
-            dtype=torch.bool,
-            device=vm_device,
-        )
-        # The candidate scorer needs the same PIT mask on the numpy side:
-        # every quality statistic (rank IC, basket selection, near-constant
-        # rejection, direction) is gated to signal-date eligible cells.
-        train_universe_mask = universe_mask[stock_slice, :train_end_idx]
-        # Recompute labels only from prices inside the inclusive training
-        # anchor. Precomputed global targets at the tail may reference fold-
-        # external t+1/t+2 prices and are intentionally never sliced here.
-        train_open = self.loader.raw_data_cache["open"][
-            stock_slice, :train_end_idx
-        ].numpy()
-        target_ret = causal_target_returns(
-            train_open,
-            self.loader.dates[:train_end_idx],
-            policy,
-            rebalance_mask=rebalance_mask,
-        )
-        realized_ret = open_to_open_returns(train_open)
-        # Same semantics as loader.mask_by_universe, applied to the capped
-        # window (the loader's mask is the full stock axis): values outside
-        # the PIT eligibility mask become NaN.
-        target_ret = np.asarray(target_ret, dtype=np.float64).copy()
-        target_ret[~np.asarray(train_universe_mask, dtype=bool)] = np.nan
-        # Tradability masks (buy/sell blocked per stock and date) align the
-        # training basket with the backtest engine's execution rules; both
-        # matrices are shared by every formula scored this run.
-        blocked_buy, blocked_sell = self.loader.tradability_masks()
-        blocked_buy = blocked_buy[stock_slice, :train_end_idx]
-        blocked_sell = blocked_sell[stock_slice, :train_end_idx]
 
-        # T2-01: the semantic cache is the evaluation-budget ledger.  Its
-        # key carries the full evaluation context (dataset_id, reward and
-        # protocol versions, the training window), so scores are never
-        # reused across datasets or measurement generations, and its budget
-        # counts **unique semantic evaluations** — structurally identical
-        # (canonical AST hash) and numerically equivalent (calibration
-        # fingerprint) formulas never bill twice.
-        self.semantic_cache = SemanticCache(
-            dataset_id=self.loader.dataset_id,
-            reward_version=REWARD_VERSION,
-            protocol_version=PROTOCOL_VERSION,
-            window_id=self._window_id(
-                contract, val_windows, policy, domain_id=self.domain_id
-            ),
-            cap=self._REWARD_CACHE_CAP,
-        )
-        calibration_slice = CalibrationSlice.of(factor_tensor.shape[2])
-        self._calibration_execute = make_calibration_execute(
-            self.vm,
-            factor_tensor,
-            universe_mask[stock_slice, :train_end_idx],
-            self.vm.industry_codes,
-            calibration_slice,
-        )
-        # Chunk the batched reward evaluation so the stacked signal matrix
-        # (original stack + batched copy + both-direction copy) stays within
-        # a fixed memory budget (~512 MB of float64 signals).
-        signal_bytes = factor_tensor.shape[1] * train_end_idx * 8
-        reward_chunk = score_chunk_size(signal_bytes)
-        return _TrainWindow(
-            contract=contract,
-            train_end_idx=train_end_idx,
-            val_windows=val_windows,
-            val_start=val_start,
-            train_signal_range=train_signal_range,
-            factor_tensor=factor_tensor,
-            vm_device=vm_device,
-            train_universe_mask=train_universe_mask,
-            target_ret=target_ret,
-            realized_ret=realized_ret,
-            rebalance_mask=rebalance_mask,
-            blocked_buy=blocked_buy,
-            blocked_sell=blocked_sell,
-            reward_chunk=reward_chunk,
-        )
+    def _reward_chunk_size(self, signal_bytes: int) -> int:
+        """Resolve the streamed-reward chunk size through the train module
+        namespace: ``tests/test_train.py`` pins the streamed-vs-single-pass
+        chunk semantics via ``monkeypatch.setattr(train_module,
+        "score_chunk_size", ...)``, so the call must stay late-bound on
+        this facade after the window code moved to ``train_windows``
+        (B3, IP-07b — registered monkeypatch surface)."""
+
+        return score_chunk_size(signal_bytes)
 
     def search(
         self,
