@@ -7,6 +7,13 @@ Aggregates the repository's research state into one report:
   (latest dataset manifest) plus manifest metadata;
 * **gates** — the G1–G7 production gate outcome (``ProductionGateRunner``,
   formal mode, read-only queries);
+* **fairness_probes** — the F2-(a) fairness re-probe obligation
+  (``campaign_closure_decisions_20260902.md`` ⑥ / t59, machine-triggered by
+  IP-03): the two t59 probes (``build_action_mask`` family-⑤ admission and
+  the GP ``build_pset`` terminal enumeration) run LIVE on whatever tree the
+  doctor inspects, and the recorded probe baseline
+  (``docs/fairness_probe_baseline.json``) is compared against the live
+  vocabulary fingerprint;
 * **artifacts** — strategy / protocol artifact versions (searcher,
   reward_version, protocol_version, model_version, dataset_id) and their
   legacy status (stamped ``legacy`` / ``legacy_reason`` fields, see
@@ -19,6 +26,10 @@ Aggregates the repository's research state into one report:
 Conflict rules (severity ``error`` -> exit code 1):
 
 * any G1–G7 gate fails;
+* any F2-(a) fairness probe fails, or the probe harness cannot run
+  (torch/deap/vocab import) — formal runs are blocked until the probes
+  pass on the actual tree; a stale or missing probe baseline is reported
+  at warning severity (evidence bookkeeping, not a fairness break);
 * the database has no ``dataset_id`` (no dataset manifest);
 * an artifact records a reward/protocol/model version that differs from
   the current code generation **and is not marked legacy** — a legacy
@@ -154,11 +165,15 @@ def build_report(
     dependencies: dict[str, str | None],
     model_searcher: str,
     runtime_estimates_: dict[str, Any],
+    fairness_probes: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Aggregate the gathered sections into the final doctor report.
 
     Pure function over plain data: every conflict rule lives here so the
     report logic is fully unit-testable without a database or git repo.
+    ``fairness_probes`` is ``None`` when the caller did not gather the
+    section (the CLI always gathers it); ``None`` contributes no findings
+    and the report simply omits the section.
     """
 
     findings: list[dict[str, str]] = []
@@ -171,6 +186,53 @@ def build_report(
                     "message": f"gate {check.get('name')} failed: {check.get('detail')}",
                 }
             )
+
+    if fairness_probes is not None:
+        for check in fairness_probes.get("probes", []):
+            if not check.get("ok"):
+                findings.append(
+                    {
+                        "severity": "error",
+                        "message": (
+                            f"F2-(a) fairness probe {check.get('name')} "
+                            f"failed: {check.get('detail')} — formal runs "
+                            "are blocked until the probes pass on this "
+                            "tree (campaign_closure_decisions_20260902.md "
+                            "⑥; evidence record: "
+                            "docs/test_runtime_measurement_log.md)"
+                        ),
+                    }
+                )
+        if fairness_probes.get("all_ok"):
+            baseline = fairness_probes.get("baseline")
+            if baseline is None:
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "message": (
+                            "no fairness probe baseline recorded "
+                            "(docs/fairness_probe_baseline.json): the live "
+                            "probes passed on this tree, but decision ⑥ "
+                            "evidence should be recorded (see "
+                            "docs/test_runtime_measurement_log.md)"
+                        ),
+                    }
+                )
+            elif fairness_probes.get("baseline_stale"):
+                findings.append(
+                    {
+                        "severity": "warning",
+                        "message": (
+                            "fairness probe baseline is stale: recorded "
+                            f"vocab_fingerprint "
+                            f"{baseline.get('vocab_fingerprint')!r} != "
+                            f"current "
+                            f"{fairness_probes.get('vocab_fingerprint')!r} "
+                            "— re-record the probe evidence after the "
+                            "vocabulary change (decision ⑥)"
+                        ),
+                    }
+                )
 
     dataset_id = (data or {}).get("dataset_id")
     if not dataset_id:
@@ -314,7 +376,7 @@ def build_report(
         )
 
     errors = [f for f in findings if f["severity"] == "error"]
-    return {
+    report = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "code": code,
         "data": data,
@@ -325,6 +387,9 @@ def build_report(
         "findings": findings,
         "healthy": not errors,
     }
+    if fairness_probes is not None:
+        report["fairness_probes"] = fairness_probes
+    return report
 
 
 def gather_code_version(repo_root: Path) -> dict[str, Any]:
@@ -395,6 +460,261 @@ def gather_gates(data_config, min_eligible: int = 100) -> dict[str, Any]:
             {"name": check.name, "ok": check.ok, "detail": check.detail}
             for check in result.checks
         ],
+    }
+
+
+# -- F2-(a) fairness re-probe (IP-03; campaign_closure_decisions_20260902.md ⑥) -
+
+#: Recorded probe evidence (committed, decision ⑥): the doctor compares its
+#: live vocabulary fingerprint against this baseline.  Provenance fields
+#: (``code_commit``) are informational; only the vocabulary fingerprint
+#: participates in the staleness comparison, so routine merges never flag.
+FAIRNESS_PROBE_BASELINE_PATH = Path("docs") / "fairness_probe_baseline.json"
+
+#: P13 family ⑤ (docs/p13_fundamental_fields_contract.md §5.5; decision ⑥):
+#: the appended slow-fundamental block whose mask/GP admission the t57/t58
+#: repair chain touched.  Frozen here deliberately — the probe pins the
+#: probed layout, and a legal vocabulary evolution must go through the
+#: re-probe flow (fail-closed) instead of silently re-deriving.
+_PROBE_FAMILY5_NAMES = (
+    "CASHFLOW_QUALITY",
+    "ACCRUALS",
+    "ASSET_GROWTH",
+    "EARNINGS_ACCEL",
+)
+
+#: The frozen grammar-6 layout the t59 probes were recorded against
+#: (feature ids 74-77 contiguous append; 77 features, 12 deprecated,
+#: 65 samplable; vocabulary fingerprint 0e64ad614bfd).
+_PROBE_FROZEN = {
+    "family5_ids": (74, 75, 76, 77),
+    "feature_count": 77,
+    "deprecated_count": 12,
+    "samplable_feature_count": 65,
+}
+
+
+def gather_fairness_probes(repo_root: Path) -> dict[str, Any]:
+    """Run the two t59 fairness probes LIVE (in-memory, read-only).
+
+    Probe harness imports are lazy and individually guarded: a tree that
+    cannot run the probes reports a failed ``probe_harness_import`` check
+    (fail-closed) instead of crashing the whole doctor.  The probes are
+    deterministic on-tree checks (engineering evidence, never a research
+    conclusion).
+    """
+
+    probes: list[dict[str, Any]] = []
+    try:
+        import torch
+
+        from .alphagpt import build_action_mask
+        from .gp_search import build_pset
+        from .vocab import DEPRECATED_FEATURE_NAMES, FORMULA_VOCAB
+    except Exception as exc:  # noqa: BLE001 - the probe must fail closed
+        probes.append(
+            {
+                "name": "probe_harness_import",
+                "ok": False,
+                "detail": (
+                    "probe infrastructure unavailable "
+                    f"({exc!r}); formal-run readiness cannot be certified"
+                ),
+            }
+        )
+        return _probe_section(probes, None, repo_root)
+
+    vocab = FORMULA_VOCAB
+    fingerprint = vocab.feature_version
+    family_ids = tuple(
+        vocab.feature_offset + vocab.feature_names.index(name)
+        for name in _PROBE_FAMILY5_NAMES
+    )
+    deprecated_ids = {
+        vocab.feature_offset + vocab.feature_names.index(name)
+        for name in DEPRECATED_FEATURE_NAMES
+    }
+
+    layout_ok = (
+        family_ids == _PROBE_FROZEN["family5_ids"]
+        and vocab.feature_count == _PROBE_FROZEN["feature_count"]
+        and len(DEPRECATED_FEATURE_NAMES) == _PROBE_FROZEN["deprecated_count"]
+    )
+    probes.append(
+        {
+            "name": "frozen_vocab_layout",
+            "ok": layout_ok,
+            "detail": (
+                f"family-⑤ ids {list(family_ids)} vs frozen "
+                f"{list(_PROBE_FROZEN['family5_ids'])}; feature_count "
+                f"{vocab.feature_count} vs {_PROBE_FROZEN['feature_count']}; "
+                f"deprecated {len(DEPRECATED_FEATURE_NAMES)} vs "
+                f"{_PROBE_FROZEN['deprecated_count']}; fingerprint "
+                f"{fingerprint} (vocabulary size {vocab.size}, EOS "
+                f"{vocab.eos_token_id})"
+            ),
+        }
+    )
+
+    # Probe 1 (t59 ⑥): build_action_mask with feature_ids=[74..77] admits
+    # exactly the four family-⑤ tokens at step 0.
+    try:
+        stack_sizes = torch.zeros(1, dtype=torch.long)
+        done = torch.zeros(1, dtype=torch.bool)
+        stack_types = torch.zeros(1, 6, dtype=torch.long)
+        mask = build_action_mask(
+            stack_sizes,
+            done,
+            0,
+            6,
+            vocab,
+            feature_ids=list(family_ids),
+            stack_types=stack_types,
+        )
+        legal = sorted(
+            int(token)
+            for token in (mask == 0.0)[0].nonzero(as_tuple=True)[0]
+        )
+        probes.append(
+            {
+                "name": "action_mask_family5_step0_exact",
+                "ok": legal == list(_PROBE_FROZEN["family5_ids"]),
+                "detail": f"step-0 legal set {legal}",
+            }
+        )
+
+        # Probe 1b (t59 ⑥): the unrestricted mask offers exactly the
+        # samplable features (77 - 12 deprecated = 65) and no deprecated
+        # token leaks into the legal set.
+        full_mask = build_action_mask(
+            stack_sizes,
+            done,
+            0,
+            6,
+            vocab,
+            feature_ids=None,
+            stack_types=stack_types,
+        )
+        legal_full = sorted(
+            int(token)
+            for token in (full_mask == 0.0)[0].nonzero(as_tuple=True)[0]
+        )
+        legal_features = [
+            token
+            for token in legal_full
+            if vocab.feature_offset <= token < vocab.operator_offset
+        ]
+        leaks = sorted(deprecated_ids & set(legal_features))
+        probes.append(
+            {
+                "name": "action_mask_full_vocab_deprecated_excluded",
+                "ok": len(legal_features)
+                == _PROBE_FROZEN["samplable_feature_count"]
+                and not leaks,
+                "detail": (
+                    f"step-0 legal features {len(legal_features)} vs "
+                    f"{_PROBE_FROZEN['samplable_feature_count']}; "
+                    f"deprecated leaks {leaks}"
+                ),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - report, never crash
+        probes.append(
+            {
+                "name": "action_mask_family5_step0_exact",
+                "ok": False,
+                "detail": f"probe raised: {exc!r}",
+            }
+        )
+        probes.append(
+            {
+                "name": "action_mask_full_vocab_deprecated_excluded",
+                "ok": False,
+                "detail": f"probe raised: {exc!r}",
+            }
+        )
+
+    # Probe 2 (t59 ⑥): the GP primitive set enumerates the single registry
+    # — exactly the four family-⑤ terminals under restriction, exactly the
+    # 65 samplable features unrestricted, no duplicates, no deprecated.
+    try:
+        restricted = build_pset(vocab, feature_ids=list(family_ids))
+        restricted_names = [
+            getattr(terminal, "name", str(terminal))
+            for terminals in restricted.terminals.values()
+            for terminal in terminals
+        ]
+        probes.append(
+            {
+                "name": "gp_pset_family5_terminals",
+                "ok": sorted(restricted_names)
+                == sorted(_PROBE_FAMILY5_NAMES),
+                "detail": (
+                    f"restricted terminals {sorted(restricted_names)} "
+                    f"(count {len(restricted_names)})"
+                ),
+            }
+        )
+
+        full = build_pset(vocab, feature_ids=None)
+        full_names = [
+            getattr(terminal, "name", str(terminal))
+            for terminals in full.terminals.values()
+            for terminal in terminals
+        ]
+        deprecated_terminals = sorted(set(full_names) & set(DEPRECATED_FEATURE_NAMES))
+        probes.append(
+            {
+                "name": "gp_pset_full_vocab_terminal_count",
+                "ok": len(set(full_names))
+                == _PROBE_FROZEN["samplable_feature_count"]
+                and len(full_names) == len(set(full_names))
+                and not deprecated_terminals,
+                "detail": (
+                    f"unique terminals {len(set(full_names))} vs "
+                    f"{_PROBE_FROZEN['samplable_feature_count']} "
+                    f"(total {len(full_names)}); deprecated terminals "
+                    f"{deprecated_terminals}"
+                ),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - report, never crash
+        probes.append(
+            {
+                "name": "gp_pset_family5_terminals",
+                "ok": False,
+                "detail": f"probe raised: {exc!r}",
+            }
+        )
+        probes.append(
+            {
+                "name": "gp_pset_full_vocab_terminal_count",
+                "ok": False,
+                "detail": f"probe raised: {exc!r}",
+            }
+        )
+
+    return _probe_section(probes, fingerprint, repo_root)
+
+
+def _probe_section(
+    probes: list[dict[str, Any]], fingerprint: str | None, repo_root: Path
+) -> dict[str, Any]:
+    """Assemble the fairness_probes report section incl. the baseline."""
+
+    baseline = read_json_safe(repo_root / FAIRNESS_PROBE_BASELINE_PATH)
+    baseline = baseline if isinstance(baseline, dict) else None
+    stale = (
+        baseline is not None
+        and fingerprint is not None
+        and baseline.get("vocab_fingerprint") != fingerprint
+    )
+    return {
+        "vocab_fingerprint": fingerprint,
+        "probes": probes,
+        "baseline": baseline,
+        "baseline_stale": stale,
+        "all_ok": all(check["ok"] for check in probes),
     }
 
 
@@ -489,6 +809,7 @@ def main(argv: list[str] | None = None) -> int:
         dependencies=gather_dependencies(),
         model_searcher=model_config.searcher,
         runtime_estimates_=runtime_estimates(model_config, protocol_config),
+        fairness_probes=gather_fairness_probes(root),
     )
 
     if args.output:
@@ -539,6 +860,24 @@ def _print_human(report: dict[str, Any]) -> None:
     passed = sum(1 for c in gates.get("checks", []) if c.get("ok"))
     total = len(gates.get("checks", []))
     print(f"gates: {passed}/{total} PASS (mode={gates.get('mode')})")
+    probes = report.get("fairness_probes")
+    if probes is not None:
+        probe_total = len(probes.get("probes", []))
+        probe_passed = sum(1 for c in probes.get("probes", []) if c.get("ok"))
+        baseline = probes.get("baseline")
+        baseline_state = (
+            "stale" if probes.get("baseline_stale")
+            else "recorded" if baseline is not None
+            else "missing"
+        )
+        print(
+            f"fairness probes (F2-(a) ⑥): {probe_passed}/{probe_total} PASS "
+            f"(vocab fingerprint {probes.get('vocab_fingerprint')}, "
+            f"baseline {baseline_state})"
+        )
+        for check in probes.get("probes", []):
+            if not check.get("ok"):
+                print(f"  FAIL {check.get('name')}: {check.get('detail')}")
     for artifact in report["artifacts"]:
         status = (
             "LEGACY" if artifact.get("legacy")
