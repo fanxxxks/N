@@ -459,3 +459,51 @@ message 与评审记录（测量日志只承载测量与门禁命令矩阵本身
 - 后续：正式运行重启前置 = "doctor fairness probes PASS on the run
   tree"（改进计划 §4.4 前置 iii 的机器化落点）；checklist 文档归集属
   IP-16（t12）。决策台账⑥的状态更新属用户持有文件，留待用户/captain。
+
+## 环境对齐（2026-09-03，U9 选项 A：.venv 对齐 lock 闭包）
+
+- 授权：用户批准 U9=选项 A（队长 2026-09-03 广播："逐包定向安装 12 包 +
+  7 包残留族单事务卸载，torch 不动，禁整体安装 lock"）；执行环境
+  Python 3.13.12（`D:\minequant\.venv\Scripts\python.exe`，torch
+  2.11.0+cu128 不动）；基线 = 28bfefb 期 lock（105 包）与本机 dist-info
+  双向漂移（03-F-01 复核记录，IP-04/t5）。
+- 命令（全部经 `.venv\Scripts\python.exe -m pip`，逐包定向）：
+  1. 安装 12 包至 lock 版本：click 8.5.0 / curl_cffi 0.16.2 /
+     filelock 3.32.4 / idna 3.19 / joblib 1.6.0 / lxml 6.1.2 /
+     narwhals 2.25.0 / platformdirs 4.11.5 / protobuf 7.36.0 /
+     Pygments 2.21.0 / scs 3.3.0 / cloudpickle 3.1.2 → 12/12 exit 0。
+  2. 单事务卸载 7 包残留族：matplotlib / seaborn / contourpy / cycler /
+     fonttools / kiwisolver / pyparsing → exit 0。
+- 复验结果：
+  1. `scripts/lock_audit.py`（.venv 解释器）→ **exit 0 / IN SYNC**：
+     lock=105 vs installed=105，mismatch=0、lock_only=0、env_only=0；
+     唯一说明项 = torch 本地 wheel tag（lock `2.11.0+cpu` vs 实装
+     `+cu128`，P0-06 设计内，非漂移）。
+  2. `scripts/freeze_lock.py --check-full` → exit 1：唯一残差为同一
+     torch 本地 tag（`_full_freeze` 按实装 verbatim 生成 vs lock 的
+     +cpu）。该残差在"torch 不动"约束下不可归零，属 P0-06 已知设计态
+     而非对齐缺陷；归零需 lock 生成器归一化或 CPU torch，均属独立
+     依赖更新任务，未执行。
+  3. `.venv pip check` → exit 0（No broken requirements found）。
+  4. .venv 定向冒烟：`pytest -q tests/test_gates.py
+     tests/test_lock_files.py tests/test_akshare_client.py` →
+     **46 passed / 1 skipped**（唯一 skip = IP-04 已登记的
+     dev-machine 守卫基线 skip）。披露：本次冒烟未跑 CUDA 相关套件
+     （test_ops/test_train/test_vm/test_backtest 的 CUDA skipif 在
+     .venv 下会转为实跑），门禁证据口径仍归 miniconda CPU 环境
+     （t20 终验）。
+- **重要发现（停止令触发）**：lock 闭包携带的 `scs==3.3.0` 为上游
+  **yanked** 版本（pip 安装时 WARNING：官方原因"Windows/manylinux
+  wheels crash the interpreter on first solve (missing MKL dispatch
+  kernels)"，cvxgrp/scs#423；且已从 PyPI 版本列表除名，`pip index
+  versions scs` 可装列表最高 3.2.11）。实测复现：隔离子进程最小 LP
+  求解（scs.SCS(data, {'l': 3}, eps_abs=1e-6).solve()）→ 进程硬崩，
+  exit -1066598274，无 Python traceback。对齐前 .venv 实装 3.2.11
+  （可用）。影响面：`ashare_portfolio/optimizer.py` 经 cvxpy 消费
+  scs——凡派发到 SCS 的求解在 Windows 上硬崩。**未自动回滚**（按
+  "冲突即停下汇报"指令）；待治理裁决：a) 授权 .venv 定向降回
+  scs==3.2.11（其余对齐保留）+ 将 lock 的 scs pin 缺陷登记为独立
+  依赖更新任务（lock 重生成）；b) 维持严格 lock 忠实（.venv 组合优化
+  求解路径不可用）。本记录按 b) 现状如实落账。
+- 性质：engineering（环境状态变更与只读复验）；不构成任何研究/收益
+  结论；未运行真实 sync（仍待授权）；未 push。
