@@ -345,9 +345,18 @@ def summarize_signal_quality_batch(
         window_icir_median = (
             float(np.median(window_icirs)) if window_icirs else None
         )
-        window_icir_q25 = (
-            float(np.quantile(window_icirs, 0.25)) if window_icirs else None
-        )
+        # IP-10 01 (itemized in docs/test_runtime_measurement_log.md):
+        # robust_icir may legitimately return +/-inf for degenerate
+        # windows; when the quantile point lands on two inf order
+        # statistics, numpy's quantile lerp computes inf - inf ("invalid
+        # value encountered in scalar subtract") and returns NaN -- the
+        # NaN summary is the intended value, so the FP-state warning is
+        # muted at the call site (np.errstate never changes the computed
+        # values).
+        with np.errstate(invalid="ignore"):
+            window_icir_q25 = (
+                float(np.quantile(window_icirs, 0.25)) if window_icirs else None
+            )
         window_sign_agreement = (
             float(np.mean([1.0 if s == train_sign_mean else 0.0 for s in window_signs]))
             if window_signs

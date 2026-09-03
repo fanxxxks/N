@@ -304,23 +304,15 @@ def aggregate_results(rows: list[dict]) -> dict:
             if not values:
                 continue
             arr = np.asarray(values, dtype=np.float64)
-            # IP-10 01 (itemized in docs/test_runtime_measurement_log.md):
-            # on degenerate summaries whose order statistics at the
-            # quantile point are both +inf, numpy's quantile lerp computes
-            # inf - inf ("invalid value encountered in scalar subtract")
-            # and returns NaN -- the NaN summary is the intended value, so
-            # the FP-state warning is muted at the call site (np.errstate
-            # never changes the computed values).
-            with np.errstate(invalid="ignore"):
-                entry["metrics"][key] = {
-                    "median": float(np.median(arr)),
-                    "q25": float(np.quantile(arr, 0.25)),
-                    "q75": float(np.quantile(arr, 0.75)),
-                    "iqr": float(np.quantile(arr, 0.75) - np.quantile(arr, 0.25)),
-                    "min": float(arr.min()),
-                    "max": float(arr.max()),
-                    "n": int(arr.size),
-                }
+            entry["metrics"][key] = {
+                "median": float(np.median(arr)),
+                "q25": float(np.quantile(arr, 0.25)),
+                "q75": float(np.quantile(arr, 0.75)),
+                "iqr": float(np.quantile(arr, 0.75) - np.quantile(arr, 0.25)),
+                "min": float(arr.min()),
+                "max": float(arr.max()),
+                "n": int(arr.size),
+            }
         if group[0].get("formula_text"):
             entry["formula_text"] = group[0]["formula_text"]
         out[name] = entry
