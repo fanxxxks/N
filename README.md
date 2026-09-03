@@ -383,13 +383,15 @@ python scripts/archive_run.py --mode sim --commit
 - **搜索与训练**：默认强类型 GP（`model.searcher: gp`；TPE/random/RL 为正式
   可选后端，RL 路径为 REINFORCE + value baseline + 熵正则、advantage 裁剪
   防数值爆炸）；训练奖励为**组合主动 IR 减去精确年化执行成本**
-  （`reward.py` v14：稀疏因果标签仅驱动 IC/质量门，逐日资金曲线消费相邻 open
+  （`reward.py` v15：稀疏因果标签仅驱动 IC/质量门，逐日资金曲线消费相邻 open
   收益；basket 在 signal-date 与 entry-date 双重 PIT eligible
   上选股，执行日（t+1 开盘）对齐回测引擎的**可交易性屏蔽**——
   停牌/一字涨停不买、停牌/一字跌停持仓强制保留，费用按精确日频路径计费），
   IC/ICIR 是辅助统计与质量门禁；验证段按
   `model.validation_splits`（默认 4）个独立子窗口取**中位数**
-  选择最佳公式；不含算子的裸因子公式减 `reward.complexity_penalty`（默认 0.02），
+  选择最佳公式；复杂度惩罚自 v15 起为两段式：complexity bill ≤
+  `complexity_free_bill`（默认 3.0）免罚，超出部分每单位减
+  `reward.complexity_penalty`（默认 0.05），
   最佳公式的验证奖励须达到 `reward.min_val_reward`（默认 0.0）、验证窗
   rank-ICIR 须达到 `reward.min_val_icir`（默认 0.05）才保存，避免把
   负质量公式回测/归档。v7 起，IC/ICIR、候选打分、RL 训练、随机搜索与裸因子

@@ -655,7 +655,7 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 
 | 目录 | 职责/现状 |
 |---|---|
-| [config](../config) | [ashare_config.yaml](../config/ashare_config.yaml) 是版本化基线；[.env.example](../config/.env.example) 只列三个数据路径变量；真实 <code>.env</code>、<code>.webapi_token</code> 和 <code>runtime_overrides.yaml</code> 被忽略 |
+| [config](../config) | [ashare_config.yaml](../config/ashare_config.yaml) 是版本化基线；[.env.example](../config/.env.example) 列三个数据路径变量与 <code>ASHARE_OFFLINE</code>；真实 <code>.env</code>、<code>.webapi_token</code> 和 <code>runtime_overrides.yaml</code> 被忽略 |
 | [docs](.) | 本指南、P2 契约（[p2_data_tier_contract.md](p2_data_tier_contract.md)）与 Phase 0-6 七份测量日志；旧评估报告 evaluation_20260823.md 已删除（74f833e） |
 | [experiments](../experiments) | 只增不改的研究快照；T2 固定-baseline-seed admission 仅为历史证据，P4 晋级必须使用配对独立种子 |
 | [assets](../assets) | 两张无 provenance 的旧回测图片 |
@@ -845,6 +845,19 @@ API 没有数据同步、训练、回测、协议评价或晋级路由，这些�
 | 分层报告 | <code>data/tier_report.json</code>、<code>tier_report_diagnostics.json</code> | tier_reports CLI | 研究/晋级准备（P2） |
 | 基本面范围 | <code>data/fundamental_scope.json</code> | check_fundamental_scope.py | 治理审计（P2） |
 | 数据库备份 | <code>data/ashare.duckdb.p2bak</code> | P2 purge 前备份 | 回滚参考（P2） |
+| 数据库备份 | <code>data/ashare.duckdb.p13bak</code> | P13 回填前备份（schema/manifest 世代与当前一致） | 回滚参考（P13） |
+
+### 6.6 本地备份与日志保留策略（IP-16；[03-F-04]/[04-TC-09]）
+
+**DuckDB 迁移备份**（<code>data/ashare.duckdb.&lt;tag&gt;bak</code>）：
+
+- 命名约定：<code>&lt;tag&gt;</code> 标识创建事件/世代（现有 <code>p2bak</code>=P2 purge 前、<code>p13bak</code>=P13 回填前）。创建备份时须在对应测量日志记录当时的 schema/manifest 世代；从备份恢复前先核对世代，旧 schema 备份不得直接恢复到新代码（fail-closed，§4.3）。
+- 保留策略（治理默认）：正式迁移/purge 前创建一代新备份；保留**最近 1 代**加当前仍被引用为回滚参考的代；更旧备份的删除/归档属**用户裁决**，本仓库不做任何自动清理——现有 <code>p2bak</code>、<code>p13bak</code> 全部保留不动。
+
+**logs/ 保留窗口**（gitignored 运行日志目录，已积累 1,000+ 文件）：
+
+- 常规日期戳运行日志（<code>ablation_*</code>、<code>admission_experiment_*</code>、<code>pytest_*</code> 等）按前缀滚动保留，治理默认：每前缀保留最近 30 天（或最近 200 个，先到为准）；超窗清理只能由显式命令执行，禁止任何自动删除。
+- **审计锚点例外**：最终候选门禁 pytest 的完整重定向固定命名 <code>logs/pytest_gate_&lt;sha&gt;.txt</code>（约定见 [docs/test_runtime_measurement_log.md](test_runtime_measurement_log.md#L130)），是 CI warning 基线（<code>docs/ci_warning_baseline.json</code>）的对账证据锚点——**不参与轮转、不自动清理**。若需压缩归档或移出 <code>logs/</code>（脱离 <code>logs/</code> 通配），属显式治理动作，且必须同步更新测量日志中的既有引用。
 
 ## 7. 依赖关系
 
@@ -943,6 +956,7 @@ flowchart LR
 - runtime overrides 对字典递归合并，标量和列表整体替换。
 - 环境变量只覆盖 <code>data_dir</code>、<code>duckdb_path</code>、<code>parquet_dir</code>。
 - <code>config/.env</code> 以 <code>override=False</code> 加载，所以进程已有同名环境变量优先。
+- <code>config/.env</code> 生效时机边界（[03-F-05]）：仅在 [ashare_data/config.py](../ashare_data/config.py#L444) 加载配置时读取一次；加载后变量进入进程环境，供之后的消费方读取（如 <code>ASHARE_OFFLINE</code> → [ashare_data/akshare_client.py](../ashare_data/akshare_client.py#L178)）。不经过配置加载的入口/子进程不会看到 <code>.env</code> 的值；仓库只读 <code>config/.env</code>，不读根目录 <code>.env</code>；WebAPI token 是独立文件（§8.3）。
 - 相对路径实际按传入的 <code>project_root</code> 解析；源码 docstring 写“相对 YAML 所在目录”，两者在自定义外部 YAML 时不一致。
 
 ### 8.2 当前关键配置
@@ -957,7 +971,7 @@ flowchart LR
 | 默认搜索 | gp | RL 准入失败后的生产默认 |
 | 默认预算 | 150 × 256；公式最长 12 | unique semantic evaluations 上限通常为 steps × batch |
 | 验证 | 尾部 35%，4 子窗中位数 | 与 IS 学习窗隔离 |
-| reward | clip [-1,1]、cost weight 1、complexity 0.02、max complexity 25 | YAML 未列字段继承 dataclass |
+| reward | clip ±10（<code>bad_reward</code> −20）、cost weight 1、complexity 两段式（<code>free_bill≤3</code> 免罚、超出 0.05/单位）、max complexity 25（v15） | YAML 未列字段继承 dataclass（[config.py](../ashare_data/config.py#L133)） |
 | 质量门禁 | val reward ≥0、val ICIR ≥.05、8 IC days、coverage .2、activity .05、sign stability .5 | 详见 RewardConfig |
 | 容量 | position / execution-day ADV ≤ .25 | 需要 loader 提供 dollar volume |
 | 协议 | 5 个年度 OOS fold × 3 seed | 2021-2025 OOS |
