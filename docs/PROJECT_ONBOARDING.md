@@ -148,7 +148,7 @@ AlphaGPT 的核心目标是自动发现可解释的 A 股横截面选股公式�
 | 系统 | psutil | 模拟子进程存活检测、终止和锁恢复 |
 | 测试 | pytest、SciPy | 单元/集成/统计检验 |
 
-直接 Python 依赖以 [requirements.in](../requirements.in) 为人读清单、[requirements.txt](../requirements.txt) 为精确 pin；可选依赖位于 [requirements-optional.in](../requirements-optional.in) 和 [requirements-optional.txt](../requirements-optional.txt)。[requirements.lock](../requirements.lock) 是生成机器的完整环境快照，不是跨平台 lock。
+直接 Python 依赖以 [requirements.in](../requirements.in) 为人读清单、[requirements.txt](../requirements.txt) 为精确 pin；可选依赖位于 [requirements-optional.in](../requirements-optional.in) 和 [requirements-optional.txt](../requirements-optional.txt)。<code>requirements.lock</code> 是**运行生成器解释器的冻结闭包快照**（经 <code>importlib.metadata</code> 全量捕获；当前为 2026-08-31 干净 CI 忠实 venv，**不是任何开发机的实时快照**），含平台特定包。**禁止用 <code>pip install -r requirements.lock</code> 整体装机**：lock 中 torch 为 <code>+cpu</code> wheel，整体安装会覆盖本机已装的 CUDA torch（已实证 <code>2.11.0+cu128</code> 被覆盖）；开发机核对 lock↔环境漂移用只读的 [scripts/lock_audit.py](../scripts/lock_audit.py)（只报告、不修复；<code>freeze_lock --check</code> 只核对 pin 文件，<code>--check-full</code> 才核对完整 lock），对齐按包经显式授权命令逐项进行（语义权威：[scripts/freeze_lock.py](../scripts/freeze_lock.py) 模块 docstring，26957fa）。本机双环境事实：<code>D:\minequant\.venv</code>（torch <code>2.11.0+cu128</code>）为开发环境；miniconda CPU 环境（Python 3.13.12）为门禁证据环境——CI warning 基线 provenance 与本地门禁复跑均记录在其上。
 
 ### 2.2 前端栈
 
@@ -443,11 +443,11 @@ AlphaGPT/
 |---|---|---|
 | 核心 | [ashare_execution.py](../ashare_execution.py) | 回测、训练奖励、组合黄金规范和模拟撮合共享的唯一费用模型；佣金最低额、印花税、过户费、滑点、可买股数 |
 | 辅助 | [ashare_logging.py](../ashare_logging.py) | Loguru 控制台/文件/内存配置；10 MB rotation、14 份 retention、最多 10,000 行内存、文本导出 |
-| 文档 | [README.md](../README.md) | 主运行说明；已更新 reward v14、P3 组合/因果标签、P2 分层与 CPU/CUDA 安装说明，历史测量以各 phase log 为准 |
+| 文档 | [README.md](../README.md) | 主运行说明；已更新 reward v15、P3 组合/因果标签、P2 分层与 CPU/CUDA 安装说明，历史测量以各 phase log 为准 |
 | 文档 | [CATREADME.md](../CATREADME.md) | 仓库速读；已更新为 39 个算子并含 P2 分层说明（98405a7） |
 | 依赖 | [requirements.in](../requirements.in)、[requirements.txt](../requirements.txt) | 直接依赖的人读清单和精确 pin |
 | 依赖 | [requirements-optional.in](../requirements-optional.in)、[requirements-optional.txt](../requirements-optional.txt) | 测试/统计/GP/TPE 可选依赖 |
-| 依赖 | [requirements.lock](../requirements.lock) | 当前开发机完整环境快照，含平台特定包 |
+| 依赖 | [requirements.lock](../requirements.lock) | 生成器解释器的冻结闭包快照（当前为干净 CI 忠实 venv，**非**开发机实时快照），含平台特定包；禁止整体安装，漂移核对用 [lock_audit.py](../scripts/lock_audit.py) |
 | 依赖 | [requirements-cuda.txt](../requirements-cuda.txt) | GPU 机器的 torch CUDA wheel 替换清单（P0-06）；与基础 pin 同版本，CI 校验一致性 |
 | 配置 | [.gitignore](../.gitignore) | 忽略 data、logs、token、runtime overrides、node_modules、dist 等 |
 | 法务 | [LICENSE](../LICENSE) | Apache License 2.0 |
