@@ -655,7 +655,7 @@ React/FastAPI 是功能更完整的现代 UI；Streamlit 适合作为简单、�
 
 | 目录 | 职责/现状 |
 |---|---|
-| [config](../config) | [ashare_config.yaml](../config/ashare_config.yaml) 是版本化基线；[.env.example](../config/.env.example) 只列三个数据路径变量；真实 <code>.env</code>、<code>.webapi_token</code> 和 <code>runtime_overrides.yaml</code> 被忽略 |
+| [config](../config) | [ashare_config.yaml](../config/ashare_config.yaml) 是版本化基线；[.env.example](../config/.env.example) 列三个数据路径变量与 <code>ASHARE_OFFLINE</code>；真实 <code>.env</code>、<code>.webapi_token</code> 和 <code>runtime_overrides.yaml</code> 被忽略 |
 | [docs](.) | 本指南、P2 契约（[p2_data_tier_contract.md](p2_data_tier_contract.md)）与 Phase 0-6 七份测量日志；旧评估报告 evaluation_20260823.md 已删除（74f833e） |
 | [experiments](../experiments) | 只增不改的研究快照；T2 固定-baseline-seed admission 仅为历史证据，P4 晋级必须使用配对独立种子 |
 | [assets](../assets) | 两张无 provenance 的旧回测图片 |
@@ -943,6 +943,7 @@ flowchart LR
 - runtime overrides 对字典递归合并，标量和列表整体替换。
 - 环境变量只覆盖 <code>data_dir</code>、<code>duckdb_path</code>、<code>parquet_dir</code>。
 - <code>config/.env</code> 以 <code>override=False</code> 加载，所以进程已有同名环境变量优先。
+- <code>config/.env</code> 生效时机边界（[03-F-05]）：仅在 [ashare_data/config.py](../ashare_data/config.py#L444) 加载配置时读取一次；加载后变量进入进程环境，供之后的消费方读取（如 <code>ASHARE_OFFLINE</code> → [ashare_data/akshare_client.py](../ashare_data/akshare_client.py#L178)）。不经过配置加载的入口/子进程不会看到 <code>.env</code> 的值；仓库只读 <code>config/.env</code>，不读根目录 <code>.env</code>；WebAPI token 是独立文件（§8.3）。
 - 相对路径实际按传入的 <code>project_root</code> 解析；源码 docstring 写“相对 YAML 所在目录”，两者在自定义外部 YAML 时不一致。
 
 ### 8.2 当前关键配置
