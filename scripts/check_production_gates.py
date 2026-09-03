@@ -14,6 +14,9 @@ script reports exactly what a formal run would enforce:
     G6  every major backtest window has enough eligible stocks
     G7  every PIT membership interval that overlaps the daily-bar horizon
         has daily bars (no zero-bar member intervals — survivorship audit)
+    G8  daily bars are fresh: the bar window ends within the tolerated
+        open-session lag of the most recent completed open session
+        (data-freshness contract docs/p16_data_freshness_gate_contract.md)
 
 Usage:
     python scripts/check_production_gates.py [--min-eligible N] [--dev]

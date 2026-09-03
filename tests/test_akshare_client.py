@@ -160,6 +160,40 @@ def test_online_calendar_retains_history_needed_for_listing_age(
     assert client.get_trade_calendar() == ["20200102", "20240102"]
 
 
+def test_online_calendar_failure_raises_instead_of_bdate(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """p16 §3: an online calendar fetch failure must fail closed — the
+    Mon-Fri ``bdate_range`` approximation must never impersonate (or be
+    persisted as) the A-share trading calendar."""
+    config = data_config_module.DataConfig(
+        start_date="2024-01-01", end_date="2024-12-31"
+    )
+    client = AkShareClient(config, offline=False)
+    monkeypatch.setattr(
+        client,
+        "_fetch",
+        lambda fn, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    with pytest.raises(AkShareUnavailable, match="trade calendar"):
+        client.get_trade_calendar()
+
+
+def test_online_calendar_empty_result_raises_instead_of_bdate(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """p16 §3: an empty provider result is equally unusable — fail closed."""
+    config = data_config_module.DataConfig(
+        start_date="2024-01-01", end_date="2024-12-31"
+    )
+    client = AkShareClient(config, offline=False)
+    monkeypatch.setattr(
+        client, "_fetch", lambda fn, **_kwargs: pd.DataFrame()
+    )
+    with pytest.raises(AkShareUnavailable, match="trade calendar"):
+        client.get_trade_calendar()
+
+
 def test_get_daily_bar_tencent_fallback_for_delisted(monkeypatch: pytest.MonkeyPatch):
     """T0-04: when eastmoney and sina serve nothing for a code (delisted /
     merged members), the Tencent endpoint backfills the history.  Tencent's

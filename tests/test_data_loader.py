@@ -141,6 +141,41 @@ def test_load_universe_and_data(populated_db: DataConfig):
     assert loader.target_ret[:, -2:].abs().sum() == 0
 
 
+def test_dataset_id_resolved_on_populated_db(populated_db):
+    """IP-05 side item: the manifest binding survives the narrowed
+    exception scope — a populated manifest resolves to its dataset id."""
+    loaded = AshareDataLoader(populated_db, ModelConfig()).load_data()
+    assert isinstance(loaded.dataset_id, str) and loaded.dataset_id
+
+
+def test_dataset_id_none_on_legacy_db_without_manifest(
+    populated_db_without_manifest,
+):
+    """IP-05 side item: a legacy database without a persisted manifest
+    binds dataset_id None (never a fabricated id) through the narrowed
+    expected-failure path."""
+    legacy = AshareDataLoader(
+        populated_db_without_manifest, ModelConfig()
+    ).load_data()
+    assert legacy.dataset_id is None
+
+
+def test_dataset_id_narrowed_except_lets_programming_errors_propagate(
+    populated_db, monkeypatch
+):
+    """IP-05 side item: the manifest-binding guard must only swallow the
+    expected storage failure (no manifest tables); a programming error in
+    the resolver must surface instead of silently binding dataset_id=None."""
+    from ashare_model import data_loader as data_loader_module
+
+    def broken(db, config):
+        raise TypeError("resolver signature bug")
+
+    monkeypatch.setattr(data_loader_module, "resolve_dataset_id", broken)
+    with pytest.raises(TypeError, match="resolver signature bug"):
+        AshareDataLoader(populated_db, ModelConfig()).load_data()
+
+
 def test_load_data_feeds_industry_relative_factors(populated_db: DataConfig):
     # With Shenwan membership present the loader injects the industry code
     # frame: the industry-relative rows leave the neutral state, and a

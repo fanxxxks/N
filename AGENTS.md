@@ -19,7 +19,7 @@
 | 只读分析 | §2.3、§13 | 只读命令边界；结束时 `git status` 复核 |
 | 工程实现（不改研究语义） | §2.1–2.3、§3.1、§10 | 行为契约 + RED 先行；golden/parity |
 | 研究语义变更 | §2.2、§3.2、§4、§11 | 预注册契约 + 版本 bump + 迁移/拒绝策略 |
-| 数据/股票池变更 | §3.2、§5 | G1–G7 + research_doctor + 只读审计 |
+| 数据/股票池变更 | §3.2、§5 | G1–G8 + research_doctor + 只读审计 |
 | 运行态/晋级/模拟交易 | §3.2、§4、§8 | fail closed；同一 run/campaign 身份 |
 
 单一权威指针（细节以目标为准，本文不复制第二份）：预注册契约见 `docs/`
@@ -224,7 +224,7 @@ OOS 不得进入任何 PR 开发反馈；paper 观察数据只允许机器证明
    当前快照不得回填历史。
 3. 正式路径不得把缺失的 B/C tier 数据静默变成看似可用的中性值。允许降级时必须显式记录
    degraded reason，且默认不可晋级。
-4. 数据或 universe 改动必须运行并记录 G1–G7 数据资格门禁（权威定义在
+4. 数据或 universe 改动必须运行并记录 G1–G8 数据资格门禁（权威定义在
    `ashare_data/gates.py`，CLI 入口 `python scripts/check_production_gates.py`；与
    `ashare_model/promotion.py` 的晋级门禁 G1–G7 是两个独立编号空间，禁止混用）；
    不得用 `--dev` 结果支持正式结论。

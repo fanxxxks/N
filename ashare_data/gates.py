@@ -16,6 +16,10 @@ gates with the strict PIT universe contract into one auditable check list:
 * G7  every membership interval that overlaps the daily-bar horizon has
        daily bars — a zero-bar historical member (delisted/merged/never
        synced) fails the gate in formal mode (survivorship audit)
+* G8  daily bars are fresh: the bar window ends within
+       ``FRESHNESS_TOLERANCE_SESSIONS`` open sessions of the most recent
+       completed open session (p16 data-freshness contract; lag counts
+       open sessions, never calendar days)
 
 Modes:
 
@@ -31,6 +35,7 @@ Modes:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -50,6 +55,14 @@ from .universe import (
 )
 
 MIN_ELIGIBLE_DEFAULT = 100
+
+# p16 §2.1: how many open sessions the daily-bar window may lag behind the
+# most recent completed open session.  Deployment tuning knob (constructor
+# override), never a bypass — 3 tolerates one missed overnight sync cycle
+# and catches the 8-session drift observed in the p15 freshness log.
+FRESHNESS_TOLERANCE_SESSIONS = 3
+
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 @dataclass(frozen=True)
@@ -163,6 +176,7 @@ class ProductionGateRunner:
         config: DataConfig,
         *,
         min_eligible: int | None = None,
+        freshness_tolerance: int | None = None,
     ):
         self.config = config
         # Deployment tuning knob: how many eligible stocks each major
@@ -171,13 +185,25 @@ class ProductionGateRunner:
         self.min_eligible = (
             MIN_ELIGIBLE_DEFAULT if min_eligible is None else int(min_eligible)
         )
+        # Deployment tuning knob (p16 §2.1): open-session freshness
+        # tolerance for G8.  Never a bypass — there is no way to disable
+        # the freshness check, only to widen the tolerated lag.
+        self.freshness_tolerance = (
+            FRESHNESS_TOLERANCE_SESSIONS
+            if freshness_tolerance is None
+            else int(freshness_tolerance)
+        )
 
-    def run(self, mode: str = "formal") -> GateResult:
+    def run(self, mode: str = "formal", *, today: str | None = None) -> GateResult:
         """Execute all gates and return the auditable result.
 
         ``run`` itself never raises: formal callers inspect ``result.ok``
         (or use :meth:`require_production`, which raises on failure); dev
         callers get a degraded result instead of an exception.
+
+        ``today`` is a test-only injection of the G8 evaluation day (p16
+        §2.1); production callers never pass it, and no config surface
+        can override it — that would be a bypass, not an injection.
         """
 
         if mode not in ("formal", "dev"):
@@ -185,6 +211,9 @@ class ProductionGateRunner:
         dev = mode == "dev"
         checks: list[GateCheck] = []
         status: UniverseContractStatus | None = None
+        evaluation_day = (
+            today if today is not None else pd.Timestamp.now(tz=_SHANGHAI).strftime("%Y%m%d")
+        )
 
         with AshareDB(self.config.duckdb_path, read_only=True) as db:
             constituents = db.query(f"SELECT * FROM {self.config.constituents_table}")
@@ -342,6 +371,63 @@ class ProductionGateRunner:
             ),
         ))
 
+        # G8: data freshness (p16) — the daily-bar window must end within
+        # the open-session tolerance of the most recent completed open
+        # session.  Sources: daily_bar max(trade_date), trade_calendar
+        # open sessions strictly before the evaluation day, and the
+        # evaluation day itself.  Fail-closed boundaries (no daily rows,
+        # no reference session, exhausted calendar horizon) never pass.
+        with AshareDB(self.config.duckdb_path, read_only=True) as db:
+            open_sessions = db.query(
+                f"SELECT trade_date FROM {self.config.calendar_table} "
+                f"WHERE is_open=true AND trade_date < ? "
+                f"ORDER BY trade_date",
+                [evaluation_day],
+            )
+        daily_max = None if pd.isna(daily["mx"]) else str(daily["mx"])
+        reference = (
+            str(open_sessions["trade_date"].iloc[-1])
+            if not open_sessions.empty
+            else None
+        )
+        calendar_max_open = (
+            None if pd.isna(calendar["mx"]) else str(calendar["mx"])
+        )
+        g8_reason: str | None = None
+        lag: int | None = None
+        if daily_max is None:
+            g8_reason = "daily table has no rows"
+        elif reference is None:
+            g8_reason = (
+                f"no open calendar session strictly before today "
+                f"{evaluation_day}: no usable reference"
+            )
+        elif calendar_max_open is None or calendar_max_open < evaluation_day:
+            g8_reason = (
+                f"calendar pre-listed horizon exhausted: max open session "
+                f"{calendar_max_open} < today {evaluation_day}"
+            )
+        else:
+            lag = int(
+                (open_sessions["trade_date"].astype(str) > daily_max).sum()
+            )
+        g8_ok = (
+            g8_reason is None and lag is not None and lag <= self.freshness_tolerance
+        )
+        if g8_reason is not None:
+            g8_detail = f"{g8_reason}; today={evaluation_day}"
+        else:
+            g8_detail = (
+                f"daily {daily_max} vs reference {reference}, "
+                f"lag={lag} {'<=' if g8_ok else '>'} "
+                f"N={self.freshness_tolerance}, today={evaluation_day}"
+            )
+        checks.append(GateCheck(
+            "G8 daily bars fresh within the open-session tolerance",
+            g8_ok,
+            g8_detail,
+        ))
+
         ok = all(check.ok for check in checks)
         warnings = tuple(
             check.detail for check in checks if not check.ok
@@ -356,9 +442,15 @@ class ProductionGateRunner:
         )
         return result
 
-    def require_production(self) -> UniverseContractStatus:
-        """Formal entry: run every gate and raise on any failure."""
-        result = self.run(mode="formal")
+    def require_production(
+        self, *, today: str | None = None
+    ) -> UniverseContractStatus:
+        """Formal entry: run every gate and raise on any failure.
+
+        ``today`` mirrors :meth:`run` — test-only injection of the G8
+        evaluation day; production callers never pass it.
+        """
+        result = self.run(mode="formal", today=today)
         if not result.ok:
             failures = [
                 f"{check.name} ({check.detail})" for check in result.checks if not check.ok
