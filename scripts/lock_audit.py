@@ -15,7 +15,10 @@ This is a reporting tool, not a repair path.  Never align an environment with
 the ``+cpu`` wheel (P0-06 CPU/CUDA split) and a wholesale installation would
 override a locally installed CUDA torch (observed with ``2.11.0+cu128``).
 Environment alignment happens per package through individually authorized
-commands.
+commands.  Development machines may keep several environments (for example a
+GPU development environment and a separate CPU environment used to produce
+gate evidence); run this script once under each interpreter to audit every
+local environment separately.
 
 Usage:
     python scripts/lock_audit.py    # print the lock<->env diff report

@@ -16,15 +16,20 @@ requirements:
 * ``requirements.lock`` — the full frozen closure (every installed
   distribution, captured via ``importlib.metadata`` from the interpreter
   that last ran this script).  The committed lock is a snapshot of that
-  generating environment — currently a clean CI-faithful venv, NOT a live
-  snapshot of any given developer machine (provenance:
-  ``docs/test_runtime_measurement_log.md``).  Do **not** reproduce a
-  machine with ``pip install -r requirements.lock``: the torch pin in the
-  lock is the ``+cpu`` wheel (P0-06) and wholesale installation would
+  generating environment — a clean CI-faithful venv (provenance:
+  ``docs/test_runtime_measurement_log.md``).  It matches **neither**
+  persistent local environment of a development machine (e.g. a GPU
+  development environment with a CUDA torch, or a separate CPU
+  environment used to produce gate evidence); the environment identity
+  behind a piece of evidence comes from the per-run records in the
+  measurement logs, not from this lock.  Do **not** reproduce a machine
+  with ``pip install -r requirements.lock``: the torch pin in the lock
+  is the ``+cpu`` wheel (P0-06) and wholesale installation would
   override a locally installed CUDA torch (observed with
-  ``2.11.0+cu128``).  Developer machines review lock<->environment drift
-  with the read-only ``scripts/lock_audit.py`` and align per package via
-  individually authorized commands.
+  ``2.11.0+cu128``).  Developer machines review lock<->environment
+  drift with the read-only ``scripts/lock_audit.py`` — run it under
+  each local interpreter to audit every environment separately — and
+  align per package via individually authorized commands.
 
 Usage:
     python scripts/freeze_lock.py            # regenerate all lock files
