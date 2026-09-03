@@ -63,6 +63,25 @@ def write_trainer_artifact(
     if selected is None:
         return None
 
+    output = _artifact_output(
+        trainer, searcher=searcher, vm_device=vm_device
+    )
+    return _persist_strategy_artifact(
+        trainer,
+        output,
+        searcher=searcher,
+        seed=seed,
+        requested_budget=requested_budget,
+    )
+
+
+def _artifact_output(
+    trainer, *, searcher: str, vm_device: torch.device
+) -> dict:
+    """Assemble the strategy payload dict (verbatim from the historical
+    ``_write_artifact`` body)."""
+
+    selected = trainer.selection_result.selected
     score_payload = selected.to_dict()
     score_payload.pop("tokens", None)
     # P8-05: the searcher-internal candidate label is a diagnostic only;
@@ -130,6 +149,21 @@ def write_trainer_artifact(
                 "experimental": trainer.rl_initialization == "random",
             }
         )
+    return output
+
+
+def _persist_strategy_artifact(
+    trainer,
+    output: dict,
+    *,
+    searcher: str,
+    seed: int,
+    requested_budget: int,
+) -> list[int] | None:
+    """Resolve the frozen RunSpec, persist through the RunStore-bound
+    formal writer and mirror the RL policy checkpoint (verbatim from the
+    historical ``_write_artifact`` body)."""
+
     out_path = trainer.data_config.data_dir / "best_ashare_strategy.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     # P8-05: resolve the frozen RunSpec for this run and persist through
@@ -192,3 +226,29 @@ def write_trainer_artifact(
         f"best formula saved to {out_path}"
     )
     return trainer.best_tokens
+
+
+class ArtifactPersistenceMixin:
+    """Artifact-boundary seam of ``AshareTrainer`` (B2/B5, IP-07b): the
+    facade method delegates to :func:`write_trainer_artifact` so callers
+    and class-attribute patches keep one stable surface."""
+
+    def _write_artifact(
+        self,
+        *,
+        contract: TrainingTimeContract,
+        vm_device: torch.device,
+        searcher: str = "rl",
+        seed: int,
+        requested_budget: int,
+    ) -> list[int] | None:
+        """Delegate to :func:`write_trainer_artifact`."""
+
+        return write_trainer_artifact(
+            self,
+            contract=contract,
+            vm_device=vm_device,
+            searcher=searcher,
+            seed=seed,
+            requested_budget=requested_budget,
+        )

@@ -22,8 +22,18 @@ import torch
 
 from .alphagpt import build_action_mask
 from .search_length_prior import sample_target_content_length
+from .semantic_cache import (
+    CalibrationSlice,
+    SemanticCache,
+    make_calibration_execute,
+)
 from .semantic_sampling import advance_stack_state
 from .time_contract import TrainingTimeContract
+from .versions import PROTOCOL_VERSION
+from .reward import REWARD_VERSION
+from .targets import causal_target_returns
+from ashare_data.processor import open_to_open_returns
+from ashare_portfolio.rebalance import RebalancePolicy
 
 
 @dataclass
@@ -229,3 +239,323 @@ def resolve_device(requested: str | None = None) -> torch.device:
             f"unknown device {requested!r}; expected 'auto', 'cpu' or 'cuda'"
         )
     return torch.device(requested)
+
+
+def _window_bounds(
+    trainer,
+    train_end_date: str | None,
+    window_cap: tuple[int, int] | None,
+):
+    """Resolve the training contract, the (optionally capped) window
+    bounds and the rebalance policy/mask (B3: contiguous extraction of
+    the historical ``prepare_window`` prologue)."""
+
+    contract = trainer._training_contract(train_end_date)
+    train_end_idx = contract.train_label_end
+    stock_slice = slice(None)
+    if window_cap is not None:
+        stocks, dates = int(window_cap[0]), int(window_cap[1])
+        if stocks <= 0 or dates <= 0:
+            raise ValueError("window_cap must be positive (stocks, dates)")
+        stock_slice = slice(0, stocks)
+        train_end_idx = min(train_end_idx, dates)
+    # The capped window's signal end reserves the exact entry+holding
+    # context declared by the target contract.
+    train_signal_end = min(
+        contract.train_signal_end,
+        max(0, train_end_idx - contract.exit_offset),
+    )
+    policy = RebalancePolicy.from_config(trainer.backtest_config)
+    full_rebalance_mask = policy.rebalance_mask(trainer.loader.dates)
+    rebalance_mask = full_rebalance_mask[:train_end_idx]
+    return (
+        contract,
+        train_end_idx,
+        stock_slice,
+        train_signal_end,
+        policy,
+        rebalance_mask,
+    )
+
+
+def _bind_vm_window(
+    trainer,
+    vm_device: torch.device,
+    stock_slice: slice,
+    train_end_idx: int,
+) -> np.ndarray:
+    """Move the VM's industry groups and PIT mask onto the compute device
+    and return the sliced numpy eligibility mask for the scorer."""
+
+    # The VM executes on the compute device; the industry-group tensor
+    # for CS_NEUTRALIZE and the PIT eligibility mask for the
+    # cross-sectional operators move with the factor stack (the loader
+    # always builds the mask in load_data, so there is no fallback).
+    industry_codes = getattr(trainer.loader, "industry_codes", None)
+    trainer.vm.industry_codes = (
+        industry_codes[stock_slice, :train_end_idx].to(vm_device)
+        if industry_codes is not None
+        else None
+    )
+    universe_mask = trainer.loader.universe_mask
+    trainer.vm.universe_mask = torch.tensor(
+        universe_mask[stock_slice, :train_end_idx],
+        dtype=torch.bool,
+        device=vm_device,
+    )
+    # The candidate scorer needs the same PIT mask on the numpy side:
+    # every quality statistic (rank IC, basket selection, near-constant
+    # rejection, direction) is gated to signal-date eligible cells.
+    return universe_mask[stock_slice, :train_end_idx]
+
+
+def _window_targets(
+    trainer,
+    policy: RebalancePolicy,
+    stock_slice: slice,
+    train_end_idx: int,
+    rebalance_mask: np.ndarray,
+    train_universe_mask: np.ndarray,
+):
+    """Build the causal targets, realized returns and tradability masks
+    for the (optionally capped) training window."""
+
+    # Recompute labels only from prices inside the inclusive training
+    # anchor. Precomputed global targets at the tail may reference fold-
+    # external t+1/t+2 prices and are intentionally never sliced here.
+    train_open = trainer.loader.raw_data_cache["open"][
+        stock_slice, :train_end_idx
+    ].numpy()
+    target_ret = causal_target_returns(
+        train_open,
+        trainer.loader.dates[:train_end_idx],
+        policy,
+        rebalance_mask=rebalance_mask,
+    )
+    realized_ret = open_to_open_returns(train_open)
+    # Same semantics as loader.mask_by_universe, applied to the capped
+    # window (the loader's mask is the full stock axis): values outside
+    # the PIT eligibility mask become NaN.
+    target_ret = np.asarray(target_ret, dtype=np.float64).copy()
+    target_ret[~np.asarray(train_universe_mask, dtype=bool)] = np.nan
+    # Tradability masks (buy/sell blocked per stock and date) align the
+    # training basket with the backtest engine's execution rules; both
+    # matrices are shared by every formula scored this run.
+    blocked_buy, blocked_sell = trainer.loader.tradability_masks()
+    blocked_buy = blocked_buy[stock_slice, :train_end_idx]
+    blocked_sell = blocked_sell[stock_slice, :train_end_idx]
+    return target_ret, realized_ret, blocked_buy, blocked_sell
+
+
+def prepare_training_window(
+    trainer,
+    train_end_date: str | None,
+    vm_device: torch.device,
+    window_cap: tuple[int, int] | None = None,
+) -> _TrainWindow:
+    """Bind everything the searchers (RL, random, GP) need about the
+    training window: the factor tensor, VM masks, target, windows, the
+    semantic-budget cache and the calibration fingerprint executor.
+
+    Shared by :meth:`train` (RL) and :meth:`train_search` (the
+    non-RL backends) so every searcher measures the identical window.
+
+    ``window_cap`` is a measurement override ``(stocks, dates)`` that
+    slices the window head for tractable experiments (the admission
+    tier): every searcher then measures the identical capped window,
+    and the validation windows / signal range are re-derived inside
+    the cap.  The cap is recorded by callers that persist results.
+
+    B3 (IP-07b): moved verbatim from ``train.py`` and split into the
+    contiguous stage helpers above; side-effect order (VM bindings,
+    semantic-cache construction, calibration executor) is unchanged.
+    """
+
+    (
+        contract,
+        train_end_idx,
+        stock_slice,
+        train_signal_end,
+        policy,
+        rebalance_mask,
+    ) = _window_bounds(trainer, train_end_date, window_cap)
+    # Hold out the tail of the training window for out-of-sample best
+    # formula selection, split into independent sub-windows; the best
+    # formula is decided on the *median* validation reward so a single
+    # lucky tail stretch cannot win the selection.
+    val_windows = trainer._validation_windows(
+        train_signal_end,
+        rebalance_mask=rebalance_mask,
+    )
+    # The *learning* window is the in-sample head only: the policy
+    # gradient scores candidates on columns strictly before the first
+    # validation window, so the selection data never doubles as the
+    # training signal (val rewards rank formulas; IS rewards teach the
+    # policy — two jobs, two windows).
+    val_start = validation_start(train_signal_end, trainer.model_config)
+    train_signal_range = (contract.train_signal_start, val_start)
+    factor_tensor = trainer.loader.factor_tensor[
+        :, stock_slice, :train_end_idx
+    ].to(vm_device)
+    train_universe_mask = _bind_vm_window(
+        trainer, vm_device, stock_slice, train_end_idx
+    )
+    target_ret, realized_ret, blocked_buy, blocked_sell = _window_targets(
+        trainer,
+        policy,
+        stock_slice,
+        train_end_idx,
+        rebalance_mask,
+        train_universe_mask,
+    )
+    reward_chunk = _bind_semantic_ledger(
+        trainer,
+        contract=contract,
+        val_windows=val_windows,
+        policy=policy,
+        factor_tensor=factor_tensor,
+        stock_slice=stock_slice,
+        train_end_idx=train_end_idx,
+    )
+    return _TrainWindow(
+        contract=contract,
+        train_end_idx=train_end_idx,
+        val_windows=val_windows,
+        val_start=val_start,
+        train_signal_range=train_signal_range,
+        factor_tensor=factor_tensor,
+        vm_device=vm_device,
+        train_universe_mask=train_universe_mask,
+        target_ret=target_ret,
+        realized_ret=realized_ret,
+        rebalance_mask=rebalance_mask,
+        blocked_buy=blocked_buy,
+        blocked_sell=blocked_sell,
+        reward_chunk=reward_chunk,
+    )
+
+
+def _bind_semantic_ledger(
+    trainer,
+    *,
+    contract,
+    val_windows: list[tuple[int, int]],
+    policy: RebalancePolicy,
+    factor_tensor: torch.Tensor,
+    stock_slice: slice,
+    train_end_idx: int,
+) -> int:
+    """Bind the evaluation-budget ledger (the semantic cache), the
+    calibration fingerprint executor and the streamed-reward chunk size
+    onto the trainer; returns the chunk size (contiguous extraction of
+    the historical ``prepare_window`` tail)."""
+
+    # T2-01: the semantic cache is the evaluation-budget ledger.  Its
+    # key carries the full evaluation context (dataset_id, reward and
+    # protocol versions, the training window), so scores are never
+    # reused across datasets or measurement generations, and its budget
+    # counts **unique semantic evaluations** — structurally identical
+    # (canonical AST hash) and numerically equivalent (calibration
+    # fingerprint) formulas never bill twice.
+    trainer.semantic_cache = SemanticCache(
+        dataset_id=trainer.loader.dataset_id,
+        reward_version=REWARD_VERSION,
+        protocol_version=PROTOCOL_VERSION,
+        window_id=trainer._window_id(
+            contract, val_windows, policy, domain_id=trainer.domain_id
+        ),
+        cap=trainer._REWARD_CACHE_CAP,
+    )
+    calibration_slice = CalibrationSlice.of(factor_tensor.shape[2])
+    trainer._calibration_execute = make_calibration_execute(
+        trainer.vm,
+        factor_tensor,
+        trainer.loader.universe_mask[stock_slice, :train_end_idx],
+        trainer.vm.industry_codes,
+        calibration_slice,
+    )
+    # Chunk the batched reward evaluation so the stacked signal matrix
+    # (original stack + batched copy + both-direction copy) stays within
+    # a fixed memory budget (~512 MB of float64 signals).  The chunk size
+    # resolves through the trainer facade (``_reward_chunk_size``) so the
+    # ``monkeypatch.setattr(train_module, "score_chunk_size", ...)``
+    # surface in tests/test_train.py keeps late-binding (B3, IP-07b).
+    signal_bytes = factor_tensor.shape[1] * train_end_idx * 8
+    return trainer._reward_chunk_size(signal_bytes)
+
+
+class WindowPreparationMixin:
+    """Window-binding seams of ``AshareTrainer`` (B3/B5, IP-07b): the
+    facade entry points delegate to this module's functions and helpers.
+    Methods stay class attributes of the composed trainer, so callers and
+    class-attribute patches keep one stable surface."""
+
+    def prepare_window(
+        self,
+        train_end_date: str | None,
+        vm_device: torch.device,
+        window_cap: tuple[int, int] | None = None,
+    ) -> "_TrainWindow":
+        """Delegate to :func:`prepare_training_window` (B3, IP-07b)."""
+
+        return prepare_training_window(
+            self, train_end_date, vm_device, window_cap
+        )
+
+    def _training_contract(
+        self, train_end_date: str | None = None
+    ) -> TrainingTimeContract:
+        return TrainingTimeContract.resolve(
+            self.loader.dates,
+            train_end_date or self.backtest_config.train_end_date,
+            horizon=self.backtest_config.target_horizon,
+        )
+
+    def _validation_start(self, train_end_idx: int) -> int:
+        """First index of the validation tail inside the training window.
+
+        Delegates to the module-level :func:`validation_start` so the
+        protocol's random-search baseline can share the exact selection
+        windows without instantiating a trainer.
+        """
+        return validation_start(train_end_idx, self.model_config)
+
+    def _validation_windows(
+        self,
+        train_end_idx: int,
+        *,
+        rebalance_mask: np.ndarray | None = None,
+    ) -> list[tuple[int, int]]:
+        """Independent validation sub-windows covering the training tail.
+
+        Delegates to the module-level :func:`validation_windows`.
+        """
+        return validation_windows(
+            train_end_idx,
+            self.model_config,
+            rebalance_mask=rebalance_mask,
+        )
+
+    @staticmethod
+    def _window_id(
+        contract,
+        val_windows: list[tuple[int, int]],
+        policy: RebalancePolicy,
+        domain_id: str = "unified",
+    ) -> str:
+        """Deterministic id of the training window: the exact columns the
+        semantic-cache key binds scores to.  A non-unified research domain
+        (P6 §4.3) appends its id so domain scores never mix with unified
+        or other-domain scores."""
+
+        val = "|".join(f"{a}:{b}" for a, b in val_windows)
+        domain = (
+            ""
+            if str(domain_id) == "unified"
+            else f":domain:{str(domain_id)}"
+        )
+        return (
+            f"train:{contract.train_signal_start}:{contract.train_signal_end}:"
+            f"label:{contract.train_label_end}:frequency:{policy.frequency}:"
+            f"horizon:{policy.horizon}:val:{val}{domain}"
+        )

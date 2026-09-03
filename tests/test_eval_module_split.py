@@ -174,13 +174,31 @@ def test_protocol_version_single_home_is_versions_module():
 
 
 def test_train_binds_protocol_version_from_versions_at_import_time():
-    """IP-07a: ``train`` binds ``PROTOCOL_VERSION`` at import time from the
-    leaf versions module, so the train⇄evaluation import edge no longer
-    forces lazy ``from .evaluation import PROTOCOL_VERSION`` imports
-    inside train.py (module-level import, no cycle, no second copy)."""
-    train = importlib.import_module("ashare_model.train")
+    """IP-07a (updated by IP-07b): the train module chain binds
+    ``PROTOCOL_VERSION`` at import time from the leaf versions module —
+    no chain module binds it through the evaluation facade, and no chain
+    module carries a lazy ``from .evaluation import`` so the
+    train⇄evaluation import edge stays broken.  After IP-07b the
+    constant's consumers live in ``train_loop`` / ``train_artifacts`` /
+    ``train_search_run`` (the facade itself no longer needs it)."""
+    import re
+    from pathlib import Path
+
     versions = importlib.import_module("ashare_model.versions")
-    assert train.PROTOCOL_VERSION is versions.PROTOCOL_VERSION
+    chain = (
+        "ashare_model.train",
+        "ashare_model.train_loop",
+        "ashare_model.train_artifacts",
+        "ashare_model.train_search_run",
+    )
+    for name in chain:
+        module = importlib.import_module(name)
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert not re.search(r"from \.evaluation import", source), (
+            f"{name} reintroduced a lazy evaluation import"
+        )
+        if name != "ashare_model.train":
+            assert module.PROTOCOL_VERSION is versions.PROTOCOL_VERSION, name
 
 
 def test_versions_module_imports_without_train_or_evaluation():
