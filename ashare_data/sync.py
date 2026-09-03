@@ -32,7 +32,13 @@ from .db import AshareDB, sql_quoted_list
 from .manifest import build_dataset_manifest, save_manifest
 from .processor import is_valid_a_share_code, normalize_daily_bars
 from .universe import member_bar_coverage
-from ashare_logging import export_log_txt, setup_run_logging
+from ashare_logging import (
+    canonical_config_sha256,
+    emit_run_identity,
+    export_log_txt,
+    new_log_run_id,
+    setup_run_logging,
+)
 
 
 def _project_root() -> Path:
@@ -209,6 +215,15 @@ def sync_all(
         config.sync_fundamentals = sync_fundamentals
     if sync_capital_flow is not None:
         config.sync_capital_flow = sync_capital_flow
+    # IP-11 (03-F-07): the identity quadruple (run_id / git commit / config
+    # sha256 / source versions) is the run log's first content line — only
+    # the pipeline's own "Run logging configured" line precedes it.
+    emit_run_identity(
+        run_id=new_log_run_id(),
+        config_sha256=canonical_config_sha256(config),
+        versions=_source_versions(),
+        project_root=_project_root(),
+    )
     config.data_dir.mkdir(parents=True, exist_ok=True)
     config.parquet_dir.mkdir(parents=True, exist_ok=True)
 
@@ -373,6 +388,11 @@ def sync_all(
             "purged_rows": purged,
             "purged_parquet": purged_parquet,
             "dataset_id": manifest.dataset_id,
+            # IP-11 fixed summary key set (03-F-07): the sync path currently
+            # produces no duplicate/suppression events; the keys stay 0 so
+            # tail summaries remain fixed-shape and cross-entry comparable.
+            "duplicates": 0,
+            "suppressed": 0,
             **fundamental_stats,
             **capital_stats,
         }

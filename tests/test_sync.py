@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import re
+import threading
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -371,3 +375,96 @@ def test_backfill_member_bars_supplements_suspended_span(tmp_path: Path):
         assert len(rows) == 2
         # The suspension row has zero volume: present but untradeable.
         assert rows.iloc[0]["volume"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# IP-11 (03-F-07 / 03-F-08): sync log identity header, fixed summary key set,
+# and the loud process-exit guard.  Everything here is fixture-based — no
+# real (stateful) sync runs in tests.
+# ---------------------------------------------------------------------------
+
+
+def _offline_config(tmp_path: Path) -> Path:
+    cfg_path = tmp_path / "ashare_config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "data_dir": str(tmp_path / "data"),
+                "duckdb_path": str(tmp_path / "data" / "ashare.duckdb"),
+                "parquet_dir": str(tmp_path / "data" / "parquet"),
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return cfg_path
+
+
+def _log_messages(text: str) -> list[str]:
+    """Message part of each formatted memory-sink line (C2 format)."""
+    return [
+        line.split(" | ", 3)[3]
+        for line in text.splitlines()
+        if line.count(" | ") >= 3
+    ]
+
+
+def test_sync_summary_fixed_key_set(tmp_path: Path):
+    """IP-11: the tail summary dict carries a fixed key set, including the
+    cross-entry ``duplicates``/``suppressed`` counters (0 while the sync
+    path produces no such events) so runs stay directly comparable."""
+    result = sync.sync_all(_offline_config(tmp_path), offline=True, limit=3)
+    assert set(result) == {
+        "calendar_days",
+        "stocks",
+        "universe",
+        "constituent_snapshot_symbols",
+        "pit_constituent_rows_written",
+        "daily_rows",
+        "failures",
+        "purged_rows",
+        "purged_parquet",
+        "dataset_id",
+        "duplicates",
+        "suppressed",
+        "fundamental_quarters",
+        "fundamental_rows",
+        "fundamental_supplements",
+        "fundamental_failures",
+        "margin_rows",
+        "margin_dates",
+        "industries",
+        "industry_rows",
+        "capital_failures",
+    }
+    assert result["duplicates"] == 0
+    assert result["suppressed"] == 0
+
+
+def test_sync_all_emits_identity_header_first(tmp_path: Path):
+    """IP-11: the first content line after logging setup carries the
+    identity quadruple (run_id / git commit / config sha256 / versions)."""
+    from ashare_logging import get_log_text, setup_run_logging
+
+    setup_run_logging(
+        log_dir=tmp_path / "logs", run_name="syncidentity", reset=True
+    )
+    sync.sync_all(_offline_config(tmp_path), offline=True, limit=3)
+    messages = _log_messages(get_log_text())
+    header_idx = next(
+        i for i, m in enumerate(messages) if m.startswith("run identity: ")
+    )
+    # The header is the first content line (only the pipeline's own setup
+    # line precedes it).
+    assert header_idx == 1, messages[: header_idx + 1]
+    header = messages[header_idx]
+    match = re.fullmatch(
+        r"run identity: run_id=[0-9a-f]{32} "
+        r"git_commit=([0-9a-f]{40}|unknown) "
+        r"config_sha256=[0-9a-f]{64} versions=(\{.*\})",
+        header,
+    )
+    assert match, header
+    versions = json.loads(match.group(2))
+    assert set(versions) == {"akshare", "duckdb", "sync_tool"}

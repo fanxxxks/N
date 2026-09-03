@@ -18,7 +18,12 @@ from ashare_execution import (
     ExecutionCostModel,
     validate_execution_config,
 )
-from ashare_logging import export_log_txt, setup_run_logging
+from ashare_logging import (
+    canonical_config_sha256,
+    emit_run_identity,
+    export_log_txt,
+    setup_run_logging,
+)
 from ashare_portfolio.constructor import PortfolioConstructor
 from ashare_portfolio.rebalance import RebalancePolicy
 
@@ -489,6 +494,20 @@ def main() -> None:
     try:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
+        from .runspec import new_run_id
+        from .versions import PROTOCOL_VERSION
+        from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
+
+        # IP-11 (03-F-07): identity quadruple as the first content line;
+        # the full version matrix travels with the boundary artifact.
+        emit_run_identity(
+            run_id=new_run_id(),
+            config_sha256=canonical_config_sha256(raw),
+            versions={
+                "protocol_version": PROTOCOL_VERSION,
+                "execution_spec_version": EXECUTION_SPEC_VERSION,
+            },
+        )
         data_config = make_data_config(raw, root)
         ProductionGateRunner(data_config, min_eligible=args.min_eligible).require_production()
         model_config = make_model_config(raw)
