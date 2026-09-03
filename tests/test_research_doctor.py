@@ -428,3 +428,53 @@ def test_fairness_probes_live_on_current_tree():
         "gp_pset_family5_terminals",
         "gp_pset_full_vocab_terminal_count",
     ]
+
+
+# -- IP-13: fundamental coverage disclosure (report-only; 03-F-09 / 05-④) --
+
+
+def _coverage_section() -> dict:
+    return {
+        "table": "fundamental_pit",
+        "total_rows": 207343,
+        "distinct_ts_code": 5202,
+        "definition": "finite values (non-NULL, non-NaN) / total rows",
+        "fields": {
+            "roa": {"finite": 20942, "coverage": 20942 / 207343},
+            "debt_ratio": {"finite": 20942, "coverage": 20942 / 207343},
+            "dividend_yield": {"finite": 2903, "coverage": 2903 / 207343},
+        },
+        "report_only": True,
+        "error": None,
+    }
+
+
+def test_fundamental_coverage_section_is_reported():
+    report = _report(fundamental_coverage=_coverage_section())
+    section = report["fundamental_coverage"]
+    assert set(section["fields"]) == {"roa", "debt_ratio", "dividend_yield"}
+    assert section["report_only"] is True
+    # Report field, never a gate: even near-zero coverage stays healthy.
+    assert report["healthy"] is True
+    assert report["findings"] == []
+
+
+def test_fundamental_coverage_absent_keeps_report_compatible():
+    # Callers that do not gather the section keep the previous report shape.
+    report = _report()
+    assert "fundamental_coverage" not in report
+    assert report["healthy"] is True
+
+
+def test_gather_fundamental_coverage_missing_db_reports_error(tmp_path):
+    from ashare_data.config import DataConfig
+
+    cfg = DataConfig(
+        data_dir=tmp_path,
+        duckdb_path=tmp_path / "missing.duckdb",
+        parquet_dir=tmp_path / "parquet",
+    )
+    section = doctor.gather_fundamental_coverage(cfg)
+    assert section["error"] is not None
+    assert section["total_rows"] is None
+    assert section["report_only"] is True
