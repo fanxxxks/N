@@ -637,3 +637,83 @@ engineering run type；不构成任何研究/收益结论。
 - 性质：engineering（用户授权的依赖文件写盘与环境变更）；不构成
   研究/收益结论；未运行真实 sync；未 push；全量回归由 t20 终验统一
   承担（合并后 main 串行全量）。
+
+## 终验合并后门禁（2026-09-03，main @ 7f2d76a，t20 全量整合终验）
+
+- 被测实现：`7f2d76aa059039a5dca7fb4f131753079b8ad36c`（main，5 条 lane
+  分支全部合并后的 tip；任务起测时点）。工作树 tracked 干净；既有未跟踪
+  `docs/p5_implementation_plan.md`、`papers/`（任务前已存在；`.agent-teams/`
+  已入 .gitignore，IP-16/t12）。
+- 命令：`python -m pytest -q tests`（串行，`cmd /c` 完整 stdout+stderr
+  重定向——沿用 IP-10 口径规避 Tee 混编缺陷）。解释器 = CPU 路径
+  （`C:\ProgramData\miniconda3\python.exe`，torch `2.11.0+cpu`，cuda
+  False），与 U9 裁决"门禁证据口径仍归 miniconda CPU 环境"及 9d7b40a
+  基线 provenance 一致。
+- 结果（2026-09-03 15:35–15:58 +08）：**8 failed, 1539 passed, 6 skipped,
+  0 warnings in 1427.38s（0:23:47）**，exit 1。原始产物
+  `logs/gate_7f2d76a.txt`（27338 字节，SHA256
+  `941017BC5004B19C278E27E54A6A19E2C10E8F635B1D952221D9B808918CB961`）。
+- 计数勾稽：1513（9d7b40a）→ 1539 passed + 8 failed = 1547 collected
+  （+34，post-collapse 合并的合同测试：IP-05 八门 fixtures、IP-09
+  5 用例、IP-13 3 测试、IP-15 test_eval_module_split 等）；skipped 6
+  持平（5 CUDA skipif + 1 IP-04 lock 审计守卫，基线守恒）；warnings
+  0 持平。
+- D2 归并检查：`--check --expect 1 --baseline docs/ci_warning_baseline.json
+  --logs logs/gate_7f2d76a.txt` → **exit 0 "baseline holds"**——零警告
+  债务形态在合并后 tip 守恒；比较器按 IP-10 增强口径接受"完整日志且
+  零警告 = 合法空 section"。
+- **8 failed 差集逐项解释（单一根因：G8×合成 fixture 组合态冲突；本运行
+  为 G8 合并后首次全量）**：
+  - 根因链：G8（`50d0753`）及 dccd19e/bd688c6 在崩溃门禁 9d7b40a 之后
+    才并入 main（`git merge-base` 证实三者均不在 9d7b40a 祖先内），
+    9d7b40a 的全量绿从未执行过 G8；t13 聚焦 GREEN（153+107）亦未覆盖
+    该组合——§12"各分支都绿不代表组合后绿"的运行态实证。
+  - 机制：8 项受影响测试全部经 formal entry（`gates.py:458`
+    `require_production`，"Formal entry: run every gate and raise on any
+    failure"）以 2024 跨度合成 fixture 运行 CLI → G8 判
+    "calendar pre-listed horizon exhausted: max open session 20240223
+    （archive 组为 20240102）< today 20260903" → fail-closed raise
+    `UniverseContractError` → CLI 错误退出、父断言失败。
+  - 逐项：`test_archive_run.py` 3 项（protocol mode archives/manifest，
+    ERROR 行含 G8 字样）；`test_bare_factor_backtest.py::
+    test_cli_smoke_writes_versioned_payload`；`test_evaluation.py` 3 项
+    （test_cli_smoke / test_cli_confirmation_smoke /
+    test_cli_selfcheck_smoke，UniverseContractError）；
+    `test_promotion.py::test_cli_promotion_refuses_legacy_artifact_
+    without_dataset`（子进程未写出 verdict.json，同根因连带）。
+  - 归因边界：非 G8 实现缺陷、非既有测试断言错误——G8 formal
+    fail-closed 按 p16 契约语义正确工作（"Never a bypass"）；冲突在于
+    8 项 CLI formal-entry 测试的合成 fixture 时间跨度 vs 真实墙钟。
+    `gates.py` 已预留 test-only 注入缝（`require_production(*,
+    today=None)`，docstring："test-only injection of the G8 evaluation
+    day; production callers never pass it"）→ 修复方向 = 8 项测试经该缝
+    注入评估日或 fixture 日历锚定测试日；属 p16 契约与 data lane 的
+    repair 范围。本条目不改任何源码（evidence-runner 边界）。
+- IP-01..IP-16 验收核对：16 项全部有树上证据锚点——37 个 evidence
+  commit 逐一验证为 HEAD 祖先（IP-01 5b75ac2、IP-02 6fbda05、IP-03
+  eaeb898+d39389f、IP-04 e5d02f5+26957fa+2e21b90、IP-05
+  50d0753+dccd19e+bd688c6、IP-05a 1745773、IP-06 da455c5+d69121e、
+  IP-07a 8641e1f、IP-07b 40d289d+7da5841+74908ce、IP-08 5a6affb、
+  IP-09 0cd416b、IP-10 6e7623a+9d7b40a+93c443c、IP-11 98ad1c5+16f8e1f、
+  IP-12 6d9a871、IP-13 424bcfe+2c08aef、IP-14 5b27a7b+3562793+b3b323e、
+  IP-15 50b41aa+866922c、IP-16 5f0dc81..574aa96）；关键 artifact 在树
+  抽验通过（docs/CONTRACTS.md、p16 契约、fairness_probe_baseline、
+  fundamental_coverage_ledger、lock_audit.py、lock-watchdog.yml、
+  versions.py PROTOCOL_VERSION="25"、ashare_domain.py、ashare_logging.py
+  四元组、train.py 219 行 facade + train_loop/search_run/artifacts/
+  windows 四模块、ci.yml --expect 4、gates.py G8+
+  FRESHNESS_TOLERANCE_SESSIONS=3、conftest 定向 osqp filter、
+  test_fundamentals xjll_em/balance_sheet 新测试）。
+- 运行中 tip 移动披露：串行运行期间 main 前进 7f2d76a → d4f0011
+  （866922c +1 个 test_train_module_split 用例、d4f0011 requirements.lock
+  重生成（t24，scs pin 修复）；无 ashare_*/scripts/webapi 生产代码
+  增量）。本条目证据锚定 7f2d76a；重跑宜与 repair 窗口合并进行。
+- 未运行项：ubuntu/py3.12 CI 形态（4 分片 matrix + test-warning-merge
+  归并 job）、web job（`npm ci`/`npm ls --depth=0`/`npm run build`）、
+  `pip check`、`freeze_lock --check`、`compileall -j 0`；真实 sync
+  验证（G8 真实墙钟测量 + IP-11 F-08 退出归因）仍待授权；push 未执行
+  （用户裁决 U1）。
+- push-ready 状态：**未成立**。8 failed 须先由 owner 按 p16 契约修复
+  （G8 测试注入缝）并在含 d4f0011 增量的精确 tip 上重跑全量串行 +
+  D2；全量绿且零警告守恒后方可宣告 push-ready。
+- 研究结论边界：engineering run type；不产生也不声称任何研究结论。
