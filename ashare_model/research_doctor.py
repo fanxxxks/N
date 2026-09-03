@@ -166,6 +166,7 @@ def build_report(
     model_searcher: str,
     runtime_estimates_: dict[str, Any],
     fairness_probes: dict[str, Any] | None = None,
+    fundamental_coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Aggregate the gathered sections into the final doctor report.
 
@@ -389,6 +390,8 @@ def build_report(
     }
     if fairness_probes is not None:
         report["fairness_probes"] = fairness_probes
+    if fundamental_coverage is not None:
+        report["fundamental_coverage"] = fundamental_coverage
     return report
 
 
@@ -443,6 +446,73 @@ def gather_data_version(data_config) -> dict[str, Any]:
                 "total_rows": manifest.total_rows,
             }
         )
+    return result
+
+
+#: IP-13 (03-F-09 / 05-④): slow-fundamental registry features whose underlying
+#: ``fundamental_pit`` columns exist but with known low coverage
+#: (~10.1% / 10.1% / 1.4% at the P13 backfill snapshot).  Disclosure is
+#: REPORT-ONLY (no gate, no finding): the numbers make the coverage
+#: auditable; filling them is a future preregistered decision
+#: (docs/fundamental_coverage_ledger.md, U7).
+FUNDAMENTAL_COVERAGE_FIELDS: tuple[str, ...] = (
+    "roa",
+    "debt_ratio",
+    "dividend_yield",
+)
+
+
+def gather_fundamental_coverage(data_config) -> dict[str, Any]:
+    """Finite-value coverage of the slow-fundamental columns (read-only).
+
+    Denominator mirrors the P13 §4.1 measurement style: finite values
+    (non-NULL, non-NaN) over all ``fundamental_pit`` rows.  Report-only
+    by contract (IP-13): this section never raises findings and never
+    gates anything.
+    """
+
+    result: dict[str, Any] = {
+        "table": "fundamental_pit",
+        "total_rows": None,
+        "distinct_ts_code": None,
+        "definition": "finite values (non-NULL, non-NaN) / total rows",
+        "fields": {
+            name: {"finite": None, "coverage": None}
+            for name in FUNDAMENTAL_COVERAGE_FIELDS
+        },
+        "report_only": True,
+        "error": None,
+    }
+    finite = ", ".join(
+        f'COUNT(*) FILTER (WHERE "{name}" IS NOT NULL AND NOT isnan("{name}")) '
+        f'AS "{name}"'
+        for name in FUNDAMENTAL_COVERAGE_FIELDS
+    )
+    query = (
+        "SELECT COUNT(*) AS total_rows, "
+        "COUNT(DISTINCT ts_code) AS distinct_ts_code, "
+        f"{finite} FROM fundamental_pit"
+    )
+    try:
+        with AshareDB(data_config.duckdb_path, read_only=True) as db:
+            frame = db.query(query)
+    except Exception as exc:  # noqa: BLE001 - report, never crash
+        result["error"] = str(exc)
+        return result
+    if frame.empty:
+        result["error"] = "fundamental_pit coverage query returned no rows"
+        return result
+    row = frame.iloc[0]
+    total = int(row["total_rows"]) if row["total_rows"] is not None else 0
+    result["total_rows"] = total or None
+    distinct = row["distinct_ts_code"]
+    result["distinct_ts_code"] = int(distinct) if distinct is not None else None
+    for name in FUNDAMENTAL_COVERAGE_FIELDS:
+        finite_count = int(row[name]) if row[name] is not None else 0
+        result["fields"][name] = {
+            "finite": finite_count,
+            "coverage": (finite_count / total) if total else None,
+        }
     return result
 
 
@@ -810,6 +880,7 @@ def main(argv: list[str] | None = None) -> int:
         model_searcher=model_config.searcher,
         runtime_estimates_=runtime_estimates(model_config, protocol_config),
         fairness_probes=gather_fairness_probes(root),
+        fundamental_coverage=gather_fundamental_coverage(data_config),
     )
 
     if args.output:
@@ -878,6 +949,27 @@ def _print_human(report: dict[str, Any]) -> None:
         for check in probes.get("probes", []):
             if not check.get("ok"):
                 print(f"  FAIL {check.get('name')}: {check.get('detail')}")
+    coverage = report.get("fundamental_coverage")
+    if coverage is not None:
+        if coverage.get("error"):
+            print(
+                "fundamental coverage (report-only): unavailable "
+                f"({coverage['error']})"
+            )
+        else:
+            fields = coverage.get("fields", {})
+            parts = []
+            for name in ("roa", "debt_ratio", "dividend_yield"):
+                value = (fields.get(name) or {}).get("coverage")
+                parts.append(
+                    f"{name}={value:.4f}"
+                    if isinstance(value, (int, float))
+                    else f"{name}=n/a"
+                )
+            print(
+                "fundamental coverage (report-only, finite/rows): "
+                + ", ".join(parts)
+            )
     for artifact in report["artifacts"]:
         status = (
             "LEGACY" if artifact.get("legacy")
