@@ -18,6 +18,8 @@ for the names it moves, so re-exports can never drift into a second copy.
 from __future__ import annotations
 
 import importlib
+import subprocess
+import sys
 
 # Names imported by production modules, scripts and tests before the split
 # (see tests/test_evaluation.py, test_stitched_oos.py, test_universe.py,
@@ -156,3 +158,42 @@ def test_eval_artifacts_reexport_identity():
         "universe_policy_payload",
     ):
         assert getattr(evaluation, name) is getattr(eval_artifacts, name), name
+
+
+def test_protocol_version_single_home_is_versions_module():
+    """IP-07a: ``PROTOCOL_VERSION``'s single home is the leaf module
+    ``ashare_model.versions``; the evaluation facade re-exports the same
+    object (no second copy, no drift) so the frozen facade surface and
+    every ``from .evaluation import PROTOCOL_VERSION`` consumer
+    (artifact_versions, bare_factor_backtest, promotion, research_doctor)
+    keep working unchanged."""
+    evaluation = importlib.import_module("ashare_model.evaluation")
+    versions = importlib.import_module("ashare_model.versions")
+    assert versions.PROTOCOL_VERSION == "25"
+    assert evaluation.PROTOCOL_VERSION is versions.PROTOCOL_VERSION
+
+
+def test_train_binds_protocol_version_from_versions_at_import_time():
+    """IP-07a: ``train`` binds ``PROTOCOL_VERSION`` at import time from the
+    leaf versions module, so the train⇄evaluation import edge no longer
+    forces lazy ``from .evaluation import PROTOCOL_VERSION`` imports
+    inside train.py (module-level import, no cycle, no second copy)."""
+    train = importlib.import_module("ashare_model.train")
+    versions = importlib.import_module("ashare_model.versions")
+    assert train.PROTOCOL_VERSION is versions.PROTOCOL_VERSION
+
+
+def test_versions_module_imports_without_train_or_evaluation():
+    """IP-07a: ``ashare_model.versions`` is the cycle-break point for the
+    train⇄evaluation edge: importing it standalone in a fresh interpreter
+    must not import ``ashare_model.train`` or ``ashare_model.evaluation``."""
+    code = (
+        "import sys\n"
+        "import ashare_model.versions\n"
+        "for name in (\"ashare_model.train\", \"ashare_model.evaluation\"):\n"
+        "    assert name not in sys.modules, name\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
+    assert proc.returncode == 0, proc.stderr

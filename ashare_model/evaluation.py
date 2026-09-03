@@ -282,9 +282,8 @@ from .research_domain import (
 )
 from .reward import REWARD_VERSION
 from .search_contract import SearchResult
+from .versions import PROTOCOL_VERSION
 from .vocab import FEATURE_NAMES
-
-PROTOCOL_VERSION = "25"
 
 
 def run_protocol(
