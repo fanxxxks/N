@@ -7,12 +7,12 @@ blocks (universe policy, data regime, data tier), the top-level
 the artifact *schema* changes — not when fold contracts, metric
 definitions, statistical corrections or search backends change.
 
-Monkeypatch compatibility: ``build_result`` reads ``PROTOCOL_VERSION`` and
-``REWARD_VERSION`` **through the facade at call time** — tests pin versions
-via ``monkeypatch.setattr(evaluation, "REWARD_VERSION", ...)``.  Since
-IP-07a the protocol version's single home is the leaf module
-``ashare_model.versions``; the facade re-exports it and remains the
-late-binding read path.
+Monkeypatch compatibility: ``build_result`` reads ``REWARD_VERSION``
+**through the reward owner at call time** — tests pin the version via
+``monkeypatch.setattr(reward, "REWARD_VERSION", ...)`` (IP-15 moved the
+patch point off the evaluation facade so facade retirement cannot kill
+the seam).  ``PROTOCOL_VERSION`` is read directly from its single home
+``ashare_model.versions`` (IP-07a) — nothing patches it.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import math
 from ashare_data.config import BacktestConfig, ProtocolConfig
 from ashare_portfolio.execution_spec import execution_provenance
 
+from . import reward as _reward_owner
 from .artifact_schemas import ARTIFACT_SCHEMA_VERSION, ProtocolResultArtifact
 from .data_loader import AshareDataLoader
 from .data_tier import DATA_TIER_VERSION, formula_data_tier_report
@@ -34,6 +35,7 @@ from .eval_metrics import (
 )
 from .identity import candidate_id
 from .research_domain import RESEARCH_DOMAIN_VERSION
+from .versions import PROTOCOL_VERSION
 
 
 def _protocol_candidate_id(spec_id: str, top: dict | None) -> str:
@@ -199,11 +201,9 @@ def build_result(
     sentinel identity when no trial was adjudicated).
     """
 
-    # Late binding through the facade: tests pin versions via
-    # ``monkeypatch.setattr(evaluation, "REWARD_VERSION", ...)``.
-    # PROTOCOL_VERSION's single home is ashare_model.versions (IP-07a);
-    # the facade re-exports it and stays the late-binding read path.
-    from ashare_model import evaluation as _facade  # noqa: PLC0415
+    # REWARD_VERSION reads through the reward owner at call time (IP-15:
+    # the monkeypatch seam moved off the evaluation facade);
+    # PROTOCOL_VERSION binds its single home at module level.
 
     if backtest_config is None:
         backtest_config = BacktestConfig(
@@ -251,9 +251,9 @@ def build_result(
             "spec_id": spec_id,
             "run_id": run_id,
             "candidate_id": _protocol_candidate_id(spec_id, top),
-            "protocol_version": _facade.PROTOCOL_VERSION,
+            "protocol_version": PROTOCOL_VERSION,
             "data_tier_version": DATA_TIER_VERSION,
-            "reward_version": _facade.REWARD_VERSION,
+            "reward_version": _reward_owner.REWARD_VERSION,
             # P6 §4.4: the research domain this campaign ran in and the
             # registry generation its defaults resolve from.
             "research_domain": proto_cfg.domain,
