@@ -79,7 +79,7 @@ referencing==0.37.0
 requests==2.34.2
 rpds-py==2026.6.3
 scipy==1.18.0
-scs==3.3.0
+scs==3.2.11
 setuptools==81.0.0
 six==1.17.0
 soupsieve==2.9.2

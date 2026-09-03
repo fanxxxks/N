@@ -600,3 +600,40 @@ engineering run type；不构成任何研究/收益结论。
   （lock 3.3.0 vs 实装 3.2.11，本裁决）。二者由 t22（lock 重生成）
   统一收口。
 - 性质：engineering（授权环境变更与只读复验）；不构成研究/收益结论。
+
+### t24 lock scs pin 重生成（2026-09-03，用户已授权执行）
+
+- 授权：用户批准 t24（t22 草案的执行令）——干净 venv + 约束文件 +
+  freeze_lock 三文件写盘（AGENTS §2.3 所需显式授权即本次批准）。
+- 前置：干净 venv `D:\minequant\venv-lockreg`（Python 3.13.12，win）；
+  约束文件 = 现行 lock 全量 105 pins 唯 scs 覆写 3.2.11（防 2026-08-31
+  以来传递依赖漂移）。
+- 命令与结果：
+  1. 干净 venv `pip install -r requirements.txt -r
+     requirements-optional.txt -c constraints.txt` → **exit 0**，
+     105 distributions（与 lock 闭包一一对应），pip check exit 0。
+  2. `python scripts/freeze_lock.py`（干净 venv 解释器，无参写三文件）
+     → exit 0。
+  3. diff 审计（与方案精确一致）：requirements.txt /
+     requirements-optional.txt **零变化**；requirements.lock **仅
+     scs==3.3.0 → scs==3.2.11 一行**——无任何传递依赖漂移。
+- 复验链：
+  1. 干净 venv `--check-full` → **exit 0**（CPU torch 闭包完全忠实，
+     旧 +cpu pin 与重生成一致）。
+  2. lock_audit ×3：干净 venv **0/0/0 IN SYNC**；.venv **0/0/0 IN
+     SYNC**（scs 3.2.11 对齐新 lock，torch 本地 tag 为设计内说明项）；
+     miniconda 38 mismatch = 其既有共享超集漂移态（U9/t5 已裁决"不对
+     齐"，scs 计入后 39→38，非回归）。
+  3. .venv scs solve 冒烟 → exit 0（v3.2.11 正常求解，硬崩消除态
+     保持）；.venv pip check → exit 0；miniconda pip check exit 1 =
+     既有 langchain/httpx2 冲突（PR1 披露，未触碰）。
+  4. 干净 venv 门禁冒烟：`pytest -q tests/test_gates.py` → 16 passed
+     （G8 含内，lock 忠实环境行为一致）。
+- 收口：t22 登记的 --check-full 两条残差中，scs 豁免由本次重生成
+  消除；torch 本地 tag 残差仅在 .venv/--check-full 口径继续存在
+  （P0-06 设计内，torch 不动约束）。t19 lock-watchdog 此后按新基线
+  看门；其首次远端 schedule 触发待 push 后验证。
+- 版本影响：无 *_VERSION 变化；lock 为生成物，diff 即 scs 一行。
+- 性质：engineering（用户授权的依赖文件写盘与环境变更）；不构成
+  研究/收益结论；未运行真实 sync；未 push；全量回归由 t20 终验统一
+  承担（合并后 main 串行全量）。
