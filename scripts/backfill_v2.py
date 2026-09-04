@@ -500,15 +500,33 @@ class BackfillRunner:
                                 fields=list(frame.columns), row_limit=limit,
                                 formal=True, scope_column="ts_code")
         for index_code in ("000300.SH", "000905.SH", "000852.SH"):
-            params = {"index_code": index_code}
-            if self._should_skip("index_weight_pit", params):
-                self.counts["skipped"] += 1
-                continue
-            frame = self._fetch("index_weight", **params)
-            self._fetch_single_guarded("index_weight", params, frame, 3000)
-            self._run_batch("index_weight_pit", frame, params=params,
-                            fields=list(frame.columns), row_limit=3000,
-                            formal=True, scope_column="con_code")
+            # Year windows bisected on the cap signal: full history for a
+            # large index (CSI 300 ≈ 7000 rows since 2005) exceeds the
+            # 3000-row per-call cap.
+            for lo, hi in year_windows("20050101", self.today):
+                stack: list[tuple[str, str]] = [(lo, hi)]
+                while stack:
+                    wlo, whi = stack.pop()
+                    params = {"index_code": index_code,
+                              "start_date": wlo, "end_date": whi}
+                    if self._should_skip("index_weight_pit", params):
+                        self.counts["skipped"] += 1
+                        continue
+                    frame = self._fetch("index_weight", **params)
+                    if len(frame) >= 3000 and wlo != whi:
+                        mid = _mid(wlo, whi)
+                        if mid < whi:
+                            print(f"  paginate index_weight {index_code} "
+                                  f"{wlo}..{whi}: {len(frame)} rows == cap, "
+                                  "bisecting")
+                            stack.append((wlo, mid))
+                            stack.append((add_days(mid, 1), whi))
+                            continue
+                    self._fetch_single_guarded("index_weight", params, frame,
+                                               3000)
+                    self._run_batch("index_weight_pit", frame, params=params,
+                                    fields=list(frame.columns), row_limit=3000,
+                                    formal=True, scope_column="con_code")
 
     def step8(self) -> None:
         print("== step 8: v2 manifest")
