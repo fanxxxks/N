@@ -460,6 +460,9 @@ class BackfillRunner:
             ("stk_holdernumber", "holder_number_pit", 3000),
         )
         for endpoint, table, limit in windowed:
+            if table in self.skip_endpoints:
+                print(f"  skip {table} (erratum-pending)")
+                continue
             for lo, hi in year_windows(self.fundamental_start, self.today):
                 stack: list[tuple[str, str]] = [(lo, hi)]
                 while stack:
