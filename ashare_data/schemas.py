@@ -57,3 +57,35 @@ class SimTrade:
     stamp_tax: float
     transfer_fee: float
     slippage: float
+
+
+@dataclass(frozen=True)
+class TushareSnapshotRecord:
+    """L0 raw-snapshot provenance for one ingest batch (p17 §4.2).
+
+    ``raw_path`` is relative to the store's raw root
+    (``data/raw/tushare/<endpoint>/<ingest_id>/part-*.parquet``);
+    ``raw_payload_sha256`` is the SHA-256 of the snapshot file bytes.
+    """
+
+    ingest_id: str
+    endpoint: str
+    raw_path: str
+    raw_payload_sha256: str
+    row_count: int
+    hit_row_limit: bool
+
+
+@dataclass(frozen=True)
+class TushareIngestResult:
+    """Typed outcome of one L1 ingest batch (mirrors source_ingest_runs)."""
+
+    ingest_id: str
+    endpoint: str
+    status: str  # 'succeeded' | 'failed'
+    row_count: int
+    raw_path: str = ""
+    raw_payload_sha256: str = ""
+    hit_row_limit: bool = False
+    error_type: str | None = None
+    error_message: str | None = None

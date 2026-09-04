@@ -77,8 +77,14 @@ def partition_spec(config) -> dict[str, tuple[str | None, str | None]]:
     column's MAX is tracked for cache invalidation (``None`` means the
     partition is validated by row count only).  The factor cache is a
     derived, disposable table and is deliberately not fingerprinted.
+
+    Accepts the production data config or the Tushare v2 table-name shim
+    (:data:`TUSHARE_V2_CONFIG`), in which case the v2 partition spec is
+    returned — one manifest machinery for both databases.
     """
 
+    if isinstance(config, _TushareV2TableNames):
+        return dict(_V2_PARTITION_SPEC)
     return {
         config.daily_table: ("substr(trade_date, 1, 4)", "trade_date"),
         config.calendar_table: ("substr(trade_date, 1, 4)", "trade_date"),
@@ -89,6 +95,83 @@ def partition_spec(config) -> dict[str, tuple[str | None, str | None]]:
         config.constituents_table: (None, None),
         config.sw_member_table: (None, None),
     }
+
+
+class _TushareV2TableNames:
+    """Attribute shim exposing the Tushare v2 table names through the
+    existing ``partition_spec(config)`` contract, so the v2 dataset
+    manifest reuses the SAME fingerprint machinery as the production
+    manifest (p17 §4.4: dataset_id recomputed from content by the
+    existing manifest authority; p13 precedent — no second hashing
+    implementation)."""
+
+    source_ingest_runs = "source_ingest_runs"
+    daily_bar_raw = "daily_bar_raw"
+    daily_adj_factor = "daily_adj_factor"
+    daily_basic_pit = "daily_basic_pit"
+    daily_price_limit = "daily_price_limit"
+    daily_suspension = "daily_suspension"
+    industry_taxonomy = "industry_taxonomy"
+    industry_membership_pit = "industry_membership_pit"
+    income_statement_pit = "income_statement_pit"
+    balance_sheet_pit = "balance_sheet_pit"
+    cashflow_statement_pit = "cashflow_statement_pit"
+    financial_indicator_audit = "financial_indicator_audit"
+    financial_disclosure_schedule = "financial_disclosure_schedule"
+    earnings_forecast_pit = "earnings_forecast_pit"
+    earnings_express_pit = "earnings_express_pit"
+    repurchase_event_pit = "repurchase_event_pit"
+    holder_number_pit = "holder_number_pit"
+    margin_detail_pit = "margin_detail_pit"
+    index_weight_pit = "index_weight_pit"
+
+
+TUSHARE_V2_CONFIG = _TushareV2TableNames()
+
+#: Partition expressions of the 19 v2 tables (date-keyed tables partition
+#: by year of their date axis; the ledger and the taxonomy dimension form
+#: single ``ALL`` partitions).
+_V2_PARTITION_SPEC: dict[str, tuple[str | None, str | None]] = {
+    "source_ingest_runs": (None, None),
+    "daily_bar_raw": ("substr(trade_date, 1, 4)", "trade_date"),
+    "daily_adj_factor": ("substr(trade_date, 1, 4)", "trade_date"),
+    "daily_basic_pit": ("substr(trade_date, 1, 4)", "trade_date"),
+    "daily_price_limit": ("substr(trade_date, 1, 4)", "trade_date"),
+    "daily_suspension": ("substr(trade_date, 1, 4)", "trade_date"),
+    "margin_detail_pit": ("substr(trade_date, 1, 4)", "trade_date"),
+    "index_weight_pit": ("substr(trade_date, 1, 4)", "trade_date"),
+    "industry_membership_pit": ("substr(in_date, 1, 4)", "in_date"),
+    "income_statement_pit": ("substr(end_date, 1, 4)", "end_date"),
+    "balance_sheet_pit": ("substr(end_date, 1, 4)", "end_date"),
+    "cashflow_statement_pit": ("substr(end_date, 1, 4)", "end_date"),
+    "financial_indicator_audit": ("substr(end_date, 1, 4)", "end_date"),
+    "financial_disclosure_schedule": ("substr(end_date, 1, 4)", "end_date"),
+    "earnings_forecast_pit": ("substr(end_date, 1, 4)", "end_date"),
+    "earnings_express_pit": ("substr(end_date, 1, 4)", "end_date"),
+    "repurchase_event_pit": ("substr(ann_date, 1, 4)", "ann_date"),
+    "holder_number_pit": ("substr(end_date, 1, 4)", "end_date"),
+    "industry_taxonomy": (None, None),
+}
+
+
+def build_v2_dataset_manifest(
+    db: AshareDB,
+    *,
+    source_versions: dict[str, str] | None = None,
+    use_cache: bool = True,
+) -> DatasetManifest:
+    """Content-addressed manifest of the Tushare v2 database state.
+
+    Deterministic for identical content (append-only rows, order-free
+    hashing) and recomputed from table content per the p13 precedent:
+    the dataset_id identifies the data, ``TUSHARE_STORE_SCHEMA_VERSION``
+    rides in ``source_versions`` as provenance metadata.
+    """
+
+    return build_dataset_manifest(
+        db, TUSHARE_V2_CONFIG, source_versions=source_versions,
+        use_cache=use_cache,
+    )
 
 
 def table_columns(db: AshareDB, table: str) -> list[str]:

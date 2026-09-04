@@ -53,6 +53,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_tier_reports.py",
         "test_time_contract.py",
         "test_tushare_client.py",
+        "test_tushare_store.py",
         "test_universe.py",
         "test_validation_docs.py",
     ),
