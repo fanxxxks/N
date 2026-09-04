@@ -23,7 +23,7 @@ corrected by erratum t44 / commit 5d05987):
 * Availability columns are computed by the writer per p17 section 6.1
   through an injected ``next_open_session`` resolver (the existing
   calendar authority is wired by D3; no second calendar lives here).
-* Everything runs on a temporary DuckDB (tmp_path) 鈥?the production
+* Everything runs on a temporary DuckDB (tmp_path) — the production
   database is never opened.
 
 The erratum-corrected contract details asserted here (all from
@@ -61,7 +61,7 @@ FAKE_TOKEN = "TOK_SECRET_SHOULD_NEVER_APPEAR"
 
 def _next_session(date: str) -> str:
     """Deterministic injected resolver for tests: the next calendar day,
-    rolling over weekends.  Fixture only 鈥?the production resolver is the
+    rolling over weekends.  Fixture only — the production resolver is the
     existing calendar authority, wired by D3 (no second calendar here)."""
 
     day = pd.Timestamp(date) + pd.Timedelta(days=1)
@@ -363,13 +363,13 @@ class TestAvailability:
                         params={"ts_code": "000001.SZ"}, fields=list(row),
                         row_limit=3000)
         stored = db.query("SELECT * FROM income_statement_pit")
-        # anchor = max(f_ann_date, ann_date) = 20240318 (搂6.1)
+        # anchor = max(f_ann_date, ann_date) = 20240318 (§6.1)
         assert stored.iloc[0]["available_date"] == _next_session("20240318")
 
     def test_suspension_available_at_is_trade_date_preopen(self, store):
         st, db = store
         row = {"ts_code": "000001.SZ", "trade_date": "20240403",
-               "suspend_type": "S", "suspend_timing": "鐩樹腑鍋滅墝"}
+               "suspend_type": "S", "suspend_timing": "盘中停牌"}
         st.ingest_batch("daily_suspension", _frame("daily_suspension", [row]),
                         params={"trade_date": "20240403"},
                         fields=list(row), row_limit=3000)
@@ -377,7 +377,7 @@ class TestAvailability:
         record = stored.iloc[0]
         assert str(record["available_at"]).startswith("2024-04-03 09:00")
         assert record["source"] == "tushare"
-        assert record["suspend_timing"] == "鐩樹腑鍋滅墝"
+        assert record["suspend_timing"] == "盘中停牌"
 
     def test_index_weight_available_after_month_end(self, store):
         st, db = store
@@ -393,7 +393,7 @@ class TestAvailability:
         st, db = store
         row = {"index_code": "801010.SI", "ts_code": "000001.SZ",
                "in_date": "20220729", "out_date": None, "is_new": "Y",
-               "industry_name": "鍐滄灄鐗ф笖"}
+               "industry_name": "农林牧渔"}
         st.ingest_batch("industry_membership_pit",
                         _frame("industry_membership_pit", [row]),
                         params={"l1_code": "801010.SI"}, fields=list(row),
@@ -440,6 +440,7 @@ class TestSnapshotAndAtomicity:
         assert _table_count(db, "daily_bar_raw") == 0
         ledger = _ledger_rows(db)
         assert ledger.iloc[0]["status"] == "failed"
+        assert ledger.iloc[0]["error_type"] == "RuntimeError"
         assert "snapshot disk full" in ledger.iloc[0]["error_message"]
 
     def test_midbatch_failure_rolls_back_zero_residue(self, store, monkeypatch):
@@ -542,7 +543,7 @@ class TestLedgerContract:
 
 class TestAllTablesSmoke:
     """Every data table's spec must map a minimal valid source row end to
-    end 鈥?this catches DDL/spec drift across all 18 tables at once."""
+    end — this catches DDL/spec drift across all 18 tables at once."""
 
     def test_every_table_ingests_a_minimal_valid_row(self, store):
         st, db = store
