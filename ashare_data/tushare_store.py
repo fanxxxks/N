@@ -706,58 +706,79 @@ class TushareStore:
         for spec in _V2_TABLE_SPECS:
             self.db.execute(spec.ddl)
 
-    def create_gate_views(self, prod_db_path: str) -> list[str]:
-        """Create compatibility views mapping v2 tables to the shapes the
-        production gate runner (G1-G8) expects (p17 §10 step 9).
+    def prepare_gate_tables(self, prod_db_path: str, config) -> Any:
+        """Create explicitly-mapped gate tables from v2 data and return a
+        DataConfig pointing to them for the G1-G8 gate runner.
 
-        The gate runner queries ``constituents``, ``stocks``,
-        ``trade_calendar`` and ``daily_bar`` by production table names.
-        This adapter creates SQL views so the gate logic (single
-        authority: ``ashare_data.gates``) runs unchanged against the v2
-        database — no second implementation of gate semantics.
+        This is a **parameterized adapter** (captain裁决: 不建兼容视图):
+        each gate table is a physically materialized temp table with the
+        production schema, populated by explicit column mapping from v2
+        data.  Missing v2 tables or columns raise TushareStoreError
+        (fail-closed) — production gate semantics are never silently
+        applied to semantically different v2 tables.
 
         ``stocks`` and ``trade_calendar`` are reference/metadata tables
-        not present in v2 (p17 §11.2: L0/audit surfaces); they are copied
-        from the production database (read-only source) into local v2
-        tables so the gate runner needs no cross-database ATTACH.
+        not present in v2 (p17 §11.2); they are copied from the
+        production database (read-only) into local gate tables.
 
-        Returns the list of created view names.
+        Returns a DataConfig copy with the gate table names substituted.
         """
+
+        import dataclasses
 
         prod = duckdb.connect(prod_db_path, read_only=True)
         try:
+            # Copy reference tables from production (read-only source).
             for table in ("stocks", "trade_calendar"):
-                # Drop any prior view or table (idempotent gate adapter)
-                self.db.execute(f"DROP VIEW IF EXISTS {table}")
-                self.db.execute(f"DROP TABLE IF EXISTS {table}")
+                self.db.execute(f"DROP TABLE IF EXISTS _gate_{table}")
                 ref = prod.execute(f"SELECT * FROM {table}").fetchdf()
-                self.db.register(f"_ref_{table}", ref)
+                self.db.register(f"_ref_gate_{table}", ref)
                 self.db.execute(
-                    f"CREATE TABLE {table} AS "
-                    f"SELECT * FROM _ref_{table}"
+                    f"CREATE TABLE _gate_{table} AS "
+                    f"SELECT * FROM _ref_gate_{table}"
                 )
         finally:
             prod.close()
-        views: list[tuple[str, str]] = [
-            ("constituents",
-             "SELECT index_code, ts_code, in_date, out_date "
-             "FROM industry_membership_pit WHERE level = 1"),
-            ("daily_bar",
-             "SELECT r.ts_code, r.trade_date, r.open, r.high, r.low, "
-             "r.close, r.pre_close, r.vol AS volume, r.amount, "
-             "a.adj_factor "
-             "FROM daily_bar_raw r "
-             "JOIN daily_adj_factor a "
-             "ON r.ts_code = a.ts_code AND r.trade_date = a.trade_date"),
-        ]
-        created = []
-        for name, sql in views:
-            self.db.execute(f"CREATE OR REPLACE VIEW {name} AS {sql}")
-            created.append(name)
-        # The copied reference tables are also "views" from the adapter's
-        # perspective (they were sourced from production).
-        created.extend(["stocks", "trade_calendar"])
-        return created
+
+        # _gate_constituents: L1 membership (the primary classification).
+        # NOTE: this is SW industry membership, NOT index constituents.
+        # G1/G4/G5 check for index_codes (000300.SH etc.) which are a
+        # different concept — those gates will report 0 matches (fail
+        # state) until index constituent data is backfilled separately.
+        self.db.execute("DROP TABLE IF EXISTS _gate_constituents")
+        self.db.execute(
+            "CREATE TABLE _gate_constituents AS "
+            "SELECT index_code, ts_code, in_date, out_date "
+            "FROM industry_membership_pit WHERE level = 1"
+        )
+        # _gate_daily_bar: join raw + adj_factor, explicit column mapping
+        # (vol → volume per production schema).
+        self.db.execute("DROP TABLE IF EXISTS _gate_daily_bar")
+        self.db.execute(
+            "CREATE TABLE _gate_daily_bar AS "
+            "SELECT r.ts_code, r.trade_date, r.open, r.high, r.low, "
+            "r.close, r.pre_close, r.vol AS volume, r.amount, "
+            "a.adj_factor "
+            "FROM daily_bar_raw r "
+            "JOIN daily_adj_factor a "
+            "ON r.ts_code = a.ts_code AND r.trade_date = a.trade_date"
+        )
+        gate_config = dataclasses.replace(
+            config,
+            duckdb_path=str(self.db.path),
+            constituents_table="_gate_constituents",
+            stocks_table="_gate_stocks",
+            calendar_table="_gate_trade_calendar",
+            daily_table="_gate_daily_bar",
+        )
+        return gate_config
+
+    def cleanup_gate_tables(self) -> None:
+        """Drop the temporary gate tables created by prepare_gate_tables."""
+
+        for table in ("_gate_constituents", "_gate_daily_bar",
+                      "_gate_stocks", "_gate_trade_calendar"):
+            self.db.execute(f"DROP TABLE IF EXISTS {table}")
 
     # -- ingest ------------------------------------------------------------
 
