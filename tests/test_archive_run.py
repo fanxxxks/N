@@ -12,6 +12,8 @@ import yaml
 from ashare_data.config import DataConfig
 from ashare_data.db import AshareDB
 
+from conftest import _future_prelisted_sessions
+
 ARCHIVE_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "archive_run.py"
 
 
@@ -83,8 +85,20 @@ def repo(tmp_path):
             data_config,
         )
         db.upsert_calendar(
-            [{"trade_date": d0, "is_open": True},
-             {"trade_date": d1, "is_open": True}],
+            [
+                {"trade_date": d0, "is_open": True},
+                {"trade_date": d1, "is_open": True},
+            ]
+            # t46-era diagnosis: the G8 gate refuses when the pre-listed
+            # horizon no longer covers the evaluation day, so a weekend
+            # run (seeded era ends Friday, clock on Sat/Sun) exhausted
+            # the horizon.  Pre-list future business sessions — what a
+            # real trading calendar does — via the shared conftest
+            # helper (single implementation, %Y%m%d bars-axis format).
+            + [
+                {"trade_date": d, "is_open": True}
+                for d in _future_prelisted_sessions(d1)
+            ],
             data_config,
         )
         db.upsert_constituents(
@@ -116,12 +130,6 @@ def repo(tmp_path):
             ],
             data_config,
         )
-        # p16 G8 pre-listed horizon: the exchange calendar lists the next
-        # session ahead of the last completed one — without a future row
-        # the fixture rots the first day the real clock moves past d1
-        # (weekends).  The lag stays within FRESHNESS_TOLERANCE_SESSIONS.
-        next_session = pd.bdate_range(start=d1, periods=2).strftime("%Y%m%d")[-1]
-        db.upsert_calendar([{"trade_date": next_session, "is_open": True}], data_config)
     metrics = {
         "formula_text": "TURNOVER_CHG MUL RET_5",
         "metrics": {"sharpe": 1.5, "max_drawdown": 0.2},

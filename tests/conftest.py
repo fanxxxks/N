@@ -318,13 +318,17 @@ def _populate_db(
     bars,
     *,
     persist_manifest: bool,
+    prelisted_open_sessions: list[str] | None = None,
 ) -> DataConfig:
     """Populate the shared synthetic database (single implementation).
 
     ``persist_manifest`` controls whether the content-addressed dataset
     manifest is saved: formal artifact flows (P8-05) require a resolved
     dataset identity, while manifest-machinery tests need a database
-    without one.
+    without one.  ``prelisted_open_sessions`` extends the trade calendar
+    with future open sessions (no bars) so the pre-listed horizon covers
+    the G8 evaluation day; the rows land before ``save_manifest`` so the
+    manifest stays authoritative for the full table.
 
     The v2 price source (p19 §2: the loader's formal price input) is
     populated next to the legacy database with neutral defaults
@@ -350,10 +354,12 @@ def _populate_db(
             ],
             data_config,
         )
-        db.upsert_calendar(
-            [{"trade_date": d, "is_open": True} for d in dates],
-            data_config,
+        calendar_rows = [{"trade_date": d, "is_open": True} for d in dates]
+        calendar_rows.extend(
+            {"trade_date": d, "is_open": True}
+            for d in prelisted_open_sessions or []
         )
+        db.upsert_calendar(calendar_rows, data_config)
         db.upsert_constituents(
             [
                 {
@@ -388,8 +394,9 @@ def populated_db(data_config: DataConfig, bars_data) -> DataConfig:
 @pytest.fixture
 def fresh_data_config(tmp_path: Path) -> DataConfig:
     """Today-relative data window (t23): ``end_date`` is the real clock's
-    date so the pre-listed calendar horizon satisfies the G8 freshness
-    gate (p16 contract, t13) for CLI smoke fixtures."""
+    date so the bar axis tracks the clock.  The G8 pre-listed horizon is
+    kept ahead of the clock by :func:`_future_prelisted_sessions` in
+    ``fresh_populated_db`` (weekend-safe; p16 contract, t13)."""
 
     end = pd.Timestamp.today().normalize()
     start = end - pd.Timedelta(days=90)
@@ -408,9 +415,40 @@ def fresh_data_config(tmp_path: Path) -> DataConfig:
 @pytest.fixture
 def fresh_bars_data():
     """Bars whose last session is today (or the last business day before
-    it) — G8-fresh by construction, never rotting with the clock."""
+    it) — G8-fresh by construction together with the pre-listed calendar
+    horizon of ``fresh_populated_db`` (weekend-safe)."""
 
     return make_bars(end=pd.Timestamp.today().normalize().strftime("%Y-%m-%d"))
+
+
+def _future_prelisted_sessions(last_session: str, days: int = 7) -> list[str]:
+    """Business days strictly after ``last_session`` through
+    ``today + days``, in the bars-axis ``%Y%m%d`` format — the
+    pre-listed open-session horizon G8 requires.
+
+    G8 (p16) fails closed when the calendar's pre-listed horizon no
+    longer covers the evaluation day.  The fresh fixtures end their bar
+    axis at the last business day, so on a weekend the horizon stops at
+    Friday while ``today`` is Saturday/Sunday and the gate refuses
+    (t43-era full-suite rot: 4 CLI-subprocess tests failed identically
+    on every branch).  Pre-listing future open sessions — exactly what a
+    real trading calendar does — keeps the horizon ahead of the clock on
+    every day of the week.  The sessions carry no bars: G8's lag counts
+    only open sessions strictly before the evaluation day.  The
+    ``%Y%m%d`` format matches ``make_bars``' axis: the gate compares
+    dates as strings, and mixed formats would sort the extension rows
+    below the ``%Y%m%d`` horizon (defeating the extension).
+    """
+
+    last = pd.Timestamp(last_session)
+    horizon = pd.Timestamp.today().normalize() + pd.Timedelta(days=days)
+    sessions: list[str] = []
+    day = last + pd.Timedelta(days=1)
+    while day <= horizon:
+        if day.dayofweek < 5:  # Monday-Friday only
+            sessions.append(day.strftime("%Y%m%d"))
+        day += pd.Timedelta(days=1)
+    return sessions
 
 
 @pytest.fixture
@@ -421,24 +459,19 @@ def fresh_populated_db(
     config plus the session axis so tests can derive fold dates from the
     same positions the historical 2024-01-01 axis used.  Used by tests
     whose formal entry runs in a SUBPROCESS (monkeypatch cannot cross the
-    process boundary)."""
+    process boundary).  The trade calendar is pre-listed beyond the bar
+    axis (see :func:`_future_prelisted_sessions`) so the G8 horizon never
+    exhausts behind the clock."""
 
     dates, ts_codes, bars = fresh_bars_data
     cfg = _populate_db(
-        fresh_data_config, dates, ts_codes, bars, persist_manifest=True
+        fresh_data_config,
+        dates,
+        ts_codes,
+        bars,
+        persist_manifest=True,
+        prelisted_open_sessions=_future_prelisted_sessions(dates[-1]),
     )
-    # p16 G8 pre-listed horizon: the exchange calendar lists sessions ahead
-    # of the last completed one.  Without future rows the fixture rots the
-    # first day the real clock moves past the last bar session (weekends).
-    last_bar = dates[-1]
-    future = pd.bdate_range(start=last_bar, periods=4).strftime("%Y%m%d")
-    extra = [d for d in future if d > last_bar][:2]
-    if extra:
-        with AshareDB(cfg.duckdb_path) as db:
-            db.upsert_calendar(
-                [{"trade_date": d, "is_open": True} for d in extra],
-                cfg,
-            )
     return cfg, dates
 
 
