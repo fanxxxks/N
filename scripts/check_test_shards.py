@@ -113,6 +113,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_runspec.py",
         "test_schemas.py",
         "test_stitched_oos.py",
+        "test_task_executor.py",
         "test_train.py",
     ),
     # Portfolio/execution/trading/sim/web/archive/golden parity.
