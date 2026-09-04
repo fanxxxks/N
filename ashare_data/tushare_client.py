@@ -13,7 +13,9 @@ Discipline (task t3 work package):
   itself never reads files.  A missing token fails closed.  The token value
   never appears in ``repr``, exception messages, logs or any other output:
   every message derived from a transport error is scrubbed through
-  :func:`_sanitize`.
+  :func:`_sanitize`, and the raised error is constructed outside the
+  handling block with a sanitized cause copy, so neither ``__cause__``,
+  ``__context__`` nor any traceback rendering can leak the secret (D1a).
 * **Lazy SDK** — ``import tushare`` happens on the first API call, so
   non-Tushare paths never require the package or a token.
 * **Fail-closed schema validation** — every registered interface has an
@@ -96,9 +98,18 @@ CORE_INTERFACES = (
 EXPECTED_NO_PERMISSION_INTERFACES = ("stock_st", "share_float", "bak_basic")
 
 #: Exact column contract per interface (frozen from the Tushare Pro docs,
-#: 2026-09).  The typed path requests exactly these fields and validates the
-#: response against the same set.  A new upstream column can never silently
-#: enter the pipeline: extending a contract is a deliberate, reviewed edit.
+#: 2026-09; extended to the p17 §5 DDL writer set in D1a where the live API
+#: verifiably returns the field — margin_detail 10 columns, income
+#: +oper_cost, cashflow +c_cash_equ_end_period, index_classify +src, all
+#: confirmed against the real endpoint 2026-09-04).  The typed path
+#: requests exactly these fields and validates the response against the
+#: same set.  A new upstream column can never silently enter the pipeline:
+#: extending a contract is a deliberate, reviewed edit.  Deliberate
+#: NON-extension: suspend_d keeps its 3 API-supplied fields — the live API
+#: silently drops resume_date/ann_date from explicit field requests (5
+#: requested -> 3 returned, verified 2026-09-04), so they must stay out of
+#: the typed contract (p17 §5.2 keeps both columns nullable in L1; the
+#: p17 §15.6 erratum records the mapping).
 INTERFACE_FIELDS: dict[str, tuple[str, ...]] = {
     "daily": (
         "ts_code",
@@ -155,6 +166,16 @@ INTERFACE_FIELDS: dict[str, tuple[str, ...]] = {
         "ts_code",
         "rzye",
         "rqye",
+        "rzmre",
+        "rqyl",
+        "rzche",
+        # API field name is `rqchl` (融券偿还量, confirmed by the D1 raw
+        # probe and by explicit-request evidence 2026-09-04: requesting
+        # `rqche` is silently dropped).  p17 §5.2's "rqche" is a mapping
+        # typo — flagged for the p17 §15.6 erratum (t42 line); the typed
+        # contract uses the source's own name, never a silent rename.
+        "rqchl",
+        "rqmcl",
         "rzrqye",
     ),
     "index_classify": (
@@ -164,6 +185,7 @@ INTERFACE_FIELDS: dict[str, tuple[str, ...]] = {
         "industry_code",
         "is_pub",
         "parent_code",
+        "src",
     ),
     "index_member_all": (
         "l1_code",
@@ -188,6 +210,7 @@ INTERFACE_FIELDS: dict[str, tuple[str, ...]] = {
         "end_type",
         "total_revenue",
         "revenue",
+        "oper_cost",
         "operate_profit",
         "total_profit",
         "n_income",
@@ -224,6 +247,7 @@ INTERFACE_FIELDS: dict[str, tuple[str, ...]] = {
         "n_cashflow_act",
         "n_cashflow_inv_act",
         "n_cash_flows_fnc_act",
+        "c_cash_equ_end_period",
         "free_cashflow",
         "update_flag",
     ),
@@ -579,27 +603,38 @@ class TushareClient:
         params: dict[str, Any],
     ) -> pd.DataFrame:
         fields_arg = ",".join(fields)
-        last_error: Exception | None = None
+        failure: tuple[str, str] | None = None
         for attempt in range(self._retries + 1):
             self._limiter.acquire()
             try:
                 return self._api.query(api_name, fields=fields_arg, **params)
             except Exception as exc:  # noqa: BLE001 - transport errors are
-                # heterogeneous (requests, SDK, server); every message is
-                # sanitized before it can reach an exception or a log.
-                last_error = exc
+                # heterogeneous (requests, SDK, server); only the sanitized
+                # message may ever leave this block (D1a: the original
+                # exception object itself never escapes — it still carries
+                # the unsanitized message and would leak through
+                # __cause__/__context__/traceback rendering).
                 message = _sanitize(exc, self._token)
                 if attempt >= self._retries or not _is_retryable(exc):
-                    raise TushareRequestError(
-                        f"tushare {api_name} request failed: {message}"
-                    ) from exc
+                    failure = (type(exc).__name__, message)
+                    break
                 delay = min(
                     self._backoff_base * (2**attempt), self._backoff_cap
                 )
                 self._sleep(delay)
-        raise TushareRequestError(  # pragma: no cover - defensive
-            f"tushare {api_name} request failed after "
-            f"{self._retries + 1} attempts: {_sanitize(last_error, self._token)}"
+        if failure is not None:
+            # Raised OUTSIDE the except block: the implicit __context__
+            # chain is broken (no handled exception is attached), and the
+            # explicit cause is a freshly built copy carrying only the
+            # sanitized message plus the original type name for diagnosis.
+            exc_type, message = failure
+            cause = TushareError(f"{exc_type}: {message}")
+            raise TushareRequestError(
+                f"tushare {api_name} request failed: {message}"
+            ) from cause
+        raise AssertionError(  # pragma: no cover - defensive
+            f"tushare {api_name}: retry loop exited without a response "
+            "or a recorded failure"
         )
 
     def _validate_frame(

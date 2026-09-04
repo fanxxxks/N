@@ -33,6 +33,7 @@ import os
 import importlib.util
 import subprocess
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -235,6 +236,47 @@ class TestContractRegistry:
 
     def test_rate_limit_ceiling_is_below_official_limit(self):
         assert MAX_REQUESTS_PER_MINUTE == 180
+
+    def test_interface_fields_extended_to_p17_set(self):
+        """D1a (t43): the curated field contracts cover the p17 §5 DDL
+        columns for the interfaces D2's writer consumes, extended ONLY
+        where the live API actually returns the field (verified against
+        the real endpoint, 2026-09-04).  margin_detail uses the API's own
+        field name ``rqchl`` — p17 §5.2's "rqche" is a mapping typo (the
+        live API silently drops ``rqche``; flagged for the §15.6
+        erratum)."""
+
+        assert INTERFACE_FIELDS["margin_detail"] == (
+            "trade_date",
+            "ts_code",
+            "rzye",
+            "rqye",
+            "rzmre",
+            "rqyl",
+            "rzche",
+            "rqchl",
+            "rqmcl",
+            "rzrqye",
+        )
+        assert "oper_cost" in INTERFACE_FIELDS["income"]
+        assert "c_cash_equ_end_period" in INTERFACE_FIELDS["cashflow"]
+        assert "src" in INTERFACE_FIELDS["index_classify"]
+
+    def test_suspend_d_contract_stays_at_api_supplied_fields(self):
+        """Documented deviation from the t43 directive: the live API
+        SILENTLY DROPS ``resume_date``/``ann_date`` from an explicit
+        suspend_d field request (verified 2026-09-04: 5 requested ->
+        3 returned), so adding them to the contract would fail-closed on
+        every typed call.  The contract stays at the API-supplied fields;
+        p17 §5.2 keeps both columns nullable in L1 (writer maps them
+        NULL); the p17 §15.6 erratum (t42 line) must record the mapping.
+        """
+
+        assert INTERFACE_FIELDS["suspend_d"] == (
+            "ts_code",
+            "trade_date",
+            "suspend_type",
+        )
 
 
 class TestLazyLoadingAndToken:
@@ -470,6 +512,73 @@ class TestRateLimitingAndBackoff:
             client.query("daily", ts_code="000001.SZ")
         assert len(api.calls) == 3
         assert FAKE_TOKEN not in str(excinfo.value)
+
+
+class TestTokenCauseChainHardening:
+    """D1a (t43): the token must not leak through the exception cause
+    chain either — ``str()``/``repr()`` of the raised error is sanitized
+    (t3), and so are ``__cause__`` and any implicitly chained context
+    that a traceback formatter would render."""
+
+    @staticmethod
+    def _formatted(exc: BaseException) -> str:
+        return "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+
+    def test_rendered_traceback_is_token_free(self):
+        client, _ = make_client([Exception(f"boom {FAKE_TOKEN}")])
+        with pytest.raises(TushareRequestError) as excinfo:
+            client.query("daily", ts_code="000001.SZ")
+        formatted = self._formatted(excinfo.value)
+        assert FAKE_TOKEN not in formatted
+        assert "<redacted>" in formatted
+
+    def test_cause_carries_sanitized_copy_of_original_type(self):
+        client, _ = make_client([Exception(f"boom {FAKE_TOKEN}")])
+        with pytest.raises(TushareRequestError) as excinfo:
+            client.query("daily", ts_code="000001.SZ")
+        cause = excinfo.value.__cause__
+        assert cause is not None
+        # The original exception TYPE name is preserved for diagnosis…
+        assert type(excinfo.value.__cause__).__name__ == "TushareError"
+        assert "Exception" in str(cause)
+        # …while the secret is scrubbed everywhere in the chain.
+        assert FAKE_TOKEN not in str(cause)
+        assert FAKE_TOKEN not in repr(cause)
+        assert "<redacted>" in str(cause)
+
+    def test_implicit_context_chain_is_broken(self):
+        """The final error is raised outside the ``except`` block, so no
+        implicitly-chained original exception (which still carries the
+        unsanitized message) can leak through ``__context__``."""
+
+        client, _ = make_client([Exception(f"boom {FAKE_TOKEN}")])
+        with pytest.raises(TushareRequestError) as excinfo:
+            client.query("daily", ts_code="000001.SZ")
+        assert excinfo.value.__context__ is None
+        # Deep hygiene: neither the error nor its cause object carries
+        # the original exception instance anywhere reachable.
+        assert excinfo.value.__cause__.__context__ is None
+        assert excinfo.value.__cause__.__cause__ is None
+
+    def test_timeout_retry_path_cause_chain_sanitized(self):
+        client, _ = make_client(
+            [TimeoutError(f"read timed out {FAKE_TOKEN}"), frame_for("daily")],
+            retries=3,
+        )
+        response = client.query("daily", ts_code="000001.SZ")
+        assert not response.data.empty
+
+    def test_exhausted_retries_render_token_free_traceback(self):
+        rate_limited = Exception(f"每分钟最多 {FAKE_TOKEN}")
+        client, _ = make_client(
+            [rate_limited for _ in range(3)],
+            retries=2,
+        )
+        with pytest.raises(TushareRequestError) as excinfo:
+            client.query("daily", ts_code="000001.SZ")
+        assert FAKE_TOKEN not in self._formatted(excinfo.value)
 
 
 class TestProbeSpecs:
