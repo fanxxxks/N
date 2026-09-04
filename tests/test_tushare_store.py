@@ -270,6 +270,53 @@ class TestContentIdentity:
         assert len(rows) == 2  # both versions kept, no overwrite
         assert list(rows["update_flag"]) == ["0", "1"]
 
+
+class TestAppendIdempotency:
+    """Repair t47 (review finding): the APPEND branch must target the
+    ``source_row_hash`` conflict explicitly and pre-deduplicate
+    intra-batch hash duplicates (DuckDB cannot combine intra-statement
+    duplicate conflict targets with ON CONFLICT).  Deduplication is
+    deterministic (keep first) and preserves the idempotent semantics."""
+
+    @staticmethod
+    def _income_rows() -> list[dict]:
+        base = {
+            "ts_code": "000001.SZ", "end_date": "20231231",
+            "report_type": "1", "comp_type": "1", "end_type": "1",
+            "total_revenue": 100.0, "revenue": 90.0, "oper_cost": 60.0,
+            "total_profit": 40.0, "n_income": 35.0, "n_income_attr_p": 34.0,
+            "ann_date": "20240315", "f_ann_date": "20240315",
+            "update_flag": "0",
+        }
+        second = {**base, "end_date": "20240331", "ann_date": "20240420",
+                  "f_ann_date": "20240420", "n_income": 36.0}
+        return [base, second]
+
+    def test_append_same_content_batch_rerun_is_idempotent_noop(self, store):
+        st, db = store
+        frame = _frame("income_statement_pit", self._income_rows())
+        st.ingest_batch("income_statement_pit", frame,
+                        params={"ts_code": "000001.SZ"},
+                        fields=list(frame.columns), row_limit=3000)
+        st.ingest_batch("income_statement_pit", frame,
+                        params={"ts_code": "000001.SZ"},
+                        fields=list(frame.columns), row_limit=3000)
+        assert _table_count(db, "income_statement_pit") == 2
+        ledger = _ledger_rows(db)
+        assert len(ledger) == 2
+        assert (ledger["status"] == "succeeded").all()
+
+    def test_append_intra_batch_duplicate_content_deduplicates(self, store):
+        st, db = store
+        row = self._income_rows()[0]
+        frame = _frame("income_statement_pit", [row, dict(row)])
+        result = st.ingest_batch("income_statement_pit", frame,
+                                 params={"ts_code": "000001.SZ"},
+                                 fields=list(frame.columns), row_limit=3000)
+        assert result.status == "succeeded"
+        assert int(result.row_count) == 2  # raw batch rows
+        assert _table_count(db, "income_statement_pit") == 1  # deduplicated
+
     def test_keyed_same_key_different_hash_fails_whole_batch(self, store):
         st, db = store
         st.ingest_batch("daily_bar_raw", _frame("daily_bar_raw", _daily_rows(1)),

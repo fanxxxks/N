@@ -21,13 +21,18 @@ The L0/L1 write path of the PIT four-layer architecture (p17 sections
   and ``available_at``/``source``; industry_taxonomy without ``is_new``;
   ``margin_detail_pit.rqchl``; ``repurchase_event_pit.proc``).  Column
   names are the API's own names (Appendix B) — never renamed silently.
-* **Write semantics** — KEYED tables (business key unique) suppress
-  conflicting-key inserts and fail the whole batch when a suppressed row's
-  content differs (``error_type='row_conflict'``; identical-content rerun
-  is an idempotent no-op).  APPEND tables (version/event) key on
-  ``source_row_hash``: same content rerun is idempotent, different content
-  is always a new version row; business-key UPDATE/DELETE never happens
-  (p17 §15.4).
+* **Write semantics** — KEYED tables (business key unique) use
+  ``ON CONFLICT DO NOTHING`` against the business-key constraint and fail
+  the whole batch when a suppressed row's content differs
+  (``error_type='row_conflict'``; identical-content rerun is an idempotent
+  no-op).  APPEND tables (version/event) key on ``source_row_hash`` with
+  an explicit ``ON CONFLICT (source_row_hash) DO NOTHING``: same content
+  rerun is idempotent, different content is always a new version row;
+  business-key UPDATE/DELETE never happens (p17 §15.4).  Both branches
+  pre-deduplicate the batch by ``source_row_hash`` (keep first) because
+  DuckDB cannot combine intra-statement duplicate conflict targets with
+  ON CONFLICT — the dedup is deterministic and changes no semantics (the
+  duplicated row is the same content and adds zero information).
 * **Atomicity** — one batch = one transaction: rows, the KEYED conflict
   assertion and the succeeded ledger row commit together.  Any failure
   rolls the batch back completely (zero half-batch residue) and a failed
@@ -772,11 +777,28 @@ class TushareStore:
         row_limit: int | None,
     ) -> TushareIngestResult:
         batch = self._map_rows(spec, frame, ingest_id)
+        # Intra-batch content deduplication (repair t47): DuckDB cannot
+        # combine duplicate conflict-target values within one INSERT ..
+        # ON CONFLICT statement, and two rows with the same
+        # source_row_hash are by definition the same content (same
+        # business key).  Keep-first is deterministic and preserves the
+        # idempotent semantics: the duplicated row adds zero information
+        # and an identical-content rerun is already a no-op across
+        # batches.  Same-key/DIFFERENT-hash rows never collapse — for
+        # KEYED they still fail closed via the business-key constraint.
+        batch = batch.drop_duplicates(subset=["source_row_hash"], keep="first")
         self.db.execute("BEGIN TRANSACTION")
         try:
             self.db.register("_tushare_batch", batch)
             columns = ", ".join(batch.columns)
-            conflict = "" if spec.mode == "APPEND" else " ON CONFLICT DO NOTHING"
+            if spec.mode == "APPEND":
+                # APPEND tables key on source_row_hash: an identical
+                # content rerun (cross-batch or intra-batch) is an
+                # idempotent no-op; different content is a new version.
+                conflict = " ON CONFLICT (source_row_hash) DO NOTHING"
+            else:
+                # KEYED tables key on the business key.
+                conflict = " ON CONFLICT DO NOTHING"
             self.db.execute(
                 f"INSERT INTO {spec.name} ({columns}) "
                 f"SELECT {columns} FROM _tushare_batch{conflict}"
