@@ -144,6 +144,30 @@ class ArtifactRecord:
             raise RunStoreError(f"malformed artifact record: missing {exc}") from exc
 
 
+_IDENTITY_METADATA_FIELDS = (
+    "artifact_id",
+    "artifact_type",
+    "path",
+    "spec_id",
+    "run_id",
+    "candidate_id",
+)
+
+
+def _identity_metadata(record: ArtifactRecord) -> dict[str, Any]:
+    """The identity-bearing fields of an artifact record.
+
+    ``created_at`` is registration provenance, not identity: identity is
+    ``artifact_id`` (content hash) plus what the content is registered
+    as.  Two identical-content registrations that land in different clock
+    seconds must still be idempotent (t43 full-suite race), while genuine
+    drift of any identity field stays fail-closed.
+    """
+
+    payload = record.to_dict()
+    return {name: payload[name] for name in _IDENTITY_METADATA_FIELDS}
+
+
 def read_registered_artifact(
     run_dir: Path, index: dict[str, Any], artifact_id: str
 ) -> dict[str, Any]:
@@ -260,12 +284,17 @@ class RunHandle:
         )
         if artifact_id in existing:
             previous = ArtifactRecord.from_dict(existing[artifact_id])
-            if previous.to_dict() != record.to_dict():
+            if _identity_metadata(previous) != _identity_metadata(record):
                 raise RunStoreError(
                     f"artifact {artifact_id} already registered with different "
                     "metadata; refusing to overwrite evidence"
                 )
-            return record
+            # Idempotent re-registration (identical content, identical
+            # identity metadata): recover by returning the registered
+            # record.  The recorded provenance keeps the FIRST
+            # registration's ``created_at`` even when the duplicate write
+            # lands in a later clock second.
+            return previous
         index["artifacts"].append(record.to_dict())
         _atomic_write_text(
             self.run_dir / INDEX_FILENAME, canonical_json_strict(index)

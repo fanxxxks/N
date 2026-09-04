@@ -16,6 +16,7 @@ import hashlib
 import json
 import re
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -207,6 +208,61 @@ def test_artifact_id_matches_independent_oracle(tmp_path):
             ).encode("utf-8")
         ).hexdigest()
         assert record.artifact_id == expected
+
+
+def test_artifact_reregistration_is_idempotent_across_second_boundary(
+    tmp_path, monkeypatch
+):
+    """t43 full-suite race: two identical-content registrations must stay
+    idempotent even when the wall clock advances a second between them —
+    ``created_at`` is registration provenance, not identity metadata
+    (identity is ``artifact_id`` = content hash plus the registration
+    fields).  The clock fake advances one second on every ``_now()``
+    call, so the two writes deterministically land in different
+    seconds — no sleep lottery."""
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def advancing_now():
+        advancing_now.calls += 1
+        return (base + timedelta(seconds=advancing_now.calls)).isoformat(
+            timespec="seconds"
+        )
+
+    advancing_now.calls = 0
+    monkeypatch.setattr(run_store, "_now", advancing_now)
+
+    with store.open_run(spec) as handle:
+        first = handle.write_artifact("strategy", ARTIFACT_PAYLOAD)
+        reordered = {
+            key: ARTIFACT_PAYLOAD[key]
+            for key in reversed(list(ARTIFACT_PAYLOAD))
+        }
+        second = handle.write_artifact("strategy", reordered)
+
+        assert second.artifact_id == first.artifact_id
+        # Provenance keeps the FIRST registration's created_at.
+        assert second.created_at == first.created_at
+        index = handle.load_index()
+        assert len(index["artifacts"]) == 1
+        assert index["artifacts"][0]["created_at"] == first.created_at
+
+
+def test_artifact_reregistration_with_drifted_metadata_is_refused(tmp_path):
+    """Non-weakening guard for the idempotency fix: ``created_at`` leaves
+    the drift comparison, but genuine identity-metadata drift (same
+    content re-registered under a different candidate_id) stays
+    fail-closed."""
+
+    store = RunStore(tmp_path)
+    with store.open_run(_spec()) as handle:
+        handle.write_artifact("strategy", ARTIFACT_PAYLOAD)
+        with pytest.raises(RunStoreError, match="different metadata"):
+            handle.write_artifact(
+                "strategy", dict(ARTIFACT_PAYLOAD), candidate_id="c-1"
+            )
 
 
 def test_artifact_payload_must_be_strictly_serializable(tmp_path):
