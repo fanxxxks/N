@@ -134,3 +134,30 @@ test_tushare_store.py / d3 日志）零冲突、零双方修改文件。
   （快照与库内容逐值一致，manifest 计数由快照批次可信支撑）。
 - 结论：**AUDIT_UPGRADE PASS**——裁决 3(a) 两条件全额兑现；条件 (b) 的
   t53 完成状态已核验（任务台账 completed + 分支 commit 在案）。
+
+## 附录二：范围裁决与零改动依据（captain 裁决，供 t13 对照）
+
+- **inScope 仲裁**：captain 裁定 inScope 以已批准契约为准——AGENTS 仲裁
+  顺序第一条（已批准且仍适用的预注册契约）优先于任务文本；t12 任务文本
+  起草于契约存在之前，属过时描述。实施触碰以下文件是 p19 自身的变更面
+  要求，非越界：§1.2（六个成交消费点逐点实测：backtest.py:562、
+  bare_factor_backtest.py:101、diagnostics.py:255、eval_search.py:93/391、
+  p3_measurement.py:107、train_windows.py:326）、§2.1（data_loader.py 为
+  双价格唯一实现地）、§3 范围（上述消费点切换 + 实施落点）、§5 版本表
+  （versions.py / targets.py / execution_spec.py 为版本所有者）。
+- **零改动核实（有意为之且正确）**：
+  - `git diff 6026129..HEAD -- ashare_model/data_tier.py` 为空：Tier A
+    时间规则文本（"值在交易日收盘即确定，自次日会话起可用"）与
+    p17 §6.1 的 v2 daily 表规则一致，p17 §7 的源级 tier 映射不变，故
+    DATA_TIER_VERSION 1 不 bump、文件零改动。
+  - `git diff 6026129..HEAD -- ashare_model/evaluation.py` 为空：
+    PROTOCOL_VERSION 的单一家园自 IP-07a 起为 ashare_model/versions.py
+    （evaluation.py:285 仅重导出），bump "25"→"26" 经重导出自动传播到
+    全部消费方（promotion G1 pin、classify_*、runspec）；协议语义输入
+    变化（标签基座 + 可交易性来源）由版本常量与消费点切换承载，无需改
+    动 evaluation.py 本体。
+- **t53 交付硬前置收口**：t53/t55 [completed]；G1-G8 经 adapter
+  6/8 PASS（G6/G7 N/A-with-reason 留证）。t12 完成时间早于本裁决送达
+  （消息交叉），完成时 t53 数据收口已在库上（dataset_id `43ef1e4c…`）；
+  升级审计（上附录）在过门禁的数据上执行 PASS——硬前置的实质条件已满足，
+  时序例外如实记录（上附录）。
