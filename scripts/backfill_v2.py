@@ -133,6 +133,9 @@ class BackfillRunner:
         self.store.create_schema()
         self.scope_codes = self._load_scope_codes()
         self.resume_keys = self._load_resume_keys()
+        self.skip_endpoints = frozenset(
+            s.strip() for s in (args.skip_endpoints or "").split(",") if s.strip()
+        )
         self.counts: dict[str, int] = {"batches": 0, "skipped": 0, "rows": 0}
         self.started = time.monotonic()
         self._session_cache: dict[str, str] = {}
@@ -199,6 +202,8 @@ class BackfillRunner:
         return (endpoint, canonical_params(params))
 
     def _should_skip(self, endpoint: str, params: dict) -> bool:
+        if endpoint in self.skip_endpoints:
+            return True
         return self._skip_key(endpoint, params) in self.resume_keys
 
     def _run_batch(self, endpoint: str, frame: pd.DataFrame, params: dict,
@@ -545,6 +550,9 @@ def main(argv: list[str] | None = None) -> int:
                         default=str(Path(r"D:\minequant\AlphaGPT\data\ashare.duckdb")))
     parser.add_argument("--config", default=None)
     parser.add_argument("--progress-every", type=int, default=100)
+    parser.add_argument(
+        "--skip-endpoints", default="",
+        help="comma-separated endpoints to exclude (erratum-pending)")
     args = parser.parse_args(argv)
 
     runner = BackfillRunner(args)
