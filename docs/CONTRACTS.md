@@ -34,3 +34,4 @@
 | [p13_fundamental_fields_contract.md](p13_fundamental_fields_contract.md) | P13 fundamental PIT 字段补齐与第⑤族解锁预注册契约（C 线） |
 | [p14_search_digest_preregistration.md](p14_search_digest_preregistration.md) | P14 搜索层消化率预注册契约（P1-1 + P1-2，S 线需求基线） |
 | [p16_data_freshness_gate_contract.md](p16_data_freshness_gate_contract.md) | P16 数据新鲜度门禁（G8）+ 交易日历回退 fail-closed 预注册契约（IP-05a） |
+| [p19_market_price_semantics_contract.md](p19_market_price_semantics_contract.md) | P19（暂定编号）市场价格语义切换预注册契约（D4：raw 成交 / 复权因子序列） |
