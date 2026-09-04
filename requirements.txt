@@ -11,6 +11,7 @@ deap==1.4.4
 akshare==1.18.91
 duckdb==1.5.5
 pyarrow==24.0.0
+tushare==1.4.29
 streamlit==1.61.1
 plotly==6.9.0
 loguru==0.7.3

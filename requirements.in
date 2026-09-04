@@ -19,6 +19,12 @@ akshare
 duckdb
 pyarrow
 
+# Tushare Pro migration (D1, branch codex/tushare-client): the typed
+# client in ashare_data/tushare_client.py is the sanctioned read path for
+# the PIT four-layer rebuild; imported lazily so non-Tushare paths never
+# require it.
+tushare
+
 streamlit
 plotly
 loguru
