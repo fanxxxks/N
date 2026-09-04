@@ -35,3 +35,4 @@
 | [p14_search_digest_preregistration.md](p14_search_digest_preregistration.md) | P14 搜索层消化率预注册契约（P1-1 + P1-2，S 线需求基线） |
 | [p16_data_freshness_gate_contract.md](p16_data_freshness_gate_contract.md) | P16 数据新鲜度门禁（G8）+ 交易日历回退 fail-closed 预注册契约（IP-05a） |
 | [p17_tushare_pit_data_contract.md](p17_tushare_pit_data_contract.md) | P17 Tushare/PIT 数据底座预注册契约（四层架构 + D4/D5/D6 语义基座） |
+| [p18_captain_authority_clause.md](p18_captain_authority_clause.md) | P18 Captain 调度权与批准记录回写义务条款（治理授权） |
