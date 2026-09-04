@@ -745,10 +745,15 @@ class TushareStore:
         # G1/G4/G5 check for index_codes (000300.SH etc.) which are a
         # different concept — those gates will report 0 matches (fail
         # state) until index constituent data is backfilled separately.
+        # G4 fix: active members (is_new=Y) have NULL out_date in the
+        # source; the production schema uses '99991231' as the sentinel
+        # for "no end date" — map NULL → '99991231' so the interval
+        # validation (membership_interval_issues) doesn't flag them.
         self.db.execute("DROP TABLE IF EXISTS _gate_constituents")
         self.db.execute(
             "CREATE TABLE _gate_constituents AS "
-            "SELECT index_code, ts_code, in_date, out_date "
+            "SELECT index_code, ts_code, in_date, "
+            "COALESCE(out_date, '99991231') AS out_date "
             "FROM industry_membership_pit WHERE level = 1"
         )
         # _gate_daily_bar: join raw + adj_factor, explicit column mapping

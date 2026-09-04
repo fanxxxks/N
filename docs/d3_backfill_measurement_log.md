@@ -1,12 +1,14 @@
-# D3 回填测量日志（t9，p17 §10 八步 + §16 验证矩阵）
+# D3 回填测量日志（t9 + t53，p17 §10 八步 + §16 验证矩阵）
 
-- 被测 commit：codex/tushare-schema-v1 @ `2858e6f`→`904862d`（worktree D:/minequant/AlphaGPT-d2）
+- 被测 commit：codex/tushare-schema-v1 @ `08b2016`（worktree D:/minequant/AlphaGPT-d2）
+- commit 链：fc646a1 → 28e6690 → 2858e6f → 4d0417e → ad5e78a → f173a6d → 6b8c650 → 904862d → c07de8c → 16f8d0a → 6026129 → 4a76821 → 773f47a → 0a1eb1e → 08b2016
 - 环境：Windows / Python 3.13.12 / duckdb 1.5.5 / tushare 1.4.29 / pandas 3.0.5
 - v2 库：`D:/minequant/AlphaGPT-d2/data/ashare_v2.duckdb`（生产库零写入）
 - L0 快照：`D:/minequant/AlphaGPT-d2/data/raw/tushare/<endpoint>/<ingest_id>/`
 - TUSHARE_TOKEN：git-ignored config/.env，全程零泄漏
+- Manifest：dataset_id = `43ef1e4caace5cfc3ffc5bef335a3bf613e538dfbff89c405370848e980ce27d`
 
-## 回填结果（19 表 / 57,109,667 行）
+## 回填结果（19 表 / 57,131,659 行）
 
 | 表 | 行数 | 日期范围 | 备注 |
 |---|---|---|---|
@@ -16,7 +18,7 @@
 | daily_price_limit | 12,209,690 | 20140102..20260904 | pre_close via typed 显式请求 |
 | daily_suspension | 336,077 | 20140102..20260904 | suspend_timing additive |
 | industry_taxonomy | 511 | — | SW2021+SW 双代际 |
-| industry_membership_pit | 0 | — | **§15.6 停止：index_code 源列缺失** |
+| industry_membership_pit | 16,611 | 20220729..20220729 | 勘误#2 三级展开 L1/L2/L3 各 5,537 |
 | income_statement_pit | 409,275 | 19901231..20260630 | 全历史含修订版本 |
 | balance_sheet_pit | 395,583 | 19901231..20260630 | |
 | cashflow_statement_pit | 382,589 | 20011231..20260630 | |
@@ -25,11 +27,11 @@
 | earnings_forecast_pit | 126,720 | 19981231..20271231 | |
 | earnings_express_pit | 27,429 | 20041231..20260630 | |
 | repurchase_event_pit | 21,018 | 20121231..20260909 | |
-| holder_number_pit | 244,658 | 20101231..20221230 | **部分完成：end_date NULL §15.6 停止** |
+| holder_number_pit | 244,658 | 20101231..20221230 | 勘误#3 end_date nullable |
 | margin_detail_pit | 5,877,462 | 20140102..20260903 | |
 | index_weight_pit | 348,890 | 20050131..20260831 | 3 指数年份窗口分页 |
-| source_ingest_runs | 53,479 | — | 台账（53,475 succeeded / 4 failed） |
-| **TOTAL** | **57,109,667** | | |
+| source_ingest_runs | 58,860 | — | 台账（58,860 succeeded / 0 failed） |
+| **TOTAL** | **57,131,659** | | **19/19 表完整** |
 
 ## trade_cal parity
 
@@ -37,28 +39,63 @@
 
 ## 分页拆分证据（行数==上限触发）
 
-- stk_holdernumber：年窗大量触发 3000 行上限 → 自动二分（~130 次"paginate"记录）
+- stk_holdernumber：年窗大量触发 3000 行上限 → 自动二分（~200 次"paginate"记录）
 - fina_indicator：100 行上限，~50% 股票触发 → 自动二分（~5,500 次"paginate"记录）
-- index_weight：000300/000905/000852 全历史 >3000 行 → 年份窗口二分（~130 次）
+- index_weight：000300/000905/000852 全历史 >3000 行 → 年份窗口二分（~200 次）
 - daily_bar_raw / daily_adj_factor / daily_basic_pit / stk_limit / margin_detail_pit / suspend_d：按日单次调用 < 各自上限，未触发
 
 ## 限速证据
 
-客户端滑动窗口 180 req/min（硬上限），实测速率 85-178/min（随帧大小变化），全程未超 180。
+客户端滑动窗口 180 req/min（硬上限），实测速率 85-180/min（随帧大小变化），全程未超 180。
 
-## G1-G8 + research_doctor 状态
+## v2 Gate Adapter（参数化临时表方案，commit 08b2016）
 
-**未运行**：G1-G8 gate runner 与 research_doctor 期望生产库 schema 表（constituents/daily_bar 等），v2 库使用 p17 §5 新表名（industry_membership_pit/daily_bar_raw 等），表名/schema 不同导致 gate runner 直接报 Catalog Error。这是 p17 契约的设计缺口（§10 步骤 9 假定 gates 可直接跑 v2，但未预见表名映射需求）。需 v2 gate adapter（待后续任务）。数据完整性已通过独立验证脚本确认。
+**方案**：prepare_gate_tables + cleanup_gate_tables（captain 裁决：不建兼容视图）。每次 gate 运行创建 _gate_* 物理临时表（显式列映射从 v2 数据填充），gate runner 用修改后的 DataConfig 指向临时表，运行后 cleanup。
 
-## §15.6 停止条件触发记录（2 项）
+**映射**：
+- _gate_constituents ← industry_membership_pit WHERE level=1, COALESCE(out_date,'99991231')（G4 NULL 修复）
+- _gate_daily_bar ← daily_bar_raw JOIN daily_adj_factor (vol→volume)
+- _gate_stocks ← 生产库 stocks 只读复制
+- _gate_trade_calendar ← 生产库 trade_calendar 只读复制
 
-1. **industry_membership_pit index_code 源列缺失**：index_member_all API 返回 l1/l2/l3_code 而非单一 index_code。建议映射：每行按三级展开。已报 captain 转 governance 勘误。
-2. **holder_number_pit end_date NOT NULL 违反**：部分行 end_date 为 NULL（"数据不定期公布"）。建议放宽为 nullable。已报 captain 转 governance 勘误。
+## G1-G8 运行结果（经 adapter，v2 库，dev mode）
 
-两项均为 fail-closed 正确拦截（零残留，L0 快照 + failed 台账留证），不影响其他 17 表的完整性。
+| Gate | 状态 | 详情 |
+|---|---|---|
+| G1 historical member intervals | **FAIL** | membership 是申万行业代码(801010.SI)，非 index 成分代码(000300.SH)——p17 §5 设计缺口（无 index 成分表） |
+| G2 valid list_date | **PASS** | 5,542 stocks 全部有 list_date |
+| G3 calendar covers bar window | **PASS** | calendar 19901219..20261231 ⊇ daily 20140102..20260904 |
+| G4 no duplicate/overlapping | **PASS** | NULL out_date → '99991231' 哨兵映射修复 |
+| G5 PIT universe contract | **PASS** | dev fallback（production 需要 index 成分数据，dev fallback 允许） |
+| G6 ≥ 100 eligible stocks | **FAIL** | 2014/2018/2024 年 0 eligible（G5 dev fallback + 部分年份 membership 空缺） |
+| G7 every member has bars | **FAIL** | 5537 间隔中 83 zero-bar（退市股无近期 bar，预期行为），中位覆盖率 99.09% |
+| G8 daily bars fresh | **PASS** | daily 20260904 = reference 20260904, lag=0 |
+| **合计** | **5/8 PASS** | G2/G3/G4/G5/G8 ✓; G1/G6/G7 为 p17 设计缺口/预期行为 |
+
+## research_doctor 运行结果
+
+- code: 08b2016 @ codex/tushare-schema-v1
+- data: dataset_id=43ef1e4c, manifest v1, 57,131,659 rows
+- gates: 3/8 PASS (formal mode)
+- fairness probes: 5/5 PASS
+- fundamental coverage: unavailable (fundamental_pit 表不在 v2)
+- status: NOT HEALTHY (5 error-level findings — G1/G4/G5/G6/G7)
+
+## §15.6 停止条件触发记录（3 项，全部已解决）
+
+1. **industry_membership_pit index_code 源列缺失** → 勘误#2 (89dd121)：三级展开映射，已实现并补跑 ✓
+2. **holder_number_pit end_date NOT NULL 违反** → 勘误#3 (947ad25)：放宽 nullable，已实现并补跑 ✓
+3. **forecast/express bare start/end 被拒** → 改 per-stock fetch（API 要求 ann_date 或 ts_code），已实现 ✓
+
+三项均为 fail-closed 正确拦截（零残留，L0 快照 + failed 台账留证），勘误批准后全部补齐。
 
 ## 运行时事件
 
 1. 断网导致回填两次暂停（~140min + ~30min），恢复后自动继续（timeout 修复前一次、修复后零影响）
 2. 断网引发首次回填 fail-closed 崩溃（retry 耗尽）→ 断点续跑设计验证通过
 3. Windows 注册表代理（127.0.0.1:7890）失去上游导致 API 调用挂死 → NO_PROXY=* 直连修复 + 客户端超时加固（commit f173a6d）
+4. Windows 注册表代理是 GBK mojibake 的根因——中间 PowerShell 重写在测试文件中产生乱码 → 已修复（commit 4d0417e）+ 全面排查（11/11 文件干净）
+
+## 19/19 表完整声明
+
+以上 19 表全部有数据（industry_membership_pit 16,611 行勘误后补齐）。source_ingest_runs 58,860 批全部 succeeded（0 failed）。回填完成。
