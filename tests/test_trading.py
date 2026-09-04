@@ -59,10 +59,12 @@ def test_portfolio_save_load_and_market_value(tmp_path: Path):
 
 
 def _bars_frame() -> pd.DataFrame:
+    # Exact constraint columns (p19 §2.4): limit rows for the 10% main
+    # board band; wide enough that plain fills are never blocked.
     return pd.DataFrame(
         [
-            {"ts_code": "000001.SZ", "trade_date": "20240102", "open": 10.0, "high": 10.2, "low": 9.9, "pre_close": 9.9, "volume": 100000.0},
-            {"ts_code": "600000.SH", "trade_date": "20240102", "open": 8.0, "high": 8.1, "low": 7.9, "pre_close": 8.0, "volume": 100000.0},
+            {"ts_code": "000001.SZ", "trade_date": "20240102", "open": 10.0, "high": 10.2, "low": 9.9, "pre_close": 9.9, "volume": 100000.0, "up_limit": 10.89, "down_limit": 8.91, "suspended": False},
+            {"ts_code": "600000.SH", "trade_date": "20240102", "open": 8.0, "high": 8.1, "low": 7.9, "pre_close": 8.0, "volume": 100000.0, "up_limit": 8.8, "down_limit": 7.2, "suspended": False},
         ]
     )
 
@@ -105,13 +107,38 @@ def test_broker_sell_requires_available_position(tmp_path: Path):
 
 def test_broker_limit_up_skip(tmp_path: Path):
     broker, portfolio, _ = _broker_and_portfolio(tmp_path)
+    # The exact daily_price_limit row publishes up_limit == open: the buy
+    # is skipped as limit_up (p19 §2.4 replaces the one-word inference).
     bars = pd.DataFrame(
-        [{"ts_code": "000001.SZ", "trade_date": "20240102", "open": 1.1, "high": 1.1, "low": 1.1, "pre_close": 1.0, "volume": 100000.0}]
+        [{"ts_code": "000001.SZ", "trade_date": "20240102", "open": 1.1, "high": 1.1, "low": 1.1, "pre_close": 1.0, "volume": 100000.0, "up_limit": 1.1, "down_limit": 0.9, "suspended": False}]
     )
     order = SimOrder(order_id="o1", ts_code="000001.SZ", trade_date="20240102", side="buy", quantity=100, price=1.1)
     broker.execute_orders([order], bars, "20240102", portfolio, {"000001.SZ": "平安银行"}, BacktestConfig())
     assert order.status == "skipped"
     assert order.reason == "limit_up"
+
+
+def test_broker_missing_limit_record_fails_closed(tmp_path: Path):
+    # No exact limit record for the day -> the order is skipped with
+    # constraint_missing; there is no approximate fallback (p19 §2.4).
+    broker, portfolio, _ = _broker_and_portfolio(tmp_path)
+    bars = pd.DataFrame(
+        [{"ts_code": "000001.SZ", "trade_date": "20240102", "open": 10.0, "high": 10.2, "low": 9.9, "pre_close": 9.9, "volume": 100000.0, "up_limit": float("nan"), "down_limit": float("nan"), "suspended": False}]
+    )
+    order = SimOrder(order_id="o1", ts_code="000001.SZ", trade_date="20240102", side="buy", quantity=100, price=10.0)
+    broker.execute_orders([order], bars, "20240102", portfolio, {"000001.SZ": "平安银行"}, BacktestConfig())
+    assert order.status == "skipped"
+    assert order.reason == "constraint_missing"
+
+
+def test_broker_rejects_frames_without_constraint_columns(tmp_path: Path):
+    broker, portfolio, _ = _broker_and_portfolio(tmp_path)
+    bars = pd.DataFrame(
+        [{"ts_code": "000001.SZ", "trade_date": "20240102", "open": 10.0, "high": 10.2, "low": 9.9, "pre_close": 9.9, "volume": 100000.0}]
+    )
+    order = SimOrder(order_id="o1", ts_code="000001.SZ", trade_date="20240102", side="buy", quantity=100, price=10.0)
+    with pytest.raises(ValueError, match="constraint columns"):
+        broker.execute_orders([order], bars, "20240102", portfolio, {}, BacktestConfig())
 
 
 def test_broker_buy_uses_whole_lots_and_min_commission(tmp_path: Path):
@@ -238,9 +265,9 @@ def test_portfolio_fresh_state_has_no_history(tmp_path: Path):
 
 
 def test_broker_limit_down_sell_skipped_keeps_position(tmp_path: Path):
-    # A position whose exit day opens at the one-word limit-down board
+    # A position whose exit day opens exactly at the published down_limit
     # cannot be sold: the order is skipped and the position is kept for
-    # the next attempt (existing matching rule).
+    # the next attempt (existing matching rule, exact p19 §2.4 source).
     broker, portfolio, _ = _broker_and_portfolio(tmp_path)
     portfolio.add_buy("000001.SZ", "平安银行", 100, 10.0, "20240101")
     bars = pd.DataFrame(
@@ -253,6 +280,9 @@ def test_broker_limit_down_sell_skipped_keeps_position(tmp_path: Path):
                 "low": 0.9,
                 "pre_close": 1.0,
                 "volume": 100000.0,
+                "up_limit": 1.1,
+                "down_limit": 0.9,
+                "suspended": False,
             }
         ]
     )
@@ -273,9 +303,11 @@ def test_broker_limit_down_sell_skipped_keeps_position(tmp_path: Path):
     assert portfolio.positions["000001.SZ"].quantity == 100
 
 
-def test_broker_display_name_does_not_apply_st_band(tmp_path: Path):
-    # A current "*ST" name is display-only: without st_codes the 10% main
-    # board band applies, so a +5.2% one-word open is buyable.
+def test_broker_display_name_does_not_apply_limit_band(tmp_path: Path):
+    # A current "*ST" display name never drives limits: the dated
+    # daily_price_limit row publishes the full 10% band (up_limit 1.1),
+    # so the +5.2% open is buyable and the name is stored display-only
+    # (p19 §2.4: the exact table is dated, names never rewrite the past).
     broker, portfolio, _ = _broker_and_portfolio(tmp_path)
     bars = pd.DataFrame(
         [
@@ -287,6 +319,9 @@ def test_broker_display_name_does_not_apply_st_band(tmp_path: Path):
                 "low": 1.052,
                 "pre_close": 1.0,
                 "volume": 100000.0,
+                "up_limit": 1.1,
+                "down_limit": 0.9,
+                "suspended": False,
             }
         ]
     )
@@ -311,10 +346,10 @@ def test_broker_display_name_does_not_apply_st_band(tmp_path: Path):
     assert portfolio.positions["000001.SZ"].name == "*ST 星源"
 
 
-def test_broker_st_codes_apply_5pct_band_as_of_date(tmp_path: Path):
-    # st_codes carries the current snapshot for same-day execution: the 5%
-    # band then blocks a +5.2% one-word buy as limit_up and a -5.2%
-    # one-word sell as limit_down.
+def test_broker_exact_limit_rows_block_five_percent_band(tmp_path: Path):
+    # The published limit rows carry the band in force that day (here the
+    # 5% ST band: up 1.05 / down 0.95): a +5.2% one-word buy is skipped as
+    # limit_up and a -5.2% one-word sell as limit_down.
     limit_up_bars = pd.DataFrame(
         [
             {
@@ -325,6 +360,9 @@ def test_broker_st_codes_apply_5pct_band_as_of_date(tmp_path: Path):
                 "low": 1.052,
                 "pre_close": 1.0,
                 "volume": 100000.0,
+                "up_limit": 1.05,
+                "down_limit": 0.95,
+                "suspended": False,
             }
         ]
     )
@@ -338,6 +376,9 @@ def test_broker_st_codes_apply_5pct_band_as_of_date(tmp_path: Path):
                 "low": 0.948,
                 "pre_close": 1.0,
                 "volume": 100000.0,
+                "up_limit": 1.05,
+                "down_limit": 0.95,
+                "suspended": False,
             }
         ]
     )
@@ -359,7 +400,6 @@ def test_broker_st_codes_apply_5pct_band_as_of_date(tmp_path: Path):
         buy_portfolio,
         names,
         BacktestConfig(),
-        st_codes={"000001.SZ"},
     )
     assert buy.status == "skipped"
     assert buy.reason == "limit_up"
@@ -382,7 +422,6 @@ def test_broker_st_codes_apply_5pct_band_as_of_date(tmp_path: Path):
         sell_portfolio,
         names,
         BacktestConfig(),
-        st_codes={"000001.SZ"},
     )
     assert sell.status == "skipped"
     assert sell.reason == "limit_down"

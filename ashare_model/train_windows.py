@@ -323,7 +323,8 @@ def _window_targets(
     # Recompute labels only from prices inside the inclusive training
     # anchor. Precomputed global targets at the tail may reference fold-
     # external t+1/t+2 prices and are intentionally never sliced here.
-    train_open = trainer.loader.raw_data_cache["open"][
+    # Label basis = adjusted open (p19 §2.3).
+    train_open = trainer.loader.raw_data_cache["adjusted_open"][
         stock_slice, :train_end_idx
     ].numpy()
     target_ret = causal_target_returns(

@@ -53,7 +53,10 @@ from .vocab import FEATURE_NAMES
 from ashare_portfolio.rebalance import RebalancePolicy
 from ashare_portfolio.execution_spec import execution_provenance
 
-BARE_FACTOR_BACKTEST_VERSION = 3
+# p19 §5: bumped 3 -> 4 — the shared engine's execution price basis
+# switched to raw nominal prices with exact constraint tables and the
+# factor/label basis to the adjusted series.
+BARE_FACTOR_BACKTEST_VERSION = 4
 
 _QUADRANTS = (
     ("daily", 1, "equal_weight"),
@@ -98,7 +101,8 @@ def _backtest_bare_factors_single(
         )
         price_end = contract.train_label_end
         signal_end = contract.train_signal_end
-        open_np = loader.raw_data_cache["open"][:, :price_end].numpy()
+        # Label basis = adjusted open (p19 §2.3).
+        open_np = loader.raw_data_cache["adjusted_open"][:, :price_end].numpy()
         train_target = causal_target_returns(
             open_np,
             loader.dates[:price_end],

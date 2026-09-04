@@ -7,6 +7,7 @@ import pytest
 
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_data.processor import open_to_open_returns, tradability_blocked_matrix
+from tests.conftest import with_price_semantics
 from ashare_execution import ExecutionCostModel
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.candidates import CandidateScorer, CandidateSpec
@@ -291,13 +292,13 @@ def _synthetic_market(n_stocks=5, n_dates=6):
     open_ = np.cumprod(1.0 + rng.normal(0.0005, 0.005, (n_stocks, n_dates)), axis=1) * 10.0
     pre_close = np.roll(open_, 1, axis=1)
     pre_close[:, 0] = open_[:, 0]
-    raw = {
+    raw = with_price_semantics({
         "open": open_,
         "high": open_ * 1.02,
         "low": open_ * 0.98,
         "pre_close": pre_close,
         "volume": np.full((n_stocks, n_dates), 1_000_000.0),
-    }
+    })
     signal = rng.normal(size=(n_stocks, n_dates))
     target = open_to_open_returns(open_)
     return ts_codes, dates, raw, signal, target
@@ -578,25 +579,34 @@ def test_blocked_basket_matches_backtest_engine_with_limits():
     # reproduce the engine's daily returns on a market where limit moves
     # actually occur, day for day.
     ts_codes, dates, raw, signal, _ = _synthetic_market(n_stocks=6, n_dates=8)
-    # Day 3: stock 0 opens at a one-word limit-up (cannot buy).
+    # Day 3: stock 0 opens at its published up_limit (cannot buy).
     raw["high"][0, 3] = raw["open"][0, 3] = raw["pre_close"][0, 3] * 1.10
     raw["low"][0, 3] = raw["open"][0, 3]
-    # Day 5: stock 1 opens at a one-word limit-down (cannot sell).
+    raw["up_limit"][0, 3] = raw["open"][0, 3]
+    # Day 5: stock 1 opens at its published down_limit (cannot sell).
     raw["high"][1, 5] = raw["open"][1, 5] = raw["pre_close"][1, 5] * 0.90
     raw["low"][1, 5] = raw["open"][1, 5]
+    raw["down_limit"][1, 5] = raw["open"][1, 5]
+    # The synthetic market has no corporate actions, so the adjusted label
+    # basis tracks the edited raw opens (the engine consumes adjusted_open).
+    raw["adjusted_open"] = raw["open"].copy()
     target = open_to_open_returns(raw["open"])
     cfg = _cfg(top_n=3, single_weight_cap=1.0)
     result = AshareBacktestEngine(cfg).run(
         signal, raw, ts_codes, dates,
         universe_mask=np.ones(signal.shape, dtype=bool),
     )
-    blocked_buy = tradability_blocked_matrix(
-        raw["open"], raw["high"], raw["low"], raw["pre_close"], raw["volume"],
-        ts_codes, "buy",
+    # The basket simulation consumes the same exact p19 §2.4 rule the
+    # engine derives from the constraint matrices (single implementation).
+    from ashare_data.processor import exact_tradability_matrix
+
+    blocked_buy, _ = exact_tradability_matrix(
+        raw["open"], raw["up_limit"], raw["down_limit"], raw["suspended"],
+        "buy",
     )
-    blocked_sell = tradability_blocked_matrix(
-        raw["open"], raw["high"], raw["low"], raw["pre_close"], raw["volume"],
-        ts_codes, "sell",
+    blocked_sell, _ = exact_tradability_matrix(
+        raw["open"], raw["up_limit"], raw["down_limit"], raw["suspended"],
+        "sell",
     )
     daily, avg_turnover = simulate_basket_daily_returns(
         signal, target, cfg, blocked_buy, blocked_sell,
@@ -961,13 +971,13 @@ def test_basket_underfilled_keeps_cash_like_backtest_engine():
     ts_codes = [f"{i:06d}.SZ" for i in range(n_stocks)]
     dates = [f"202401{i:02d}" for i in range(n_dates)]
     open_ = np.full((n_stocks, n_dates), 10.0)
-    raw = {
+    raw = with_price_semantics({
         "open": open_,
         "high": open_ * 1.02,
         "low": open_ * 0.98,
         "pre_close": open_.copy(),
         "volume": np.full_like(open_, 1_000_000.0),
-    }
+    })
     engine = AshareBacktestEngine(cfg).run(
         signal, raw, ts_codes, dates, universe_mask=mask
     )

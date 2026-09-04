@@ -10,8 +10,8 @@ from loguru import logger
 
 from ashare_data.config import BacktestConfig
 from ashare_data.processor import (
+    exact_tradability_matrix,
     open_to_open_returns,
-    tradability_blocked,
 )
 from ashare_data.schemas import BacktestResult
 from ashare_execution import (
@@ -109,9 +109,16 @@ class AshareBacktestEngine:
         historical contract; the golden execution spec stresses 2 =
         one-day-delayed execution with the same parity guarantees).
 
-        Limit detection always uses board rates (main board 10%,
-        ChiNext / STAR 20%): the engine replays history, there is no dated
-        ST status, and current stock names must never rewrite the past.
+        Price semantics (p19 §2): ``raw_cache`` must carry the loader's
+        execution/constraint view — ``open``/``high``/``low``/``pre_close``/
+        ``volume`` are the RAW nominal prices that drive every execution
+        decision, and ``adjusted_open`` / ``up_limit`` / ``down_limit`` /
+        ``suspended`` carry the adjusted label basis and the exact
+        ``daily_price_limit`` / ``daily_suspension`` constraint matrices.
+        The exact rule (buy blocked ⟺ open >= up_limit, sell blocked ⟺
+        open <= down_limit, suspension rows and missing limit records
+        block) replaces the approximate one-word/board-rate inference; a
+        cache missing the price-semantics keys fails closed.
         """
 
         factors = np.asarray(factors, dtype=np.float64)
@@ -136,29 +143,27 @@ class AshareBacktestEngine:
                 f"date axis ({len(dates)},)"
             )
 
+        missing_keys = [
+            key
+            for key in (
+                "adjusted_open",
+                "up_limit",
+                "down_limit",
+                "suspended",
+            )
+            if key not in raw_cache
+        ]
+        if missing_keys:
+            raise ValueError(
+                "raw_cache is missing the p19 price-semantics keys "
+                f"{missing_keys}: the engine executes on raw nominal "
+                "prices with exact daily_price_limit/daily_suspension "
+                "constraints and labels on the adjusted basis; build the "
+                "cache from AshareDataLoader.raw_data_cache (p19 §2)"
+            )
+
         open_ = np.nan_to_num(
             np.asarray(raw_cache["open"], dtype=np.float64),
-            nan=0.0,
-            posinf=0.0,
-            neginf=0.0,
-        )
-        high = np.nan_to_num(
-            np.asarray(raw_cache["high"], dtype=np.float64),
-            nan=0.0,
-            posinf=0.0,
-            neginf=0.0,
-        )
-        low = np.nan_to_num(
-            np.asarray(raw_cache["low"], dtype=np.float64),
-            nan=0.0,
-            posinf=0.0,
-            neginf=0.0,
-        )
-        pre_close = np.nan_to_num(
-            np.asarray(
-                raw_cache.get("pre_close", np.roll(open_, 1, axis=1)),
-                dtype=np.float64,
-            ),
             nan=0.0,
             posinf=0.0,
             neginf=0.0,
@@ -171,6 +176,28 @@ class AshareBacktestEngine:
             nan=0.0,
             posinf=0.0,
             neginf=0.0,
+        )
+        adjusted_open = np.nan_to_num(
+            np.asarray(raw_cache["adjusted_open"], dtype=np.float64),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        # Exact constraint matrices (p19 §2.4): NaN limit cells fail closed
+        # inside the rule, so the NaN must survive this cache boundary.
+        blocked_buy_matrix, _ = exact_tradability_matrix(
+            open_,
+            np.asarray(raw_cache["up_limit"], dtype=np.float64),
+            np.asarray(raw_cache["down_limit"], dtype=np.float64),
+            np.asarray(raw_cache["suspended"]),
+            "buy",
+        )
+        blocked_sell_matrix, _ = exact_tradability_matrix(
+            open_,
+            np.asarray(raw_cache["up_limit"], dtype=np.float64),
+            np.asarray(raw_cache["down_limit"], dtype=np.float64),
+            np.asarray(raw_cache["suspended"]),
+            "sell",
         )
 
         n_stocks, n_dates = factors.shape
@@ -190,7 +217,7 @@ class AshareBacktestEngine:
         ):
             raise ValueError("signal_range must be contiguous")
 
-        target_ret = self._open_to_open_returns(open_)
+        target_ret = self._open_to_open_returns(adjusted_open)
         if benchmark_returns is None:
             # Default benchmark: equal-weight universe return on the same
             # complete t+2 periods as the strategy itself.
@@ -220,26 +247,8 @@ class AshareBacktestEngine:
             # the selection itself.
             eligible = universe_mask[:, t] & universe_mask[:, entry_day]
             exit_day = t + delay + 1
-            buy_blocked = self._blocked_mask(
-                entry_day,
-                open_,
-                high,
-                low,
-                pre_close,
-                volume,
-                ts_codes,
-                side="buy",
-            )
-            sell_blocked = self._blocked_mask(
-                entry_day,
-                open_,
-                high,
-                low,
-                pre_close,
-                volume,
-                ts_codes,
-                side="sell",
-            )
+            buy_blocked = blocked_buy_matrix[:, entry_day]
+            sell_blocked = blocked_sell_matrix[:, entry_day]
             output = self.portfolio_constructor.construct(
                 signal,
                 prev_weights,
@@ -349,32 +358,6 @@ class AshareBacktestEngine:
     @staticmethod
     def _open_to_open_returns(open_: np.ndarray) -> np.ndarray:
         return open_to_open_returns(open_)
-
-    @staticmethod
-    def _blocked_mask(
-        exec_day: int,
-        open_: np.ndarray,
-        high: np.ndarray,
-        low: np.ndarray,
-        pre_close: np.ndarray,
-        volume: np.ndarray,
-        ts_codes: list[str],
-        side: str,
-        st_mask: np.ndarray | None = None,
-    ) -> np.ndarray:
-        n_stocks = open_.shape[0]
-        if exec_day >= open_.shape[1]:
-            return np.ones(n_stocks, dtype=bool)
-        return tradability_blocked(
-            open_[:, exec_day],
-            high[:, exec_day],
-            low[:, exec_day],
-            pre_close[:, exec_day],
-            volume[:, exec_day],
-            ts_codes,
-            side,
-            st_mask=st_mask,
-        )
 
     @staticmethod
     def _equity_curve(daily_returns: list[float]) -> list[float]:
@@ -558,8 +541,9 @@ def main() -> None:
             price_end = contract.train_label_end
             signal_end = contract.train_signal_end
             full_rebalance_mask = policy.rebalance_mask(loader.dates)
+            # Label basis = adjusted open (p19 §2.3).
             train_target = causal_target_returns(
-                loader.raw_data_cache["open"][:, :price_end].numpy(),
+                loader.raw_data_cache["adjusted_open"][:, :price_end].numpy(),
                 loader.dates[:price_end],
                 policy,
                 rebalance_mask=full_rebalance_mask[:price_end],

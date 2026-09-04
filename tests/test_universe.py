@@ -587,6 +587,9 @@ def test_calendar_open_rows_define_loader_session_axis(data_config: DataConfig):
     )
     with AshareDB(data_config.duckdb_path) as db:
         db.upsert_daily(bars.to_dict("records"), data_config)
+    from tests.conftest import populate_v2_for_config
+
+    populate_v2_for_config(data_config, dates, ["000001.SZ"], bars)
     loader = AshareDataLoader(data_config, ModelConfig()).load_data()
     assert loader.dates == [dates[0], dates[2]]
     assert loader.raw_data_cache["open"].shape[1] == 2

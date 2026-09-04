@@ -65,8 +65,29 @@ def _cfg(**kwargs) -> BacktestConfig:
     return BacktestConfig(**values)
 
 
-def _raw_from_bars(bars, ts_codes, dates) -> dict[str, np.ndarray]:
-    """The engine's raw-cache dict reconstructed from a bars frame."""
+def _raw_from_bars(
+    bars,
+    ts_codes,
+    dates,
+    *,
+    up_limit: np.ndarray | None = None,
+    down_limit: np.ndarray | None = None,
+    suspended: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    """The engine's raw-cache dict reconstructed from a bars frame.
+
+    The adjusted label basis is derived by the single p19 §2.1
+    implementation (``adjusted_price_scale``) from the bars' adj_factor
+    column; the exact constraint matrices default to unconstrained
+    (scenario tests override the specific cells they target).
+    """
+
+    from ashare_data.processor import (
+        adjusted_price_scale,
+        apply_adjusted_scale,
+        pivot_wide,
+    )
+
     n, t = len(ts_codes), len(dates)
     out = {}
     for name in ("open", "high", "low", "pre_close", "volume"):
@@ -75,6 +96,23 @@ def _raw_from_bars(bars, ts_codes, dates) -> dict[str, np.ndarray]:
             rows = bars[bars["ts_code"] == code].sort_values("trade_date")
             matrix[i, :] = rows[name].to_numpy(dtype=np.float64)
         out[name] = matrix
+    if "adj_factor" not in bars.columns:
+        bars = bars.assign(adj_factor=1.0)
+    scale, _ = adjusted_price_scale(bars)
+    adjusted = apply_adjusted_scale(bars, scale)
+    out["adjusted_open"] = pivot_wide(
+        adjusted, ts_codes, dates, "open"
+    ).to_numpy(dtype=np.float64)
+    out["adjusted_open"] = np.nan_to_num(out["adjusted_open"], nan=0.0)
+    out["up_limit"] = (
+        np.full((n, t), 1e12) if up_limit is None else up_limit
+    )
+    out["down_limit"] = (
+        np.full((n, t), 1e-9) if down_limit is None else down_limit
+    )
+    out["suspended"] = (
+        np.zeros((n, t)) if suspended is None else suspended
+    )
     return out
 
 
@@ -117,7 +155,7 @@ def _run(
 
 
 def test_execution_spec_is_versioned():
-    assert EXECUTION_SPEC_VERSION == 2
+    assert EXECUTION_SPEC_VERSION == 3
 
 
 def test_external_weights_without_constructor_provenance_are_rejected():
@@ -177,6 +215,7 @@ def test_whole_lot_scenario_is_exact_in_lot_mode():
                     "pre_close": 10.0,
                     "volume": 1_000_000.0,
                     "close": 10.0,
+                    "adj_factor": 1.0,
                 }
             )
     import pandas as pd
@@ -239,8 +278,11 @@ def test_suspension_blocks_buy_in_both_paths():
     # Stock 0 is already held and remains in the target Top-2 when it is
     # suspended.  P3 contract section 2 only prohibits a buy-blocked name
     # from becoming a *new* holding; it does not create a needless exit.
+    # The suspension is table-driven (p19 §2.4: a daily_suspension record
+    # blocks both sides that day).
     signal, raw, ts_codes, dates, mask = _market()
     suspension_day = 5
+    raw["suspended"][0, suspension_day] = 1.0
     raw["volume"][0, suspension_day] = 0.0
     _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=100)
     GoldenParity(_cfg(), lot_size=100).verify(report)
@@ -254,14 +296,16 @@ def test_suspension_blocks_buy_in_both_paths():
 
 
 def test_limit_up_open_blocks_buy():
-    # One-word +10% open on the entry day: the engine's selection excludes
-    # the name — no BUY may fill in either path, exact parity.  (A sell of
-    # a previously held position is legitimate on the limit-up day.)
+    # The exact daily_price_limit row publishes up_limit at the one-word
+    # +10% open on the entry day: the engine's selection excludes the name
+    # — no BUY may fill in either path, exact parity.  (A sell of a
+    # previously held position is legitimate on the limit-up day.)
     signal, raw, ts_codes, dates, mask = _market()
     limit_day = 6
     raw["open"][0, limit_day] = raw["pre_close"][0, limit_day] * 1.10
     raw["high"][0, limit_day] = raw["open"][0, limit_day]
     raw["low"][0, limit_day] = raw["open"][0, limit_day]
+    raw["up_limit"][0, limit_day] = raw["open"][0, limit_day]
     _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=100)
     GoldenParity(_cfg(), lot_size=100).verify(report)
     entry_record = report.records[limit_day - 1]
@@ -282,6 +326,7 @@ def test_limit_down_exit_is_force_held_in_both_paths():
     raw["open"][0, crash_day] = raw["pre_close"][0, crash_day] * 0.90
     raw["high"][0, crash_day] = raw["open"][0, crash_day]
     raw["low"][0, crash_day] = raw["open"][0, crash_day]
+    raw["down_limit"][0, crash_day] = raw["open"][0, crash_day]
     _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=100)
     GoldenParity(_cfg(), lot_size=100).verify(report)
     # The executed weight for stock 0 stays positive on the crash day and
@@ -318,13 +363,32 @@ def test_delisting_force_holds_position():
 
 
 def test_adjusted_price_series_parity():
-    # 复权: both engines consume the same qfq-adjusted series; a 2:1
-    # split-like price jump must not break the parity contract.
+    # p19 basis: the RAW series carries a real 2:1 split-like gap and a
+    # matching adj_factor step; the adjusted label series derived by the
+    # single p19 §2.1 implementation stays continuous, and the parity
+    # contract holds across the event (execution on raw prices, labels on
+    # the adjusted basis).
     signal, raw, ts_codes, dates, mask = _market()
     split_day = 6
     for name in ("open", "high", "low", "pre_close"):
         raw[name][:, split_day:] *= 0.5
     raw["volume"][:, split_day:] *= 2.0
+    # Raw bars carry af 1.0 before the event and 2.0 from it on; the
+    # window anchor is af[0] == 1.0, so adjusted_open continues the
+    # pre-split price path (no 0.5 gap) while the raw series halves.
+    af = np.ones_like(raw["open"])
+    af[:, split_day:] = 2.0
+    base = af[:, :1]
+    raw["adj_factor"] = af
+    raw["adjusted_open"] = raw["open"] * af / base
+    # The raw series shows the split gap; the adjusted series does not.
+    assert np.all(
+        raw["open"][:, split_day] < 0.6 * raw["open"][:, split_day - 1]
+    )
+    assert np.all(
+        raw["adjusted_open"][:, split_day]
+        > 0.9 * raw["adjusted_open"][:, split_day - 1]
+    )
     _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=0)
     GoldenParity(_cfg(), lot_size=0).verify(report)
 
@@ -421,8 +485,9 @@ def test_missing_bar_parity():
 
 
 def test_extreme_limit_moves_parity():
-    # A full one-word ±10% sequence: limit-up days block buys, limit-down
-    # days block sells; every day stays in exact parity.
+    # A full ±10% sequence driven by the exact constraint tables: limit-up
+    # rows block buys, limit-down rows block sells; every day stays in
+    # exact parity.
     signal, raw, ts_codes, dates, mask = _market(n_dates=16)
     for day in range(3, 12):
         stock = day % 3
@@ -430,6 +495,10 @@ def test_extreme_limit_moves_parity():
         raw["open"][stock, day] = raw["pre_close"][stock, day] * (1.10 if up else 0.90)
         raw["high"][stock, day] = raw["open"][stock, day]
         raw["low"][stock, day] = raw["open"][stock, day]
+        if up:
+            raw["up_limit"][stock, day] = raw["open"][stock, day]
+        else:
+            raw["down_limit"][stock, day] = raw["open"][stock, day]
     _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=0)
     GoldenParity(_cfg(), lot_size=0).verify(report)
 

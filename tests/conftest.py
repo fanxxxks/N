@@ -5,12 +5,31 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from ashare_data.config import BacktestConfig, DataConfig
 from ashare_data.db import AshareDB
 from ashare_data.manifest import build_dataset_manifest, save_manifest
+
+
+def with_price_semantics(raw: dict[str, "np.ndarray"]) -> dict[str, "np.ndarray"]:
+    """Attach the p19 §2 cache keys to a synthetic execution-price dict.
+
+    The adjusted label basis mirrors the raw prices (no corporate actions
+    in the synthetic data) and the exact constraint tables default to
+    unconstrained; scenario tests override the specific cells they target.
+    """
+
+    open_ = np.asarray(raw["open"], dtype=np.float64)
+    out = dict(raw)
+    out.setdefault("adjusted_open", open_.copy())
+    n, t = open_.shape
+    out.setdefault("up_limit", np.full((n, t), 1e12))
+    out.setdefault("down_limit", np.full((n, t), 1e-9))
+    out.setdefault("suspended", np.zeros((n, t)))
+    return out
 from ashare_logging import (
     export_log_txt,
     guard_process_exit,
@@ -20,6 +39,179 @@ from ashare_logging import (
 
 
 DEFAULT_CODES = ["000001.SZ", "600000.SH", "300001.SZ"]
+
+# Loader-facing column subset of the p17 §5 v2 price tables (DDL authority:
+# ashare_data.tushare_store / test_tushare_store; the loader reads exactly
+# these named columns, so the synthetic source carries exactly these).
+_V2_PRICE_DDL = {
+    "daily_bar_raw": """
+        CREATE TABLE IF NOT EXISTS daily_bar_raw (
+            ts_code VARCHAR, trade_date VARCHAR,
+            open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE,
+            pre_close DOUBLE, vol DOUBLE, amount DOUBLE
+        )""",
+    "daily_adj_factor": """
+        CREATE TABLE IF NOT EXISTS daily_adj_factor (
+            ts_code VARCHAR, trade_date VARCHAR, adj_factor DOUBLE
+        )""",
+    "daily_price_limit": """
+        CREATE TABLE IF NOT EXISTS daily_price_limit (
+            ts_code VARCHAR, trade_date VARCHAR,
+            pre_close DOUBLE, up_limit DOUBLE, down_limit DOUBLE
+        )""",
+    "daily_suspension": """
+        CREATE TABLE IF NOT EXISTS daily_suspension (
+            ts_code VARCHAR, trade_date VARCHAR, suspend_type VARCHAR
+        )""",
+    "daily_basic_pit": """
+        CREATE TABLE IF NOT EXISTS daily_basic_pit (
+            ts_code VARCHAR, trade_date VARCHAR, turnover_rate DOUBLE
+        )""",
+}
+
+
+def populate_v2_for_config(
+    data_config: DataConfig,
+    dates: list[str],
+    ts_codes: list[str],
+    bars: pd.DataFrame,
+    **kwargs,
+) -> Path:
+    """Resolve the config's v2 price source path and populate it.
+
+    Single resolution rule for tests (mirrors the loader): a relative
+    ``v2_duckdb_path`` sits next to ``duckdb_path``.
+    """
+
+    v2_path = Path(data_config.v2_duckdb_path)
+    if not v2_path.is_absolute():
+        v2_path = data_config.duckdb_path.parent / v2_path
+    return populate_v2_price_tables(v2_path, dates, ts_codes, bars, **kwargs)
+
+
+def populate_v2_price_tables(
+    v2_path: Path,
+    dates: list[str],
+    ts_codes: list[str],
+    bars: pd.DataFrame,
+    *,
+    adj_factor: float | dict[tuple[str, str], float] = 1.0,
+    limit_band: tuple[float, float] = (2.0, 0.5),
+    limit_overrides: dict[tuple[str, str], tuple[float, float]] | None = None,
+    drop_limit_for: set[tuple[str, str]] | None = None,
+    drop_adj_for: set[tuple[str, str]] | None = None,
+    suspensions: list[dict] | None = None,
+    turnover_rate: float | dict[tuple[str, str], float] = 1.0,
+) -> Path:
+    """Populate the v2 price source (p19 §2 formal loader input) in tmp DuckDB.
+
+    ``bars`` is the shared synthetic long frame (``make_bars``); every table
+    is written for every (code, date) cell unless explicitly dropped via
+    ``drop_limit_for`` / ``drop_adj_for`` (fail-closed scenarios).  Default
+    limit bands are deliberately wide (never blocks) so only tests that
+    target the exact constraint rule observe blocking.
+    """
+
+    v2_path = Path(v2_path)
+    v2_path.parent.mkdir(parents=True, exist_ok=True)
+    required_bar_columns = (
+        "ts_code",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "volume",
+        "amount",
+    )
+    if bars is None or bars.empty:
+        bars = pd.DataFrame(columns=list(required_bar_columns))
+    close_of = {
+        (row.ts_code, str(row.trade_date)): float(row.close)
+        for row in bars.itertuples(index=False)
+    }
+    limit_overrides = limit_overrides or {}
+    drop_limit_for = drop_limit_for or set()
+    drop_adj_for = drop_adj_for or set()
+    bar_rows: list[dict] = []
+    adj_rows: list[dict] = []
+    limit_rows: list[dict] = []
+    basic_rows: list[dict] = []
+    for code in ts_codes:
+        for date in dates:
+            source = bars[(bars["ts_code"] == code) & (bars["trade_date"] == date)]
+            if source.empty:
+                continue
+            row = source.iloc[0]
+            bar_rows.append(
+                {
+                    "ts_code": code,
+                    "trade_date": date,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "pre_close": float(row["pre_close"]),
+                    "vol": float(row["volume"]),
+                    "amount": float(row["amount"]),
+                }
+            )
+            if (code, date) not in drop_adj_for:
+                value = (
+                    adj_factor.get((code, date), 1.0)
+                    if isinstance(adj_factor, dict)
+                    else adj_factor
+                )
+                adj_rows.append(
+                    {"ts_code": code, "trade_date": date, "adj_factor": value}
+                )
+            if (code, date) not in drop_limit_for:
+                up, down = limit_overrides.get(
+                    (code, date),
+                    (
+                        close_of[(code, date)] * limit_band[0],
+                        close_of[(code, date)] * limit_band[1],
+                    ),
+                )
+                limit_rows.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": date,
+                        "pre_close": close_of[(code, date)],
+                        "up_limit": float(up),
+                        "down_limit": float(down),
+                    }
+                )
+            value = (
+                turnover_rate.get((code, date), 1.0)
+                if isinstance(turnover_rate, dict)
+                else turnover_rate
+            )
+            basic_rows.append(
+                {"ts_code": code, "trade_date": date, "turnover_rate": value}
+            )
+    with AshareDB(v2_path) as db:
+        for ddl in _V2_PRICE_DDL.values():
+            db.execute(ddl)
+        db.execute("DELETE FROM daily_bar_raw")
+        db.execute("DELETE FROM daily_adj_factor")
+        db.execute("DELETE FROM daily_price_limit")
+        db.execute("DELETE FROM daily_suspension")
+        db.execute("DELETE FROM daily_basic_pit")
+        for table, rows in (
+            ("daily_bar_raw", bar_rows),
+            ("daily_adj_factor", adj_rows),
+            ("daily_price_limit", limit_rows),
+            ("daily_suspension", list(suspensions or [])),
+            ("daily_basic_pit", basic_rows),
+        ):
+            if rows:
+                db.register(f"_{table}_rows", pd.DataFrame(rows))
+                db.execute(
+                    f"INSERT INTO {table} SELECT * FROM _{table}_rows"
+                )
+    return v2_path
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -133,6 +325,11 @@ def _populate_db(
     manifest is saved: formal artifact flows (P8-05) require a resolved
     dataset identity, while manifest-machinery tests need a database
     without one.
+
+    The v2 price source (p19 §2: the loader's formal price input) is
+    populated next to the legacy database with neutral defaults
+    (adj_factor=1.0, wide limit bands, no suspensions) so scenario tests
+    re-populate it via :func:`populate_v2_price_tables`.
     """
 
     data_config.data_dir.mkdir(parents=True, exist_ok=True)
@@ -175,6 +372,10 @@ def _populate_db(
             save_manifest(
                 db, data_config, build_dataset_manifest(db, data_config)
             )
+    v2_path = Path(data_config.v2_duckdb_path)
+    if not v2_path.is_absolute():
+        v2_path = data_config.duckdb_path.parent / v2_path
+    populate_v2_price_tables(v2_path, dates, ts_codes, bars)
     return data_config
 
 
@@ -226,6 +427,18 @@ def fresh_populated_db(
     cfg = _populate_db(
         fresh_data_config, dates, ts_codes, bars, persist_manifest=True
     )
+    # p16 G8 pre-listed horizon: the exchange calendar lists sessions ahead
+    # of the last completed one.  Without future rows the fixture rots the
+    # first day the real clock moves past the last bar session (weekends).
+    last_bar = dates[-1]
+    future = pd.bdate_range(start=last_bar, periods=4).strftime("%Y%m%d")
+    extra = [d for d in future if d > last_bar][:2]
+    if extra:
+        with AshareDB(cfg.duckdb_path) as db:
+            db.upsert_calendar(
+                [{"trade_date": d, "is_open": True} for d in extra],
+                cfg,
+            )
     return cfg, dates
 
 

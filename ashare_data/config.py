@@ -24,6 +24,14 @@ def _as_path(value: Any, base: Path | None = None) -> Path:
 class DataConfig:
     data_dir: Path = Path("data")
     duckdb_path: Path = Path("data/ashare.duckdb")
+    # v2 Tushare/PIT price source (p17 four-layer architecture; p19 §2: the
+    # loader's formal price input).  A relative value resolves against the
+    # parent directory of ``duckdb_path`` (the shared data directory), so
+    # the default sits next to the legacy database; YAML overrides may use
+    # absolute paths.  The universe/calendar/stocks/fundamental sources
+    # stay on ``duckdb_path`` (the production calendar remains the single
+    # authority, p17 §6.1).
+    v2_duckdb_path: Path = Path("ashare_v2.duckdb")
     parquet_dir: Path = Path("data/parquet")
     calendar_table: str = "trade_calendar"
     stocks_table: str = "stocks"

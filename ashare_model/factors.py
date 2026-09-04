@@ -42,8 +42,12 @@ NEUTRAL_FEATURE_NAMES = {
 # P9 (docs/p9_factor_family_contract.md §5.3): version of the factor
 # computation semantics.  v1 = the sparse-safe standardization for the
 # event family (P9 §5.3, t2 finding F1) plus the P9 feature additions.
+# v2 (p19 §5): the factor input price basis switched from the qfq daily
+# table to the adjusted continuous series derived from v2 daily_bar_raw ×
+# daily_adj_factor (window-first-day anchor); every factor value is
+# recomputed wholesale on the new basis, with no historical migration.
 # Recorded in run artifacts via the runspec version registry.
-FACTOR_COMPUTE_VERSION = 1
+FACTOR_COMPUTE_VERSION = 2
 
 # Sparse event features standardize on the sparse-safe path: the 1%/99%
 # winsorize quantiles flatten any day whose event incidence is below the

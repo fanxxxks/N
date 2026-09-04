@@ -1312,6 +1312,8 @@ def _populated_db_n_stocks(tmp_path: Path, n: int = 6) -> DataConfig:
             ],
             data_config,
         )
+        from tests.conftest import populate_v2_for_config
+    populate_v2_for_config(data_config, dates, ts_codes, bars)
     return data_config
 
 

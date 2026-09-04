@@ -90,7 +90,8 @@ def baseline_candidates(
     train_price_end = contract.train_label_end
     train_signal_end = contract.train_signal_end
     train_factors = loader.factor_tensor[:, :, :train_price_end].numpy()
-    train_open = loader.raw_data_cache["open"][:, :train_price_end].numpy()
+    # Label basis = adjusted open (p19 §2.3).
+    train_open = loader.raw_data_cache["adjusted_open"][:, :train_price_end].numpy()
     full_rebalance_mask = fold.policy.rebalance_mask(loader.dates)
     train_rebalance_mask = full_rebalance_mask[:train_price_end]
     train_target = causal_target_returns(
@@ -388,7 +389,8 @@ def _build_search_window(
     # signals and targets (no off-by-one with the val windows, which are
     # index ranges inside the same slice).
     train_universe_mask = universe_mask[:, :train_price_end]
-    train_open = loader.raw_data_cache["open"][:, :train_price_end].numpy()
+    # Label basis = adjusted open (p19 §2.3).
+    train_open = loader.raw_data_cache["adjusted_open"][:, :train_price_end].numpy()
     full_rebalance_mask = fold.policy.rebalance_mask(loader.dates)
     rebalance_mask = full_rebalance_mask[:train_price_end]
     target = loader.mask_by_universe(

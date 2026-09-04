@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -120,6 +121,19 @@ def _seed_loader_db(
         )
         db.upsert_calendar(calendar, config)
         db.upsert_constituents(memberships, config)
+    # p19: the loader's formal price source is the v2 database; seed it
+    # with the same bars (neutral adj_factor/limits, no suspensions).
+    from tests.conftest import populate_v2_price_tables
+
+    v2_path = Path(config.v2_duckdb_path)
+    if not v2_path.is_absolute():
+        v2_path = config.duckdb_path.parent / v2_path
+    populate_v2_price_tables(
+        v2_path,
+        dates,
+        codes,
+        bars if bars is not None and not bars.empty else pd.DataFrame(),
+    )
 
 
 def test_load_universe_and_data(populated_db: DataConfig):
@@ -137,6 +151,11 @@ def test_load_universe_and_data(populated_db: DataConfig):
         "amount",
         "turnover_rate",
         "adj_factor",
+        # p19 §2: dual price basis + exact constraint matrices.
+        "adjusted_open",
+        "up_limit",
+        "down_limit",
+        "suspended",
     }
     assert loader.target_ret[:, -2:].abs().sum() == 0
 
@@ -257,6 +276,10 @@ def test_load_data_raises_when_no_bars(data_config: DataConfig):
             [{"index_code": "000300.SH", "ts_code": "000001.SZ", "in_date": "20200101", "out_date": "99991231"}],
             data_config,
         )
+    from tests.conftest import populate_v2_price_tables
+
+    v2_path = data_config.duckdb_path.parent / "ashare_v2.duckdb"
+    populate_v2_price_tables(v2_path, ["20240102"], ["000001.SZ"], pd.DataFrame())
     loader = AshareDataLoader(data_config, ModelConfig())
     with pytest.raises(ValueError, match="No daily bars found"):
         loader.load_data()
@@ -283,7 +306,6 @@ def test_target_ret_masks_suspended_days(data_config: DataConfig):
     bars = bars[~((bars["ts_code"] == "600000.SH") & (bars["trade_date"] == dates[1]))]
     with AshareDB(data_config.duckdb_path) as db:
         db.create_schema(data_config)
-        db.upsert_daily(bars.to_dict("records"), data_config)
         db.upsert_stocks(
             [
                 {"ts_code": code, "name": code, "industry": None, "list_date": "20200101", "is_st": False}
@@ -302,6 +324,14 @@ def test_target_ret_masks_suspended_days(data_config: DataConfig):
             ],
             data_config,
         )
+    from tests.conftest import populate_v2_price_tables
+
+    populate_v2_price_tables(
+        data_config.duckdb_path.parent / "ashare_v2.duckdb",
+        dates,
+        ts_codes,
+        bars,
+    )
     loader = AshareDataLoader(data_config, ModelConfig())
     loader.load_data(ts_codes=ts_codes, dates=dates)
     assert loader.target_ret is not None

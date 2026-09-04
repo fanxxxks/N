@@ -36,7 +36,6 @@ from ashare_data.config import (
 )
 from ashare_data.io_utils import atomic_write_json
 from ashare_data.schemas import SimOrder
-from ashare_data.processor import tradability_blocked
 from ashare_data.gates import ProductionGateRunner
 from ashare_execution import validate_execution_config
 
@@ -104,8 +103,10 @@ class SimulationRunner:
         self.backtest_config = backtest_config
         self.sim_config = sim_config
         self.loader = loader
-        # The current ST snapshot (stocks.is_st) is only valid as of today:
-        # same-day executions may use it, historical replay must not.
+        # ``today`` anchors nothing anymore: fill gating consumes the dated
+        # exact constraint tables (p19 §2.4), so the current ST snapshot
+        # has no execution role left.  The attribute stays for callers that
+        # inspect the runner (display/audit only).
         self.today = (today or datetime.now().strftime("%Y%m%d")).replace("-", "")
         validate_execution_config(backtest_config, sim_config)
         self.portfolio = SimulationPortfolio(
@@ -244,8 +245,9 @@ class SimulationRunner:
             price_end = contract.train_label_end
             policy = RebalancePolicy.from_config(self.backtest_config)
             full_rebalance_mask = policy.rebalance_mask(self.loader.dates)
+            # Label basis = adjusted open (p19 §2.3).
             target = causal_target_returns(
-                self.loader.raw_data_cache["open"][:, :price_end].numpy(),
+                self.loader.raw_data_cache["adjusted_open"][:, :price_end].numpy(),
                 self.loader.dates[:price_end],
                 policy,
                 rebalance_mask=full_rebalance_mask[:price_end],
@@ -386,46 +388,23 @@ class SimulationRunner:
             stopped = False
             portfolio_diagnostics: list[dict[str, object]] = []
             actual_order_count = 0
+            # Exact execution constraints (p19 §2.4): the loader derives
+            # the buy/sell blocked matrices once from daily_price_limit /
+            # daily_suspension; the loop only slices the execution day.
+            blocked_buy_matrix, blocked_sell_matrix = (
+                self.loader.tradability_masks()
+            )
             for signal_idx in range(start_idx, end_idx):
                 if self._handle_stop_signal():
                     stopped = True
                     break
                 exec_idx = signal_idx + 1
                 exec_date = dates[exec_idx]
-                # Same-day execution is the only reliable as-of use of the
-                # current ST snapshot; historical dates get board rates only.
-                same_day = exec_date == self.today
-                st_codes = self.loader.current_st_codes if same_day else None
-                st_mask = (
-                    np.asarray(
-                        [code in st_codes for code in ts_codes], dtype=bool
-                    )
-                    if st_codes
-                    else None
-                )
                 eligible = (
                     universe_mask[:, signal_idx] & universe_mask[:, exec_idx]
                 )
-                buy_blocked = tradability_blocked(
-                    raw["open"][:, exec_idx],
-                    raw["high"][:, exec_idx],
-                    raw["low"][:, exec_idx],
-                    raw["pre_close"][:, exec_idx],
-                    raw["volume"][:, exec_idx],
-                    ts_codes,
-                    "buy",
-                    st_mask=st_mask,
-                )
-                sell_blocked = tradability_blocked(
-                    raw["open"][:, exec_idx],
-                    raw["high"][:, exec_idx],
-                    raw["low"][:, exec_idx],
-                    raw["pre_close"][:, exec_idx],
-                    raw["volume"][:, exec_idx],
-                    ts_codes,
-                    "sell",
-                    st_mask=st_mask,
-                )
+                buy_blocked = blocked_buy_matrix[:, exec_idx]
+                sell_blocked = blocked_sell_matrix[:, exec_idx]
                 prev_weights, equity = self._portfolio_weights(
                     ts_codes, raw["open"][:, exec_idx]
                 )
@@ -467,7 +446,6 @@ class SimulationRunner:
                     self.portfolio,
                     stock_names,
                     self.backtest_config,
-                    st_codes=st_codes,
                 )
                 # Persist orders after execution so their final status/reason
                 # (filled, skipped, limit_up, ...) is part of the paper-trail.

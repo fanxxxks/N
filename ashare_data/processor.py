@@ -112,6 +112,12 @@ _CHINEXT_LIMIT_PREFIXES = {"300", "301", "688", "689"}
 def limit_rate(ts_code: str, *, is_st: bool = False) -> float:
     """Daily price-limit rate of one stock.
 
+    **LEGACY AUDIT (p19 §2.5)**: the board-rate inference is retired from
+    every formal computation path by ``docs/p19_market_price_semantics_contract.md``
+    §2.4; the exact ``daily_price_limit`` table is the single formal
+    constraint source.  This function remains read-only for legacy parity
+    comparisons only.
+
     ST stocks trade under a 5% band.  There is no dated ST history, so the
     caller must supply the as-of ``is_st`` flag explicitly: the current
     ``stocks.is_st`` snapshot is only valid for same-day execution and must
@@ -140,6 +146,13 @@ def _blocked_parts(
 ) -> tuple[np.ndarray, np.ndarray]:
     """``(suspended, limit)`` mask pair: one implementation of the exchange
     rule shared by the per-date column and full-matrix paths.
+
+    **LEGACY AUDIT (p19 §2.5)**: the approximate one-word/board-rate
+    tradability inference is retired from every formal computation path by
+    ``docs/p19_market_price_semantics_contract.md`` §2.4; the exact
+    ``daily_price_limit`` / ``daily_suspension`` tables (see
+    :func:`_exact_blocked_parts`) are the single formal constraint source.
+    Kept read-only for legacy parity comparisons only.
 
     ``o``/``h``/``l``/``pc``/``v`` share one shape (a single date column or
     the full ``[stock x date]`` matrix); ``rates`` is broadcastable to it.
@@ -197,6 +210,11 @@ def blocked_components(
 ) -> tuple[np.ndarray, np.ndarray]:
     """``(suspended, limit)`` per-stock bool masks for one date column.
 
+    **LEGACY AUDIT (p19 §2.5)**: approximate one-word/board-rate inference,
+    retired from formal paths by p19 §2.4 (see
+    :func:`exact_blocked_components` for the formal rule).  Read-only for
+    legacy parity comparisons only.
+
     The exact rule behind :func:`tradability_blocked`, split so callers
     that need distinct reasons (the paper-trading matcher) do not
     re-derive them.  ``st_mask`` optionally supplies per-stock as-of ST
@@ -231,6 +249,11 @@ def tradability_blocked(
 ) -> np.ndarray:
     """Buy/sell blocked mask for one date column (``[stock]`` bool).
 
+    **LEGACY AUDIT (p19 §2.5)**: approximate one-word/board-rate inference,
+    retired from formal paths by p19 §2.4 (see
+    :func:`exact_blocked_components`).  Read-only for legacy parity
+    comparisons only.
+
     Same semantics as :func:`tradability_blocked_matrix`, vectorized per
     column; the backtest engine calls this per execution day.  ``st_mask``
     optionally marks the stocks that are ST as of that exact execution
@@ -263,6 +286,11 @@ def tradability_blocked_matrix(
 ) -> np.ndarray:
     """Buy/sell blocked mask over the full ``[stock x date]`` window.
 
+    **LEGACY AUDIT (p19 §2.5)**: approximate one-word/board-rate inference,
+    retired from formal paths by p19 §2.4 (see
+    :func:`exact_tradability_matrix`).  Read-only for legacy parity
+    comparisons only.
+
     The reward path precomputes this matrix once and shares it across the
     whole formula batch; per date it is the exact rule the backtest engine
     applies through :func:`tradability_blocked`.  The matrix is historical
@@ -282,6 +310,160 @@ def tradability_blocked_matrix(
     rates = np.asarray([limit_rate(code) for code in ts_codes], dtype=np.float64)[:, None]
     suspended, limit = _blocked_parts(o, h, l, pc, v, rates, side)
     return suspended | limit
+
+
+# --- exact execution constraints (p19 §2.4, the single formal rule) ----------
+
+_EXACT_SIDES = ("buy", "sell")
+
+
+def _exact_blocked_parts(
+    o: np.ndarray,
+    up_limit: np.ndarray,
+    down_limit: np.ndarray,
+    suspended: np.ndarray,
+    side: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(blocked, missing_limit)`` core of the exact constraint rule.
+
+    Pre-registered semantics (p19 §2.4, single implementation):
+
+    * buy blocked ⟺ ``open >= up_limit``; sell blocked ⟺
+      ``open <= down_limit`` (exact published limit prices);
+    * a ``daily_suspension`` row for that stock/date blocks both sides;
+    * a missing limit record (NaN or non-positive limit) blocks both sides
+      — fail-closed, never an approximate fallback (p19 §2.4);
+    * a missing bar (non-finite or non-positive open — the 0-filled cache
+      convention) blocks both sides, exactly as before.
+
+    ``o``/``up_limit``/``down_limit`` share one shape (a single execution
+    column or the full ``[stock x date]`` window); ``suspended`` broadcasts
+    to it (0/1 or bool).
+    """
+
+    if side not in _EXACT_SIDES:
+        raise ValueError(f"unknown side {side!r}; expected 'buy' or 'sell'")
+    o = np.asarray(o, dtype=np.float64)
+    up = np.asarray(up_limit, dtype=np.float64)
+    down = np.asarray(down_limit, dtype=np.float64)
+    sus = np.asarray(suspended)
+    if sus.dtype != bool:
+        sus = np.nan_to_num(sus.astype(np.float64), nan=0.0) != 0.0
+    if not (o.shape == up.shape == down.shape):
+        raise ValueError(
+            "open/up_limit/down_limit must share one shape for the exact rule"
+        )
+    try:
+        sus = np.broadcast_to(sus, o.shape)
+    except ValueError as exc:
+        raise ValueError(
+            f"suspended shape {sus.shape} is not broadcastable to {o.shape}"
+        ) from exc
+    missing = ~np.isfinite(up) | ~np.isfinite(down) | (up <= 0) | (down <= 0)
+    dead_bar = ~np.isfinite(o) | (o <= 0)
+    if side == "buy":
+        hit = np.isfinite(up) & (o >= up)
+    else:
+        hit = np.isfinite(down) & (o <= down)
+    common = sus | missing | dead_bar
+    return common | hit, missing
+
+
+def exact_blocked_components(
+    open_col: np.ndarray,
+    up_limit_col: np.ndarray,
+    down_limit_col: np.ndarray,
+    suspended_col: np.ndarray,
+    side: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(blocked, missing_limit)`` per-stock masks for one execution day.
+
+    The exact rule behind the engine / reward / matcher blocking, split so
+    callers that need the degraded reason (missing limit record) do not
+    re-derive it.  One date column per call; see
+    :func:`exact_tradability_matrix` for the vectorized full-window form.
+    """
+
+    o = np.asarray(open_col, dtype=np.float64).reshape(-1, 1)
+    up = np.asarray(up_limit_col, dtype=np.float64).reshape(-1, 1)
+    down = np.asarray(down_limit_col, dtype=np.float64).reshape(-1, 1)
+    sus = np.asarray(suspended_col).reshape(-1, 1)
+    blocked, missing = _exact_blocked_parts(o, up, down, sus, side)
+    return blocked[:, 0], missing[:, 0]
+
+
+def exact_tradability_matrix(
+    open_: np.ndarray,
+    up_limit: np.ndarray,
+    down_limit: np.ndarray,
+    suspended: np.ndarray,
+    side: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(blocked, missing_limit)`` over the full ``[stock x date]`` window.
+
+    Vectorized form of :func:`exact_blocked_components`; the reward path
+    precomputes these matrices once and shares them across the whole
+    formula batch, and the backtest engine slices them per execution day.
+    """
+
+    return _exact_blocked_parts(
+        np.asarray(open_, dtype=np.float64),
+        np.asarray(up_limit, dtype=np.float64),
+        np.asarray(down_limit, dtype=np.float64),
+        np.asarray(suspended),
+        side,
+    )
+
+
+# --- adjusted price basis (p19 §2.1, the single derivation) -------------------
+
+
+def adjusted_price_scale(df: pd.DataFrame) -> tuple[pd.Series, list[str]]:
+    """Per-row adjusted scale ``adj_factor(t) / adj_factor_base`` (p19 §2.1).
+
+    ``df`` is the raw (unadjusted) long bar frame **before any adj_factor
+    forward/backward fill** — the derivation consumes source values only.
+    ``base`` is the stock's first in-window bar row (window-first-day
+    anchor; in-window ratios are hfq-consistent and OHLC is scaled
+    uniformly).  A missing, non-finite or non-positive ``adj_factor`` on
+    ANY bar row of a stock degrades the whole stock: its scale becomes NaN
+    (the adjusted series fails closed — never ``ffill().bfill()``, which
+    this path pre-registers as abolished) and the code is returned in the
+    degraded list.  Returns ``(scale_series, degraded_ts_codes)``.
+    """
+
+    if "adj_factor" not in df.columns:
+        raise ValueError("adjusted scale requires the raw adj_factor column")
+    af = pd.to_numeric(df["adj_factor"], errors="coerce")
+    base = af.groupby(df["ts_code"]).transform("first")
+    scale = af / base
+    row_invalid = ~np.isfinite(af) | (af.fillna(-1.0) <= 0)
+    base_invalid = ~np.isfinite(base) | (base.fillna(-1.0) <= 0)
+    stock_invalid = row_invalid | base_invalid
+    degraded_codes = sorted(
+        df.loc[stock_invalid, "ts_code"].astype(str).unique().tolist()
+    )
+    # Whole-stock fail-closed: one invalid cell poisons the series.
+    poisoned = stock_invalid.groupby(df["ts_code"]).transform("any")
+    scale = scale.where(~poisoned)
+    return scale, degraded_codes
+
+
+def apply_adjusted_scale(df: pd.DataFrame, scale: pd.Series) -> pd.DataFrame:
+    """Return the adjusted long frame: OHLC/pre_close scaled, the rest raw.
+
+    The adjusted basis feeds factors and labels (p19 §2.3); volume, amount
+    and turnover_rate stay raw (nominal shares and yuan do not rescale).
+    Rows whose scale is NaN (fail-closed stock) keep NaN in the adjusted
+    price columns — missing is never turned into 0.
+    """
+
+    out = df.copy()
+    aligned = pd.Series(np.asarray(scale, dtype=np.float64), index=df.index)
+    for column in ("open", "high", "low", "close", "pre_close"):
+        if column in out.columns:
+            out[column] = out[column] * aligned
+    return out
 
 
 def encode_industry_frame(frame: pd.DataFrame) -> np.ndarray:

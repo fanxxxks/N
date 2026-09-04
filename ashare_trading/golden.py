@@ -25,6 +25,17 @@ contract:
   cash), and the bookkeeping identity
   ``sum(residual) == lot_equity(T) - free_equity(T)`` holds exactly.
 
+Price semantics (p19 §2): ``raw_cache`` must carry the loader's dual
+basis — raw nominal prices (``open``/``high``/``low``/``pre_close``/
+``volume``) drive every execution record (order prices, lots, cash,
+fees), while ``adjusted_open`` is the label/return basis for the
+free/lot-free ledgers, and ``up_limit``/``down_limit``/``suspended``
+carry the exact constraint tables.  Because the lot path marks a real
+account at raw open prices while the free path earns the adjusted
+(dividend-inclusive) open-to-open return, a corporate action between an
+entry and its exit shows up as an additional recorded residual — it is
+attribution output, never a silent divergence.
+
 The spec also applies the blocking rule (buy-blocked / outside-universe
 names are never freshly bought; sell-blocked reductions are force-held at
 the previous weight; weights never renormalize upward) to *any* weight
@@ -45,7 +56,10 @@ import numpy as np
 import pandas as pd
 
 from ashare_data.config import BacktestConfig
-from ashare_data.processor import open_to_open_returns, tradability_blocked
+from ashare_data.processor import (
+    exact_tradability_matrix,
+    open_to_open_returns,
+)
 from ashare_execution import ExecutionCostModel
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_portfolio.execution_spec import (
@@ -58,6 +72,9 @@ from ashare_trading.orders import build_orders, target_shares_from_weights
 from ashare_trading.portfolio import PositionState, SimulationPortfolio
 
 _BAR_COLUMNS = ("open", "high", "low", "pre_close", "volume")
+# p19 §2: the price-semantics keys the harness consumes on top of the
+# execution bars (adjusted label basis + exact constraint tables).
+_PRICE_SEMANTICS_KEYS = ("adjusted_open", "up_limit", "down_limit", "suspended")
 
 
 class GoldenParityViolation(AssertionError):
@@ -129,6 +146,9 @@ def _broker_bars(
     low: np.ndarray,
     pre_close: np.ndarray,
     volume: np.ndarray,
+    up_limit: np.ndarray,
+    down_limit: np.ndarray,
+    suspended: np.ndarray,
     ts_codes: list[str],
     dates: list[str],
 ) -> pd.DataFrame:
@@ -137,6 +157,9 @@ def _broker_bars(
     A cell whose OHLCV is non-finite is a **missing bar**: the row is
     dropped and the matcher skips the order with ``missing_bar``; the
     engine's zero-cell rule blocks the same day, so both paths agree.
+    The exact constraint columns (p19 §2.4) travel with every row so the
+    broker's fill gating consumes the same ``daily_price_limit`` /
+    ``daily_suspension`` records the engine slices per execution day.
     """
 
     rows = []
@@ -154,6 +177,9 @@ def _broker_bars(
                     "low": low[i, j],
                     "pre_close": pre_close[i, j],
                     "volume": volume[i, j],
+                    "up_limit": up_limit[i, j],
+                    "down_limit": down_limit[i, j],
+                    "suspended": bool(suspended[i, j]),
                 }
             )
     return pd.DataFrame(rows)
@@ -229,7 +255,7 @@ class GoldenParity:
         readable elsewhere but cannot claim P3 golden parity.
         ``rebalance_mask`` is forwarded unchanged to the engine-owned path.
         ``raw_cache``, ``ts_codes``, ``dates`` and ``universe_mask`` follow
-        the engine's conventions.
+        the engine's conventions (including the p19 price-semantics keys).
         """
 
         signals = np.asarray(signals, dtype=np.float64)
@@ -240,8 +266,13 @@ class GoldenParity:
         if len(ts_codes) != n or len(dates) != n_dates:
             raise ValueError("ts_codes/dates must match the signal matrix")
         missing = [k for k in _BAR_COLUMNS if k not in raw_cache]
+        missing += [k for k in _PRICE_SEMANTICS_KEYS if k not in raw_cache]
         if missing:
-            raise ValueError(f"raw_cache missing columns: {missing}")
+            raise ValueError(
+                f"raw_cache missing columns: {missing} (p19 §2: the golden "
+                "harness executes on raw prices with exact constraints and "
+                "labels on the adjusted basis)"
+            )
 
         delay = self.execution_delay
         open_ = _nan_to_zero(raw_cache["open"])
@@ -249,7 +280,21 @@ class GoldenParity:
         low = _nan_to_zero(raw_cache["low"])
         pre_close = _nan_to_zero(raw_cache["pre_close"])
         volume = _nan_to_zero(raw_cache["volume"])
-        target_ret = open_to_open_returns(open_)
+        adjusted_open = _nan_to_zero(raw_cache["adjusted_open"])
+        up_limit = np.asarray(raw_cache["up_limit"], dtype=np.float64)
+        down_limit = np.asarray(raw_cache["down_limit"], dtype=np.float64)
+        suspended = np.asarray(raw_cache["suspended"])
+        # Label/return basis: adjusted open-to-open (p19 §2.3) — a corporate
+        # action between the entry and exit open is an economic return.
+        target_ret = open_to_open_returns(adjusted_open)
+        # Exact constraint matrices, computed once and sliced per entry day
+        # (the same rule the engine applies; p19 §2.4).
+        blocked_buy_matrix, _ = exact_tradability_matrix(
+            open_, up_limit, down_limit, suspended, "buy"
+        )
+        blocked_sell_matrix, _ = exact_tradability_matrix(
+            open_, up_limit, down_limit, suspended, "sell"
+        )
 
         provenance = execution_provenance(self.config)
         if target_weights is None:
@@ -288,14 +333,8 @@ class GoldenParity:
         prev = np.zeros(n, dtype=np.float64)
         for k, w in enumerate(weights):
             entry = k + delay
-            blocked_buy = tradability_blocked(
-                open_[:, entry], high[:, entry], low[:, entry],
-                pre_close[:, entry], volume[:, entry], ts_codes, "buy",
-            )
-            blocked_sell = tradability_blocked(
-                open_[:, entry], high[:, entry], low[:, entry],
-                pre_close[:, entry], volume[:, entry], ts_codes, "sell",
-            )
+            blocked_buy = blocked_buy_matrix[:, entry]
+            blocked_sell = blocked_sell_matrix[:, entry]
             eligible = mask[:, k] & mask[:, entry]
             executed.append(
                 apply_blocking_rule(w, prev, blocked_buy, blocked_sell, eligible)
@@ -321,14 +360,21 @@ class GoldenParity:
             prev = w
 
         # --- matcher paths -------------------------------------------------
-        bars = _broker_bars(open_, high, low, pre_close, volume, ts_codes, dates)
+        bars = _broker_bars(
+            open_, high, low, pre_close, volume,
+            up_limit, down_limit, suspended, ts_codes, dates,
+        )
         lot_free_equity, lot_free_returns, lot_free_fees, lot_free_fills, _ = (
-            self._broker_path(executed, bars, ts_codes, dates, open_, capital, 0)
+            self._broker_path(
+                executed, bars, ts_codes, dates, open_, capital, 0,
+                target_ret,
+            )
         )
         if self.lot_size > 0:
             lot_equity, lot_returns, lot_fees, lot_fills, lot_portfolio = (
                 self._broker_path(
-                    executed, bars, ts_codes, dates, open_, capital, self.lot_size
+                    executed, bars, ts_codes, dates, open_, capital,
+                    self.lot_size, target_ret,
                 )
             )
         else:
@@ -455,6 +501,7 @@ class GoldenParity:
         open_: np.ndarray,
         capital: float,
         lot_size: int,
+        target_ret: np.ndarray,
     ) -> tuple[
         list[float], list[float], list[float], list[list[FillRecord]],
         SimulationPortfolio,
@@ -468,10 +515,13 @@ class GoldenParity:
         ``lot_size <= 0`` is the golden lot-free mode: only weight deltas
         are traded (the engine never rebalances price drift) and the
         ledger compounds the engine's formula — equity times the weighted
-        open-to-open return minus the fills' fees.  The fills still come
-        from the authoritative broker (blocking, T+1, minimum commission),
-        so the mode reproduces the vectorized engine exactly when the fill
-        fees equal the engine's weight-delta fees.
+        adjusted open-to-open return minus the fills' fees.  The fills
+        still come from the authoritative broker (blocking, T+1, minimum
+        commission), so the mode reproduces the vectorized engine exactly
+        when the fill fees equal the engine's weight-delta fees.
+
+        ``target_ret`` is the caller's adjusted open-to-open matrix (p19
+        §2.3) — the single label basis, computed once in :meth:`run`.
         """
 
         state_path = Path(tempfile.gettempdir()) / f"golden-{uuid4().hex}.json"
@@ -479,7 +529,6 @@ class GoldenParity:
         broker = SimBroker()
         delay = self.execution_delay
         n = open_.shape[0]
-        target_ret = open_to_open_returns(open_)
         index_of = {code: i for i, code in enumerate(ts_codes)}
         lot_free = lot_size <= 0
         equity = [capital]

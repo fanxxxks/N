@@ -116,6 +116,12 @@ def repo(tmp_path):
             ],
             data_config,
         )
+        # p16 G8 pre-listed horizon: the exchange calendar lists the next
+        # session ahead of the last completed one — without a future row
+        # the fixture rots the first day the real clock moves past d1
+        # (weekends).  The lag stays within FRESHNESS_TOLERANCE_SESSIONS.
+        next_session = pd.bdate_range(start=d1, periods=2).strftime("%Y%m%d")[-1]
+        db.upsert_calendar([{"trade_date": next_session, "is_open": True}], data_config)
     metrics = {
         "formula_text": "TURNOVER_CHG MUL RET_5",
         "metrics": {"sharpe": 1.5, "max_drawdown": 0.2},

@@ -45,6 +45,19 @@ def _engine_inputs(populated_db: DataConfig):
     return factors, raw, loader.ts_codes, loader.dates
 
 
+def _with_price_semantics(raw: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Attach the p19 cache keys to a synthetic execution-price dict:
+    adjusted label basis mirrors the raw prices (no corporate actions)
+    and the exact constraints are unconstrained by default."""
+    out = dict(raw)
+    out.setdefault("adjusted_open", np.asarray(raw["open"], dtype=np.float64).copy())
+    n, t = np.asarray(raw["open"]).shape
+    out.setdefault("up_limit", np.full((n, t), 1e12))
+    out.setdefault("down_limit", np.full((n, t), 1e-9))
+    out.setdefault("suspended", np.zeros((n, t)))
+    return out
+
+
 def test_run_returns_expected_result(populated_db: DataConfig):
     factors, raw, ts_codes, dates = _engine_inputs(populated_db)
     result = AshareBacktestEngine(BacktestConfig(top_n=2, train_end_date="2024-02-01")).run(
@@ -74,52 +87,86 @@ def test_open_to_open_returns():
     assert ret[0, -1] == 0.0 and ret[0, -2] == 0.0
 
 
-def test_blocked_mask_suspension_and_limits(populated_db: DataConfig):
+def test_engine_exact_constraints_block_execution(populated_db: DataConfig):
+    """The engine consumes the exact constraint matrices: a suspension row
+    blocks both sides and an open at the published up_limit blocks the
+    fresh buy (p19 §2.4)."""
     factors, raw, ts_codes, dates = _engine_inputs(populated_db)
-    engine = AshareBacktestEngine(BacktestConfig())
-    open_ = np.ones((1, 3))
-    high = np.ones((1, 3))
-    low = np.ones((1, 3))
-    pre_close = np.ones((1, 3))
-    volume = np.ones((1, 3))
+    n, t = factors.shape
+    signal = np.zeros((n, t))
+    signal[0, :] = 3.0
+    signal[1, :] = 2.0
+    signal[2, :] = 1.0
+    # Both blocks land on the FIRST entry day (day 1), so the blocked
+    # names are fresh entrants (a held survivor would legitimately keep
+    # its slot — blocking only prevents new buys).
+    raw["suspended"][0, 1] = 1.0  # stock 0 suspended on day 1
+    raw["up_limit"][1, 1] = raw["open"][1, 1]  # stock 1 opens at its limit
+    result = AshareBacktestEngine(BacktestConfig(top_n=2, single_weight_cap=0.5)).run(
+        signal, raw, ts_codes, dates,
+        np.ones((n, t), dtype=bool),
+    )
+    # The first entry finds both top-ranked names blocked: the only
+    # selectable cross-section is a single stock, which is dispersion-less
+    # (T1-02), so the book holds instead of entering either blocked name.
+    assert set(result.positions[0]["ts_codes"]) == set()
 
-    open_[0, 1] = 0.0
-    blocked = engine._blocked_mask(1, open_, high, low, pre_close, volume, ["000001.SZ"], "buy")
-    assert blocked[0]
-
-    open_[:] = 1.1
-    high[:] = 1.1
-    low[:] = 1.1
-    pre_close[:] = 1.0
-    blocked_buy = engine._blocked_mask(1, open_, high, low, pre_close, volume, ["000001.SZ"], "buy")
-    assert blocked_buy[0]
-
-    open_[:] = 0.9
-    high[:] = 0.9
-    low[:] = 0.9
-    blocked_sell = engine._blocked_mask(1, open_, high, low, pre_close, volume, ["000001.SZ"], "sell")
-    assert blocked_sell[0]
+    # With only the suspension blocking, the other two names trade.
+    factors2, raw2, ts_codes2, dates2 = _engine_inputs(populated_db)
+    raw2["suspended"][0, 1] = 1.0
+    result2 = AshareBacktestEngine(
+        BacktestConfig(top_n=2, single_weight_cap=0.5)
+    ).run(
+        signal, raw2, ts_codes2, dates2,
+        np.ones((n, t), dtype=bool),
+    )
+    entered2 = set(result2.positions[0]["ts_codes"])
+    assert ts_codes2[0] not in entered2
+    assert ts_codes2[1] in entered2
+    assert ts_codes2[2] in entered2
 
 
-def test_engine_uses_board_rates_not_current_st_names():
-    # A one-word +5.2% open is inside the 10% main-board band: the
-    # historical engine must buy it, whatever the stock's current name is
-    # (there is no dated ST history, so names can never rewrite the past).
-    codes = ["000001.SZ", "600000.SH"]
-    dates = ["20240102", "20240103", "20240104", "20240105"]
-    open_ = np.full((2, 4), 10.0)
-    high = np.full((2, 4), 10.0)
-    low = np.full((2, 4), 10.0)
-    pre_close = np.full((2, 4), 10.0)
-    volume = np.full((2, 4), 1_000_000.0)
-    open_[0, 1] = high[0, 1] = low[0, 1] = 10.52  # one-word entry-day open
-    signal = np.array([[5.0] * 4, [1.0] * 4])
+def test_engine_missing_limit_record_blocks_entry(populated_db: DataConfig):
+    """A NaN limit cell is fail-closed: the stock cannot be newly bought
+    that day (no approximate fallback, p19 §2.4)."""
+    factors, raw, ts_codes, dates = _engine_inputs(populated_db)
+    n, t = factors.shape
+    # NaN limit record on the first entry day: the stock cannot be newly
+    # bought THAT day (later days keep their own exact semantics).
+    raw["up_limit"][0, 1] = np.nan
+    raw["down_limit"][0, 1] = np.nan
+    signal = np.zeros((n, t))
+    signal[0, :] = 3.0
+    signal[1, :] = 2.0
+    result = AshareBacktestEngine(BacktestConfig(top_n=1, single_weight_cap=1.0)).run(
+        signal, raw, ts_codes, dates,
+        np.ones((n, t), dtype=bool),
+    )
+    assert ts_codes[0] not in result.positions[0]["ts_codes"]
+    assert result.positions[0]["ts_codes"] == [ts_codes[1]]
+
+
+def test_engine_exact_limit_table_not_current_names(populated_db: DataConfig):
+    # The dated limit row carries the band in force that day: a near-limit
+    # one-word open below the published up_limit is buyable, whatever the
+    # stock's current display name is (names never rewrite the past).
+    factors, raw, ts_codes, dates = _engine_inputs(populated_db)
+    n, t = factors.shape
+    day = 2
+    raw["open"][0, day] = raw["open"][0, day] * 1.052
+    raw["high"][0, day] = raw["open"][0, day]
+    raw["low"][0, day] = raw["open"][0, day]
+    raw["up_limit"][0, day] = raw["open"][0, day - 1] * 1.10
+    signal = np.zeros((n, t))
+    signal[0, :] = 5.0
+    signal[1, :] = 1.0
     result = AshareBacktestEngine(
         BacktestConfig(top_n=1, single_weight_cap=1.0)
-    ).run(signal, {"open": open_, "high": high, "low": low,
-                   "pre_close": pre_close, "volume": volume}, codes, dates,
-          np.ones((len(codes), len(dates)), dtype=bool))
-    assert result.positions[0]["ts_codes"] == ["000001.SZ"]
+    ).run(
+        signal, raw, ts_codes, dates,
+        np.ones((n, t), dtype=bool),
+    )
+    assert result.positions[0]["ts_codes"] == [ts_codes[0]]
 
 
 def test_run_includes_benchmark_positions_and_aligned_dates(populated_db: DataConfig):
@@ -161,13 +208,13 @@ def test_run_excludes_high_signal_outside_pit_universe():
     factors = np.array(
         [[100.0, 100.0, 100.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]
     )
-    raw = {
+    raw = _with_price_semantics({
         "open": np.ones((3, 3)),
         "high": np.full((3, 3), 1.1),
         "low": np.full((3, 3), 0.9),
         "pre_close": np.ones((3, 3)),
         "volume": np.ones((3, 3)),
-    }
+    })
     universe_mask = np.array(
         [[False, False, True], [True, True, True], [True, True, True]],
         dtype=bool,
@@ -191,13 +238,13 @@ def _masked_market(n_stocks=4, n_dates=8):
     codes = [f"{i:06d}.SZ" for i in range(n_stocks)]
     dates = [f"202401{i:02d}" for i in range(n_dates)]
     open_ = np.full((n_stocks, n_dates), 10.0)
-    raw = {
+    raw = _with_price_semantics({
         "open": open_,
         "high": open_ * 1.02,
         "low": open_ * 0.98,
         "pre_close": open_.copy(),
         "volume": np.full((n_stocks, n_dates), 1_000_000.0),
-    }
+    })
     signal = np.tile(
         np.arange(n_stocks, 0, -1, dtype=float)[:, None], (1, n_dates)
     )
@@ -375,13 +422,16 @@ def test_engine_survives_busted_book_end_to_end():
     codes = ["000001.SZ", "600000.SH"]
     dates = ["20240102", "20240103", "20240104", "20240105"]
     open_ = np.array([[10.0, 10.0, 1e-9, 1e-9], [10.0, 10.0, 10.0, 10.0]])
-    raw = {
+    raw = _with_price_semantics({
         "open": open_,
         "high": open_.copy(),
         "low": open_.copy(),
         "pre_close": open_.copy(),
         "volume": np.ones((2, 4)),
-    }
+    })
+    # The busted open is a missing bar, not a limit state: keep the exact
+    # constraints unconstrained so the day blocks via the dead-bar rule.
+    raw["up_limit"][:] = 1e12
     result = AshareBacktestEngine(
         BacktestConfig(top_n=1, single_weight_cap=1.0)
     ).run(

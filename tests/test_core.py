@@ -52,6 +52,11 @@ def _make_bars(tmp_path: Path, n_dates: int = 40) -> tuple[list[str], list[str],
                     "amount": 1_000_000.0 * close,
                     "turnover_rate": 1.0,
                     "adj_factor": 1.0,
+                    # p19 §2.4: the broker gates fills on the exact
+                    # constraint columns (wide bands -> never blocking).
+                    "up_limit": close * 1.2,
+                    "down_limit": close * 0.8,
+                    "suspended": False,
                 }
             )
     return dates, ts_codes, pd.DataFrame(rows)
@@ -102,6 +107,10 @@ def _write_db(tmp_path: Path, dates: list[str], ts_codes: list[str], bars: pd.Da
         # P8-05: this fixture feeds the formal training write path, whose
         # schema-v2 identity must bind to a persisted dataset manifest.
         save_manifest(db, cfg, build_dataset_manifest(db, cfg))
+    # p19: the loader's formal price source is the v2 database.
+    from tests.conftest import populate_v2_for_config
+
+    populate_v2_for_config(cfg, dates, ts_codes, bars)
     return cfg
 
 
