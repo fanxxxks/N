@@ -62,6 +62,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import duckdb
 import pandas as pd
 
 from .db import AshareDB
@@ -716,24 +717,31 @@ class TushareStore:
         database — no second implementation of gate semantics.
 
         ``stocks`` and ``trade_calendar`` are reference/metadata tables
-        not present in v2 (p17 §11.2: L0/audit surfaces); they are read
-        from the production database via DuckDB ``ATTACH`` (read-only).
+        not present in v2 (p17 §11.2: L0/audit surfaces); they are copied
+        from the production database (read-only source) into local v2
+        tables so the gate runner needs no cross-database ATTACH.
 
         Returns the list of created view names.
         """
 
-        alias = "_prod_gate_ref"
-        self.db.execute(
-            f"ATTACH IF NOT EXISTS '{prod_db_path}' AS {alias} (READ_ONLY)"
-        )
+        prod = duckdb.connect(prod_db_path, read_only=True)
+        try:
+            for table in ("stocks", "trade_calendar"):
+                # Drop any prior view or table (idempotent gate adapter)
+                self.db.execute(f"DROP VIEW IF EXISTS {table}")
+                self.db.execute(f"DROP TABLE IF EXISTS {table}")
+                ref = prod.execute(f"SELECT * FROM {table}").fetchdf()
+                self.db.register(f"_ref_{table}", ref)
+                self.db.execute(
+                    f"CREATE TABLE {table} AS "
+                    f"SELECT * FROM _ref_{table}"
+                )
+        finally:
+            prod.close()
         views: list[tuple[str, str]] = [
             ("constituents",
              "SELECT index_code, ts_code, in_date, out_date "
              "FROM industry_membership_pit WHERE level = 1"),
-            ("stocks",
-             f"SELECT ts_code, list_date FROM {alias}.stocks"),
-            ("trade_calendar",
-             f"SELECT trade_date, is_open FROM {alias}.trade_calendar"),
             ("daily_bar",
              "SELECT r.ts_code, r.trade_date, r.open, r.high, r.low, "
              "r.close, r.pre_close, r.vol AS volume, r.amount, "
@@ -746,6 +754,9 @@ class TushareStore:
         for name, sql in views:
             self.db.execute(f"CREATE OR REPLACE VIEW {name} AS {sql}")
             created.append(name)
+        # The copied reference tables are also "views" from the adapter's
+        # perspective (they were sourced from production).
+        created.extend(["stocks", "trade_calendar"])
         return created
 
     # -- ingest ------------------------------------------------------------
