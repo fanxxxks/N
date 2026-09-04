@@ -743,6 +743,57 @@ class TushareStore:
             raise
         return result
 
+    def snapshot_only(
+        self,
+        endpoint: str,
+        frame: pd.DataFrame,
+        *,
+        params: dict,
+        fields: list[str] | None = None,
+        row_limit: int | None = None,
+    ) -> TushareIngestResult:
+        """L0-only batch for endpoints without a formal v2 table
+        (p17 §11.2: ``stock_basic`` / ``trade_cal`` are audit/metadata
+        surfaces — full-market frames never enter a formal table, §15.5).
+
+        Writes the raw snapshot and a succeeded ledger row; no L1 table is
+        touched.  Ledger-based resume applies identically.
+        """
+
+        ingest_id = self._ingest_id_factory(endpoint)
+        started_at = self._clock()
+        fields_resolved = fields if fields is not None else list(frame.columns)
+        snapshot: TushareSnapshotRecord | None = None
+        try:
+            snapshot = self._write_snapshot(
+                endpoint, ingest_id, frame, row_limit=row_limit
+            )
+            self.db.execute("BEGIN TRANSACTION")
+            try:
+                self._insert_ledger_succeeded(
+                    ingest_id, endpoint, params, fields_resolved,
+                    started_at, frame, snapshot, row_limit=row_limit,
+                )
+                self.db.execute("COMMIT")
+            except Exception:
+                self.db.execute("ROLLBACK")
+                raise
+        except Exception as exc:
+            self._record_failure(
+                ingest_id, endpoint, exc, snapshot, frame, params,
+                fields_resolved, started_at, row_limit=row_limit,
+            )
+            raise
+        return TushareIngestResult(
+            ingest_id=ingest_id,
+            endpoint=endpoint,
+            status="succeeded",
+            row_count=int(len(frame)),
+            raw_path=snapshot.raw_path,
+            raw_payload_sha256=snapshot.raw_payload_sha256,
+            hit_row_limit=bool(row_limit is not None and len(frame) >= row_limit),
+        )
+
     # -- seams (overridable for order/fault-injection tests) -----------------
 
     def _write_snapshot(
@@ -805,29 +856,9 @@ class TushareStore:
             )
             if spec.mode == "KEYED":
                 self._assert_no_keyed_conflict(spec, batch)
-            self.db.execute(
-                "INSERT INTO source_ingest_runs VALUES (?, ?, ?, ?, ?, ?, "
-                "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    ingest_id,
-                    _PROVIDER,
-                    spec.name,
-                    json.dumps(params, sort_keys=True, ensure_ascii=False,
-                               separators=(",", ":")),
-                    json.dumps(sorted(str(c) for c in fields),
-                               ensure_ascii=False),
-                    started_at,
-                    self._clock(),
-                    "succeeded",
-                    int(len(frame)),
-                    snapshot.raw_payload_sha256,
-                    snapshot.raw_path,
-                    self.code_commit,
-                    self.sdk_version,
-                    bool(row_limit is not None and len(frame) >= row_limit),
-                    None,
-                    None,
-                ],
+            self._insert_ledger_succeeded(
+                ingest_id, spec.name, params, fields, started_at, frame,
+                snapshot, row_limit=row_limit,
             )
             self.db.execute("COMMIT")
         except Exception:
@@ -841,6 +872,43 @@ class TushareStore:
             raw_path=snapshot.raw_path,
             raw_payload_sha256=snapshot.raw_payload_sha256,
             hit_row_limit=bool(row_limit is not None and len(frame) >= row_limit),
+        )
+
+    def _insert_ledger_succeeded(
+        self,
+        ingest_id: str,
+        endpoint: str,
+        params: dict,
+        fields: list[str],
+        started_at: datetime,
+        frame: pd.DataFrame,
+        snapshot: TushareSnapshotRecord,
+        *,
+        row_limit: int | None,
+    ) -> None:
+        self.db.execute(
+            "INSERT INTO source_ingest_runs VALUES (?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                ingest_id,
+                _PROVIDER,
+                endpoint,
+                json.dumps(params, sort_keys=True, ensure_ascii=False,
+                           separators=(",", ":")),
+                json.dumps(sorted(str(c) for c in fields),
+                           ensure_ascii=False),
+                started_at,
+                self._clock(),
+                "succeeded",
+                int(len(frame)),
+                snapshot.raw_payload_sha256,
+                snapshot.raw_path,
+                self.code_commit,
+                self.sdk_version,
+                bool(row_limit is not None and len(frame) >= row_limit),
+                None,
+                None,
+            ],
         )
 
     def _assert_no_keyed_conflict(self, spec: V2Table, batch: pd.DataFrame) -> None:

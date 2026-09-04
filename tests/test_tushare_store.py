@@ -541,6 +541,48 @@ class TestLedgerContract:
         assert len(_ledger_rows(db)) == 1
 
 
+class TestSnapshotOnly:
+    """L0-only batches for endpoints without a formal v2 table
+    (p17 §11.2: stock_basic / trade_cal are audit/metadata surfaces)."""
+
+    def test_snapshot_only_writes_l0_and_ledger_without_formal_table(self, store):
+        st, db = store
+        frame = _frame("stock_basic", [
+            {"ts_code": "000001.SZ", "name": "平安银行", "list_status": "L"},
+            {"ts_code": "000002.SZ", "name": "万科A", "list_status": "L"},
+        ])
+        result = st.snapshot_only("stock_basic", frame,
+                                  params={"list_status": "L"},
+                                  fields=list(frame.columns), row_limit=None)
+        assert isinstance(result, TushareIngestResult)
+        assert result.status == "succeeded"
+        assert result.row_count == 2
+        raw_file = Path(st.raw_root) / result.raw_path
+        assert raw_file.exists()
+        assert len(pd.read_parquet(raw_file)) == 2  # full source fidelity
+        ledger = _ledger_rows(db)
+        assert len(ledger) == 1
+        assert ledger.iloc[0]["endpoint"] == "stock_basic"
+        assert ledger.iloc[0]["status"] == "succeeded"
+        # No formal table touched: the batch endpoint has no v2 table.
+        assert "stock_basic" not in V2_TABLES
+
+    def test_snapshot_only_failure_records_failed_ledger(self, store, monkeypatch):
+        st, db = store
+
+        def boom(self, *args, **kwargs):
+            raise RuntimeError("snapshot fault")
+
+        monkeypatch.setattr(st, "_write_snapshot", boom.__get__(st))
+        with pytest.raises(RuntimeError, match="snapshot fault"):
+            st.snapshot_only("trade_cal", _frame("trade_cal", []),
+                             params={"exchange": "SSE"}, fields=["cal_date"],
+                             row_limit=None)
+        ledger = _ledger_rows(db)
+        assert ledger.iloc[0]["status"] == "failed"
+        assert ledger.iloc[0]["error_type"] == "RuntimeError"
+
+
 class TestAllTablesSmoke:
     """Every data table's spec must map a minimal valid source row end to
     end — this catches DDL/spec drift across all 18 tables at once."""
