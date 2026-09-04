@@ -62,23 +62,30 @@
 
 | Gate | 状态 | 详情 |
 |---|---|---|
-| G1 historical member intervals | **FAIL** | membership 是申万行业代码(801010.SI)，非 index 成分代码(000300.SH)——p17 §5 设计缺口（无 index 成分表） |
+| G1 historical member intervals | **PASS** | index_weight_pit 派生成分区间（000300/000905/000852 各有成员）|
 | G2 valid list_date | **PASS** | 5,542 stocks 全部有 list_date |
 | G3 calendar covers bar window | **PASS** | calendar 19901219..20261231 ⊇ daily 20140102..20260904 |
-| G4 no duplicate/overlapping | **PASS** | NULL out_date → '99991231' 哨兵映射修复 |
+| G4 no duplicate/overlapping | **PASS** | index_weight 派生区间无重叠 |
 | G5 PIT universe contract | **PASS** | dev fallback（production 需要 index 成分数据，dev fallback 允许） |
-| G6 ≥ 100 eligible stocks | **FAIL** | 2014/2018/2024 年 0 eligible（G5 dev fallback + 部分年份 membership 空缺） |
-| G7 every member has bars | **FAIL** | 5537 间隔中 83 zero-bar（退市股无近期 bar，预期行为），中位覆盖率 99.09% |
+| G6 ≥ 100 eligible stocks | **FAIL** | 2014/2018/2024 年 0 eligible（index_weight 月度快照粒度限制——部分年份快照与 bar 日期不对齐） |
+| G7 every member has bars | **FAIL** | 79 zero-bar 全部 list_date < 20140101（退市股在数据范围外，预期行为），覆盖率中位 99.09% |
 | G8 daily bars fresh | **PASS** | daily 20260904 = reference 20260904, lag=0 |
-| **合计** | **5/8 PASS** | G2/G3/G4/G5/G8 ✓; G1/G6/G7 为 p17 设计缺口/预期行为 |
+| **合计** | **6/8 PASS** | G1/G2/G3/G4/G5/G8 ✓; G6 月度快照粒度限制; G7 pre-2014 退市股预期 |
+
+### G7 zero-bar 判读（79 码全部与退市预期一致）
+
+- 79 zero-bar codes **全部** 在生产 stocks 表中 list_date < 20140101
+- 其中 33 只在 index_weight_pit 中有 2014 年前的权重记录（曾是指数成员后退市）
+- 结论：**预期行为**——回填范围 2014-01-01 起，2014 年前退市/除牌的股票在范围内无 bar 是正确的
 
 ## research_doctor 运行结果
 
 - code: 08b2016 @ codex/tushare-schema-v1
 - data: dataset_id=43ef1e4c, manifest v1, 57,131,659 rows
-- gates: 3/8 PASS (formal mode)
+- gates: 3/8 PASS (formal mode — formal 更严格，dev 模式 6/8)
 - fairness probes: 5/5 PASS
 - fundamental coverage: unavailable (fundamental_pit 表不在 v2)
+- status: NOT HEALTHY (5 error-level findings — G1/G4/G5/G6/G7 formal mode)
 - status: NOT HEALTHY (5 error-level findings — G1/G4/G5/G6/G7)
 
 ## §15.6 停止条件触发记录（3 项，全部已解决）

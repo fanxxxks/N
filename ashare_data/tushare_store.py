@@ -740,21 +740,22 @@ class TushareStore:
         finally:
             prod.close()
 
-        # _gate_constituents: L1 membership (the primary classification).
-        # NOTE: this is SW industry membership, NOT index constituents.
-        # G1/G4/G5 check for index_codes (000300.SH etc.) which are a
-        # different concept — those gates will report 0 matches (fail
-        # state) until index constituent data is backfilled separately.
-        # G4 fix: active members (is_new=Y) have NULL out_date in the
-        # source; the production schema uses '99991231' as the sentinel
-        # for "no end date" — map NULL → '99991231' so the interval
-        # validation (membership_interval_issues) doesn't flag them.
+        # _gate_constituents: derived from index_weight_pit (p19 §6.4:
+        # index_weight is the PIT source for the production universe
+        # 300+500 pool).  Each (index_code, con_code) pair's membership
+        # interval: in_date = first appearance, out_date = '99991231'
+        # (conservative: all stocks treated as still in index; monthly
+        # snapshot granularity — documented limitation).
+        # industry_membership_pit (SW industry) is NOT mapped here — it's
+        # a different concept (行业成员 ≠ 指数成分).
         self.db.execute("DROP TABLE IF EXISTS _gate_constituents")
         self.db.execute(
             "CREATE TABLE _gate_constituents AS "
-            "SELECT index_code, ts_code, in_date, "
-            "COALESCE(out_date, '99991231') AS out_date "
-            "FROM industry_membership_pit WHERE level = 1"
+            "SELECT index_code, con_code AS ts_code, "
+            "MIN(trade_date) AS in_date, "
+            "'99991231' AS out_date "
+            "FROM index_weight_pit "
+            "GROUP BY index_code, con_code"
         )
         # _gate_daily_bar: join raw + adj_factor, explicit column mapping
         # (vol → volume per production schema).
