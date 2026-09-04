@@ -724,6 +724,15 @@ class TestGateAdapter:
                         _frame("industry_membership_pit", [member_row]),
                         params={"ts_code": "000001.SZ"},
                         fields=list(member_row), row_limit=2000)
+        # index_weight_pit is the constituents source for the gate adapter
+        st.ingest_batch("index_weight_pit",
+                        _frame("index_weight_pit", [
+                            {"index_code": "000300.SH",
+                             "con_code": "000001.SZ",
+                             "trade_date": "20240315", "weight": 0.9},
+                        ]),
+                        params={"index_code": "000300.SH"},
+                        fields=["index_code", "con_code"], row_limit=3000)
         prod_path = str(tmp_path / "prod_ref.duckdb")
         prod = AshareDB(prod_path)
         prod.execute(
@@ -743,7 +752,7 @@ class TestGateAdapter:
         assert gate_config.stocks_table == "_gate_stocks"
         cons = db.query("SELECT * FROM _gate_constituents")
         assert len(cons) == 1
-        assert cons.iloc[0]["index_code"] == "801010.SI"
+        assert cons.iloc[0]["index_code"] == "000300.SH"
         bars = db.query("SELECT ts_code, volume FROM _gate_daily_bar")
         assert len(bars) == 2
         assert "volume" in bars.columns
