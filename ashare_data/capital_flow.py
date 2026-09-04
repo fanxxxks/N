@@ -31,8 +31,11 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from .config import resolve_v2_duckdb_path
 from .db import AshareDB, sql_quoted_list
 from .fundamentals import _cached_or_fetch, _read_cached, _write_cached
+from .gates import FRESHNESS_TOLERANCE_SESSIONS
+from .universe import OPEN_ENDED_OUT_DATE
 
 # Vocabulary feature names produced by this module.
 EXTERNAL_FACTOR_NAMES = ("MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM", "MARGIN_CROWD_60")
@@ -144,46 +147,252 @@ def sync_capital_flow(
     }
 
 
-def _industry_map(config) -> dict[str, str]:
-    """``ts_code -> Shenwan first-level industry index code`` (snapshot)."""
+class IndustryMembershipError(ValueError):
+    """The membership intervals violate p17 §14.3: the same stock at the
+    same level has more than one valid industry on some day (overlap).
+    Fail-closed — never silently merged."""
 
-    with AshareDB(config.duckdb_path, read_only=True) as db:
-        members = db.query(
-            f"SELECT index_code, ts_code FROM {config.sw_member_table}"
+
+def _membership_rows(config, level: int) -> pd.DataFrame:
+    """Expanded membership contract rows of one level from the v2 PIT table
+    (p17 §5.2 table 8, 勘误 #2).  A missing source propagates as a duckdb
+    error for the caller to degrade on (Tier C auxiliary semantics)."""
+
+    v2_path = resolve_v2_duckdb_path(config)
+    with AshareDB(v2_path, read_only=True) as db:
+        return db.query(
+            "SELECT ts_code, index_code, in_date, out_date, is_new, "
+            "industry_name, available_date FROM industry_membership_pit "
+            f"WHERE level = {int(level)} ORDER BY ts_code, in_date"
         )
-    return {
-        str(code): str(index)
-        for code, index in zip(members["ts_code"], members["index_code"])
-    }
+
+
+def _membership_intervals(
+    rows: pd.DataFrame,
+) -> dict[str, list[tuple[str, str, str, str]]]:
+    """``ts_code -> sorted (in_date, out_date, available_date, index_code)``
+    half-open intervals; an empty ``out_date`` becomes the open-ended
+    sentinel (still a member, p17 §5.2 table 8)."""
+
+    intervals: dict[str, list[tuple[str, str, str, str]]] = {}
+    for row in rows.itertuples(index=False):
+        out_date = (
+            str(row.out_date)
+            if pd.notna(row.out_date) and str(row.out_date)
+            else OPEN_ENDED_OUT_DATE
+        )
+        available_date = (
+            str(row.available_date) if pd.notna(row.available_date) else ""
+        )
+        intervals.setdefault(str(row.ts_code), []).append(
+            (
+                str(row.in_date),
+                out_date,
+                available_date,
+                str(row.index_code),
+            )
+        )
+    for values in intervals.values():
+        values.sort(key=lambda item: (item[0], item[1]))
+    return intervals
 
 
 def build_industry_member_frame(
     config,
     ts_codes: list[str],
     dates: list[str],
+    *,
+    level: int = 1,
 ) -> pd.DataFrame:
-    """Build the ``[stock x date]`` Shenwan first-level industry code frame.
+    """Build the ``[stock x date]`` Shenwan industry-code frame from the
+    v2 ``industry_membership_pit`` intervals (p17, D5 原位切换).
 
-    Membership is a current snapshot repeated over all dates (the same
-    survivorship caveat as ``INDUSTRY_MOMENTUM``); unmapped stocks stay
-    NaN so the industry-relative factors never fabricate a grouping.  Any
-    failure (e.g. the table does not exist yet) degrades to an all-NaN
-    frame, keeping the loader independent of this data source.
+    Semantics (p17 §6.3/§14.3, single implementation):
+
+    * an assignment is valid on the half-open interval
+      ``[in_date, out_date)``; ``out_date`` NULL means still a member;
+    * it becomes *visible* only from ``available_date`` (p17 §6.1: the
+      session after ``in_date``) — the inclusion day itself carries no
+      industry yet, and nothing exists before inclusion;
+    * the same stock at the same level has at most one valid industry
+      per day — overlapping intervals raise
+      :class:`IndustryMembershipError` (fail-closed, never silently
+      merged);
+    * the default level is Shenwan L1 (the historical IND_REL grouping);
+      L2/L3 rows never leak into it.
+
+    Unmapped / not-yet-visible cells stay NaN so the industry-relative
+    factors never fabricate a grouping.  A missing v2 source degrades to
+    an all-NaN frame with a warning (Tier C auxiliary semantics); only
+    the data-integrity violation (overlap) fails closed.
     """
 
     frame = pd.DataFrame(np.nan, index=ts_codes, columns=dates, dtype=object)
     if not ts_codes:
         return frame
     try:
-        industry_map = _industry_map(config)
-    except Exception as exc:  # noqa: BLE001 - table may not exist yet.
+        rows = _membership_rows(config, level)
+    except Exception as exc:  # noqa: BLE001 - source may not exist yet.
         logger.warning(f"Industry membership frame unavailable: {exc}")
         return frame
-    for code in ts_codes:
-        industry = industry_map.get(code)
-        if industry is not None:
-            frame.loc[code] = industry
+    intervals = _membership_intervals(rows)
+
+    # Fail-closed uniqueness sweep (p17 §14.3): interval overlap means
+    # some day carries two valid industries for one stock/level.
+    for code, values in intervals.items():
+        previous_out: str | None = None
+        for in_date, out_date, _available, _index_code in values:
+            if previous_out is not None and in_date < previous_out:
+                raise IndustryMembershipError(
+                    f"overlapping industry_membership_pit intervals for "
+                    f"({code}, level={level}): {in_date} < {previous_out} "
+                    "(p17 §14.3: one valid industry per stock/level/day)"
+                )
+            previous_out = (
+                out_date if previous_out is None else max(previous_out, out_date)
+            )
+
+    # Fill: each interval contributes one contiguous visible column slice
+    # [max(in_date, available_date), out_date) clipped to the window.
+    date_index = {date: position for position, date in enumerate(dates)}
+    known_codes = set(ts_codes)
+    for code, values in intervals.items():
+        if code not in known_codes:
+            continue
+        row = frame.index.get_loc(code)
+        for in_date, out_date, available_date, index_code in values:
+            start = max(in_date, available_date) if available_date else in_date
+            start_idx = date_index.get(start)
+            if start_idx is None:
+                inside = [d for d in dates if start <= d < out_date]
+                if not inside:
+                    continue  # interval entirely outside the window
+                start_idx = date_index[inside[0]]
+            end_idx = min(date_index.get(out_date, len(dates)), len(dates))
+            if start_idx < end_idx:
+                frame.iloc[row, start_idx:end_idx] = index_code
     return frame
+
+
+def load_industry_taxonomy(config) -> pd.DataFrame:
+    """The v2 ``industry_taxonomy`` rows (index_code -> generation/name),
+    the single traceability path for the 2021 taxonomy switch."""
+
+    v2_path = resolve_v2_duckdb_path(config)
+    with AshareDB(v2_path, read_only=True) as db:
+        return db.query(
+            "SELECT index_code, industry_name, level, industry_code, src "
+            "FROM industry_taxonomy ORDER BY index_code"
+        )
+
+
+def industry_index_freshness(
+    config,
+    dates: list[str],
+    tolerance: int = FRESHNESS_TOLERANCE_SESSIONS,
+) -> int | None:
+    """Open-session lag of the Shenwan industry-index close source (p17
+    §12: 滞后 = 最近会话 − 该源最新会话, tolerance 3).  ``None`` when the
+    source has no rows (unusable — reported by the caller); the lag count
+    otherwise.  ``lag > tolerance`` marks the source stale for the D7
+    qualification gate (the RunSpec rejection wiring is t19's)."""
+
+    try:
+        with AshareDB(config.duckdb_path, read_only=True) as db:
+            latest = db.query(
+                f"SELECT MAX(trade_date) AS latest FROM {config.sw_index_table}"
+            )
+    except Exception:  # noqa: BLE001 - table may not exist yet.
+        return None
+    latest_value = latest.iloc[0]["latest"] if not latest.empty else None
+    if latest_value is None or pd.isna(latest_value):
+        return None
+    latest_date = str(latest_value)
+    return len([date for date in dates if date > latest_date])
+
+
+def industry_membership_gate(
+    config,
+    dates: list[str],
+    *,
+    level: int = 1,
+    coverage_threshold: float = 0.98,
+) -> dict[str, object]:
+    """Machine-checkable D5 verification gate (p17 §7/§12 C→B thresholds).
+
+    * ``coverage`` — PIT-visible industry sessions over the interval span
+      sessions of every member stock (p17 §12: 有效区间覆盖 ≥ 98%);
+    * ``overlap_violations`` — (stock, day) cells with two interval-valid
+      industries (must be 0; p17 §15.3 red line);
+    * ``availability_complete`` — every expanded row carries a non-null
+      ``available_date`` (p17 §6.1);
+    * ``official_reconciliation`` — the third pre-registered sub-gate is
+      an external reconciliation against official SW announcements: it is
+      NOT verifiable in-repo, so the gate can never upgrade the source to
+      Tier B here (p17 §7: 未验证维持 C) — the honest gap travels with
+      the result instead of being silently upgraded.
+    """
+
+    result: dict[str, object] = {
+        "coverage": 0.0,
+        "overlap_violations": 0,
+        "availability_complete": False,
+        "official_reconciliation": "not_verifiable_in_repo",
+        "coverage_threshold": coverage_threshold,
+        "upgrade_to_b": False,
+    }
+    try:
+        rows = _membership_rows(config, level)
+    except Exception as exc:  # noqa: BLE001 - missing source reports, not raises.
+        logger.warning(f"industry membership gate unavailable: {exc}")
+        return result
+    if rows.empty:
+        # An empty membership table is "complete but covers nothing".
+        result["availability_complete"] = True
+        return result
+    result["availability_complete"] = not bool(rows["available_date"].isna().any())
+
+    intervals = _membership_intervals(rows)
+    span_total = 0
+    visible_total = 0
+    overlaps = 0
+    for _code, values in intervals.items():
+        covered = sorted(
+            {
+                date
+                for in_date, out_date, _available, _index in values
+                for date in dates
+                if in_date <= date < out_date
+            }
+        )
+        span_total += len(covered)
+        overlaps += sum(
+            1
+            for date in covered
+            if sum(
+                1
+                for in_date, out_date, _available, _index in values
+                if in_date <= date < out_date
+            )
+            > 1
+        )
+        visible_total += sum(
+            1
+            for date in covered
+            if any(
+                in_date <= date < out_date and available_date and available_date <= date
+                for in_date, out_date, available_date, _index in values
+            )
+        )
+    result["overlap_violations"] = overlaps
+    result["coverage"] = (visible_total / span_total) if span_total else 0.0
+    result["upgrade_to_b"] = bool(
+        result["coverage"] >= coverage_threshold
+        and overlaps == 0
+        and result["availability_complete"]
+        and result["official_reconciliation"] == "verified"
+    )
+    return result
 
 
 def _margin_crowd(wide: pd.DataFrame, window: int = _MARGIN_CROWD_WINDOW) -> pd.DataFrame:
@@ -224,10 +433,12 @@ def build_capital_frames(
             sw_index = db.query(
                 f"SELECT index_code, trade_date, close FROM {config.sw_index_table}"
             )
-        industry_map = _industry_map(config)
     except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
         logger.warning(f"Capital-flow frames unavailable: {exc}")
         return frames
+    # D5: the membership dimension comes from the v2 PIT intervals; the
+    # industry index closes stay on the legacy source (no v2 SW-close table).
+    industry_frame = build_industry_member_frame(config, ts_codes, dates)
 
     if not margin.empty:
         wide = (
@@ -241,17 +452,21 @@ def build_capital_frames(
         frames["MARGIN_BALANCE_CHG"] = change.replace([np.inf, -np.inf], np.nan)
         frames["MARGIN_CROWD_60"] = _margin_crowd(wide, _MARGIN_CROWD_WINDOW)
 
-    if industry_map and not sw_index.empty:
+    if not sw_index.empty and not industry_frame.empty:
         index_wide = sw_index.pivot_table(
             index="index_code", columns="trade_date", values="close", aggfunc="last"
         ).reindex(columns=dates)
         with np.errstate(all="ignore"):
             industry_ret = index_wide / index_wide.shift(_INDUSTRY_WINDOW, axis=1) - 1.0
-        for position, code in enumerate(ts_codes):
-            industry = industry_map.get(code)
-            if industry is not None and industry in industry_ret.index:
-                frames["INDUSTRY_MOMENTUM"].iloc[position] = industry_ret.loc[
-                    industry
-                ].to_numpy(dtype=float)
+        momentum = pd.DataFrame(
+            np.nan, index=industry_frame.index, columns=industry_frame.columns
+        )
+        # Per-date membership: each industry's return series is applied
+        # exactly where the PIT frame assigns that industry on that date.
+        for industry in industry_ret.index:
+            momentum = momentum.mask(
+                industry_frame == industry, industry_ret.loc[industry], axis=1
+            )
+        frames["INDUSTRY_MOMENTUM"] = momentum
 
     return frames

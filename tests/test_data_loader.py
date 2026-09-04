@@ -199,9 +199,54 @@ def test_load_data_feeds_industry_relative_factors(populated_db: DataConfig):
     # With Shenwan membership present the loader injects the industry code
     # frame: the industry-relative rows leave the neutral state, and a
     # single-member industry demeans to exactly zero (stays neutral).
-    with AshareDB(populated_db.duckdb_path) as db:
-        db.replace_sw_members("801780", ["000001.SZ", "600000.SH"], populated_db)
-        db.replace_sw_members("801880", ["300001.SZ"], populated_db)
+    # D5: the industry source is the v2 membership PIT table (in_date
+    # before the window so the whole fixture window is visible).
+    from tests.conftest import populate_v2_industry_tables
+
+    populate_v2_industry_tables(
+        populated_db.duckdb_path.parent / "ashare_v2.duckdb",
+        membership_rows=[
+            {
+                "ts_code": code,
+                "index_code": "801780",
+                "level": 1,
+                "in_date": "20200101",
+                "out_date": None,
+                "is_new": "0",
+                "industry_name": "A",
+                "available_date": "20200102",
+            }
+            for code in ("000001.SZ", "600000.SH")
+        ]
+        + [
+            {
+                "ts_code": "300001.SZ",
+                "index_code": "801880",
+                "level": 1,
+                "in_date": "20200101",
+                "out_date": None,
+                "is_new": "0",
+                "industry_name": "B",
+                "available_date": "20200102",
+            }
+        ],
+        taxonomy_rows=[
+            {
+                "index_code": "801780",
+                "industry_name": "A",
+                "level": "L1",
+                "industry_code": "SW2020-480000",
+                "src": "sw2020",
+            },
+            {
+                "index_code": "801880",
+                "industry_name": "B",
+                "level": "L1",
+                "industry_code": "SW2020-490000",
+                "src": "sw2020",
+            },
+        ],
+    )
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     tensor = loader.factor_tensor.numpy()
@@ -220,8 +265,24 @@ def test_load_data_feeds_industry_relative_factors(populated_db: DataConfig):
 def test_load_data_exposes_industry_codes_for_vm(populated_db: DataConfig):
     # The VM's CS_NEUTRALIZE consumes dense industry group ids aligned with
     # the factor stack: same industry -> same id, unmapped stock -> NaN.
-    with AshareDB(populated_db.duckdb_path) as db:
-        db.replace_sw_members("801780", ["000001.SZ", "600000.SH"], populated_db)
+    from tests.conftest import populate_v2_industry_tables
+
+    populate_v2_industry_tables(
+        populated_db.duckdb_path.parent / "ashare_v2.duckdb",
+        membership_rows=[
+            {
+                "ts_code": code,
+                "index_code": "801780",
+                "level": 1,
+                "in_date": "20200101",
+                "out_date": None,
+                "is_new": "0",
+                "industry_name": "A",
+                "available_date": "20200102",
+            }
+            for code in ("000001.SZ", "600000.SH")
+        ],
+    )
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     codes = loader.industry_codes

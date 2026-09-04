@@ -89,6 +89,65 @@ def populate_v2_for_config(
     return populate_v2_price_tables(v2_path, dates, ts_codes, bars, **kwargs)
 
 
+V2_INDUSTRY_DDL = {
+    "industry_membership_pit": """
+        CREATE TABLE IF NOT EXISTS industry_membership_pit (
+            ts_code VARCHAR, index_code VARCHAR, level INTEGER,
+            in_date VARCHAR, out_date VARCHAR, is_new VARCHAR,
+            industry_name VARCHAR, available_date VARCHAR
+        )""",
+    "industry_taxonomy": """
+        CREATE TABLE IF NOT EXISTS industry_taxonomy (
+            index_code VARCHAR, industry_name VARCHAR, level VARCHAR,
+            industry_code VARCHAR, src VARCHAR
+        )""",
+}
+
+
+def populate_v2_industry_tables(
+    v2_path: Path,
+    membership_rows: list[dict] | None = None,
+    taxonomy_rows: list[dict] | None = None,
+) -> Path:
+    """Populate the v2 industry membership/taxonomy tables (p17 §5.2 table 8
+    loader-facing subset + taxonomy) with explicit contract rows.
+
+    ``membership_rows`` follow the p17 勘误 #2 expanded-row shape:
+    ``ts_code / index_code / level / in_date / out_date (nullable) /
+    is_new / industry_name / available_date``.  Default = tables exist but
+    stay empty (loader degrades to an all-NaN industry frame, the same
+    visible behavior as today's no-membership databases).
+    """
+
+    v2_path = Path(v2_path)
+    v2_path.parent.mkdir(parents=True, exist_ok=True)
+    with AshareDB(v2_path) as db:
+        for ddl in V2_INDUSTRY_DDL.values():
+            db.execute(ddl)
+        db.execute("DELETE FROM industry_membership_pit")
+        db.execute("DELETE FROM industry_taxonomy")
+        columns = {
+            "industry_membership_pit": [
+                "ts_code", "index_code", "level", "in_date", "out_date",
+                "is_new", "industry_name", "available_date",
+            ],
+            "industry_taxonomy": [
+                "index_code", "industry_name", "level", "industry_code", "src",
+            ],
+        }
+        for table, rows in (
+            ("industry_membership_pit", list(membership_rows or [])),
+            ("industry_taxonomy", list(taxonomy_rows or [])),
+        ):
+            if rows:
+                frame = pd.DataFrame(rows).reindex(columns=columns[table])
+                db.register(f"_{table}_rows", frame)
+                db.execute(
+                    f"INSERT INTO {table} SELECT * FROM _{table}_rows"
+                )
+    return v2_path
+
+
 def populate_v2_price_tables(
     v2_path: Path,
     dates: list[str],
@@ -382,6 +441,11 @@ def _populate_db(
     if not v2_path.is_absolute():
         v2_path = data_config.duckdb_path.parent / v2_path
     populate_v2_price_tables(v2_path, dates, ts_codes, bars)
+    # D5: the loader's industry source lives in the same v2 database; the
+    # shared fixture ships empty membership/taxonomy tables (all-NaN frame,
+    # the same visible behavior as a no-membership database) so scenario
+    # tests seed rows via :func:`populate_v2_industry_tables`.
+    populate_v2_industry_tables(v2_path)
     return data_config
 
 

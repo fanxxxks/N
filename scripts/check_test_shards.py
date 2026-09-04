@@ -45,6 +45,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_logging.py",
         "test_logging_parallel.py",
         "test_manifest.py",
+        "test_industry_pit.py",
         "test_p8_lifecycle_contract_doc.py",
         "test_pit_import.py",
         "test_processor.py",
