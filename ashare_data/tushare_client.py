@@ -32,7 +32,10 @@ Discipline (task t3 work package):
   of a 2000-point account; the ceiling is enforced, not advisory).
 * **Retry/backoff** — 429/rate-limit and timeout failures retry with
   exponential backoff (``backoff_base * 2**attempt``, capped); permission
-  and other non-retryable failures raise immediately.
+  and other non-retryable failures raise immediately.  Every transport
+  attempt is bounded by the explicit client ``timeout`` (default 30s,
+  also passed to the SDK client): a hung socket can never block the
+  pipeline beyond the bound (D1c).
 * **Row cap signal** — when a response's row count reaches the interface's
   documented per-call cap (:data:`INTERFACE_ROW_LIMITS`, conservative
   lower bounds in the pagination-safe direction), the typed result carries
@@ -412,6 +415,34 @@ def _is_retryable(exc: BaseException) -> bool:
     return any(marker in message for marker in _RETRYABLE_MARKERS)
 
 
+def _call_with_timeout(fn: Callable[[], Any], timeout: float) -> Any:
+    """Run one transport attempt bounded by ``timeout`` seconds.
+
+    Mirrors the ``akshare_client`` seam: the call runs in a daemon thread
+    so a hung socket (e.g. a dead local proxy stalling the connection)
+    can never block the pipeline beyond the bound — the TimeoutError is a
+    retryable transport failure and the abandoned worker dies with the
+    process (D1c, t9 outage follow-up).
+    """
+
+    result: dict[str, Any] = {}
+
+    def runner() -> None:
+        try:
+            result["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - forwarded to caller
+            result["error"] = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise TimeoutError(f"tushare call timed out after {timeout} seconds")
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
 class TushareError(Exception):
     """Base class of every typed Tushare client failure."""
 
@@ -486,7 +517,10 @@ class TushareClient:
 
     Parameters mirror the discipline above; ``api_factory(token) -> api``
     replaces the lazy SDK construction in tests (the fake must expose
-    ``query(api_name, fields=..., **params)``).
+    ``query(api_name, fields=..., **params)``).  ``timeout`` bounds every
+    transport attempt at the client layer (a hung socket — e.g. a dead
+    local proxy — can never block the pipeline beyond the bound) and is
+    also passed to the SDK client explicitly.
     """
 
     def __init__(
@@ -497,6 +531,7 @@ class TushareClient:
         retries: int = 3,
         backoff_base: float = 1.0,
         backoff_cap: float = 30.0,
+        timeout: float = 30.0,
         api_factory: Callable[[str], Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -508,6 +543,8 @@ class TushareClient:
                 "backoff_base must be > 0 and backoff_cap >= backoff_base, "
                 f"got base={backoff_base} cap={backoff_cap}"
             )
+        if timeout <= 0:
+            raise ValueError(f"timeout must be > 0, got {timeout}")
         self._token = token if token is not None else self._read_token()
         self._limiter = TushareRateLimiter(
             max_per_minute, clock=clock, sleep=sleep
@@ -515,8 +552,9 @@ class TushareClient:
         self._retries = int(retries)
         self._backoff_base = float(backoff_base)
         self._backoff_cap = float(backoff_cap)
+        self._timeout = float(timeout)
         self._sleep = sleep
-        self._api_factory = api_factory or self._default_api_factory
+        self._api_factory = api_factory
         self._api_obj: Any = None
 
     # --- token & SDK lifecycle ------------------------------------------
@@ -535,15 +573,20 @@ class TushareClient:
         return value.strip()
 
     @staticmethod
-    def _default_api_factory(token: str) -> Any:
+    def _default_api_factory(token: str, timeout: float = 30.0) -> Any:
         import tushare as ts  # lazy: only real Tushare paths pay for this
 
-        return ts.pro_api(token)
+        return ts.pro_api(token, timeout=timeout)
 
     @property
     def _api(self) -> Any:
         if self._api_obj is None:
-            self._api_obj = self._api_factory(self._token)
+            if self._api_factory is not None:
+                self._api_obj = self._api_factory(self._token)
+            else:
+                self._api_obj = self._default_api_factory(
+                    self._token, timeout=self._timeout
+                )
         return self._api_obj
 
     def __repr__(self) -> str:  # token must never leak through repr
@@ -607,7 +650,12 @@ class TushareClient:
         for attempt in range(self._retries + 1):
             self._limiter.acquire()
             try:
-                return self._api.query(api_name, fields=fields_arg, **params)
+                return _call_with_timeout(
+                    lambda: self._api.query(
+                        api_name, fields=fields_arg, **params
+                    ),
+                    self._timeout,
+                )
             except Exception as exc:  # noqa: BLE001 - transport errors are
                 # heterogeneous (requests, SDK, server); only the sanitized
                 # message may ever leave this block (D1a: the original

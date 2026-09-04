@@ -33,6 +33,7 @@ import os
 import importlib.util
 import subprocess
 import sys
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -617,3 +618,54 @@ class TestProbeSpecs:
         for api in list(CORE_INTERFACES) + list(EXPECTED_NO_PERMISSION_INTERFACES):
             assert api in plan
         assert "expected no permission" in plan
+
+
+class TestTransportTimeout:
+    """D1c (t9 outage follow-up): a hung transport (e.g. a dead local
+    proxy stalling the socket) must be bounded by the client's explicit
+    per-call timeout — the call fails with the standard retry/backoff
+    path instead of blocking forever, and the SDK client is constructed
+    with the same explicit timeout."""
+
+    def test_hung_transport_is_bounded_and_retried(self):
+        class HungApi:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def query(self, *args, **kwargs):
+                self.calls += 1
+                time.sleep(30)  # far beyond the client timeout
+
+        api = HungApi()
+        # A realistic-shaped token: the sanitizer scrubs its exact
+        # occurrences, so a degenerate single-character secret would
+        # redact the whole message and defeat the assertion below.
+        token = "a" * 32
+        client = TushareClient(
+            token=token, timeout=0.3, retries=1, backoff_base=0.1,
+            api_factory=lambda tok: api, sleep=lambda seconds: None,
+        )
+        started = time.monotonic()
+        with pytest.raises(TushareRequestError) as excinfo:
+            client.query("daily", ts_code="000001.SZ")
+        wall = time.monotonic() - started
+        assert wall < 5.0, f"timeout not enforced: blocked {wall:.1f}s"
+        # The timeout is a retryable transport failure: 1 initial + 1 retry.
+        assert api.calls == 2
+        assert "timed out" in str(excinfo.value).lower()
+        assert token not in str(excinfo.value)
+
+    def test_sdk_client_constructed_with_explicit_timeout(self, monkeypatch):
+        captured: dict = {}
+
+        class FakeSdk:
+            @staticmethod
+            def pro_api(token, timeout=None):
+                captured["token"] = token
+                captured["timeout"] = timeout
+                return object()
+
+        monkeypatch.setitem(sys.modules, "tushare", FakeSdk)
+        api = TushareClient._default_api_factory("TOK_X", timeout=42.0)
+        assert captured == {"token": "TOK_X", "timeout": 42.0}
+        assert api is not None
