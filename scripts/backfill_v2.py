@@ -185,17 +185,12 @@ class BackfillRunner:
         return frozenset(codes)
 
     def _load_resume_keys(self) -> set[tuple[str, str]]:
-        ledger_path = self.db_path
-        if not ledger_path.exists():
-            return set()
-        conn = AshareDB(ledger_path, read_only=True)
-        try:
-            rows = conn.query(
-                "SELECT endpoint, parameters_json FROM source_ingest_runs "
-                "WHERE status = 'succeeded'"
-            )
-        finally:
-            conn.close()
+        # Query through the store's own connection: DuckDB refuses a
+        # second connection to the same file with a different mode.
+        rows = self.store.db.query(
+            "SELECT endpoint, parameters_json FROM source_ingest_runs "
+            "WHERE status = 'succeeded'"
+        )
         return {(str(r[0]), str(r[1])) for r in rows.itertuples(index=False)}
 
     # -- batch plumbing -------------------------------------------------------
@@ -302,9 +297,9 @@ class BackfillRunner:
         finally:
             conn.close()
         ts = {
-            str(r[0]) for r in tushare_cal[
-                tushare_cal["is_open"] == 1
-            ]["cal_date"].astype(str).itertuples(index=False)
+            str(d) for d in tushare_cal.loc[
+                tushare_cal["is_open"] == 1, "cal_date"
+            ].astype(str)
         }
         overlap_lo, overlap_hi = max(min(ts), min(prod)), min(max(ts), max(prod))
         ts_in_window = {d for d in ts if overlap_lo <= d <= overlap_hi}
@@ -321,20 +316,20 @@ class BackfillRunner:
         print("== step 3: daily / adj_factor / daily_basic / stk_limit / "
               "suspend_d per trade_date (2014-01-01 .. today)")
         for date in self._market_sessions():
-            for endpoint, limit in (
-                ("daily", 6000),
-                ("adj_factor", 6000),
-                ("daily_basic", 6000),
-                ("stk_limit", 7800),
-                ("suspend_d", 3000),
+            for endpoint, table, limit in (
+                ("daily", "daily_bar_raw", 6000),
+                ("adj_factor", "daily_adj_factor", 6000),
+                ("daily_basic", "daily_basic_pit", 6000),
+                ("stk_limit", "daily_price_limit", 7800),
+                ("suspend_d", "daily_suspension", 3000),
             ):
                 params = {"trade_date": date}
-                if self._should_skip(endpoint, params):
+                if self._should_skip(table, params):
                     self.counts["skipped"] += 1
                     continue
                 frame = self._fetch(endpoint, **params)
                 self._fetch_single_guarded(endpoint, params, frame, limit)
-                self._run_batch(endpoint, frame, params=params,
+                self._run_batch(table, frame, params=params,
                                 fields=list(frame.columns), row_limit=limit,
                                 formal=True,
                                 scope_column="ts_code")
