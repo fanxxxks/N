@@ -691,3 +691,60 @@ class TestV2Manifest:
         third = build_v2_dataset_manifest(db)
         assert third.dataset_id != first.dataset_id
         assert first.source_versions["tushare_store"] == "1"
+
+
+class TestGateAdapter:
+    """The v2 gate adapter creates compatibility views so G1-G8 runs
+    unchanged against v2 (single gate authority, no second implementation)."""
+
+    def test_gate_views_map_v2_to_production_shapes(self, store, tmp_path):
+        st, db = store
+        # Ingest minimal data for the views to expose.
+        st.ingest_batch("daily_bar_raw",
+                        _frame("daily_bar_raw", _daily_rows(2)),
+                        params={"trade_date": "20240315"},
+                        fields=["ts_code", "trade_date"], row_limit=6000)
+        st.ingest_batch("daily_adj_factor",
+                        _frame("daily_adj_factor", [
+                            {"ts_code": "000000.SZ", "trade_date": "20240315",
+                             "adj_factor": 1.0},
+                            {"ts_code": "000001.SZ", "trade_date": "20240315",
+                             "adj_factor": 1.0}]),
+                        params={"trade_date": "20240315"},
+                        fields=["ts_code"], row_limit=6000)
+        member_row = {
+            "ts_code": "000001.SZ", "in_date": "20220729",
+            "out_date": None, "is_new": "Y",
+            "l1_code": "801010.SI", "l1_name": "农林牧渔",
+            "l2_code": None, "l2_name": None,
+            "l3_code": None, "l3_name": None,
+        }
+        st.ingest_batch("industry_membership_pit",
+                        _frame("industry_membership_pit", [member_row]),
+                        params={"ts_code": "000001.SZ"},
+                        fields=list(member_row), row_limit=2000)
+        # Create a stub production DB with the reference tables the
+        # adapter needs (stocks + trade_calendar are production-only).
+        prod_path = str(tmp_path / "prod_ref.duckdb")
+        prod = AshareDB(prod_path)
+        prod.execute(
+            "CREATE TABLE stocks (ts_code VARCHAR, list_date VARCHAR)")
+        prod.execute(
+            "INSERT INTO stocks VALUES ('000001.SZ', '19910403')")
+        prod.execute(
+            "CREATE TABLE trade_calendar (trade_date VARCHAR, is_open BOOLEAN)")
+        prod.execute(
+            "INSERT INTO trade_calendar VALUES ('20240315', true)")
+        prod.close()
+        views = st.create_gate_views(prod_path)
+        assert set(views) == {"constituents", "stocks", "trade_calendar",
+                              "daily_bar"}
+        cons = db.query("SELECT * FROM constituents")
+        assert len(cons) == 1
+        assert cons.iloc[0]["index_code"] == "801010.SI"
+        assert cons.iloc[0]["ts_code"] == "000001.SZ"
+        bars = db.query("SELECT ts_code, trade_date, volume FROM daily_bar")
+        assert len(bars) == 2
+        assert "volume" in bars.columns
+        stocks = db.query("SELECT * FROM stocks")
+        assert stocks.iloc[0]["list_date"] == "19910403"

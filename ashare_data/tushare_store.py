@@ -705,6 +705,49 @@ class TushareStore:
         for spec in _V2_TABLE_SPECS:
             self.db.execute(spec.ddl)
 
+    def create_gate_views(self, prod_db_path: str) -> list[str]:
+        """Create compatibility views mapping v2 tables to the shapes the
+        production gate runner (G1-G8) expects (p17 §10 step 9).
+
+        The gate runner queries ``constituents``, ``stocks``,
+        ``trade_calendar`` and ``daily_bar`` by production table names.
+        This adapter creates SQL views so the gate logic (single
+        authority: ``ashare_data.gates``) runs unchanged against the v2
+        database — no second implementation of gate semantics.
+
+        ``stocks`` and ``trade_calendar`` are reference/metadata tables
+        not present in v2 (p17 §11.2: L0/audit surfaces); they are read
+        from the production database via DuckDB ``ATTACH`` (read-only).
+
+        Returns the list of created view names.
+        """
+
+        alias = "_prod_gate_ref"
+        self.db.execute(
+            f"ATTACH IF NOT EXISTS '{prod_db_path}' AS {alias} (READ_ONLY)"
+        )
+        views: list[tuple[str, str]] = [
+            ("constituents",
+             "SELECT index_code, ts_code, in_date, out_date "
+             "FROM industry_membership_pit WHERE level = 1"),
+            ("stocks",
+             f"SELECT ts_code, list_date FROM {alias}.stocks"),
+            ("trade_calendar",
+             f"SELECT trade_date, is_open FROM {alias}.trade_calendar"),
+            ("daily_bar",
+             "SELECT r.ts_code, r.trade_date, r.open, r.high, r.low, "
+             "r.close, r.pre_close, r.vol AS volume, r.amount, "
+             "a.adj_factor "
+             "FROM daily_bar_raw r "
+             "JOIN daily_adj_factor a "
+             "ON r.ts_code = a.ts_code AND r.trade_date = a.trade_date"),
+        ]
+        created = []
+        for name, sql in views:
+            self.db.execute(f"CREATE OR REPLACE VIEW {name} AS {sql}")
+            created.append(name)
+        return created
+
     # -- ingest ------------------------------------------------------------
 
     def ingest_batch(
