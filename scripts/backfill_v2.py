@@ -448,9 +448,9 @@ class BackfillRunner:
         print("== step 7: forecast / express / repurchase / "
               "stk_holdernumber by year windows (bisected on cap) + "
               "index_weight per configured index")
+        # repurchase / stk_holdernumber accept bare start_date/end_date
+        # windows (docs 124/166); year windows bisected on the cap signal.
         windowed = (
-            ("forecast", "earnings_forecast_pit", 3500),
-            ("express", "earnings_express_pit", 3000),
             ("repurchase", "repurchase_event_pit", 3000),
             ("stk_holdernumber", "holder_number_pit", 3000),
         )
@@ -473,6 +473,24 @@ class BackfillRunner:
                     self._run_batch(table, frame, params=params,
                                     fields=list(frame.columns), row_limit=limit,
                                     formal=True, scope_column="ts_code")
+        # forecast / express REQUIRE ann_date or ts_code (bare start/end
+        # windows are rejected with a parameter-validation error, observed
+        # live 2026-09-04) — per-stock full history, docs 45/46.
+        per_stock = (
+            ("forecast", "earnings_forecast_pit", 3500),
+            ("express", "earnings_express_pit", 3000),
+        )
+        for endpoint, table, limit in per_stock:
+            for code in sorted(self.scope_codes):
+                params = {"ts_code": code}
+                if self._should_skip(table, params):
+                    self.counts["skipped"] += 1
+                    continue
+                frame = self._fetch(endpoint, **params)
+                self._fetch_single_guarded(endpoint, params, frame, limit)
+                self._run_batch(table, frame, params=params,
+                                fields=list(frame.columns), row_limit=limit,
+                                formal=True, scope_column="ts_code")
         for index_code in ("000300.SH", "000905.SH", "000852.SH"):
             params = {"index_code": index_code}
             if self._should_skip("index_weight_pit", params):
