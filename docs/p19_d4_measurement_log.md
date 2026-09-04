@@ -99,3 +99,38 @@ test_tushare_store.py / d3 日志）零冲突、零双方修改文件。
   分歧）；fresh G8 fixtures 补 pre-listed 未来会话（周末时钟翻转缺陷，
   先于本任务存在）；factors.py 涨跌停特征族 `limit_rate` 消费保留
   （t22 原位修复范围，非 D4 执行阻断路径）。
+
+## 附录：数据前置升级审计（captain 裁决 3a，evidence-only @ `064018a` 后）
+
+- 触发：captain 批准等效审计路径时附两条件——(a) 四表全量双向核对 +
+  L0 快照抽查；(b) t53（gate adapter + G1-G8）完成是 t12 交付硬前置。
+  裁决送达时 t12 已按调度器投递完成（时序例外），本附录为条件 (a) 的
+  补齐与 (b) 的收口记录；顺序例外由 captain 授权记录在案（理由 = 文件
+  不相交 + AGENTS §12 并行线规则 + 门禁完成仍是交付硬条件）。
+- 前置状态核验：t53 [completed]（gate adapter 773f47a/0a1eb1e/08b2016）、
+  t55 [completed]（constituents ← index_weight_pit 映射修正 b2a7d8b）；
+  G1-G8 最终 6/8 PASS（G1/G2/G3/G4/G5/G8 ✓），G6/G7 N/A-with-reason
+  （t53/t55 output 与 d3 日志留证）。t12 完成时 t53 数据收口（dataset_id
+  `43ef1e4c…`）已在库上，任务状态翻终态的先后无法事后精确判定，如实
+  记录。
+- 升级审计命令：`python D:/minequant/audit_price_tables_t12_upgrade.py`
+  （venv python，duckdb read_only + pandas/pyarrow 读 L0 parquet，
+  库 `43ef1e4c…` = t53 补跑后重建 manifest，created_at
+  2026-09-04T19:12:31+00:00）。p19 引用的 `aa6f6d55` 为 D3 时点 id，其
+  逐表计数与下表相同（t9 记录），本次双向核对以当前库上权威 manifest
+  为准，双向一致即同时覆盖旧 id 的计数声明。
+
+| 表 | manifest | live | 双向 | 日期范围 |
+|---|---|---|---|---|
+| daily_bar_raw | 11,886,384 | 11,886,384 | OK/OK | 20140102..20260904 一致 |
+| daily_adj_factor | 12,246,154 | 12,246,154 | OK/OK | 20140102..20260904 一致 |
+| daily_price_limit | 12,209,690 | 12,209,690 | OK/OK | 20140102..20260904 一致 |
+| daily_suspension | 336,077 | 336,077 | OK/OK | 20140102..20260904 一致 |
+| daily_basic_pit | 11,896,917 | 11,896,917 | OK/OK | 20140102..20260904 一致 |
+
+- L0 快照抽查（抽样日期 20240102、20250610；端点 daily_bar_raw 与
+  daily_price_limit 的全部 L0 批次文件）：live 行 10,200 / 10,228，
+  快照行 10,200 / 10,228，键差 0/0，值差异 0/0 —— 两端点均 PASS
+  （快照与库内容逐值一致，manifest 计数由快照批次可信支撑）。
+- 结论：**AUDIT_UPGRADE PASS**——裁决 3(a) 两条件全额兑现；条件 (b) 的
+  t53 完成状态已核验（任务台账 completed + 分支 commit 在案）。
