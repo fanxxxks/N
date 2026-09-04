@@ -389,11 +389,38 @@ class TestAvailability:
         stored = db.query("SELECT * FROM index_weight_pit")
         assert stored.iloc[0]["available_date"] == _next_session("20240331")
 
+    def test_membership_expansion_produces_three_level_rows(self, store):
+        st, db = store
+        row = {
+            "ts_code": "000001.SZ", "in_date": "20220729",
+            "out_date": None, "is_new": "Y",
+            "l1_code": "801010.SI", "l1_name": "农林牧渔",
+            "l2_code": "801012.SI", "l2_name": "养殖业",
+            "l3_code": None, "l3_name": None,
+        }
+        st.ingest_batch("industry_membership_pit",
+                        _frame("industry_membership_pit", [row]),
+                        params={"ts_code": "000001.SZ"}, fields=list(row),
+                        row_limit=2000)
+        stored = db.query(
+            "SELECT * FROM industry_membership_pit ORDER BY level"
+        )
+        assert len(stored) == 2  # L1 + L2 (L3 skipped: null code)
+        assert list(stored["level"]) == [1, 2]
+        assert list(stored["index_code"]) == ["801010.SI", "801012.SI"]
+        assert list(stored["industry_name"]) == ["农林牧渔", "养殖业"]
+        assert stored.iloc[0]["available_date"] == _next_session("20220729")
+        # Expanded rows must have distinct hashes (level discriminator)
+        hashes = list(stored["source_row_hash"])
+        assert hashes[0] != hashes[1]
+
     def test_membership_available_after_in_date(self, store):
         st, db = store
-        row = {"index_code": "801010.SI", "ts_code": "000001.SZ",
+        row = {"ts_code": "000001.SZ",
                "in_date": "20220729", "out_date": None, "is_new": "Y",
-               "industry_name": "农林牧渔"}
+               "l1_code": "801010.SI", "l1_name": "农林牧渔",
+               "l2_code": None, "l2_name": None,
+               "l3_code": None, "l3_name": None}
         st.ingest_batch("industry_membership_pit",
                         _frame("industry_membership_pit", [row]),
                         params={"l1_code": "801010.SI"}, fields=list(row),
@@ -600,13 +627,24 @@ class TestAllTablesSmoke:
                     row[column.name] = 7
                 else:
                     row[column.name] = 1.5
+            if spec.expand_levels:
+                # Expansion source: provide l1/l2/l3 columns, drop
+                # index_code/level/industry_name (computed per level).
+                row.update({
+                    "l1_code": "801010.SI", "l1_name": "v_l1_name",
+                    "l2_code": "801012.SI", "l2_name": "v_l2_name",
+                    "l3_code": None, "l3_name": None,
+                })
+                for k in ("index_code", "level", "industry_name"):
+                    row.pop(k, None)
             frame = _frame(spec.name, [row])
             result = st.ingest_batch(
                 spec.name, frame, params={"smoke": spec.name},
                 fields=list(row), row_limit=None,
             )
             assert result.status == "succeeded", spec.name
-            assert _table_count(db, spec.name) == 1, spec.name
+            expected_rows = 2 if spec.expand_levels else 1
+            assert _table_count(db, spec.name) == expected_rows, spec.name
 
     def test_daily_suspension_uses_erratum_definition(self):
         spec = V2_TABLES["daily_suspension"]

@@ -183,6 +183,10 @@ class V2Table:
     #:   ('month_end', anchor)      — available_date = next open session
     #:                                after the anchor's month end
     availability: tuple | None = None
+    #: When True, one source row is expanded into up to 3 DDL rows (one
+    #: per SW level: index_code=l1/l2/l3_code, industry_name=l1/l2/l3_name,
+    #: level=1/2/3); null level codes are skipped (erratum #2, t50).
+    expand_levels: bool = False
 
 
 _SOURCE_INGEST_RUNS_DDL = """
@@ -267,6 +271,7 @@ CREATE TABLE IF NOT EXISTS industry_taxonomy (
 _INDUSTRY_MEMBERSHIP_PIT_DDL = """
 CREATE TABLE IF NOT EXISTS industry_membership_pit (
     index_code VARCHAR NOT NULL, ts_code VARCHAR NOT NULL,
+    level INTEGER NOT NULL,
     in_date VARCHAR NOT NULL,
     out_date VARCHAR, is_new VARCHAR NOT NULL,
     industry_name VARCHAR NOT NULL, available_date VARCHAR NOT NULL,
@@ -368,7 +373,8 @@ CREATE TABLE IF NOT EXISTS repurchase_event_pit (
 _HOLDER_NUMBER_PIT_DDL = """
 CREATE TABLE IF NOT EXISTS holder_number_pit (
     ts_code VARCHAR NOT NULL, ann_date VARCHAR NOT NULL,
-    end_date VARCHAR NOT NULL, holder_num BIGINT,
+    end_date VARCHAR,
+    holder_num BIGINT,
     available_date VARCHAR NOT NULL,
     ingest_id VARCHAR NOT NULL, source_row_hash VARCHAR NOT NULL,
     PRIMARY KEY (source_row_hash)
@@ -487,12 +493,14 @@ _V2_TABLE_SPECS: tuple[V2Table, ...] = (
         source_columns=(
             _c("index_code", "VARCHAR", nullable=False),
             _c("ts_code", "VARCHAR", nullable=False),
+            _c("level", "BIGINT", nullable=False),
             _c("in_date", "VARCHAR", nullable=False, is_date=True),
             _c("out_date", "VARCHAR", is_date=True),
             _c("is_new", "VARCHAR", nullable=False),
             _c("industry_name", "VARCHAR", nullable=False),
         ),
         availability=("next_session", ("in_date",)),
+        expand_levels=True,
     ),
     V2Table(
         name="income_statement_pit",
@@ -624,7 +632,7 @@ _V2_TABLE_SPECS: tuple[V2Table, ...] = (
         source_columns=(
             _c("ts_code", "VARCHAR", nullable=False),
             _c("ann_date", "VARCHAR", nullable=False, is_date=True),
-            _c("end_date", "VARCHAR", nullable=False, is_date=True),
+            _c("end_date", "VARCHAR", is_date=True),  # nullable (erratum #3)
             _c("holder_num", "BIGINT"),
         ),
         availability=("next_session", ("ann_date",)),
@@ -995,10 +1003,45 @@ class TushareStore:
             )
         records: list[dict] = []
         for position, raw_row in enumerate(frame.to_dict("records")):
-            records.append(
-                self._map_row(spec, raw_row, ingest_id, position)
-            )
+            if spec.expand_levels:
+                records.extend(
+                    self._map_expanded_row(spec, raw_row, ingest_id, position)
+                )
+            else:
+                records.append(
+                    self._map_row(spec, raw_row, ingest_id, position)
+                )
         return pd.DataFrame(records)
+
+    def _map_expanded_row(self, spec: V2Table, raw_row: dict,
+                          ingest_id: str, position: int) -> list[dict]:
+        """Expand one index_member_all source row into up to 3 DDL rows
+        (one per non-null SW level: index_code = l1/l2/l3_code,
+        industry_name = l1/l2/l3_name, level = 1/2/3).  Each expanded row
+        gets its own source_row_hash because index_code/industry_name
+        differ per level — the hash covers the mapped content, not the
+        raw source row (erratum #2, t50)."""
+
+        level_defs = [
+            (1, "l1_code", "l1_name"),
+            (2, "l2_code", "l2_name"),
+            (3, "l3_code", "l3_name"),
+        ]
+        results = []
+        for level_num, code_col, name_col in level_defs:
+            index_code = _normalize(raw_row.get(code_col))
+            industry_name = _normalize(raw_row.get(name_col))
+            if not index_code or not industry_name:
+                continue
+            expanded = dict(raw_row)
+            expanded["index_code"] = index_code
+            expanded["industry_name"] = industry_name
+            expanded["level"] = level_num
+            expanded["position"] = position
+            results.append(
+                self._map_row(spec, expanded, ingest_id, position)
+            )
+        return results
 
     def _map_row(self, spec: V2Table, raw_row: dict, ingest_id: str,
                  position: int) -> dict:
