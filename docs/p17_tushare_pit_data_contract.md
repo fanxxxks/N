@@ -373,10 +373,12 @@ CREATE TABLE IF NOT EXISTS repurchase_event_pit (
     ingest_id VARCHAR NOT NULL, source_row_hash VARCHAR NOT NULL,
     PRIMARY KEY (source_row_hash)
 );
--- 17. 股东人数（stk_holdernumber）
+-- 17. 股东人数（stk_holdernumber；end_date 可空——不定期公布，部分公告无
+--     期间锚点是数据本性，勘误 #3；L1 纯源原则禁止为完整性而排除行）
 CREATE TABLE IF NOT EXISTS holder_number_pit (
     ts_code VARCHAR NOT NULL, ann_date VARCHAR NOT NULL,
-    end_date VARCHAR NOT NULL, holder_num BIGINT,
+    end_date VARCHAR,  -- 可空（勘误 #3）：部分公告行无期间锚点，排除即静默丢弃数据
+    holder_num BIGINT,
     available_date VARCHAR NOT NULL,
     ingest_id VARCHAR NOT NULL, source_row_hash VARCHAR NOT NULL,
     PRIMARY KEY (source_row_hash)
@@ -665,6 +667,7 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
 | t44 | daily_suspension | trade_date / suspend_timing | trade_date / suspend_timing | 恢复用户目标文档原始定义；resume_date/ann_date 源不存在，已删 |
 | t44 | industry_taxonomy | （无 is_new 列） | （is_new 已删） | index_classify 源无 is_new；代际判定归 industry_membership_pit.is_new |
 | t49 | industry_membership_pit | l1/l2/l3_code + l1/l2/l3_name（源行，无 index_code 列） | index_code + industry_name + level(1/2/3) | 一行源数据展开为最多 3 行契约行；空级跳过；level 为展开判别符（入 canonical 哈希输入）；in_date/out_date/is_new 各级沿用源值；available_date 按 §6.1 由 in_date 推导 |
+| t52 | holder_number_pit | end_date（源可空——部分公告无期间锚点） | end_date（契约可空） | nullable 事实登记，非改名映射；放宽 vs 排除经 captain 代行裁决（附录 C 勘误 #3）；available_date 推导（按 ann_date）不受影响 |
 
 ## 附录 C：勘误记录（t44，2026-09-04，用户批准「批准全部」）
 
@@ -721,3 +724,26 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
 - **PK 维持声明**：`PRIMARY KEY (index_code, ts_code, in_date)` 不扩大
   （level 经 index_code 跨级互异而隐式区分；病态同码跨级由 KEYED 冲突
   fail-closed 拦截）。
+
+### 勘误 #3（t52，2026-09-04，captain 代行批准——p18 §4 回写义务模式）
+
+- **触发链**：t9 step7（stk_holdernumber 回填）实测 **2023-12 批第 1,867 行
+  end_date 为 NULL**，契约 NOT NULL → store fail-closed 拒绝（零残留提交；
+  L0 快照 + source_ingest_runs failed 台账留证）。数据本性：stk_holdernumber
+  不定期公布（官方口径），部分公告行无期间锚点（end_date 空）。
+- **代行批准声明（逐字，本勘误的批准证据）**："批准 holder_number_pit.
+  end_date 放宽为 NULLABLE——L1 纯源原则：stk_holdernumber 不定期公布，
+  部分行无期间锚点是数据本性；排除该类行会静默丢弃数据，违反 §4.3 完整性；
+  类比 membership out_date 可空处理。依据：用户 2026-09-04 授权扩展记录
+  （89dd121 附录 C：勘误与流程批准点由 captain 代行）。"
+- **处置对比**：放宽（采纳）vs 排除该类行（否决）——排除 = 静默丢弃数据
+  （§4.3 append-only 完整性 + §1 原则 1），且与 §5.0 L1 纯源原则冲突
+  （源给什么存什么，缺失 = NULL）；类比先例：industry_membership_pit.
+  out_date 可空（同源结构本性）。
+- **available_date 不受影响确认**：§6.1 holder_number 行的可用时间推导
+  输入 = ann_date（NOT NULL 不变），end_date 可空不参与推导——本勘误对
+  §6.1/§6.3 正文零改动。
+- **执行清单（本 commit 实际改动）**：§5.2/§5.4 holder_number_pit DDL
+  end_date VARCHAR NOT NULL → VARCHAR（可空）+ 表注释与行内注释；附录 B
+  追加 t52 nullable 事实登记行。其余 DDL/规则零改动（PK source_row_hash、
+  ann_date NOT NULL、holder_num、附录 A/B 既有行不动）。
