@@ -563,7 +563,10 @@ def normalize_daily_bars(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[df["pre_close"].isna(), "pre_close"] = df["open"]
     df["volume"] = df["volume"].fillna(0.0)
     df["amount"] = df["amount"].fillna(0.0)
-    df["adj_factor"] = df["adj_factor"].ffill().bfill()
+    # adj_factor is deliberately NOT filled (p19 §2.1, t13 observation B):
+    # a missing factor stays NaN — the fail-closed value — instead of a
+    # fabricated continuity; consumers that need a filled view apply it
+    # explicitly on their own raw source values.
     # Turnover rate cannot be reconstructed from OHLCV (it needs the float
     # share count), so a missing column stays missing instead of pretending
     # to be ~1.0.  Downstream standardization treats it as neutral.
