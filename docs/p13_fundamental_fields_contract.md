@@ -1,7 +1,18 @@
 # P13 fundamental PIT 字段补齐与第⑤族解锁预注册契约（C 线）
 
-- 状态：**DRAFT — 提交契约门禁评审（t10）**。批准后本文保持前瞻性，禁止用
-  实现或测量输出反向修改；测量结果只能执行预注册裁决。
+- 状态：**APPROVED — 用户追认批准（2026-09-04，经 captain 转达；批准记录见下）**。
+  批准后本文保持前瞻性，禁止用实现或测量输出反向修改；测量结果只能执行
+  预注册裁决。
+- 批准记录（按 p16 `2f5e18b` 先例补记，Q4①）：批准人 = 用户（转达渠道 =
+  captain 会话，2026-09-04；批准原文逐字：「p17批准，1.1,2.1,3.1,4.1,5.1」，
+  本契约对应 Q2① 追认项，**含 §6.3（t46 方案 A）与 §6.4（t57 追加段）两处
+  勘误的追认**）；批准内容 = 追认本契约批准，已合入 main 的实现与数据回填
+  合规——git 可查时序：契约 PR `7f9c1fd` → 实现 `02c30e8`（第⑤族解锁）+
+  勘误落盘 `8d89f6a`/`4e0c6cc`/`632b13f` → 回填 dataset `b7b4dd4b…`
+  （`docs/p13_fundamental_backfill_measurement_log.md`）；§8 族级裁决仍待
+  当前团队 t18 执行，不受本次追认预写。证据：
+  `docs/g0_approval_evidence_audit.md` §4 裁决结果小节 + 批准原文引用。
+  补记人 governance-auditor（AgentTeams tushare-pit-migration），2026-09-04。
 - 起草：contract-a（AgentTeams alphagpt-p0-p1 t7），2026-09-02
 - 证据基线：main @ `fde9f8b`；`docs/p9_factor_family_contract.md` §6（第⑤族
   pending 占位与**预注册解除条件**——本文即该条款所指"另行预注册实现契约"）；

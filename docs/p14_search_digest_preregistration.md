@@ -1,6 +1,14 @@
 # P14 搜索层消化率预注册契约（P1-1 + P1-2）—— S 线需求基线
 
-- 状态：**DRAFT — 待独立评审（t17 门禁）。批准前禁止实现动代码（§2.2 门禁顺序不可倒置）；批准后本文保持前瞻性，禁止用实现或测量输出反向修改。**
+- 状态：**APPROVED — 用户追认批准（2026-09-04，经 captain 转达；批准记录见下）。**
+- 批准记录（按 p16 `2f5e18b` 先例补记，Q4①）：批准人 = 用户（转达渠道 =
+  captain 会话，2026-09-04；批准原文逐字：「p17批准，1.1,2.1,3.1,4.1,5.1」，
+  本契约对应 Q3① 追认项）；批准内容 = 追认本契约批准，已合入 main 的机制
+  实现合规——git 可查时序：契约提交 `dcc228b` → 实现 `64acd6e`
+  （SEARCH_CONTRACT/SEARCHER_BENCH 4，预算拆分 1200/800 生效）；§9 正式研究
+  测量（当前团队 t23）仍待执行，其判据按本文预注册执行，不受本次追认预写。
+  证据：`docs/g0_approval_evidence_audit.md` §4 裁决结果小节 + 批准原文引用。
+  补记人 governance-auditor（AgentTeams tushare-pit-migration），2026-09-04。
 - 起草：impl-p1（AgentTeams alphagpt-p0-p1，S 线搜索层），2026-09-02
 - 证据基线：main @ fde9f8b（阶段 0 清障后）；P10 产物 `docs/p10_searcher_comparison_20260901/summary.json`、
   `docs/p10_measurement_log.md`、`docs/p10_final_synthesis_report.md`、`docs/p10_searcher_fairness_contract.md`（APPROVED）；

@@ -1,7 +1,15 @@
 # P12 晋级执法预注册契约（B 线：promotion_allowed/deprecated 晋级门禁消费）
 
-- 状态：**DRAFT — 提交契约门禁评审（t9）**。批准后本文保持前瞻性，禁止用实现
-  或测量输出反向修改；测量结果只能执行预注册裁决。
+- 状态：**APPROVED — 用户追认批准（2026-09-04，经 captain 转达；批准记录见下）**。
+  批准后本文保持前瞻性，禁止用实现或测量输出反向修改；测量结果只能执行
+  预注册裁决。
+- 批准记录（按 p16 `2f5e18b` 先例补记，Q4①）：批准人 = 用户（转达渠道 =
+  captain 会话，2026-09-04；批准原文逐字：「p17批准，1.1,2.1,3.1,4.1,5.1」，
+  本契约对应 Q1① 追认项）；批准内容 = 追认本契约批准，已合入 main 的实现
+  合规——git 可查时序：契约 PR `97a86fe` → 实现 `bed24d0`（晋级门 G7 生效，
+  `PROMOTION_RULE_VERSION = "2"`）。证据：`docs/g0_approval_evidence_audit.md`
+  §4 裁决结果小节 + 批准原文引用。补记人 governance-auditor（AgentTeams
+  tushare-pit-migration），2026-09-04。
 - 起草：contract-a（AgentTeams alphagpt-p0-p1 t6），2026-09-02
 - 证据基线：main @ `fde9f8b`（阶段 0 清障后，t4 审核通过）；代码证据全部在
   main @ fde9f8b 实测（命中计数/行号见 §1）；`ashare_model/promotion.py`、
