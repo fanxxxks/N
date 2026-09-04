@@ -123,7 +123,10 @@ L3 消费层       AshareDataLoader / 因子注册表（既有唯一正式路径
    token、HTTP headers 或任何账户信息。
 3. **source_row_hash**：对行做 canonical 序列化（键排序、UTF-8、值原样、
    不含 token/账户信息）后 SHA-256 十六进制；append-only 幂等与修订检测的
-   唯一依据。
+   唯一依据。**展开映射场景（附录 B）的哈希输入 = 展开后契约行全部列**，
+   canonical 输入显式含 level 判别符；**禁止以源行（11 列）为哈希输入**——
+   t47 keep-first 批内预去重会把同源行的多个展开行坍缩为一行（L2/L3 静默
+   数据丢失，勘误 #2）。
 4. **dataset_id**：`ashare_v2` 的 manifest 按既有 manifest 权威对内容重算
    （p13 先例：dataset_id 随数据内容重算是数据事实，manifest 版本常量不 bump）；
    后续测量绑定 v2 dataset_id，跨 dataset_id 结论禁止拼接（AGENTS §4.3）。
@@ -234,9 +237,11 @@ CREATE TABLE IF NOT EXISTS industry_taxonomy (
     ingest_id VARCHAR NOT NULL, source_row_hash VARCHAR NOT NULL
 );
 -- 8. 申万行业成员 PIT（index_member_all；区间 [in_date, out_date)，
---    out_date 为空 = 仍在任；约束见 §14）
+--    out_date 为空 = 仍在任；约束见 §14；源行三级展开映射见附录 B——
+--    一行源数据展开为最多 3 行契约行（level=1/2/3），空级跳过）
 CREATE TABLE IF NOT EXISTS industry_membership_pit (
     index_code VARCHAR NOT NULL, ts_code VARCHAR NOT NULL,
+    level INTEGER NOT NULL,  -- 展开判别符（勘误 #2 授权的唯一派生列，非源列；入 canonical 哈希输入）
     in_date VARCHAR NOT NULL,
     out_date VARCHAR, is_new VARCHAR NOT NULL,
     industry_name VARCHAR NOT NULL, available_date VARCHAR NOT NULL,
@@ -528,7 +533,7 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
 |---|---|
 | daily / daily_basic / adj_factor / stk_limit / margin_detail | 按 trade_date 全市场，一日一请求（2014-01-01 起逐日） |
 | income / balancesheet / cashflow | 按 ts_code 全历史逐只 |
-| index_member_all | 按 ts_code 逐只（单次 2000 行上限 → 防截断，t9 步骤 5） |
+| index_member_all | 按 ts_code 逐只（单次 2000 行上限 → 防截断，t9 步骤 5）；源行三级展开为 ≤3 契约行（勘误 #2，附录 B） |
 | forecast / express | 按公告日期增量；首次按年分段 |
 | repurchase / stk_holdernumber | 按公告日期或按股票分段 |
 | index_classify / index_weight / trade_cal / stock_basic / disclosure_date | 全量/按指数/按日（小表） |
@@ -652,6 +657,7 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
 | t44 | margin_detail_pit | rqchl | rqchl | p17 起草笔误 `rqche` 已更正——现同名，无映射偏移 |
 | t44 | daily_suspension | trade_date / suspend_timing | trade_date / suspend_timing | 恢复用户目标文档原始定义；resume_date/ann_date 源不存在，已删 |
 | t44 | industry_taxonomy | （无 is_new 列） | （is_new 已删） | index_classify 源无 is_new；代际判定归 industry_membership_pit.is_new |
+| t49 | industry_membership_pit | l1/l2/l3_code + l1/l2/l3_name（源行，无 index_code 列） | index_code + industry_name + level(1/2/3) | 一行源数据展开为最多 3 行契约行；空级跳过；level 为展开判别符（入 canonical 哈希输入）；in_date/out_date/is_new 各级沿用源值；available_date 按 §6.1 由 in_date 推导 |
 
 ## 附录 C：勘误记录（t44，2026-09-04，用户批准「批准全部」）
 
@@ -678,3 +684,33 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
   措辞按本勘误读作 trade_date（同一语义、同一条映射规则），§6.1 正文零改动。
 - **未采纳项**：项 6 跳过——p17 未钉死 stk_limit 行上限数值，§13 分页规则
   以"行数==接口上限"信号触发，无需修改。
+
+### 勘误 #2（t50，2026-09-04，用户批准「这次批准，接下来你自行把握即可不用再问我」）
+
+- **触发**：t9 step5-membership（index_member_all 回填）被 §15.6 拦截——
+  p17 §5.2 假设源行携带单一 index_code，探针与实测证明源行为 l1/l2/l3
+  三级同行结构、无 index_code 列（11 列清单见草案）。
+- **草案**：`docs/p17_erratum2_draft_t49.md` @ `5b15bbb`（governance-auditor，
+  t49）。
+- **用户批准原文（逐字）**：「这次批准，接下来你自行把握即可不用再问我」
+  （2026-09-04，经 captain 会话转达）。
+- **表决范围**：草案项 1 + 项 2 **捆绑采纳**（拆开会产生中间态错误：有展开
+  无哈希钉死 = 数据丢失）；范围外核对 ④（SW 双代际 src 取值确认步骤
+  预注册）与 ⑤（附录 B 衔接）随批记录。
+- **授权扩展记录（如实记录，含范围解释）**：用户原文把后续处置授权给
+  captain 自行把握。团队按保守解释登记其范围为——**后续勘误的批准与
+  流程批准点由 captain 代行**（p18 条款框架内的自主推进延伸）；**push/
+  merge 等外部状态变更、预算规模变更仍需请示用户**。该解释为本团队对
+  简式批准的保守读法，用户原文未逐项列举边界；如用户意图更宽或更窄，
+  以用户后续明示为准（p18 §5 撤回/修订机制适用）。
+- **执行清单（本 commit 实际改动）**：§5.2 表 8 增 `level INTEGER NOT
+  NULL`（展开判别符，唯一授权派生列）+ 注释（三级展开、空级跳过）；§4.3
+  哈希输入定义补句（展开后行 canonical 显式含 level，禁止以源行 11 列为
+  输入——t47 keep-first 坍缩风险）；§13 index_member_all 行补备注（源行
+  三级展开 ≤3 契约行）；附录 B 追加 t49 展开映射行。
+- **零修改确认句（修正清单第 3 项）**：§14.3 的"同一层级"经展开后即同
+  level 分组，规则文本零修改；§6.1 行业成员可用时间推导与 §6.3 as-of
+  规则本体零修改（in/out/is_new 沿用源值，available_date 推导输入不变）。
+- **PK 维持声明**：`PRIMARY KEY (index_code, ts_code, in_date)` 不扩大
+  （level 经 index_code 跨级互异而隐式区分；病态同码跨级由 KEYED 冲突
+  fail-closed 拦截）。
