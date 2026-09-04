@@ -158,6 +158,9 @@ L3 消费层       AshareDataLoader / 因子注册表（既有唯一正式路径
   - **APPEND**（版本/事件类，修订并存）：`ON CONFLICT (source_row_hash)
     DO NOTHING`；同 hash 重跑幂等，不同 hash 永远追加新版本行，禁止任何
     按业务键的 UPDATE/DELETE（红线 §15.4）。
+- **源列→契约列映射纪律（勘误 t44 确立，常设）**：任何源列名与契约列名
+  不一致（改名/语义错位/笔误），必须先经勘误在附录 B 落盘显式映射后方可
+  实施；D2/D3 按映射实施，禁止静默改名或跳列（§15.6 的机制化）。
 
 ### 5.1 台账（第 1 张）
 
@@ -214,23 +217,27 @@ CREATE TABLE IF NOT EXISTS daily_basic_pit (
 -- 5. 涨跌停价格（stk_limit；元；官方更新=交易日9点，当日会话可用）
 CREATE TABLE IF NOT EXISTS daily_price_limit (
     ts_code VARCHAR NOT NULL, trade_date VARCHAR NOT NULL,
-    pre_close DOUBLE, up_limit DOUBLE NOT NULL, down_limit DOUBLE NOT NULL,
+    pre_close DOUBLE,  -- typed 显式字段请求供给（D1 实测 2026-09-04；探针默认响应未含此列）
+    up_limit DOUBLE NOT NULL, down_limit DOUBLE NOT NULL,
     ingest_id VARCHAR NOT NULL, source_row_hash VARCHAR NOT NULL,
     PRIMARY KEY (ts_code, trade_date)
 );
--- 6. 停复牌（suspend_d；事件类但按业务键幂等；suspend_date 当日会话可用）
+-- 6. 停复牌（suspend_d；事件类但按业务键幂等；trade_date 当日会话可用，§6.1；
+--    列集恢复用户目标文档原始定义：suspend_timing 为 §5.0 additive 源列）
 CREATE TABLE IF NOT EXISTS daily_suspension (
-    ts_code VARCHAR NOT NULL, suspend_date VARCHAR NOT NULL,
+    ts_code VARCHAR NOT NULL, trade_date VARCHAR NOT NULL,
     suspend_type VARCHAR NOT NULL,
-    resume_date VARCHAR, ann_date VARCHAR, available_date VARCHAR NOT NULL,
+    suspend_timing VARCHAR,  -- additive 源列（探针实证 2026-09-04）
+    available_at TIMESTAMP NOT NULL,  -- 源可得时点：trade_date 当日（停牌决定于开盘前确定；经 §6.1 映射得当日会话）
+    source VARCHAR NOT NULL,  -- 数据来源标识（与 source_ingest_runs.provider 一致：'tushare'）
     ingest_id VARCHAR NOT NULL, source_row_hash VARCHAR NOT NULL,
-    PRIMARY KEY (ts_code, suspend_date, suspend_type)
+    PRIMARY KEY (ts_code, trade_date, suspend_type)
 );
--- 7. 申万行业分类（index_classify；is_new=Y 为现行代，历史代并存可查）
+-- 7. 申万行业分类（index_classify；源列含 is_pub/parent_code，代际判定见 §14.3）
 CREATE TABLE IF NOT EXISTS industry_taxonomy (
     index_code VARCHAR PRIMARY KEY,
     industry_name VARCHAR NOT NULL, level VARCHAR NOT NULL,
-    industry_code VARCHAR NOT NULL, is_new VARCHAR NOT NULL, src VARCHAR,
+    industry_code VARCHAR NOT NULL, src VARCHAR,
     ingest_id VARCHAR NOT NULL, source_row_hash VARCHAR NOT NULL
 );
 -- 8. 申万行业成员 PIT（index_member_all；区间 [in_date, out_date)，
@@ -248,7 +255,7 @@ CREATE TABLE IF NOT EXISTS industry_membership_pit (
 CREATE TABLE IF NOT EXISTS margin_detail_pit (
     ts_code VARCHAR NOT NULL, trade_date VARCHAR NOT NULL,
     rzye DOUBLE, rqye DOUBLE, rzmre DOUBLE, rqyl DOUBLE,
-    rzche DOUBLE, rqche DOUBLE, rqmcl DOUBLE, rzrqye DOUBLE,
+    rzche DOUBLE, rqchl DOUBLE, rqmcl DOUBLE, rzrqye DOUBLE,
     available_date VARCHAR NOT NULL,
     ingest_id VARCHAR NOT NULL, source_row_hash VARCHAR NOT NULL,
     PRIMARY KEY (ts_code, trade_date)
@@ -355,7 +362,7 @@ CREATE TABLE IF NOT EXISTS earnings_express_pit (
 -- 16. 回购（repurchase；vol=万股，amount=万元）
 CREATE TABLE IF NOT EXISTS repurchase_event_pit (
     ts_code VARCHAR NOT NULL, ann_date VARCHAR NOT NULL,
-    end_date VARCHAR, proc_date VARCHAR, exp_date VARCHAR,
+    end_date VARCHAR, proc VARCHAR, exp_date VARCHAR,  -- proc=实施进度（源列名，勘误 t44；取值语义 D3 首批样本值落档核验）
     vol DOUBLE, amount DOUBLE, high_limit DOUBLE, low_limit DOUBLE,
     available_date VARCHAR NOT NULL,
     ingest_id VARCHAR NOT NULL, source_row_hash VARCHAR NOT NULL,
@@ -548,7 +555,8 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
 2. 同一股票同一层级同一会话**至多一个**有效行业——回填审计与 D5 消费端双重
    fail-closed 校验；发现重叠 → 红线 §15.3 停止。
 3. 必须同时取 `is_new=Y` 与历史记录（行业迁移史可追溯）；`industry_taxonomy`
-   保留各代分类（is_new 标志 + index_code 代际），**2021 版分类切换显式记录
+   保留各代分类（index_code 代际 + industry_membership_pit.is_new——真实源
+   字段、代际判定单一权威），**2021 版分类切换显式记录
    taxonomy 代际版本**（D5 审计含切换边界证据）。
 4. legacy `sw_industry_member` 只读保留且**退出正式计算路径**（D5 切换后
    仅审计消费；grep 验证正式计算不再读它）。
@@ -637,3 +645,43 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
 
 > adj_factor 与 suspend_d 的权限档位以 D1 探针实测为准：若探针显示无权限，
 > 触发停止条件 §15.6（停下修订本文），禁止换源凑数。
+
+## 附录 B：源列→契约列显式映射表（勘误 t44 确立，常设机制）
+
+任何源列名与契约列名不一致（改名/语义错位/笔误），必须先经勘误在本表落盘
+显式映射后方可实施；D2/D3 按映射实施，禁止静默改名或跳列（§5.0 常设规则、
+§15.6 的机制化）。未来新增不一致必须经勘误在本表追加行；未登记的源列差异
+按 §15.6 停止。
+
+| 勘误 | 表 | 源列（探针实证 2026-09-04） | 契约列 | 备注 |
+|---|---|---|---|---|
+| t44 | repurchase_event_pit | proc | proc | 实施进度（文本）；取值语义 D3 首批样本值落档核验 |
+| t44 | margin_detail_pit | rqchl | rqchl | p17 起草笔误 `rqche` 已更正——现同名，无映射偏移 |
+| t44 | daily_suspension | trade_date / suspend_timing | trade_date / suspend_timing | 恢复用户目标文档原始定义；resume_date/ann_date 源不存在，已删 |
+| t44 | industry_taxonomy | （无 is_new 列） | （is_new 已删） | index_classify 源无 is_new；代际判定归 industry_membership_pit.is_new |
+
+## 附录 C：勘误记录（t44，2026-09-04，用户批准「批准全部」）
+
+- **触发**：t6 评审（D1 验收，verdict=pass）D2 交接②——p17 DDL 与探针源列
+  名不符，按 §15.6 走勘误；起草核对另发现同类差异（见下表决范围 3/4/5）。
+- **草案**：`docs/p17_erratum_draft_t42.md` @ `fc03fb4`（governance-auditor，
+  t42）。
+- **用户批准原文（逐字）**：「批准全部」（2026-09-04，经 captain 会话转达）。
+- **表决范围与 captain 裁决**：草案建议列 **1/2/3/4/5 全部采纳，项 6
+  （stk_limit 行上限增补）跳过**；两处分流裁决——(a) pre_close **保留**并补
+  来源说明（typed 显式字段请求供给，D1 实测 2026-09-04），否决草案的删列
+  建议；(b) daily_suspension **删除 resume_date/ann_date**、suspend_date
+  统一为 trade_date，恢复用户目标文档原始定义（ts_code/trade_date/
+  suspend_type/suspend_timing/available_at/source/ingest_id）。
+- **执行清单（本 commit 实际改动）**：§5.0 增补源列→契约列映射纪律常设
+  规则；§5.2 daily_price_limit pre_close 补来源说明（保留）；§5.2
+  daily_suspension 恢复用户原始定义（suspend_date→trade_date、删
+  resume_date/ann_date、增 suspend_timing/available_at/source，主键
+  (ts_code, trade_date, suspend_type)）；§5.2 industry_taxonomy 删 is_new
+  （连带注释修正）；§5.2 margin_detail_pit rqche→rqchl；§5.4
+  repurchase_event_pit proc_date→proc；§14.3 代际判定措辞 conforming
+  修正；新增附录 B。
+- **残留措辞说明（超出表决范围，不改）**：§6.1 suspend_d 行的 "suspend_date"
+  措辞按本勘误读作 trade_date（同一语义、同一条映射规则），§6.1 正文零改动。
+- **未采纳项**：项 6 跳过——p17 未钉死 stk_limit 行上限数值，§13 分页规则
+  以"行数==接口上限"信号触发，无需修改。
