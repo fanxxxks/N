@@ -409,8 +409,58 @@ def _populate_cumulative(db: AshareDB, cfg, rows=None) -> None:
     )
 
 
+def _populate_cumulative_v2(cfg, dates: list[str], rows=None) -> None:
+    """D6: seed the three v2 version tables with the same synthetic
+    economics as ``_CUM_ROWS`` (the family-⑤ source switched to the v2
+    as-of tables; available_date = the first session strictly after the
+    announcement, p17 §6.1)."""
+
+    from tests.conftest import populate_v2_statement_tables
+
+    rows = rows if rows is not None else _CUM_ROWS
+    date_axis = sorted(set(dates) | {ann for _rep, ann, _p, _c, _ta in rows})
+
+    def _available(ann: str) -> str:
+        return next(d for d in date_axis if d > ann)
+
+    income_rows, cashflow_rows, balance_rows = [], [], []
+    for index, (rep, ann, p, c, ta) in enumerate(rows):
+        identity = {
+            "ts_code": "000001.SZ",
+            "end_date": rep,
+            "ann_date": ann,
+            "f_ann_date": ann,
+            "available_date": _available(ann),
+            "report_type": "1",
+            "comp_type": "1",
+            "update_flag": "0",
+        }
+        income_rows.append(
+            {**identity, "n_income_attr_p": p, "ingest_id": f"income_{index}"}
+        )
+        cashflow_rows.append(
+            {**identity, "n_cashflow_act": c, "ingest_id": f"cashflow_{index}"}
+        )
+        balance_rows.append(
+            {**identity, "total_assets": ta, "ingest_id": f"balance_{index}"}
+        )
+    populate_v2_statement_tables(
+        cfg.duckdb_path.parent / "ashare_v2.duckdb",
+        income_rows=income_rows,
+        balance_rows=balance_rows,
+        cashflow_rows=cashflow_rows,
+    )
+
+
 def _first_visible(dates: list[str], announce: str) -> str:
     return next(d for d in dates if d >= announce)
+
+
+def _first_visible_strict(dates: list[str], announce: str) -> str:
+    """D6 (p17 §6.1): the first session strictly AFTER the announcement —
+    the report's available_date; a same-day-close signal never sees it."""
+
+    return next(d for d in dates if d > announce)
 
 
 def test_fundamental_schema_has_cash_flow_and_total_assets(tmp_path: Path):
@@ -626,8 +676,10 @@ def test_build_pit_frames_family5_golden(tmp_path: Path):
     cfg = _data_config(tmp_path)
     codes = ["000001.SZ"]
     dates = pd.bdate_range("2022-01-03", "2024-07-31").strftime("%Y%m%d").tolist()
-    with AshareDB(cfg.duckdb_path) as db:
-        _populate_cumulative(db, cfg)
+    # D6: the family-⑤ source is the v2 version tables; the visibility
+    # shifts to the session AFTER the announcement (p17 §6.1) — the
+    # hand-computed §5.3 values are unchanged.
+    _populate_cumulative_v2(cfg, dates)
 
     close = pd.DataFrame(20.0, index=codes, columns=dates)
     frames = build_pit_frames(cfg, codes, dates, close)
@@ -635,7 +687,9 @@ def test_build_pit_frames_family5_golden(tmp_path: Path):
         assert name in frames, name
 
     def visible(announce: str) -> str:
-        return _first_visible(dates, announce)
+        # available_date = the first session strictly after the
+        # announcement (p17 §6.1); the value then fills forward.
+        return next(d for d in dates if d > announce)
 
     def check(name: str, announce: str, expected: float) -> None:
         got = frames[name].loc["000001.SZ", visible(announce)]
@@ -732,8 +786,7 @@ def test_build_pit_frames_family5_missing_quarter_stays_nan(tmp_path: Path):
     dates = pd.bdate_range("2023-01-02", "2024-07-31").strftime("%Y%m%d").tolist()
     rows = [r for r in _CUM_ROWS if r[0] != "20230630"]  # drop Q2'23
     rows = [r for r in rows if r[0] >= "20230331"]
-    with AshareDB(cfg.duckdb_path) as db:
-        _populate_cumulative(db, cfg, rows)
+    _populate_cumulative_v2(cfg, dates, rows)
     close = pd.DataFrame(20.0, index=codes, columns=dates)
     frames = build_pit_frames(cfg, codes, dates, close)
     for name in ("CASHFLOW_QUALITY", "ACCRUALS"):
@@ -758,8 +811,7 @@ def test_build_pit_frames_family5_guards(tmp_path: Path):
         ("20230930", "20231031", 21.0, 27.0, 1100.0),
         ("20231231", "20240430", 40.0, 34.0, 1200.0),
     ]
-    with AshareDB(cfg.duckdb_path) as db:
-        _populate_cumulative(db, cfg, rows)
+    _populate_cumulative_v2(cfg, dates, rows)
     close = pd.DataFrame(20.0, index=codes, columns=dates)
     frames = build_pit_frames(cfg, codes, dates, close)
 
@@ -767,14 +819,14 @@ def test_build_pit_frames_family5_guards(tmp_path: Path):
         return frames[name].loc["000001.SZ"]
 
     # total_assets <= 0 through 2022: ACCRUALS/ASSET_GROWTH stay NaN there.
-    v2022 = dates.index(_first_visible(dates, "20220430"))
-    v2022_end = dates.index(_first_visible(dates, "20230430")) - 1
+    v2022 = dates.index(_first_visible_strict(dates, "20220430"))
+    v2022_end = dates.index(_first_visible_strict(dates, "20230430")) - 1
     assert series("ACCRUALS").iloc[v2022:v2022_end].isna().all()
     assert series("ASSET_GROWTH").iloc[v2022:v2022_end].isna().all()
     # CASHFLOW_QUALITY while TTM profit <= 0 (the whole 2022 window): NaN.
     assert series("CASHFLOW_QUALITY").iloc[v2022:v2022_end].isna().all()
     # After the recovery TTM is visible the ratios become finite again.
-    post = dates.index(_first_visible(dates, "20240430"))
+    post = dates.index(_first_visible_strict(dates, "20240430"))
     assert series("CASHFLOW_QUALITY").iloc[post] == pytest.approx(34 / 40)
     assert series("ACCRUALS").iloc[post] == pytest.approx((40 - 34) / 1200)
     # EARNINGS_ACCEL: g needs TTM profit at t-4 > 0; with the 2022 loss year
@@ -797,6 +849,8 @@ def test_build_pit_frames_family5_unbacked_rows_stay_nan(tmp_path: Path):
         )
     close = pd.DataFrame(20.0, index=codes, columns=dates)
     frames = build_pit_frames(cfg, codes, dates, close)
+    # The legacy row carries no v2 statement versions: the family-⑤
+    # features stay NaN (the legacy table is never a fallback, p17 §6.2).
     for name in _FAMILY5:
         assert name in frames, name
         assert frames[name].loc["000001.SZ"].isna().all(), name

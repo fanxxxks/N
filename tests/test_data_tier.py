@@ -40,7 +40,10 @@ def _tier_set(*tiers: DataTier) -> set[str]:
 
 
 def test_data_tier_version_is_pinned():
-    assert DATA_TIER_VERSION == 1
+    # p17 §9 (D6): bumped 1 -> 2 — the fundamentals B-rule switched to
+    # revision-tracking semantics and the industry-membership B-rule
+    # records the D5 gate state.
+    assert DATA_TIER_VERSION == 2
 
 
 def test_every_feature_has_a_data_tier():
@@ -212,5 +215,5 @@ def test_every_tier_has_usable_time_rules():
     # are gated by the statutory disclosure-season end; C is snapshot-only
     # and never usable for promotion decisions.
     assert "次日" in TIER_TIME_RULES["A"]
-    assert "04-30" in TIER_TIME_RULES["B"] and "08-31" in TIER_TIME_RULES["B"]
+    assert "修订" in TIER_TIME_RULES["B"] and "次一开市会话" in TIER_TIME_RULES["B"]
     assert "快照" in TIER_TIME_RULES["C"]
