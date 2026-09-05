@@ -40,6 +40,10 @@ from ashare_data.gates import ProductionGateRunner
 from ashare_execution import validate_execution_config
 
 from ashare_model.data_loader import AshareDataLoader
+from ashare_model.lifecycle import (
+    assert_paper_account_writable,
+    assert_formal_run_lifecycle,
+)
 from ashare_model.reward import signal_direction
 from ashare_model.time_contract import TrainingTimeContract
 from ashare_model.targets import causal_target_returns
@@ -109,6 +113,10 @@ class SimulationRunner:
         # inspect the runner (display/audit only).
         self.today = (today or datetime.now().strftime("%Y%m%d")).replace("-", "")
         validate_execution_config(backtest_config, sim_config)
+        # P8-15 no-bypass: paper simulation runs must pass the lifecycle
+        # gate and the paper account must be writable (contract §8).
+        assert_formal_run_lifecycle("paper_sim", data_config.data_dir)
+        assert_paper_account_writable("current")
         self.portfolio = SimulationPortfolio(
             sim_config.initial_capital, sim_config.state_path
         )

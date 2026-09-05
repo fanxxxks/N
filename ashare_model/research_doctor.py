@@ -827,6 +827,21 @@ def gather_artifacts(data_dir: Path) -> list[dict[str, Any]]:
     return snapshots
 
 
+def gather_lifecycle_checks(data_dir, data_config) -> dict:
+    """P8-15: lifecycle / paper / RunSpec health checks."""
+    result = {"lifecycle_available": False, "checks": []}
+    try:
+        from .lifecycle import ACTIVATED_EDGES, legal_edge_pairs, assert_paper_account_writable
+        all_activated = ACTIVATED_EDGES == legal_edge_pairs()
+        result["lifecycle_available"] = True
+        result["checks"].append({"name": "lifecycle_edges_activated", "ok": all_activated, "detail": f"count={len(ACTIVATED_EDGES)}"})
+        assert_paper_account_writable("current")
+        result["checks"].append({"name": "paper_account_writable", "ok": True, "detail": "writable"})
+    except Exception as exc:
+        result["checks"].append({"name": "lifecycle_error", "ok": False, "detail": str(exc)})
+    return result
+
+
 def gather_dependencies() -> dict[str, str | None]:
     """Installed versions of the research-critical packages (None = absent)."""
 

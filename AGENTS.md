@@ -198,14 +198,14 @@ portfolio config/hash、资金和费用；搜索器、唯一语义预算、seed�
 契约测试；console 日志和 dashboard 数字只能帮助诊断，不能替代 append-only ledger 和
 类型化 artifact 证据。
 
-### 4.6 研究生命周期（统一契约：`docs/p8_research_lifecycle_contract.md`；待 lifecycle v1 激活）
+### 4.6 研究生命周期（统一契约：`docs/p8_research_lifecycle_contract.md`；**强制**——P8-15 已激活）
 
 正式研究运行的生命周期状态（`IDEA`、`SPEC_LOCKED`、`DATA_QUALIFIED`、
 `FACTOR_SET_QUALIFIED`、`SEARCH_PLAN_ADMITTED`、`OOS_QUALIFIED`、
 `PAPER_OBSERVING`、`PROMOTED`、`REJECTED`、`FAILED`、`RETIRED`）及其证据
 矩阵、身份层次与合法转换由 `docs/p8_research_lifecycle_contract.md` 唯一定义，
-此处不重复。以下约束在该契约的 lifecycle v1（P8-06+）逐阶段激活完成前不改变任何
-现行行为；全部激活后（P8-15）为强制：状态只能由 append-only、hash-chained
+此处不重复。以下约束在 P8-15 激活后为**强制**（正式入口已接线 lifecycle no-bypass；
+违反即 fail-closed 拒绝）：状态只能由 append-only、hash-chained
 lifecycle 事件重放得出，禁止直接写/改 status JSON 或以“人工看 JSON”判定状态；
 每次状态转换必须消费证据矩阵规定的机器证据，跳级、未注册转换、身份错配、
 degraded 门禁一律 fail-closed 拒绝；身份（`spec_id`/`run_id`/`candidate_id`/

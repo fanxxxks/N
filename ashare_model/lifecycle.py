@@ -1093,6 +1093,71 @@ def assert_protected_oos_access(state: str | None, run_type: str) -> None:
         )
 
 
+def assert_formal_run_lifecycle(
+    entry_type: str,
+    data_dir: Path,
+    spec_id: str | None = None,
+    run_id: str | None = None,
+) -> str | None:
+    """P8-15 no-bypass gate for formal entry points (train/evaluation/
+    paper simulation).
+
+    Returns the replayed lifecycle state, or ``None`` when no lifecycle
+    events exist for the run (pre-activation legacy: the run proceeds but
+    its artifacts are marked legacy by the classification authority).
+
+    Raises :class:`LifecycleError` when lifecycle events exist and the
+    state does not allow the requested entry type (fail-closed no-bypass:
+    a formal run cannot skip the lifecycle state machine).
+
+    Entry-type → minimum-state mapping (contract §4 graph):
+
+    * ``train`` → at least ``DATA_QUALIFIED``
+    * ``evaluation`` → at least ``SEARCH_PLAN_ADMITTED``
+    * ``paper_sim`` → exactly ``PAPER_OBSERVING``
+    """
+
+    if entry_type not in ("train", "evaluation", "paper_sim"):
+        raise LifecycleError(f"unknown formal entry type {entry_type!r}")
+    if run_id is None or spec_id is None:
+        return None  # no lifecycle identity → pre-activation legacy run
+    try:
+        state = replay_run(data_dir, spec_id, run_id)
+    except (FileNotFoundError, KeyError):
+        return None  # no lifecycle events file → pre-activation legacy
+    if state is None:
+        return None  # empty event log → pre-activation legacy
+
+    minimum = {
+        "train": "DATA_QUALIFIED",
+        "evaluation": "SEARCH_PLAN_ADMITTED",
+        "paper_sim": "PAPER_OBSERVING",
+    }
+    required = minimum[entry_type]
+    stage_order = [
+        "IDEA", "SPEC_LOCKED", "DATA_QUALIFIED", "FACTOR_SET_QUALIFIED",
+        "SEARCH_PLAN_ADMITTED", "OOS_QUALIFIED", "PAPER_OBSERVING",
+        "PROMOTED",
+    ]
+    if entry_type == "paper_sim":
+        if state != required:
+            raise LifecycleError(
+                f"paper simulation requires lifecycle state "
+                f"{required!r}; got {state!r} (contract §6: paper "
+                "observation starts only from OOS_QUALIFIED)"
+            )
+    else:
+        current_idx = stage_order.index(state) if state in stage_order else -1
+        required_idx = stage_order.index(required)
+        if current_idx < required_idx:
+            raise LifecycleError(
+                f"{entry_type} entry requires lifecycle state at least "
+                f"{required!r}; got {state!r} (contract §4: the run has "
+                "not completed the prerequisite stages)"
+            )
+    return state
+
+
 def assert_paper_account_writable(account_kind: str) -> None:
     """Contract §8: v1/v0 paper accounts are read-only by default —
     writes (resume/append/promotion) are refused; only current

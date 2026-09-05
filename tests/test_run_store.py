@@ -11,6 +11,7 @@ ledger lines keep their exact historical byte behavior and stay read-only.
 """
 
 from __future__ import annotations
+import pathlib
 
 import hashlib
 import json
@@ -1338,3 +1339,69 @@ def test_lifecycle_cli_start_show_state_and_retire(tmp_path, capsys):
     assert state == 0
     shown = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert shown["state"] == "RETIRED"
+
+
+# --- P8-15 no-bypass wiring tests (t61) ---------------------------------------
+
+import numpy as np
+
+
+def test_p8_15_lifecycle_no_bypass_assert_formal_run_lifecycle():
+    """P8-15①: the no-bypass gate function exists and enforces the
+    entry-type → minimum-state mapping.  Pre-activation runs (no
+    lifecycle events) pass through with None."""
+    import tempfile
+    from pathlib import Path
+
+    from ashare_model.lifecycle import (
+        LifecycleError,
+        assert_formal_run_lifecycle,
+    )
+
+    data_dir = Path(tempfile.mkdtemp())
+    # Pre-activation (no spec_id/run_id): passes through with None.
+    assert assert_formal_run_lifecycle("train", data_dir) is None
+    assert assert_formal_run_lifecycle("evaluation", data_dir) is None
+    assert assert_formal_run_lifecycle("paper_sim", data_dir) is None
+    # Unknown entry type: fail-closed.
+    with pytest.raises(LifecycleError, match="unknown formal entry type"):
+        assert_formal_run_lifecycle("unknown", data_dir)
+
+
+def test_p8_15_paper_account_writable_wired():
+    """P8-15①: assert_paper_account_writable is callable and enforces
+    the current-account rule (contract §8)."""
+    from ashare_model.lifecycle import (
+        LifecycleError,
+        assert_paper_account_writable,
+    )
+
+    assert_paper_account_writable("current")  # no raise
+    with pytest.raises(LifecycleError, match="read-only"):
+        assert_paper_account_writable("v1")
+
+
+def test_p8_15_research_doctor_lifecycle_section():
+    """P8-15②: research_doctor's gather_lifecycle_checks returns
+    lifecycle/paper check results (calls lifecycle.py, zero duplication)."""
+    import tempfile
+    from pathlib import Path
+
+    from ashare_model.research_doctor import gather_lifecycle_checks
+
+    data_dir = Path(tempfile.mkdtemp())
+    result = gather_lifecycle_checks(data_dir, data_dir)
+    assert "checks" in result
+    assert "lifecycle_available" in result
+    check_names = [c["name"] for c in result["checks"]]
+    assert "lifecycle_edges_activated" in check_names
+    assert "paper_account_writable" in check_names
+
+
+def test_p8_15_agents_md_marker_flipped():
+    """P8-15③: the AGENTS.md §4.6 marker is flipped from "待 lifecycle v1
+    激活" to "强制" (P8-15 activation)."""
+    agents_path = pathlib.Path(__file__).resolve().parents[1] / "AGENTS.md"
+    agents = agents_path.read_text(encoding="utf-8")
+    assert "待 lifecycle v1 激活" not in agents
+    assert "P8-15 已激活" in agents or "强制" in agents
