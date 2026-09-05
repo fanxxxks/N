@@ -1009,7 +1009,8 @@ def test_p9_factor_compute_version_pinned():
     from ashare_model.factors import FACTOR_COMPUTE_VERSION
 
     # p19 (D4): bumped 1 -> 2 for the adjusted price basis.
-    assert FACTOR_COMPUTE_VERSION == 2
+    # p17/D5 (t16 F1): bumped 2 -> 3 for the industry membership PIT switch.
+    assert FACTOR_COMPUTE_VERSION == 3
 
 
 def test_p9_new_factors_registered():

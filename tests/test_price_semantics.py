@@ -695,7 +695,9 @@ def test_version_impact_table_bumps_are_in_place():
 
     assert EXECUTION_SPEC_VERSION == 3
     assert str(PROTOCOL_VERSION) == "26"
-    assert FACTOR_COMPUTE_VERSION == 2
+    # p17/D5 (t16 F1): bumped 2 -> 3 for the industry membership PIT
+    # switch; p17/D6 bumps to 4 for the family-⑤ source switch.
+    assert FACTOR_COMPUTE_VERSION == 3
     assert TARGET_CONTRACT_VERSION == 2
     assert BARE_FACTOR_BACKTEST_VERSION == 4
     assert P3_MEASUREMENT_VERSION == 4
