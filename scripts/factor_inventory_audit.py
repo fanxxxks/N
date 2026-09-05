@@ -10,6 +10,16 @@ generation profile):
   2026-09-01, 73-feature post-P9 v4 audit; frozen in git history at
   commit d6a034d).
 
+The ``v2`` generation (t18 factor retest, 2026-09-05) measures the full
+77-name vocabulary on the Tushare v2 PIT dataset (``ashare_v2.duckdb``)
+under the D4/D5/D6 semantics (p19 §2.3 adjusted label basis, D5 industry
+PIT intervals, D6 family-⑤ as-of statements).  It is the only profile
+that (a) derives its targets from the loader's NaN-preserving adjusted
+open cache, (b) reports per-fold IC over the five pre-registered
+walk-forward folds, (c) reports 2x cost pressure, and (d) audits each
+feature's direction/tier metadata.  The v1/v4 profiles keep their
+historical schemas byte-for-byte.
+
 The per-directory ``metrics.json`` / ``audit_report*.md`` measurement
 evidence stays in place; ``COMPATIBILITY.md`` in each directory points
 here.  Per the p13 contract freeze
@@ -55,6 +65,8 @@ separately from this JSON.  Read-only with respect to the database.
 Usage:
     python scripts/factor_inventory_audit.py --generation v1
     python scripts/factor_inventory_audit.py --generation v4
+    python scripts/factor_inventory_audit.py --generation v2 \
+        --v2-duckdb-path <path to ashare_v2.duckdb>
 """
 
 from __future__ import annotations
@@ -81,16 +93,25 @@ from ashare_data.config import (  # noqa: E402
     load_config,
     make_backtest_config,
     make_data_config,
+    make_protocol_config,
+    resolve_v2_duckdb_path,
 )
 from ashare_data.db import AshareDB  # noqa: E402
 from ashare_data.fundamentals import build_pit_frames  # noqa: E402
-from ashare_data.manifest import build_dataset_manifest  # noqa: E402
+from ashare_data.manifest import (  # noqa: E402
+    build_dataset_manifest,
+    build_v2_dataset_manifest,
+)
 from ashare_data.processor import pivot_wide  # noqa: E402
 from ashare_model.cost_matrix import round_trip_cost  # noqa: E402
 from ashare_model.data_loader import AshareDataLoader  # noqa: E402
+from ashare_model.data_tier import feature_tier  # noqa: E402
+from ashare_model.feature_metadata import authored_metadata_of  # noqa: E402
 from ashare_model.feature_registry import (  # noqa: E402
     CORR_THRESHOLD,
     _correlation_clusters,
+    family_of,
+    pit_level_of,
 )
 from ashare_model.factors import (  # noqa: E402
     AshareFactorEngine,
@@ -101,7 +122,10 @@ from ashare_model.reward import (  # noqa: E402
     icir_from_series,
     rank_ic_series,
 )
-from ashare_model.vocab import FEATURE_NAMES  # noqa: E402
+from ashare_model.vocab import (  # noqa: E402
+    DEPRECATED_FEATURE_NAMES,
+    FEATURE_NAMES,
+)  # noqa: E402
 
 HORIZONS = (1, 2, 3, 5, 10, 15, 20)
 MIN_STOCKS = 10
@@ -141,6 +165,36 @@ _PROFILES: dict[str, dict] = {
         "check_v4_tail": True,
         "include_factor_compute": True,
     },
+    # t18 (2026-09-05): the first audit on the Tushare v2 PIT dataset under
+    # the D4/D5/D6 semantics.  Measurement conventions stay the pre-registered
+    # ones (h set, min_stocks, IS/OOS 2022 split, cost model); the additions
+    # below are reporting-only and are keyed off profile flags so the frozen
+    # v1/v4 schema is untouched.
+    "v2": {
+        "out_dirname": "factor_inventory_audit_v2_20260905",
+        "expected_features": 77,
+        "audit_generation": (
+            "v2 (t18 post-D4/D5/D6 factor retest on the ashare_v2 "
+            "Tushare/PIT dataset)"
+        ),
+        "baseline_predecessor": (
+            "docs/factor_inventory_audit_v4_20260901/metrics.json "
+            "(t5, 73-feature post-P9 audit)"
+        ),
+        "manifest_note": (
+            "v2 dataset_id computed read-only via "
+            "manifest.build_v2_dataset_manifest (p17 §4.4); the legacy "
+            "database stays read-only"
+        ),
+        "check_v4_tail": False,
+        "check_v5_tail": True,
+        "include_factor_compute": True,
+        "manifest_source": "v2",
+        "price_basis": "adjusted",
+        "fold_ic_stats": True,
+        "cost_pressure_2x": True,
+        "direction_tier_audit": True,
+    },
 }
 
 
@@ -157,7 +211,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         required=True,
         help=(
             "audit generation profile: v1 = t2 62-feature baseline "
-            "(2026-08-31), v4 = t5 73-feature post-P9 audit (2026-09-01)"
+            "(2026-08-31), v4 = t5 73-feature post-P9 audit (2026-09-01), "
+            "v2 = t18 77-feature retest on the Tushare v2 PIT dataset "
+            "(2026-09-05)"
+        ),
+    )
+    parser.add_argument(
+        "--v2-duckdb-path",
+        default=None,
+        help=(
+            "explicit path to the Tushare v2 price source "
+            "(ashare_v2.duckdb); overrides config.v2_duckdb_path after "
+            "resolution.  Needed when the v2 database does not sit next "
+            "to the legacy database.  Used by the v2 profile."
         ),
     )
     parser.add_argument(
@@ -303,6 +369,43 @@ def union_find_clusters(corr: np.ndarray, names: list[str],
     return {name: f"c{k}" for k, g in enumerate(groups) for name in g}
 
 
+def _adjusted_bars_frame(loader: AshareDataLoader) -> pd.DataFrame:
+    """``loader.bars`` with the OHLC/pre_close columns replaced IN PLACE by
+    the loader's own adjusted-cache values (p19 §2.3: the factor input
+    basis is the adjusted continuous series).
+
+    Values are read exclusively from ``loader.adjusted_data_cache`` — the
+    same NaN-preserving adjusted frames ``compute_factor_tensor`` consumed
+    — so this replays no adjustment arithmetic and cannot drift from the
+    loader's single adjustment implementation.  Rows whose (code, date) is
+    outside the pivoted grid (defensive: none under the loader's contract)
+    keep NaN, which the registry builders propagate as missing values.
+    The mutation happens in place (no frame copy) to stay inside the
+    memory budget; the caller must have finished every raw-OHLC consumer
+    (the raw close pivot for the PIT frames) before calling.
+    """
+
+    df = loader.bars
+    grids = {
+        col: loader.adjusted_data_cache[col].numpy().astype(np.float64)
+        for col in ("open", "high", "low", "close", "pre_close")
+    }
+    s_n, t_n = grids["open"].shape
+    assert (s_n, t_n) == (len(loader.ts_codes), len(loader.dates)), (
+        "adjusted cache shape does not match (ts_codes, dates)"
+    )
+    code_idx = {code: i for i, code in enumerate(loader.ts_codes)}
+    date_idx = {d: i for i, d in enumerate(loader.dates)}
+    row_code = df["ts_code"].map(code_idx).to_numpy(dtype=float)
+    row_date = df["trade_date"].map(date_idx).to_numpy(dtype=float)
+    ok = np.isfinite(row_code) & np.isfinite(row_date)
+    for col, wide in grids.items():
+        vals = np.full(len(df), np.nan)
+        vals[ok] = wide[row_code[ok].astype(np.int64), row_date[ok].astype(np.int64)]
+        df[col] = vals
+    return df
+
+
 def main(argv: list[str] | None = None) -> int:
     t_start = time.time()
     provenance: dict = {}
@@ -312,6 +415,8 @@ def main(argv: list[str] | None = None) -> int:
 
     raw = load_config(None, project_root=ROOT)
     config = make_data_config(raw, ROOT)
+    if args.v2_duckdb_path:
+        config.v2_duckdb_path = Path(args.v2_duckdb_path)
     bt_cfg = make_backtest_config(raw)
     loader = AshareDataLoader(config)
     loader.load_data()
@@ -319,8 +424,29 @@ def main(argv: list[str] | None = None) -> int:
     dates = list(loader.dates)
     years = [d[:4] for d in dates]
     mask = np.asarray(loader.universe_mask, dtype=bool)
-    tensor = loader.factor_tensor.numpy().astype(np.float32)  # [n_f, S, T]
-    open_np = loader.raw_data_cache["open"].numpy().astype(np.float64)
+    if profile.get("price_basis") == "adjusted":
+        # Memory-bounded view: the torch tensor is already float32, so the
+        # audit reads it zero-copy (the frozen profiles keep their historical
+        # explicit copy below).
+        tensor = loader.factor_tensor.numpy()  # [n_f, S, T] float32 view
+    else:
+        tensor = loader.factor_tensor.numpy().astype(np.float32)  # [n_f, S, T]
+    if profile.get("price_basis") == "adjusted":
+        # p19 §2.3: the label basis is the adjusted open.  The adjusted
+        # cache is the NaN-preserving fail-closed view, so suspension gaps
+        # and missing opens yield NaN targets by construction.
+        open_np = loader.adjusted_data_cache["open"].numpy().astype(np.float64)
+        price_basis_note = (
+            "targets: adjusted open-to-open (p19 §2.3), NaN-preserving "
+            "adjusted cache; factors consume the adjusted basis (p19 §2.3); "
+            "volume/amount/turnover stay raw"
+        )
+    else:
+        open_np = loader.raw_data_cache["open"].numpy().astype(np.float64)
+        price_basis_note = (
+            "targets: loader raw open cache (the pre-D4 profiles measured "
+            "qfq opens through this same key)"
+        )
 
     n_f, s_n, t_n = tensor.shape
     assert n_f == len(FEATURE_NAMES) == profile["expected_features"], (
@@ -335,14 +461,30 @@ def main(argv: list[str] | None = None) -> int:
             _FEATURE_NAMES_V4
         )
         assert set(DEPRECATED_FEATURE_NAMES) <= set(FEATURE_NAMES)
+    if profile.get("check_v5_tail"):
+        # P13 vocabulary tail: the four family-⑤ slow-fundamental features
+        # (77 = 73 + 4); deprecated members still computed and measurable.
+        from ashare_model.vocab import _FEATURE_NAMES_V5
+
+        assert list(FEATURE_NAMES[-len(_FEATURE_NAMES_V5):]) == list(
+            _FEATURE_NAMES_V5
+        )
+        assert set(DEPRECATED_FEATURE_NAMES) <= set(FEATURE_NAMES)
     assert mask.shape == (s_n, t_n)
     is_oos = np.array([d >= IS_CUTOFF for d in dates])
     is_mask_flat = np.broadcast_to(is_oos, (s_n, t_n)).reshape(-1)
 
-    with AshareDB(config.duckdb_path, read_only=True) as db:
-        dataset_id_current = build_dataset_manifest(
-            db, config, use_cache=True
-        ).dataset_id
+    if profile.get("manifest_source") == "v2":
+        v2_path = resolve_v2_duckdb_path(config)
+        with AshareDB(v2_path, read_only=True) as v2db:
+            dataset_id_current = build_v2_dataset_manifest(
+                v2db, use_cache=True
+            ).dataset_id
+    else:
+        with AshareDB(config.duckdb_path, read_only=True) as db:
+            dataset_id_current = build_dataset_manifest(
+                db, config, use_cache=True
+            ).dataset_id
 
     from ashare_model.alphagpt import MODEL_VERSION
     from ashare_model.data_tier import DATA_TIER_VERSION
@@ -390,8 +532,35 @@ def main(argv: list[str] | None = None) -> int:
         "min_stocks": MIN_STOCKS,
         "baseline_signals": list(BASELINE_SIGNALS),
         "horizons": list(HORIZONS),
-        "note_industry_snapshot": "industry membership is a current snapshot (non-PIT)",
+        "note_industry_snapshot": (
+            "industry membership is consumed from the v2 "
+            "industry_membership_pit PIT intervals (D5, half-open "
+            "[in_date, out_date), available_date visibility); the feature "
+            "tier stays C pending the p17 §14 verification gate (t14)"
+            if profile.get("manifest_source") == "v2"
+            else "industry membership is a current snapshot (non-PIT)"
+        ),
+        "price_basis": price_basis_note,
+        "duckdb_path_legacy": str(config.duckdb_path),
+        "v2_duckdb_path": str(resolve_v2_duckdb_path(config)),
     })
+    if profile.get("direction_tier_audit"):
+        # Loader-declared degradation is recorded, never swallowed (p19
+        # §2.1/§2.4; p17 §12 industry freshness gate).
+        provenance["data_degradation"] = {
+            "price_degraded_codes": dict(loader.price_degraded),
+            "n_price_degraded_codes": len(loader.price_degraded),
+            "industry_index_lag_sessions": loader.industry_index_lag,
+            "industry_source_degraded": getattr(
+                loader, "industry_source_degraded", None
+            ),
+        }
+        provenance["seeds_note"] = (
+            "protocol seeds [42, 7, 2024] are the pre-registered ProtocolConfig "
+            "defaults; this audit is deterministic (rank IC, no RNG, no "
+            "search), so no seed is consumed and the unique-semantic "
+            "evaluation budget consumed by this run is 0"
+        )
 
     # ---- targets ----------------------------------------------------------
     targets = {h: forward_open_returns(open_np, h) for h in HORIZONS}
@@ -424,6 +593,32 @@ def main(argv: list[str] | None = None) -> int:
         for h in (1, 10, 20)
     }
 
+    # ---- pre-registered walk-forward folds (reporting-only) ---------------
+    fold_slices: dict[str, np.ndarray] = {}
+    fold_windows: list[dict] = []
+    if profile.get("fold_ic_stats"):
+        proto = make_protocol_config(raw)
+        for i, cfg in enumerate(proto.folds):
+            lo = cfg.train_end.replace("-", "")
+            hi = cfg.test_end.replace("-", "")
+            sel = np.array([(d > lo) and (d <= hi) for d in dates])
+            if not sel.any():
+                raise ValueError(
+                    f"fold {i + 1} ({lo}..{hi}) has no sessions inside the "
+                    "data window"
+                )
+            fold_slices[f"fold{i + 1}_test_{lo}_{hi}"] = sel
+            fold_windows.append({
+                "train_end": cfg.train_end,
+                "test_end": cfg.test_end,
+                "first_test_date": next(d for d, s in zip(dates, sel) if s),
+                "n_test_dates": int(sel.sum()),
+            })
+        provenance["walk_forward_folds"] = {
+            "source": "protocol.folds (pre-registered ProtocolConfig defaults)",
+            "windows": fold_windows,
+        }
+
     # ---- raw coverage + exposure ------------------------------------------
     engine = AshareFactorEngine()
     close_df = pivot_wide(loader.bars, ts_codes, dates, "close")
@@ -431,7 +626,25 @@ def main(argv: list[str] | None = None) -> int:
     capital_frames = build_capital_frames(config, ts_codes, dates)
     industry_frame = build_industry_member_frame(config, ts_codes, dates)
     elig_frame = pd.DataFrame(mask, index=ts_codes, columns=dates)
-    ctx = engine._build_context(loader.bars, ts_codes, dates, close_df,
+    if profile.get("price_basis") == "adjusted":
+        # p19 §2.3: the factor input basis is the adjusted series — the raw
+        # missingness pass must evaluate the registry on the same basis the
+        # tensor consumed, otherwise adjusted-basis degradation (e.g. a
+        # missing adj_factor) would be misreported as coverage.  The melt
+        # happens in place AFTER the raw close pivot above (the PIT frames'
+        # raw-price input), and the loader's torch caches are released
+        # afterwards: this audit needs neither cache again (the measurement
+        # keeps only its own float32 tensor view + melted bars frame).
+        _adjusted_bars_frame(loader)
+        loader.raw_data_cache = {}
+        loader.adjusted_data_cache = {}
+        import gc as _gc
+
+        _gc.collect()
+        ctx_bars = loader.bars
+    else:
+        ctx_bars = loader.bars
+    ctx = engine._build_context(ctx_bars, ts_codes, dates, close_df,
                                 elig_frame, industry_frame)
 
     with np.errstate(all="ignore"):
@@ -525,21 +738,50 @@ def main(argv: list[str] | None = None) -> int:
 
     del ctx
     # ---- correlation clusters ---------------------------------------------
-    z = tensor.reshape(n_f, -1).astype(np.float64)
-    cell_ok = mask.reshape(-1)
-    corr = np.full((n_f, n_f), np.nan)
-    for i in range(n_f):
-        zi = np.where(cell_ok, z[i], np.nan)
-        zi0 = zi - np.nanmean(zi)
-        for j in range(i, n_f):
-            zj = np.where(cell_ok, z[j], np.nan)
-            zj0 = zj - np.nanmean(zj)
-            ok = np.isfinite(zi0) & np.isfinite(zj0)
-            if int(ok.sum()) < 1000:
-                continue
-            a, b = zi0[ok], zj0[ok]
-            den = math.sqrt(float(a @ a) * float(b @ b))
-            corr[i, j] = corr[j, i] = float(a @ b) / den if den > 1e-12 else np.nan
+    if profile.get("price_basis") == "adjusted":
+        # Memory-bounded variant: the flat matrix stays a float32 VIEW of the
+        # tensor; each per-pair slice is cast to float64 transiently (exact
+        # per-element cast, so the float64 arithmetic is identical to the
+        # whole-matrix cast below).
+        z = tensor.reshape(n_f, -1)
+        cell_ok = mask.reshape(-1)
+        corr = np.full((n_f, n_f), np.nan)
+        zi0 = np.empty(t_n * s_n, dtype=np.float64)
+        zj0 = np.empty(t_n * s_n, dtype=np.float64)
+        for i in range(n_f):
+            zi = np.where(cell_ok, z[i].astype(np.float64), np.nan)
+            zi0[:] = zi - np.nanmean(zi)
+            del zi
+            for j in range(i, n_f):
+                zj = np.where(cell_ok, z[j].astype(np.float64), np.nan)
+                zj0[:] = zj - np.nanmean(zj)
+                del zj
+                ok = np.isfinite(zi0) & np.isfinite(zj0)
+                if int(ok.sum()) < 1000:
+                    continue
+                a, b = zi0[ok], zj0[ok]
+                den = math.sqrt(float(a @ a) * float(b @ b))
+                corr[i, j] = corr[j, i] = (
+                    float(a @ b) / den if den > 1e-12 else np.nan
+                )
+    else:
+        z = tensor.reshape(n_f, -1).astype(np.float64)
+        cell_ok = mask.reshape(-1)
+        corr = np.full((n_f, n_f), np.nan)
+        for i in range(n_f):
+            zi = np.where(cell_ok, z[i], np.nan)
+            zi0 = zi - np.nanmean(zi)
+            for j in range(i, n_f):
+                zj = np.where(cell_ok, z[j], np.nan)
+                zj0 = zj - np.nanmean(zj)
+                ok = np.isfinite(zi0) & np.isfinite(zj0)
+                if int(ok.sum()) < 1000:
+                    continue
+                a, b = zi0[ok], zj0[ok]
+                den = math.sqrt(float(a @ a) * float(b @ b))
+                corr[i, j] = corr[j, i] = (
+                    float(a @ b) / den if den > 1e-12 else np.nan
+                )
     clusters = union_find_clusters(corr, list(FEATURE_NAMES), CORR_THRESHOLD)
     # Cross-check the union-find semantics against the registry implementation
     # on a date-subsample (memory-bounded; same measure, independent call).
@@ -598,9 +840,10 @@ def main(argv: list[str] | None = None) -> int:
                 None if res is None else res["degenerate_share"]
             )
             if res is not None:
-                entry[f"cost_drag_pct_h{h}"] = (
-                    2.0 * res["tau"] * (252.0 / h) * per_yuan_rt * 100.0
-                )
+                drag = 2.0 * res["tau"] * (252.0 / h) * per_yuan_rt * 100.0
+                entry[f"cost_drag_pct_h{h}"] = drag
+                if profile.get("cost_pressure_2x"):
+                    entry[f"cost_drag_pct_2x_h{h}"] = 2.0 * drag
         turnover[name] = entry
         print(f"turnover done: {name}", flush=True)
 
@@ -655,7 +898,54 @@ def main(argv: list[str] | None = None) -> int:
             "residual_is": series_stats(ic_R[~is_oos]),
             "residual_oos": series_stats(ic_R[is_oos]),
         }
+        if profile.get("direction_tier_audit"):
+            # p9 §7.2 / p13 §8 pre-registered direction check: the residual
+            # IC sign must match the feature's preregistered expected
+            # direction.  delta_ic_oos stays raw (the composite absorbs the
+            # direction through is_coef_factor).
+            d = int(authored_metadata_of(name).expected_direction)
+            ro = results_incr[name]["residual_oos"]["ic_mean"]
+            results_incr[name]["expected_direction"] = d
+            results_incr[name]["residual_sign_matches_direction"] = (
+                None if (ro is None or d == 0) else ((ro > 0) == (d > 0))
+            )
         print(f"incremental done: {name}", flush=True)
+
+    # ---- direction / PIT / tier audit (reporting-only) ---------------------
+    dir_tier_audit: dict[str, dict] = {}
+    if profile.get("direction_tier_audit"):
+        for name in FEATURE_NAMES:
+            meta = authored_metadata_of(name)
+            entry = {
+                "expected_direction": int(meta.expected_direction),
+                "promotion_allowed_at_measurement": bool(
+                    meta.promotion_allowed
+                ),
+                "deprecated": name in DEPRECATED_FEATURE_NAMES,
+                "family": family_of(name),
+                "pit_level": pit_level_of(name).value,
+                "data_tier": feature_tier(name).value,
+                "availability_rule": meta.availability_rule,
+            }
+            for h in (1, 10, 20):
+                annual_entry = annual[h][name]
+                finite_years = [
+                    y for y, st in annual_entry.items()
+                    if st["ic_mean"] is not None
+                ]
+                if meta.expected_direction != 0 and finite_years:
+                    agree = sum(
+                        1 for y in finite_years
+                        if (annual_entry[y]["ic_mean"] > 0)
+                        == (meta.expected_direction > 0)
+                    )
+                    entry[f"annual_direction_stability_h{h}"] = (
+                        agree / len(finite_years)
+                    )
+                else:
+                    entry[f"annual_direction_stability_h{h}"] = None
+                entry[f"annual_direction_n_years_h{h}"] = len(finite_years)
+            dir_tier_audit[name] = entry
 
     # ---- assemble per-factor block ----------------------------------------
     per_factor: dict[str, dict] = {}
@@ -678,6 +968,16 @@ def main(argv: list[str] | None = None) -> int:
             "turnover": turnover[name],
             "incremental_oos_h10": results_incr[name],
         }
+        if profile.get("fold_ic_stats"):
+            per_factor[name]["fold_ic"] = {
+                str(h): {
+                    fid: series_stats(ic_by_h[h][i][sel])
+                    for fid, sel in fold_slices.items()
+                }
+                for h in HORIZONS
+            }
+        if profile.get("direction_tier_audit"):
+            per_factor[name]["direction_tier_audit"] = dir_tier_audit[name]
 
     metrics = {
         "provenance": provenance,
@@ -700,6 +1000,15 @@ def main(argv: list[str] | None = None) -> int:
             "round_trip_cost_yuan": rt_cost,
             "per_yuan_round_trip": per_yuan_rt,
             "source": "cost_matrix.round_trip_cost under BacktestConfig",
+            **(
+                {
+                    "cost_pressure_2x": (
+                        "cost_drag_pct_2x_h* doubles the per-yuan round-trip "
+                        "fee level (2x cost stress); turnover tau unchanged"
+                    )
+                }
+                if profile.get("cost_pressure_2x") else {}
+            ),
         },
         "runtime_seconds": round(time.time() - t_start, 1),
     }
