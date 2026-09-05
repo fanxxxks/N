@@ -116,14 +116,18 @@ def test_required_adjudication_sections_are_present() -> None:
     assert not missing, f"contract is missing adjudication sections: {missing}"
 
 
-def test_agents_md_carries_pending_activation_block() -> None:
+def test_agents_md_p8_15_activation_flipped() -> None:
+    """P8-15: the AGENTS.md §4.6 marker is flipped from "待 lifecycle v1
+    激活" to "强制" — lifecycle v1 is fully activated."""
     text = AGENTS_PATH.read_text(encoding="utf-8")
     assert "p8_research_lifecycle_contract.md" in text, (
         "AGENTS.md must reference the lifecycle contract document"
     )
-    assert "待 lifecycle v1 激活" in text, (
-        "lifecycle hard constraints must be marked pending lifecycle v1 "
-        "activation until P8-15 flips them to mandatory"
+    assert "待 lifecycle v1 激活" not in text, (
+        "the pending-activation marker must be removed after P8-15"
+    )
+    assert "强制" in text, (
+        "AGENTS.md must mark the lifecycle constraints as mandatory"
     )
 
 
