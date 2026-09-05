@@ -122,8 +122,10 @@ def _pit_level_of(name: str, family: str) -> PitLevel:
     if name in FUNDAMENTAL_PIT_NAMES:
         return PitLevel.PIT_FUNDAMENTAL
     if name in EXTERNAL_FACTOR_NAMES:
-        # INDUSTRY_MOMENTUM is built on the industry membership snapshot;
-        # MARGIN_BALANCE_CHG is a PIT capital-flow feed.
+        # INDUSTRY_MOMENTUM is built on the industry membership PIT
+        # intervals (D5 原位切换) — its carrying is absorbed by the
+        # FACTOR_COMPUTE_VERSION bump (t16 F1); MARGIN_BALANCE_CHG is a
+        # PIT capital-flow feed.
         return (
             PitLevel.SNAPSHOT
             if name == "INDUSTRY_MOMENTUM"
