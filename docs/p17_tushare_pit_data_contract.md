@@ -421,7 +421,15 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
    禁止用一表的公告日代表另一表、禁止提前拼接（AGENTS §1 时间因果）；
 4. 查无候选或缺字段 → NaN，**禁止 0 或中性值伪造**（AGENTS §5.3）；
 5. as-of 读取只允许一个实现（D6 落点：`ashare_data/pit_import.py`/视图层），
-   消费方（factors.py 等）只调用不复制（AGENTS §1 原则 3）。
+   消费方（factors.py 等）只调用不复制（AGENTS §1 原则 3）；
+6. **非季末 end_date 行的消费语义（勘误 #4，2026-09-04 captain 代行批准）**：
+   income_statement_pit 源行 end_date 可为非季末（不规则报告期，
+   20170131/20160430/20190831 等——L1 纯源入库正确且必须保留）；此类行
+   **不参与季度累计 TTM 期间算术**（非季末报告不可解释为季末累计报告，
+   禁止强行套入 _QUARTER_ENDS 季度索引），相关特征该报告期按缺失 NaN
+   处理并落审计计数；balance/cashflow 实测无此情形（零不规则行）。
+   消费实现（D6）按此句过滤期间算术输入并输出审计计数，禁止静默丢弃行
+   （as-of 读取仍可见全部版本行）。
 
 ### 6.3 行业成员 as-of 规则（D5 消费方的预注册语义）
 
@@ -747,3 +755,25 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
   end_date VARCHAR NOT NULL → VARCHAR（可空）+ 表注释与行内注释；附录 B
   追加 t52 nullable 事实登记行。其余 DDL/规则零改动（PK source_row_hash、
   ann_date NOT NULL、holder_num、附录 A/B 既有行不动）。
+
+### 勘误 #4（t59，2026-09-04，captain 代行批准——p18 §4 回写义务模式）
+
+- **触发链**：t18 首次真实数据端到端运行 fail-closed 拦截——
+  `data_loader.py:485 → fundamentals.py:639→523→426→110
+  _QUARTER_ENDS.index(report_date[4:])` ValueError：income_statement_pit
+  含 **10 行非季末 end_date**（20170131/20160430/20190831 等；10 只股票：
+  003040.SZ/300959.SZ/301001.SZ/301038.SZ/301200.SZ/301217.SZ/301256.SZ/
+  688063.SH/688772.SH/688779.SH；report_type=1、多为 update_flag=1）；
+  balance/cashflow **零不规则行**（实测）。
+- **L1 确认**：非季末 end_date 源行入库正确且必须保留（§5.0 纯源原则；
+  不规则报告期是源数据事实，排除即静默丢弃）——缺陷在消费语义缺失，
+  不在数据。
+- **代行批准声明（逐字，本勘误的批准证据）**："批准 §6.2 增补非季末
+  end_date 消费语义——income_statement_pit 源行 end_date 可为非季末
+  （不规则报告期，L1 纯源入库正确且必须保留）；消费语义 = 非季末
+  end_date 行不参与季度累计 TTM 期间算术（不可解释为季末累计报告），
+  相关特征该期按缺失 NaN 处理并落审计计数；balance/cashflow 实测无此
+  情形。依据：用户 2026-09-04 授权扩展记录（89dd121 附录 C）。"
+- **执行清单（本 commit 实际改动）**：§6.2 增补第 6 条消费语义（非季末
+  end_date 行不参与季度累计 TTM 期间算术、相关特征该期 NaN + 审计计数、
+  balance/cashflow 零不规则行记录、禁止静默丢弃行）。其余 DDL/规则零改动。
