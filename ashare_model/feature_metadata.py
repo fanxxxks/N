@@ -81,7 +81,10 @@ _FUNDAMENTAL_TTM = (
     "(Q1 04-30 / H1 08-31 / Q3 10-31 / annual next-year 04-30); TTM ratios "
     "require four complete consecutive quarters (docs/p13_fundamental_fields_contract.md §5.3)"
 )
-_CAPITAL = "point-in-time margin/capital-flow feed as of session t"
+_MARGIN = (
+    "v2 margin_detail_pit (p17 §5.2 table 18): the detail of session t-1 "
+    "becomes visible at session t (p17 §6.1 T+1 availability)"
+)
 _SNAPSHOT_EXT = (
     "industry membership snapshot + daily bars up to session t inclusive "
     "(PIT-bounded by the universe contract)"
@@ -128,7 +131,7 @@ def resolve_depends_on(name: str, meta: AuthoredFeatureMeta) -> tuple[str, ...]:
     spec = FACTOR_REGISTRY[name][0]
     deps = tuple(spec.required_columns)
     if spec.family == "industry":
-        deps = deps + ("industry_membership_snapshot",)
+        deps = deps + ("industry_membership_pit",)
     return deps
 
 
@@ -372,12 +375,12 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         depends_on=(),
     ),
     "MARGIN_BALANCE_CHG": AuthoredFeatureMeta(
-        availability_rule=_CAPITAL,
+        availability_rule=_MARGIN,
         hypothesis="Margin-flow momentum: leveraged inflows chase and lift prices over short horizons.",
         expected_direction=1,
         semantic_type=SemanticType.VOLUME_LIKE,
         compute_cost=ComputeCost.LOW,
-        depends_on=("capital_flow_pit",),
+        depends_on=("margin_detail_pit",),
     ),
     # Limit-move event family (boolean/event).
     "LIMIT_UP_EVENT": AuthoredFeatureMeta(
@@ -398,7 +401,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         expected_direction=1,
         semantic_type=SemanticType.CROSS_SECTIONAL_SIGNAL,
         compute_cost=ComputeCost.LOW,
-        depends_on=("industry_membership_snapshot", "close"),
+        depends_on=("industry_membership_pit", "close"),
     ),
     # Intraday decomposition (return-like).
     "OVERNIGHT_RET": AuthoredFeatureMeta(
@@ -663,12 +666,12 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         semantic_type=SemanticType.VOLUME_LIKE,
     ),
     "MARGIN_CROWD_60": AuthoredFeatureMeta(
-        availability_rule=_CAPITAL,
+        availability_rule=_MARGIN,
         hypothesis="Margin crowding: a financing balance far above its own baseline marks leveraged crowding that unwinds.",
         expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
         compute_cost=ComputeCost.LOW,
-        depends_on=("capital_flow_pit",),
+        depends_on=("margin_detail_pit",),
     ),
     # Family ⑤ (P13 §5.3, docs/p13_fundamental_fields_contract.md): the
     # pending_data placeholders become authoritative metadata -- same

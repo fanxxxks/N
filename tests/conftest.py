@@ -104,6 +104,35 @@ V2_INDUSTRY_DDL = {
 }
 
 
+def populate_v2_margin_table(v2_path: Path, rows: list[dict]) -> Path:
+    """Populate the v2 ``margin_detail_pit`` table (p17 §5.2 table 18)
+    with explicit contract rows for the capital-frame tests.  Rows carry
+    ``ts_code / trade_date / available_date / rzye`` at minimum; the
+    remaining p17 columns stay NULL.  The DDL is imported from the store
+    authority (no second schema copy)."""
+
+    from ashare_data.tushare_store import _MARGIN_DETAIL_PIT_DDL
+
+    v2_path = Path(v2_path)
+    v2_path.parent.mkdir(parents=True, exist_ok=True)
+    with AshareDB(v2_path) as db:
+        db.execute(_MARGIN_DETAIL_PIT_DDL)
+        db.execute("DELETE FROM margin_detail_pit")
+        for row in rows:
+            db.execute(
+                "INSERT INTO margin_detail_pit "
+                "(ts_code, trade_date, rzye, available_date, ingest_id, source_row_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    row["ts_code"], row["trade_date"], row.get("rzye"),
+                    row["available_date"],
+                    row.get("ingest_id", "test_ingest"),
+                    row.get("source_row_hash", f"test-{row['ts_code']}-{row['trade_date']}"),
+                ],
+            )
+    return v2_path
+
+
 def populate_v2_industry_tables(
     v2_path: Path,
     membership_rows: list[dict] | None = None,
@@ -387,6 +416,7 @@ def make_bars(
         for i, date in enumerate(dates):
             close = 10.0 + i * 0.1 + (0.5 if code == "000001.SZ" else 0.0)
             open_ = close * 0.99
+            pre_close = close * 0.99
             rows.append(
                 {
                     "ts_code": code,
@@ -395,11 +425,20 @@ def make_bars(
                     "high": close * 1.02,
                     "low": open_ * 0.98,
                     "close": close,
-                    "pre_close": close * 0.99,
+                    "pre_close": pre_close,
                     "volume": 1_000_000.0,
                     "amount": 1_000_000.0 * close,
                     "turnover_rate": 1.0,
                     "adj_factor": 1.0,
+                    # Exact-limit columns (p17 §5.2 table 5; t22): the
+                    # generic fixtures carry a wide 10% band so the event
+                    # family sees finite inputs; event-specific tests set
+                    # explicit prices.
+                    "close_raw": close,
+                    "high_raw": close * 1.02,
+                    "low_raw": open_ * 0.98,
+                    "up_limit": round(pre_close * 1.10, 2),
+                    "down_limit": round(pre_close * 0.90, 2),
                 }
             )
     return dates, ts_codes, pd.DataFrame(rows)

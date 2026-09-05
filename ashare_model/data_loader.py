@@ -506,9 +506,15 @@ class AshareDataLoader:
             )
 
         # Factors consume the ADJUSTED continuous basis (p19 §2.3); volume,
-        # amount and turnover_rate stay raw (nominal shares / yuan).
+        # amount and turnover_rate stay raw (nominal shares / yuan).  The
+        # exact-limit event family additionally reads the raw nominal
+        # prices (close_raw/high_raw/low_raw) and the daily_price_limit
+        # columns already merged into df_adj — p17 §5.2 table 5, t22
+        # in-place fix.
         factors = compute_factor_tensor(
-            df_adj,
+            df_adj.assign(
+                close_raw=df["close"], high_raw=df["high"], low_raw=df["low"],
+            ),
             self.ts_codes,
             self.dates,
             pit_fundamentals=pit,

@@ -58,7 +58,7 @@ from .vocab import FEATURE_NAMES
 # the family-⑤ pending_data placeholders lift into authoritative metadata
 # and the four slow-fundamental features join the vocabulary (grammar v6,
 # research domain v3); registry summary exposes no pending_data members.
-FEATURE_REGISTRY_VERSION = 6
+FEATURE_REGISTRY_VERSION = 7
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

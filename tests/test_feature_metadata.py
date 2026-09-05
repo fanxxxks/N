@@ -103,7 +103,7 @@ def test_registry_version_is_pinned():
     # placeholders become authoritative metadata (4 features join the
     # vocabulary).  Whitelist §10.1 case 2 — requirement change pre-registered
     # in the approved p13 contract.
-    assert FEATURE_REGISTRY_VERSION == 6
+    assert FEATURE_REGISTRY_VERSION == 7  # t22 metadata (exact-limit columns + v2 margin/industry depends)
 
 
 def test_expected_horizon_derives_from_research_domains():
@@ -137,7 +137,9 @@ def test_compute_cost_and_depends_on_derive_from_factor_registry():
             assert record.compute_cost == expected_cost, name
             expected_deps = tuple(spec.required_columns)
             if spec.family == "industry":
-                expected_deps = expected_deps + ("industry_membership_snapshot",)
+                # t22: the D5 PIT interval table is the membership source
+                # (the legacy snapshot name is retired from the metadata).
+                expected_deps = expected_deps + ("industry_membership_pit",)
             assert record.depends_on == expected_deps, name
         elif name == "NORTHBOUND_CHG":
             assert record.depends_on == ()
