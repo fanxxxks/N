@@ -1397,6 +1397,26 @@ def test_p8_15_research_doctor_lifecycle_section():
     assert "lifecycle_edges_activated" in check_names
     assert "paper_account_writable" in check_names
 
+    # build_report's OUTPUT must carry the lifecycle section (not just the
+    # direct function call): the report schema includes it when provided.
+    from ashare_model.research_doctor import build_report
+
+    report = build_report(
+        code={"commit": "test"},
+        data={"dataset_id": "test"},
+        gates={"checks": []},
+        artifacts=[],
+        dependencies={},
+        model_searcher="test",
+        runtime_estimates_={},
+        lifecycle_checks=result,
+    )
+    assert "lifecycle_checks" in report, (
+        "build_report output must include the lifecycle_checks section"
+    )
+    assert report["lifecycle_checks"]["lifecycle_available"] is True
+    assert report["lifecycle_checks"]["checks"] == result["checks"]
+
 
 def test_p8_15_agents_md_marker_flipped():
     """P8-15③: the AGENTS.md §4.6 marker is flipped from "待 lifecycle v1

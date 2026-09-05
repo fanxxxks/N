@@ -167,6 +167,7 @@ def build_report(
     runtime_estimates_: dict[str, Any],
     fairness_probes: dict[str, Any] | None = None,
     fundamental_coverage: dict[str, Any] | None = None,
+    lifecycle_checks: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Aggregate the gathered sections into the final doctor report.
 
@@ -392,6 +393,8 @@ def build_report(
         report["fairness_probes"] = fairness_probes
     if fundamental_coverage is not None:
         report["fundamental_coverage"] = fundamental_coverage
+    if lifecycle_checks is not None:
+        report["lifecycle_checks"] = lifecycle_checks
     return report
 
 
