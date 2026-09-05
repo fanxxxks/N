@@ -520,6 +520,13 @@ def _family5_asof_frames(
         for end_date in sorted(
             set(income_cum) | set(cashflow_cum) | set(assets_level)
         ):
+            # Erratum #4: non-quarter-end end_dates (real irregular
+            # reporting periods like 20170131) do not participate in the
+            # quarterly cumulative TTM period arithmetic — they cannot be
+            # interpreted as quarter-end cumulative reports.  Skip them;
+            # the related features stay NaN for those periods.
+            if end_date[4:] not in _QUARTER_ENDS:
+                continue
             profit_tl = _profit_ttm_timeline(end_date)
             cashflow_tl = _cashflow_ttm_timeline(end_date)
             assets_tl = assets_level.get(end_date, [])
