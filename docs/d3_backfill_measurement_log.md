@@ -6,7 +6,15 @@
 - v2 库：`D:/minequant/AlphaGPT-d2/data/ashare_v2.duckdb`（生产库零写入）
 - L0 快照：`D:/minequant/AlphaGPT-d2/data/raw/tushare/<endpoint>/<ingest_id>/`
 - TUSHARE_TOKEN：git-ignored config/.env，全程零泄漏
-- Manifest：dataset_id = `43ef1e4caace5cfc3ffc5bef335a3bf613e538dfbff89c405370848e980ce27d`
+- Manifest：dataset_id = `157e0cf54a417da0f2076158e241a384dc01222091a41cad1a06751f5676edf2`（t68 补齐后刷新；前值 `43ef1e4c…`）
+
+## t68 adj_factor 缺口补齐（2026-09-05）
+
+- **诊断**：2,314 个 (code,date) 缺口全部集中在单一日期 **20140422**（每日一缺口 × 2,314 码，全部部分缺失——0 码全缺）。Tushare API 直查 20140422 返回 2,528 行 → **批级边界遗漏**（原始回填该日 adj_factor 批次未入库），非源缺失。
+- **补齐**：TushareStore.ingest_batch 单批补入 2,528 行（KEYED 幂等），daily_adj_factor 总行数 12,246,154 → 12,248,682。
+- **验证**：补后剩余缺口 = 0。daily_bar_raw 每行均有对应 adj_factor。
+- **Manifest**：dataset_id 从 `43ef1e4c…` 刷新为 `157e0cf5…`（数据内容变更 → 内容寻址 ID 变更）。
+- **G1-G8 复核**：6/8 PASS（G1-G5/G8 不变；G6 N/A 月度快照粒度；G7 N/A pre-2014 退市）——adj_factor 补齐不影响 gate 结果（预期：gate 检查的是行存在性而非值正确性），有效横截面恢复由 factor-engineer t18 重测确认。
 
 ## 回填结果（19 表 / 57,131,659 行）
 
