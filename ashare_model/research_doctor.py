@@ -173,9 +173,12 @@ def build_report(
 
     Pure function over plain data: every conflict rule lives here so the
     report logic is fully unit-testable without a database or git repo.
-    ``fairness_probes`` is ``None`` when the caller did not gather the
-    section (the CLI always gathers it); ``None`` contributes no findings
-    and the report simply omits the section.
+    ``fairness_probes``, ``fundamental_coverage`` and
+    ``lifecycle_checks`` are ``None`` when the caller did not gather the
+    section; ``None`` contributes no findings and the report omits the
+    section.  The CLI (``main()``) gathers all three: fairness probes,
+    fundamental coverage and the P8-15 lifecycle checks, so CLI-produced
+    reports always carry the ``lifecycle_checks`` section.
     """
 
     findings: list[dict[str, str]] = []
@@ -899,6 +902,9 @@ def main(argv: list[str] | None = None) -> int:
         runtime_estimates_=runtime_estimates(model_config, protocol_config),
         fairness_probes=gather_fairness_probes(root),
         fundamental_coverage=gather_fundamental_coverage(data_config),
+        lifecycle_checks=gather_lifecycle_checks(
+            data_config.data_dir, data_config
+        ),
     )
 
     if args.output:
