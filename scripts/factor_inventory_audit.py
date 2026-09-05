@@ -464,7 +464,9 @@ def main(argv: list[str] | None = None) -> int:
     if profile.get("check_v5_tail"):
         # P13 vocabulary tail: the four family-⑤ slow-fundamental features
         # (77 = 73 + 4); deprecated members still computed and measurable.
-        from ashare_model.vocab import _FEATURE_NAMES_V5
+        # Local import mirrors the v4 block above (a local import anywhere
+        # in main() shadows the module-level name for the whole function).
+        from ashare_model.vocab import DEPRECATED_FEATURE_NAMES, _FEATURE_NAMES_V5
 
         assert list(FEATURE_NAMES[-len(_FEATURE_NAMES_V5):]) == list(
             _FEATURE_NAMES_V5
