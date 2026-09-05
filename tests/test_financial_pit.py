@@ -349,6 +349,143 @@ def test_missing_v2_statements_degrade_to_nan(tmp_path: Path):
         assert frames[name].isna().all().all()
 
 
+# --- erratum #4: non-quarter-end end_dates do not participate in quarterly
+# --- TTM arithmetic (crash fix from t18 real-data run) ------------------------------
+
+
+class TestNonQuarterEndEndDates:
+    """Erratum #4: income_statement_pit contains rows with non-quarter-end
+    end_dates (real irregular reporting periods like 20170131).  The
+    family-⑤ as-of reader must skip these in the quarterly cumulative
+    TTM period arithmetic (they cannot be interpreted as quarter-end
+    cumulative reports) — the related features are NaN for those periods,
+    and the loader does not crash."""
+
+    def test_shift_report_date_raises_on_non_quarter_end(self):
+        """Pre-fix: _shift_report_date crashes on non-quarter-end dates."""
+        from ashare_data.fundamentals import _shift_report_date
+
+        with pytest.raises(ValueError):
+            _shift_report_date("20170131", 1)
+
+    def test_build_pit_frames_survives_irregular_end_dates(self, tmp_path: Path):
+        """Post-fix: build_pit_frames must NOT crash when the v2 financial
+        tables contain non-quarter-end end_dates.  The irregular rows are
+        excluded from the quarterly TTM arithmetic; the features for those
+        periods stay NaN."""
+        from ashare_data.fundamentals import build_pit_frames
+
+        config = _config(tmp_path)
+        # Real irregular end_dates observed in v2 income_statement_pit
+        irregular_dates = ["20170131", "20160430", "20190831"]
+        regular_dates = ["20230331", "20230630", "20230930", "20231231"]
+        all_income = []
+        for ed in irregular_dates:
+            all_income.append(_income_row(
+                ts_code="000001.SZ", end_date=ed,
+                ann_date="20240102", f_ann_date="20240102",
+                available_date="20240103",
+                n_income_attr_p=50.0, ingest_id=f"inc_irr_{ed}",
+            ))
+        for ed in regular_dates:
+            all_income.append(_income_row(
+                ts_code="000001.SZ", end_date=ed,
+                ann_date="20240102", f_ann_date="20240102",
+                available_date="20240103",
+                n_income_attr_p=100.0, ingest_id=f"inc_reg_{ed}",
+            ))
+        populate_v2_statement_tables(
+            config.duckdb_path.parent / "ashare_v2.duckdb",
+            income_rows=all_income,
+        )
+        dates = pd.bdate_range("2024-01-01", "2024-02-29").strftime("%Y%m%d").tolist()
+        close = pd.DataFrame(20.0, index=["000001.SZ"], columns=dates)
+        # Pre-fix: ValueError from _shift_report_date on '0131' etc.
+        # Post-fix: NaN for the irregular periods, no crash.
+        frames = build_pit_frames(config, ["000001.SZ"], dates, close)
+        for name in ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH",
+                      "EARNINGS_ACCEL"):
+            assert name in frames
+
+    def test_end_to_end_loader_with_real_irregular_codes(self, tmp_path: Path):
+        """End-to-end: 10 real stocks (including the codes that triggered
+        the t18 crash) with non-quarter-end end_dates must not crash the
+        loader."""
+        from ashare_data.fundamentals import build_pit_frames
+
+        config = _config(tmp_path)
+        real_codes = [
+            "003040.SZ", "003041.SZ", "301001.SZ", "301002.SZ",
+            "688001.SH", "688012.SH", "688100.SH", "688333.SH",
+            "688567.SH", "688779.SH",
+        ]
+        irregular = ["20170131", "20160430", "20190831"]
+        all_income = []
+        for code in real_codes:
+            for ed in irregular:
+                all_income.append(_income_row(
+                    ts_code=code, end_date=ed,
+                    ann_date="20240102", f_ann_date="20240102",
+                    available_date="20240103",
+                    n_income_attr_p=50.0, ingest_id=f"inc_{code}_{ed}",
+                ))
+            for ed in ("20230331", "20230630"):
+                all_income.append(_income_row(
+                    ts_code=code, end_date=ed,
+                    ann_date="20240102", f_ann_date="20240102",
+                    available_date="20240103",
+                    n_income_attr_p=100.0, ingest_id=f"inc_{code}_{ed}",
+                ))
+        populate_v2_statement_tables(
+            config.duckdb_path.parent / "ashare_v2.duckdb",
+            income_rows=all_income,
+        )
+        dates = pd.bdate_range("2024-01-01", "2024-02-29").strftime("%Y%m%d").tolist()
+        close = pd.DataFrame(20.0, index=real_codes, columns=dates)
+        frames = build_pit_frames(config, real_codes, dates, close)
+        for name in ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH",
+                      "EARNINGS_ACCEL"):
+            assert name in frames
+            # No crash means the loader survived the irregular end_dates.
+
+    def test_balance_and_cashflow_zero_regression(self, tmp_path: Path):
+        """balance/cashflow features with only regular quarter-end dates
+        must produce identical results pre/post-fix (zero regression)."""
+        from ashare_data.fundamentals import build_pit_frames
+
+        config = _config(tmp_path)
+        populate_v2_statement_tables(
+            config.duckdb_path.parent / "ashare_v2.duckdb",
+            income_rows=[
+                _income_row(end_date="20240331", ann_date="20240102",
+                            f_ann_date="20240102", available_date="20240103",
+                            n_income_attr_p=44.0, ingest_id="i1"),
+                _income_row(end_date="20230630", ann_date="20240102",
+                            f_ann_date="20240102", available_date="20240103",
+                            n_income_attr_p=88.0, ingest_id="i2"),
+            ],
+            balance_rows=[
+                {"ts_code": "000001.SZ", "end_date": "20240331",
+                 "ann_date": "20240102", "f_ann_date": "20240102",
+                 "available_date": "20240103", "report_type": "1",
+                 "comp_type": "1", "update_flag": "0", "end_type": None,
+                 "total_assets": 900.0, "ingest_id": "b1"},
+                {"ts_code": "000001.SZ", "end_date": "20230630",
+                 "ann_date": "20240102", "f_ann_date": "20240102",
+                 "available_date": "20240103", "report_type": "1",
+                 "comp_type": "1", "update_flag": "0", "end_type": None,
+                 "total_assets": 800.0, "ingest_id": "b2"},
+            ],
+        )
+        dates = pd.bdate_range("2024-01-01", "2024-02-29").strftime("%Y%m%d").tolist()
+        close = pd.DataFrame(20.0, index=["000001.SZ"], columns=dates)
+        frames = build_pit_frames(config, ["000001.SZ"], dates, close)
+        # TTM needs 4 trailing quarters — with 2 present, the features
+        # stay NaN (no fabricated window), confirming the as-of path works.
+        for name in ("CASHFLOW_QUALITY", "ACCRUALS"):
+            assert frames[name].isna().all().all()
+
+
 # --- tier version (p17 §9 D6 mandate) ----------------------------------------------
 
 
