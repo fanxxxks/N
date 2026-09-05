@@ -13,7 +13,14 @@ stocks_table: stocks
 daily_table: daily_bar
 constituents_table: constituents
 
-start_date: "2015-01-01"
+# Load window narrowed per captain ruling (E4/t23): the p14 contract does
+# not pin start_date; the campaign caps the tensor window at 300x400
+# (300 stocks × 400 sessions ending at the fold's train_end), so loading
+# from 2022-01-01 (≈620 open sessions before the 20240628 train_end —
+# window 400 + margin) changes no tensor content and only eliminates
+# useless loading.  Recorded in the measurement log (captain conditions
+# ①②③).
+start_date: "2022-01-01"
 end_date: "2026-12-31"
 
 index_codes:
