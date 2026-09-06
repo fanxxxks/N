@@ -1,5 +1,13 @@
 # P21/P22 F 批次登记核验记录（governance——批准链、版本基线、sequencing）
 
+- **编号纠正（2026-09-07 captain）**：本记录第 1 节核验的 F1 四候选草案
+  正式编号为 **p23**（原起草号 p21 已被 R1 线预注册契约
+  `p21_r1_domain_return_research_preregistration.md` 占用，且已批准）；
+  第 2 节的 p22 = INDUSTRY_MOMENTUM 方向重预注册注记（编号不变，已获
+  captain 代行批准生效，按 sequencing p20 → p9 Part A → p22 实施）。
+  本记录保留因子线本地编号作核验史，登记与用户转达统一用 **p23**/p22；
+  p23 转呈用户批准中（captain 转达）。
+
 - 性质：治理登记核验（evidence-only）。核验对象 = factor-engineer 的
   F 批次登记包（codex/factor-semantic-fixes）：
   `docs/p21_f1_slow_fundamental_quality_draft.md`（F1 四候选）+
