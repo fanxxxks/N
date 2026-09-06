@@ -1,5 +1,7 @@
 # P20 草案：MARGIN_BALANCE_CHG 方向重预注册（authored +1 证伪 → −1）
 
+> **[2026-09-07 路由更新，captain 裁决]**：本草案**不再单独立勘误**——方向重注册**并入 F2 批次**（融资拥挤）预注册：authored +1 两轮证伪是合法负结果（promotion_allowed=False 维持+证据保留），"换方向重试"是新假设，须按 F2 批次流程（经济假设重述 + 两轮证伪历史披露 + 新鲜数据裁决）与 MARGIN_BALANCE_TO_CIRC_MV/MARGIN_BUY_PRESSURE_5 同批预注册。本文件保留为证据/历史草案，**不按本文实施**。
+
 - 状态：**DRAFT — 待 governance-auditor 登记与 captain 代行批准**（起草：factor-engineer，AgentTeams tushare-pit-migration，2026-09-06；依据 captain t22 路由指令第 3 条"方向重预注册草案（authored +1 被证伪 → 新方向假设的预注册文本）"）。批准后本文保持前瞻性，禁止以实现输出反向修改。
 - 证据基线：**t18/t22 两轮 v2 重测**（`docs/t18_factor_retest_measurement_log.md`、`docs/t22_semantic_fix_measurement_log.md`；dataset `43ef1e4c…` → `157e0cf5…`）+ t2/v4 冻结审计（`docs/factor_inventory_audit_20260831/`、`docs/factor_inventory_audit_v4_20260901/`，dataset `a839ecf2…`）。勘察基线 commit：codex/factor-semantic-fixes @ `0e4c1fd`。
 - 本文使用 AGENTS.md 的"必须/禁止/应当"语义。任务路由：**研究语义变更**（AGENTS §3.2：预期方向为预注册元数据）。
