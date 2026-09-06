@@ -539,6 +539,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Monthly crowding level.",
         expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
+        promotion_allowed=False,  # t22/p9 erratum (t69) Part A: 0.914 vs TURNOVER_STD20 across four rounds
     ),
     "TURNOVER_STD20": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=20),

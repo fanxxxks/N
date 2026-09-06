@@ -103,7 +103,7 @@ def test_registry_version_is_pinned():
     # placeholders become authoritative metadata (4 features join the
     # vocabulary).  Whitelist §10.1 case 2 — requirement change pre-registered
     # in the approved p13 contract.
-    assert FEATURE_REGISTRY_VERSION == 7  # t22 metadata (exact-limit columns + v2 margin/industry depends)
+    assert FEATURE_REGISTRY_VERSION == 8  # t22/p9 erratum (t69) Part A: TURNOVER_MA20 deprecated
 
 
 def test_expected_horizon_derives_from_research_domains():

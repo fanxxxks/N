@@ -58,7 +58,11 @@ from .vocab import FEATURE_NAMES
 # the family-⑤ pending_data placeholders lift into authoritative metadata
 # and the four slow-fundamental features join the vocabulary (grammar v6,
 # research domain v3); registry summary exposes no pending_data members.
-FEATURE_REGISTRY_VERSION = 7
+# v7 (t22/p9 erratum t69, governance option A): TURNOVER_MA20 deprecated
+# (Part A trigger fired: 0.914 vs TURNOVER_STD20 across four audit rounds;
+# the stronger representative kept) — keeps computing, exits the sampling
+# space, loses promotion eligibility.
+FEATURE_REGISTRY_VERSION = 8
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

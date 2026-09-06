@@ -269,3 +269,36 @@ def test_margin_frames_read_v2_margin_detail_with_t_plus_1_visibility(tmp_path: 
     assert margin.loc["000001.SZ", dates[24]] == pytest.approx(expected_24)
     # The never-margin stock stays NaN.
     assert np.isnan(margin.loc["600000.SH", dates[24]])
+
+
+# ---------------------------------------------------------------------------
+# 5. p9 Part A execution (governance ruling on the keep-list conflict):
+#    TURNOVER_MA20 deprecated — exits the sampling space, keeps its token
+#    and computation, loses promotion eligibility.
+# ---------------------------------------------------------------------------
+
+
+def test_turnover_ma20_deprecated_per_part_a_ruling():
+    from ashare_model.feature_metadata import FEATURE_METADATA
+    from ashare_model.vocab import (
+        DEPRECATION_REASONS,
+        DEPRECATED_FEATURE_NAMES,
+        FEATURE_NAMES,
+        FORMULA_VOCAB,
+        GRAMMAR_VERSION,
+    )
+
+    # Part A: |rho| = 0.914 stable across four audit rounds vs the stronger
+    # TURNOVER_STD20 representative (governance ruling, option A).
+    assert "TURNOVER_MA20" in DEPRECATION_REASONS
+    assert "TURNOVER_STD20" in DEPRECATION_REASONS or True  # STD20 stays live
+    assert "TURNOVER_STD20" not in DEPRECATION_REASONS
+    # Deprecation never removes a name: the token space and the computation
+    # survive (legacy formulas keep resolving by name).
+    assert "TURNOVER_MA20" in FEATURE_NAMES
+    assert "TURNOVER_MA20" in FORMULA_VOCAB.feature_names
+    # The deprecation leaves the sampling space -> the grammar generation
+    # bumps (the same discipline as every prior deprecated-set change).
+    assert GRAMMAR_VERSION == 7
+    # Promotion eligibility lost (the registry mirrors the metadata).
+    assert FEATURE_METADATA["TURNOVER_MA20"].promotion_allowed is False

@@ -170,10 +170,13 @@ def test_feature_version_pinned():
     # t46 Plan A: the appended names keep the contiguous feature block
     # (ids 74-77) and legacy grammar-5 decoding goes through the frozen
     # grammar-5 layout -- the t14 feature_version hash is restored.
-    assert FORMULA_VOCAB.feature_version == "0e64ad614bfd"
+    # t22/p9 erratum (t69, governance option A): the grammar bump 6 -> 7
+    # (TURNOVER_MA20 leaves the sampling space) changes the hash by design —
+    # whitelist §10.1 case 2, the intended discipline catching the bump.
+    assert FORMULA_VOCAB.feature_version == "2217cb8d4902"
     assert len(FORMULA_VOCAB.feature_version) == 12
     # v6 grammar: the v5 layout plus the P13 family-⑤ feature append.
-    assert GRAMMAR_VERSION == 6
+    assert GRAMMAR_VERSION == 7  # v7 (t22/p9 erratum t69): TURNOVER_MA20 exits the sampling space
     # A grammar bump changes the version even with identical name lists.
     legacy = FormulaVocab(
         feature_names=FORMULA_VOCAB.feature_names,
@@ -237,14 +240,15 @@ def test_resolve_formula_tokens_fails_closed_without_grammar_version():
 
 
 def test_resolve_formula_tokens_fails_closed_on_unknown_grammar_generation():
-    """t46 captain pre-ruling + t57 F2: only known generations (2-6) enter
-    remap decoding; anything else fails closed."""
+    """t46 captain pre-ruling + t57 F2 + t22/p9 appendix-B erratum (t69):
+    only known generations (2-7) enter remap decoding; anything else fails
+    closed."""
     payload = _sample_payload()
     payload["grammar_version"] = 1
     with pytest.raises(ValueError, match="unsupported grammar generation 1"):
         resolve_formula_tokens(payload)
-    payload["grammar_version"] = 7
-    with pytest.raises(ValueError, match="unsupported grammar generation 7"):
+    payload["grammar_version"] = 8
+    with pytest.raises(ValueError, match="unsupported grammar generation 8"):
         resolve_formula_tokens(payload)
 
 
@@ -487,7 +491,7 @@ P9_DEPRECATED_FEATURES = (
 def test_p9_grammar_v4_with_additive_feature_generation():
     # v5 = the v4 P9 layout + the §7 adjudicated deprecations.
     # v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤ appends 4 more.
-    assert GRAMMAR_VERSION == 6
+    assert GRAMMAR_VERSION == 7  # v7 (t22/p9 erratum t69): TURNOVER_MA20 exits the sampling space
     for name in P9_NEW_FEATURES:
         assert name in FEATURE_NAMES
     # v4 names are appended, so every pre-v4 token id stays stable; the

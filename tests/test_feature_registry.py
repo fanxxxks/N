@@ -149,7 +149,7 @@ def test_registry_version_is_pinned():
     # change path).  v5 (P9 §7 adjudication, measurement log
     # 2026-09-01).  v6 (P13 §5.3/§6.1): family ⑤ unlocks — whitelist
     # §10.1 case 2, pre-registered in docs/p13_fundamental_fields_contract.md.
-    assert FEATURE_REGISTRY_VERSION == 7  # t22 metadata
+    assert FEATURE_REGISTRY_VERSION == 8  # t22/p9 erratum (t69) Part A: TURNOVER_MA20 deprecated
 
 
 def test_registry_records_data_tiers(tensor, mask):
@@ -180,13 +180,16 @@ def test_summary_reports_tiers_and_deprecations(tensor, mask):
     # P9 §4.1 + §7 adjudication (whitelist §10.1 case 2, contract
     # APPROVED): the eight window variants, the triggered conditional
     # LIMIT_STREAK and the two second-pass consolidations join
-    # NORTHBOUND_CHG in the deprecated set.
+    # NORTHBOUND_CHG in the deprecated set.  t22/p9 erratum (t69,
+    # governance option A): TURNOVER_MA20 joins them (0.914 vs
+    # TURNOVER_STD20 across four audit rounds).
     assert summary["deprecated"] == sorted(
         [
             "NORTHBOUND_CHG",
             "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
             "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",
             "LIMIT_STREAK", "LIQ_SHOCK_20", "CROWD_TURNOVER_60",
+            "TURNOVER_MA20",
         ]
     )
     assert PitLevel.PIT_DAILY.value in summary["by_pit_level"]
@@ -209,7 +212,7 @@ def test_p9_registry_version_deprecations_and_pending_data():
     LIMIT_STREAK conditional deprecation triggered, two second-pass
     consolidations).  v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤
     unlocks; the pending set empties."""
-    assert FEATURE_REGISTRY_VERSION == 7  # t22 metadata
+    assert FEATURE_REGISTRY_VERSION == 8  # t22/p9 erratum (t69) Part A: TURNOVER_MA20 deprecated
     p9_deprecated = (
         "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
         "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",
