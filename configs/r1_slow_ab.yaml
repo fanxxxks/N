@@ -1,0 +1,69 @@
+# R1 config 3/5 — slow domain, A+B (= full slow domain; p21 preregistration).
+# BLOCKED as of 2026-09-06: D7 gate FAIL (income_statement_pit report-period
+# coverage 85.60% < 90% on the dev window 2014..2023Q) — runs only after a
+# data task raises v2 financial coverage to the p17 §12 threshold.
+# Independent experiment config; production defaults untouched.
+# No secrets here (TUSHARE_TOKEN lives in git-ignored config/.env only).
+
+data_dir: D:/minequant/AlphaGPT-r1/data
+duckdb_path: D:/minequant/AlphaGPT/data/ashare.duckdb
+parquet_dir: D:/minequant/AlphaGPT-r1/data/parquet
+v2_duckdb_path: D:/minequant/AlphaGPT-d2/data/ashare_v2.duckdb
+
+calendar_table: trade_calendar
+stocks_table: stocks
+daily_table: daily_bar
+constituents_table: constituents
+
+start_date: "2015-01-01"
+end_date: "2026-12-31"
+adjust: qfq
+
+index_codes:
+  - "000300.SH"
+  - "000905.SH"
+
+index_names:
+  - "沪深300"
+  - "中证500"
+
+min_listed_sessions: 60
+
+model:
+  searcher: gp
+
+protocol:
+  domain: slow_fundamental
+  # p21 §8 condition precedent: tier_set lands with PROTOCOL_VERSION 27.
+  tier_set: AB
+  frequency: every_20_days
+  horizon: 20
+  seeds: [42, 7, 2024]
+  folds:
+    - {train_end: "2020-12-31", test_end: "2021-12-31"}
+    - {train_end: "2021-12-31", test_end: "2022-12-31"}
+    - {train_end: "2022-12-31", test_end: "2023-12-31"}
+    - {train_end: "2023-12-31", test_end: "2024-12-31"}
+    - {train_end: "2024-12-31", test_end: "2025-12-31"}
+  baseline_signals: [ROE, PE_TTM, REVENUE_YOY, DIVIDEND_YIELD, MARKET_CAP]
+  screening: {steps: 2, batch_size: 256}
+  confirmation: {steps: 2, batch_size: 256}
+
+backtest:
+  start_date: "2015-01-01"
+  end_date: "2026-12-31"
+  train_end_date: "2023-12-31"
+  initial_capital: 100000.0
+  top_n: 20
+  portfolio_method: equal_weight
+  buy_rank: 20
+  sell_rank: 30
+  min_trade_amount: 5000.0
+  target_weight_change_threshold: 0.01
+  single_weight_cap: 0.05
+  commission_rate: 0.00025
+  min_commission: 5.0
+  stamp_tax_rate: 0.0005
+  transfer_fee_rate: 0.00001
+  slippage_rate: 0.0005
+  benchmark: "全市场等权"
