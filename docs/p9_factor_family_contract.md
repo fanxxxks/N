@@ -55,6 +55,8 @@ t2 库存审计在真实数据上测得三个结构性事实，构成本契约�
 
 净效果：词表 62（含 1 deprecated）→ 62-9 deprecated（8 立即 + 1 条件）→ **有效特征 53→54**。RET_1~INTRADAY_RET（0.902）保留双方（隔夜/日内分解是构造性原子，不是窗口变体）。
 
+**【superseded by final ruling — Part A executed：TURNOVER_MA20 deprecated，GRAMMAR 7→8 / FEATURE_REGISTRY 8→9】**（t71 曾短暂入契的 standing exception 段被下述记录取代；原 6995ede 保留作裁决史，append-only。SUSPEND~LIST_AGE ρ=−1.000 降级簇伪影标注继续适用：修复后复检结论 = 该对已从 ≥0.9 列表消失。）
+
 **Part A 弃用执行记录（t71 修订，2026-09-06 captain 最终裁决 = Option A）**：TURNOVER_MA20 按 Part A 机械规则**弃用**（弱代表），保留 TURNOVER（日频水平原子）+ TURNOVER_STD20（波动/异质代表），家族构成变更一次落地。事实与理由：(a) ρ(MA20, STD20) 在四轮审计（t2/v4/t18/t22，跨 legacy/v2 两代底座与 t22 修复边界）恒定 0.914–0.919，与本节起草时的 t2 矩阵（0.914）同值——阈值边缘的结构性共线（同源 turnover_rate 20 日窗统计），非新事故；(b) STD20 的 ICIR 四轮恒强（−0.343/−0.348/−0.317 vs MA20 −0.285/−0.287/−0.269）——Part A tiebreaker（弃弱者）指向无歧义；(c) t69 的有条件豁免（"若未来重测持续 ≥0.9 且出现增量证据再触发族内裁决"）条件已被四轮证据满足并触发本裁决——再次豁免将使 ≥0.9 规则对该对沦为死条；(d) 语义代价有界：水平维度仍由 TURNOVER 日频原子覆盖，拥挤/波动维度由 STD20 覆盖，MA20 为书内已有信息的平滑近重复（与 STD20 ρ=0.914）；(e) 内在一致性：F1-F4 新因子须过 |corr|<0.9，书内自持 0.914 对而对新来者要求 <0.9 不自洽。**裁决时序**：t69 有条件豁免 → t71 中间措辞（Option B standing exception）→ captain 撤回并采纳 Option A（2026-09-06："我的 B 正是'看完四轮数据后追认例外'，违背预注册纪律"——撤回理由逐字留档），Option B 措辞作废。**实施**：factor-engineer 在 codex/factor-semantic-fixes 按 P9 Part A 全套机制执行（DEPRECATION_REASONS +1、GRAMMAR 7→8、FEATURE_REGISTRY 8→9、deprecated 保留计算/退出采样/禁止晋级（d6a034d 先例）、docs/feature_registry.md 同 commit 再生、RED 先行：deprecated 退出采样断言 + 旧公式按名可解析 parity）；执行顺序（captain 指令）：p20 实施（FEATURE_REGISTRY 7→8）先行，本 Part A（GRAMMAR 7→8 + REGISTRY 8→9）后行，版本单调。关联标注（不变）：SUSPEND~LIST_AGE ρ=−1.000 为降级簇伪影（t69 附录 B；t18/t22 判读一致；修复后数据上该对已从 ≥0.9 列表消失，复检结论 = 消失），历史标注留档。
 
 ### 4.2 版本影响与迁移/拒绝策略
