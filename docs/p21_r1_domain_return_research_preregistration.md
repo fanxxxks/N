@@ -37,7 +37,7 @@ P6 已把研究域按预测周期拆分（short/medium/slow，`RESEARCH_DOMAIN_V
 5. **预算记账**：唯一语义评价为唯一预算单位；无效、退化、canonical duplicate、semantic duplicate 不计费（T2-01 语义）；每行记录 requested/consumed、终止/停滞原因、best-so-far、公式长度分布；提前停滞不得伪装成耗满预算。
 6. **append-only**：全部 trial（成功/失败/崩溃/提前停止）进入共享 campaign ledger；重跑用新 run ID/新输出目录；禁止覆盖或删除不利行。
 7. **fail-closed**：dataset_id 在任一配置运行时与 campaign 首行记录不一致 → 停止 campaign；G1–G8 或 D7 FAIL → 该配置 not_run（记录原因），不静默跳过；degraded 数据显式记录（p19 §2.4 价格约束降级逐股入日志）。
-8. **方向权威**：全部基线与被评公式的方向由 `feature_registry` 的 `expected_direction` 与搜索期学习方向决定；DRAFT p20（MARGIN_BALANCE_CHG +1→−1）未获批准，**不适用**——若批准先于运行落地，则以运行 commit 的注册表为准并记录。
+8. **方向权威**：基线行的方向 = 训练窗内信号方向规则（负 IC 因子翻转；P1-03 既有约定，`eval_search.baseline_candidates` 单一实现）；搜索/trained 行的方向 = 搜索期在验证尾窗上选出（禁止在测试窗重拟合，p10 §4.4）。registry `expected_direction` 是治理元数据，不是运行时方向来源；DRAFT p20（MARGIN_BALANCE_CHG +1→−1）未获批准且不影响本 campaign 的方向机制——若批准先于运行落地，亦不改变本条（运行时方向权威是训练窗/验证尾窗，不是 registry 元数据）。
 
 ## 3. 假设与前提
 
@@ -52,7 +52,7 @@ P6 已把研究域按预测周期拆分（short/medium/slow，`RESEARCH_DOMAIN_V
 
 | # | config_id | 域 | 预注册特征集（可采样口径：域特征 ∩ tier − deprecated） | 执行点 | 基线信号（预注册，方向=registry） | tier_set | 状态（2026-09-06 D7 探针） |
 |---|---|---|---|---|---|---|---|
-| 1 | r1_medium_a | medium_cross_section | 17（域 31 ∩ A 22 − deprecated 5） | every_10_days / h=10 | MOMENTUM_20, RSQ_60, REVERSAL_60（域默认去掉 Tier C 的 IND_REL_RET_20） | A | D7 PASS，可运行 |
+| 1 | r1_medium_a | medium_cross_section | 17（域 31 ∩ A 22 − deprecated 5） | every_10_days / h=10 | MOMENTUM_20, RSQ_60, REVERSAL_60（域默认去掉 Tier C 的 IND_REL_RET_20；方向=训练窗规则，§2.8） | A | D7 PASS，可运行 |
 | 2 | r1_medium_ab | medium_cross_section | 19（17 A + 2 B） | every_10_days / h=10 | 同上 | AB | D7 PASS，可运行 |
 | 3 | r1_slow_ab | slow_fundamental | 16（1×A + 15×B，无 C，域全集） | every_20_days / h=20 | ROE, PE_TTM, REVENUE_YOY, DIVIDEND_YIELD, MARKET_CAP（域默认） | AB | **D7 FAIL**（income_statement_pit 期间覆盖 86.53% < 90%）→ not_run 待数据任务 |
 | 4 | r1_short_a | short_price_volume | 23（域 29 ∩ A 29 − deprecated 6，域全集） | every_5_days / h=5 | REVERSAL_5, TURNOVER, ILLIQ_20, OVERNIGHT_RET, LIMIT_UP_CNT_20（域默认） | A | D7 PASS，可运行 |
@@ -62,12 +62,11 @@ P6 已把研究域按预测周期拆分（short/medium/slow，`RESEARCH_DOMAIN_V
 
 ## 5. 唯一语义预算与资源上限
 
-（数值由 2026-09-06 fold-0 工程校准推导，校准属 engineering 证据，仅用于预算标定，禁止升格为研究结论。）
-
-- 每配置每 fold 预算：random S + gp S + tpe S + trained 3×S（S = screening `steps × batch_size`，`batch_size ≥ 256` 为 trained 臂稳定性硬约束）；每配置合计 30S 请求评价；五配置合计 150S（+基线行，不计预算）。
-- 校准结果与 S 取值：**TBD（校准运行完成后填入本节并冻结）**。
-- 资源上限：campaign 总墙钟 ≤ TBD h；任一配置首折实测行均墙钟 > 投影 2× → 停止后续 seed/配置，campaign 标 FAILED（fail-closed，p10 §4.5 先例）；单行墙钟 > 投影 3× → 测量日志强制解释。
-- 验证子窗口（validation_fraction 0.35 / 4 splits）消耗一并计入 consumed，如实在 ledger 与测量日志披露。
+- **S = 512**（screening `steps=2, batch_size=256`；batch_size ≥ 256 为 trained 臂优势归一化的稳定性硬约束）。五配置取同一 S；验证子窗口（validation_fraction 0.35 / 4 splits，中位数 val_reward）在一次唯一语义评价内完成，**不产生额外预算行**（reward v15 既有语义）。
+- 每配置每 fold 预算：random S + gp S + tpe S + trained 3×S；每配置合计 **30S = 15,360** 请求评价；五配置合计 **150S = 76,800**（+基线行与 benchmark 行，不计预算）。
+- **预算标定基础**（engineering，仅用于预算 sizing）：2026-09-01 p10 附录 A 实测 0.56–1.01 s/eval（300×400 封顶窗口、daily 调仓、当日数据集）；R1 为全窗口 + 稀疏调仓（medium ~145 个调仓日 vs p10 封顶 ~300），量级相近但未实测。**预注册回退规则**：campaign 启动前（engineering 步骤 0，无任何研究结果产生时）以 medium 配置实测 s/eval；实测均值 > 4 s/eval → S 降为 256（steps=1, batch_size=256）后再启动，其余情况 S 不变。
+- **墙钟上限**：campaign 总墙钟 ≤ 60h（含 5 次全窗口加载，实测单次加载在 t62 并发负载下 > 55 min；无并发时预计显著更短）；单配置 ≤ 12h；首个 fold 的四臂完成后，实测行均墙钟 > 工程投影 2× → 停止后续 seed/配置，campaign 标 FAILED（fail-closed，p10 §4.5 先例）；单行墙钟 > 投影 3× → 测量日志强制解释。
+- 2026-09-06 fold-0 小预算工程校准在 6C/12T 主机与 t62（P14 测量）并发下运行，全窗口加载阶段 > 55 min 未完成即转后台；其完成后的实测数字只进测量日志，不改已冻结的 S（除非触发上面的回退规则）。
 
 ## 6. 门禁（每配置运行前置，全部硬性）
 
