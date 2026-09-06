@@ -93,3 +93,11 @@
 - **not-evaluable 计数**：`NORTHBOUND_CHG`（中性占位，coverage=0）1 项——无族门资格。
 - **两条日志裁决落盘（p9 附录 B 第 1/2 条）**：① TURNOVER_MA20~STD20 ρ=0.914（本修正后重跑复测同值）→ **豁免登记**（p9 §4.1 语义异质裁决；若未来重测持续 ≥0.9 且出现增量证据再触发族内裁决）；② SUSPEND_DAYS_60~LIST_AGE −1.000 → **降级簇伪影标注**，复检条件（D3 adj_factor 修复）已满足——修复后重跑（本日志 §2/§3 的 after 与本节重算）中该对已从 ≥0.9 列表消失，复检结果 = **消失（伪影证实）**，未用于任何 deprecated 裁决。
 - 证据链：`logs/t22_audit_run4.err`（run 4 静默清除记录）、`logs/t22_audit_run5.out/.err`（run 5 全程）、`logs/t22_recompute_compare.txt`（watcher 自动对比）。
+
+## 9. p9 keep-list 冲突裁决执行（governance 选项 A；追加节，2026-09-07）
+
+- **裁决**：governance-auditor 就 p9_erratum_draft_t22.md 的两条选项裁决 **选项 A**（Part A 机械执行：弃 TURNOVER_MA20）——条件豁免触发（四轮 rho 0.914/0.914/0.919/0.914 持续 ≥0.9 + STD20 ICIR 四轮恒强的增量证据）、tiebreaker 无歧义、语义代价有界、书内自持 0.914 对与新因子 <0.9 要求不自洽、选项 B 属事后放宽形态否决。
+- **实施 @ 596550a**：DEPRECATION_REASONS += TURNOVER_MA20；GRAMMAR 6→7（generation 7 注册进 remap 分派、token 布局与 6 相同——弃用不移 id）；FEATURE_REGISTRY 7→8（promotion_allowed=False）；registry doc 再生；钉值更新（含 feature_version hash 2217cb8d4902——grammar bump 按设计变更 hash）。RED 先行（test_turnover_ma20_deprecated_per_part_a_ruling 冻结代码失败）；TURNOVER_STD20 维持 live。
+- **版本号披露**：governance 指令原文 7→8/8→9 以 F1 先行为前提；实际执行时点 F1 尚未批准，按当时现值 6→7/7→8 落地并在 p9 勘误执行记录中披露，F1 批准时顺延。
+- **全量验证**：本轮聚焦集 220 passed/2 skipped（platform skips）；全量串行（.venv）在本节 commit 后执行并记录于完成报告。
+- 证据：p9_erratum_draft_t22.md（EXECUTED 状态 + 四轮表 + 裁决记录）、logs/t22_full_suite*.out。
