@@ -82,3 +82,14 @@
 ## 7. 边界声明
 
 本日志全部结论 = dev/validation 数据上的研究诊断，不构成 alpha/晋级证据；locked holdout 未触碰。after 数据集 = D3 勘误后的 `157e0cf5…`；跨 dataset_id 的 before/after 差异含数据修复叠加，已逐项标注。t22 零 push/PR/merge。
+
+## 8. 勘误后重算（p9 附录 B/t69 修正语义落地；追加节，2026-09-07）
+
+- **触发**：p9 附录 B 勘误 @ `cd94ca8`（codex/g0-tushare-pit-contract，captain 代行批准）——ΔIC 复合基线符号翻转缺陷正式化，修正语义 = `comp = |w_b|·B + w_f·z`（方向保持规范化；原始 w_b 照实留档；coverage=0 因子的 ΔIC 腿记 not-evaluable）。实现：`1ad7b73`（scripts/factor_inventory_audit.py incremental 块 + `delta_ic_evaluable`/`delta_ic_not_evaluable` 计数）。
+- **验证**：合成零信号因子在负 w_b 下修正前 ΔIC=+0.0162（翻号）→ 修正后 **ΔIC=0.0（精确）**；t22 E2E 驱动全过。
+- **重算运行**：同口径同 dataset `157e0cf5…`，墙钟 20,276.3s，证据 `docs/factor_inventory_audit_v2_fix2_20260906/metrics.json`（77 因子全量；运行 4 被会话中断静默清除——零产物零覆盖，run 5 成功，失败证据保留）。
+- **附录 B 影响集（本 dataset 实测）**：77 因子中 w_b<0 行 = **{BETA_60, RSQ_60} 仅两项**（CAPM 族，均不在四类裁决集合内）：BETA_60 ΔIC −0.0001→−0.0017、RSQ_60 +0.0492→+0.0428（翻号通胀移除）——**两项均无族门资格，裁决矩阵零变化**。
+- **四类裁决矩阵复核（修正后 ΔIC）**：与 §4 完全一致（20 个家族成员 w_b 全部 >0，修正前后 ΔIC 逐位相同）——§4 的族门结论（P13 PASS / 行业族①成员 PASS / MARGIN_CROWD_60 PASS / MARGIN_BALANCE_CHG 方向证伪 / family-③ FAIL）**全部维持**。
+- **not-evaluable 计数**：`NORTHBOUND_CHG`（中性占位，coverage=0）1 项——无族门资格。
+- **两条日志裁决落盘（p9 附录 B 第 1/2 条）**：① TURNOVER_MA20~STD20 ρ=0.914（本修正后重跑复测同值）→ **豁免登记**（p9 §4.1 语义异质裁决；若未来重测持续 ≥0.9 且出现增量证据再触发族内裁决）；② SUSPEND_DAYS_60~LIST_AGE −1.000 → **降级簇伪影标注**，复检条件（D3 adj_factor 修复）已满足——修复后重跑（本日志 §2/§3 的 after 与本节重算）中该对已从 ≥0.9 列表消失，复检结果 = **消失（伪影证实）**，未用于任何 deprecated 裁决。
+- 证据链：`logs/t22_audit_run4.err`（run 4 静默清除记录）、`logs/t22_audit_run5.out/.err`（run 5 全程）、`logs/t22_recompute_compare.txt`（watcher 自动对比）。
