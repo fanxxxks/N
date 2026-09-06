@@ -1051,3 +1051,126 @@ def test_d7_manifest_integrity_is_required(tmp_path):
     )
     assert not verdict.ok
     assert any("dataset_manifest" in reason for reason in verdict.reasons)
+
+
+def test_d7_financial_expected_excludes_pre_listing_quarters(tmp_path: Path):
+    """t73 correctness fix (p17 section 12 measurement recipe): a mid-quarter-
+    listed stock's PRE-LISTING quarters are a source gap - no reports
+    exist before listing (t72 sampling: every sampled (code, period) gap
+    was pre-listing) - so they must not count in the expected coverage
+    denominator.  Post-listing gaps stay counted (delisting/suspension
+    periods are honestly missing).  The 90 percent threshold is
+    unchanged - a correctness fix, not a relaxation."""
+    from ashare_model.data_eligibility import check_runspec_data_eligibility
+    from tests.conftest import V2_STATEMENT_COLUMNS, populate_v2_statement_tables
+
+    universe = ['000001.SZ', '600000.SH']
+    listing_dates = {'000001.SZ': '20200101', '600000.SH': '20230701'}
+    # STOCK_600000 lists mid-window (20230701): its 20230331/20230630
+    # reports cannot exist (pre-listing source gap).
+    periods_by_code = {
+        '000001.SZ': D7_QUARTER_ENDS,
+        '600000.SH': ['20230930', '20231231'],  # post-listing periods only
+    }
+
+    config, v2_path = _d7_world(tmp_path)
+
+    def statement_rows(table):
+        identity = (
+            'ts_code', 'end_date', 'ann_date', 'f_ann_date',
+            'available_date', 'report_type', 'comp_type',
+            'update_flag', 'end_type', 'ingest_id',
+        )
+        value_columns = [
+            c for c in V2_STATEMENT_COLUMNS[table] if c not in identity
+        ]
+        rows = []
+        for code, periods in periods_by_code.items():
+            for period in periods:
+                row = {
+                    'ts_code': code,
+                    'end_date': period,
+                    'ann_date': period,
+                    'f_ann_date': period,
+                    'available_date': period,
+                    'report_type': '1',
+                    'comp_type': '1',
+                    'update_flag': '0',
+                    'end_type': '1',
+                    'ingest_id': 'ing-' + code + '-' + period,
+                }
+                for column in value_columns:
+                    row[column] = 1.0
+                rows.append(row)
+        return rows
+
+    # One populate call carries all three tables (the helper wipes and
+    # re-inserts all of them per call).
+    populate_v2_statement_tables(
+        v2_path,
+        income_rows=statement_rows('income_statement_pit'),
+        balance_rows=statement_rows('balance_sheet_pit'),
+        cashflow_rows=statement_rows('cashflow_statement_pit'),
+    )
+
+    # Listing dates ride the production stocks table (the single source).
+    with AshareDB(config.duckdb_path) as db:
+        db.execute('DELETE FROM stocks')
+        db.register(
+            '_listing_rows',
+            pd.DataFrame([
+                {'ts_code': code, 'name': code, 'industry': None,
+                 'list_date': date, 'is_st': False}
+                for code, date in listing_dates.items()
+            ]),
+        )
+        db.execute(
+            'INSERT INTO stocks SELECT ts_code, name, industry, list_date, '
+            'is_st FROM _listing_rows'
+        )
+
+    # The store content changed after _d7_world's manifest: rebuild it so
+    # the manifest integrity check reflects the actual store.
+    from ashare_data.manifest import (
+        TUSHARE_V2_CONFIG,
+        build_v2_dataset_manifest,
+        save_manifest,
+    )
+    with AshareDB(v2_path) as db:
+        save_manifest(db, TUSHARE_V2_CONFIG, build_v2_dataset_manifest(db))
+
+    verdict = check_runspec_data_eligibility(
+        make_test_spec(resolved_thresholds={
+            'min_eligible': 1.0, 'factor_min_coverage': 0.90,
+        }),
+        ['CASHFLOW_QUALITY'], universe, config,
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    # B's pre-listing quarters are excluded from the expected denominator:
+    # post-listing coverage is complete, so the gate passes.
+    assert verdict.ok, verdict.reasons
+    assert 'pre-listing' in verdict.checks['financial_version_tables'].detail
+
+    # Non-relaxation proof: POST-listing missing periods still fail.
+    config_b, v2_b = _d7_world(tmp_path / 'b', save_manifest=False)
+    skipped = {
+        ('000001.SZ', '20230630'),
+        ('000001.SZ', '20230930'),
+    }
+    populate_v2_statement_tables(
+        v2_b,
+        income_rows=_d7_statement_rows(
+            'income_statement_pit', skip_keys=skipped),
+        balance_rows=_d7_statement_rows(
+            'balance_sheet_pit', skip_keys=skipped),
+        cashflow_rows=_d7_statement_rows(
+            'cashflow_statement_pit', skip_keys=skipped),
+    )
+    verdict_b = check_runspec_data_eligibility(
+        make_test_spec(), ['CASHFLOW_QUALITY'], D7_UNIVERSE, config_b,
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    assert not verdict_b.ok
+    assert any(
+        'financial_version_tables' in reason for reason in verdict_b.reasons
+    )

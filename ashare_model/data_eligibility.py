@@ -260,20 +260,54 @@ def _quarter_ends(start: str, end: str) -> list[str]:
     return ends
 
 
+def _universe_list_dates(
+    config, universe_codes: list[str]
+) -> dict[str, str | None]:
+    """``list_date`` per universe code from the production ``stocks``
+    table (the single listing-date source).  Unknown/missing values map
+    to ``None`` and keep ALL periods in the expected denominator
+    (conservative — a coverage gap is never silently excused)."""
+
+    try:
+        with AshareDB(config.duckdb_path, read_only=True) as db:
+            placeholders = ", ".join("?" for _ in universe_codes)
+            rows = db.query(
+                f"SELECT ts_code, list_date FROM {config.stocks_table} "
+                f"WHERE ts_code IN ({placeholders})",
+                list(universe_codes),
+            )
+    except Exception:  # noqa: BLE001 - missing table: stay conservative
+        return {code: None for code in universe_codes}
+    dates = {
+        str(row.ts_code): str(row.list_date)
+        for row in rows.itertuples(index=False)
+        if not _is_missing(row.list_date)
+    }
+    return {code: dates.get(code) for code in universe_codes}
+
+
 def _financial_coverage(
     db: AshareDB,
     universe_codes: list[str],
     quarter_ends: list[str],
+    listing_dates: dict[str, str | None] | None = None,
 ) -> tuple[float | None, str]:
     """Report-period coverage of the three financial version tables
     (p17 §12: 当前正式 scope 报告期覆盖 ≥ 90%).  Expected = universe codes
     × quarter-end periods in the RunSpec window (extended one year back
-    for the YoY/TTM lookbacks the fundamental features consume); covered
-    = keys with a version row whose every core column is non-null.  The
-    worst table decides the family verdict.  Ratio ``None`` = not
-    computable (the detail carries the reason)."""
+    for the YoY/TTM lookbacks the fundamental features consume), with
+    PRE-LISTING quarters excluded per the stock's ``list_date`` (t73
+    correctness fix: no reports exist before listing — those quarters
+    are a source gap, not a coverage failure; data-engineer's sampling
+    confirmed every sampled gap was pre-listing).  Post-listing gaps
+    stay expected (delisting/suspension periods are honestly missing).
+    Covered = keys with a version row whose every core column is
+    non-null.  The worst table decides the family verdict.  Ratio
+    ``None`` = not computable (the detail carries the reason)."""
 
+    listing_dates = listing_dates or {}
     per_table: list[tuple[str, float]] = []
+    excluded_pre_listing = 0
     for table, core_columns in _FINANCIAL_TABLES.items():
         try:
             rows = db.query(
@@ -289,8 +323,19 @@ def _financial_coverage(
                 if not any(_is_missing(value) for value in values):
                     covered.add((str(row.ts_code), str(row.end_date)))
         expected = {
-            (code, period) for code in universe_codes for period in quarter_ends
+            (code, period)
+            for code in universe_codes
+            for period in quarter_ends
+            if listing_dates.get(code) in (None, "")
+            or period >= listing_dates.get(code, "")
         }
+        excluded_pre_listing += sum(
+            1
+            for code in universe_codes
+            for period in quarter_ends
+            if listing_dates.get(code)
+            and period < listing_dates.get(code, "")
+        )
         if not expected:
             continue  # no report periods in scope: nothing required here
         ratio = len(covered & expected) / len(expected)
@@ -299,7 +344,11 @@ def _financial_coverage(
         return None, "no report periods in the formal scope"
     worst_table, worst_ratio = min(per_table, key=lambda entry: entry[1])
     detail = "; ".join(f"{table}={ratio:.2%}" for table, ratio in per_table)
-    return worst_ratio, f"{detail} (worst: {worst_table})"
+    detail += (
+        f" (worst: {worst_table}; pre-listing periods excluded from "
+        f"expected: {excluded_pre_listing})"
+    )
+    return worst_ratio, detail
 
 
 def check_runspec_data_eligibility(
@@ -477,8 +526,16 @@ def check_runspec_data_eligibility(
                 quarter_ends = _quarter_ends(
                     window_start, spec.dev_window.end
                 )
+                # t73: pre-listing quarters are excluded from the expected
+                # denominator (a mid-quarter-listed stock cannot have
+                # reports before its listing — a source gap, not a
+                # coverage failure; data-engineer's sampling confirmed it).
+                listing_dates = _universe_list_dates(
+                    config, list(universe_codes)
+                )
                 ratio, detail = _financial_coverage(
-                    v2_db, list(universe_codes), quarter_ends
+                    v2_db, list(universe_codes), quarter_ends,
+                    listing_dates=listing_dates,
                 )
                 if ratio is None:
                     checks[SOURCE_FINANCIAL] = fail(
