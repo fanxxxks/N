@@ -1024,6 +1024,7 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.out_dir) if args.out_dir
         else ROOT / "docs" / profile["out_dirname"]
     )
+    out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / "metrics.json"
     out.write_text(json.dumps(metrics, ensure_ascii=False, indent=1, default=jdefault),
                    encoding="utf-8")
