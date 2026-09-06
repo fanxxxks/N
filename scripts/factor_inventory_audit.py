@@ -386,6 +386,12 @@ def _adjusted_bars_frame(loader: AshareDataLoader) -> pd.DataFrame:
     """
 
     df = loader.bars
+    # Capture the raw nominal prices BEFORE the adjusted overwrite: the
+    # exact-limit event family declares close_raw/high_raw/low_raw as
+    # required columns (t22), so the raw-missingness ctx must carry them
+    # alongside the adjusted OHLC.
+    for col in ("close_raw", "high_raw", "low_raw"):
+        df[col] = df[col.replace("_raw", "")].copy()
     grids = {
         col: loader.adjusted_data_cache[col].numpy().astype(np.float64)
         for col in ("open", "high", "low", "close", "pre_close")
