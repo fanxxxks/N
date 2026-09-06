@@ -877,7 +877,14 @@ def main(argv: list[str] | None = None) -> int:
         is_sel = is_mask_flat[rows]
         coef, *_ = np.linalg.lstsq(X[is_sel], yv[is_sel], rcond=None)
         w_b, w_f = float(coef[1]), float(coef[2])
-        comp = w_b * B + w_f * tensor[i].astype(np.float64)
+        # p9 附录 B (t69, captain 代行批准): the composite is DIRECTION-
+        # ALIGNED to the benchmark — comp = |w_b|·B + w_f·z.  A noise-fit
+        # negative w_b previously flipped the baseline inside the composite
+        # (zero-signal factors gained ΔIC = −2×baseline_OOS; t18 evidence:
+        # INDUSTRY_MOMENTUM coverage=0 → ΔIC +0.0357).  The raw w_b stays
+        # on record below (is_coef_baseline); a coverage-0 factor's ΔIC leg
+        # is additionally marked not-evaluable for gate accounting.
+        comp = abs(w_b) * B + w_f * tensor[i].astype(np.float64)
         ic_C = rank_ic_series(comp[None], tgt, min_stocks=MIN_STOCKS,
                               universe_mask=mask)[0]
         resid = np.full((s_n, t_n), np.nan)
@@ -903,6 +910,10 @@ def main(argv: list[str] | None = None) -> int:
             "baseline_oos": oos_ic_B,
             "composite_oos": comp_oos,
             "delta_ic_oos": delta,
+            # p9 附录 B guard: a coverage-0 (zero-signal) factor's ΔIC leg
+            # is not-evaluable for family-gate accounting (its corrected
+            # value is ≈0 by construction, never an increment datum).
+            "delta_ic_evaluable": coverage[name]["overall"] > 0.0,
             "residual_is": series_stats(ic_R[~is_oos]),
             "residual_oos": series_stats(ic_R[is_oos]),
         }
@@ -989,6 +1000,12 @@ def main(argv: list[str] | None = None) -> int:
 
     metrics = {
         "provenance": provenance,
+        # p9 附录 B (t69): the not-evaluable ΔIC legs (coverage-0 factors)
+        # are counted explicitly so family-gate accounting can exclude them.
+        "delta_ic_not_evaluable": [
+            name for name in FEATURE_NAMES
+            if not results_incr[name]["delta_ic_evaluable"]
+        ],
         "shapes": {"n_features": n_f, "n_stocks": int(s_n), "n_dates": int(t_n)},
         "target_finite_fraction": target_finite_fraction,
         "ic_full_window_pooled": {
