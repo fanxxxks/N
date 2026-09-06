@@ -41,6 +41,9 @@
   same-commit 规则在批准/实施边界落实）。
 - 实施人 = factor-engineer（codex/factor-semantic-fixes，单 commit：
   元数据一行 + FEATURE_REGISTRY 7→8 + RED 断言 + 文档再生 + 索引行）。
+- **执行顺序（captain 2026-09-06 指令）**：本实施（FEATURE_REGISTRY 7→8）
+  **先于** p9 Part A 弃用执行（GRAMMAR 7→8 + FEATURE_REGISTRY 8→9，
+  弃 TURNOVER_MA20）——版本单调递增，两线同分支串行。
 - 实施后 RED 证据（expected_direction == −1 断言先红后绿）与
   FEATURE_REGISTRY_VERSION == 8 钉值进 commit 证据。
 - 本核验记录不替代 p20 文件头的批准行——批准后由实施 commit 按 p16
