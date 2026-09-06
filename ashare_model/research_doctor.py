@@ -553,14 +553,15 @@ _PROBE_FAMILY5_NAMES = (
     "EARNINGS_ACCEL",
 )
 
-#: The frozen grammar-6 layout the t59 probes were recorded against
-#: (feature ids 74-77 contiguous append; 77 features, 12 deprecated,
-#: 65 samplable; vocabulary fingerprint 0e64ad614bfd).
+#: The frozen grammar-7 layout the t69 re-probe records against
+#: (feature ids 74-77 contiguous append; 77 features, 13 deprecated,
+#: 64 samplable; vocabulary fingerprint 2217cb8d4902 — the t22/p9
+#: erratum (t69) Part A grammar bump 6->7; token layout unchanged).
 _PROBE_FROZEN = {
     "family5_ids": (74, 75, 76, 77),
     "feature_count": 77,
-    "deprecated_count": 12,
-    "samplable_feature_count": 65,
+    "deprecated_count": 13,
+    "samplable_feature_count": 64,
 }
 
 
@@ -654,7 +655,7 @@ def gather_fairness_probes(repo_root: Path) -> dict[str, Any]:
         )
 
         # Probe 1b (t59 ⑥): the unrestricted mask offers exactly the
-        # samplable features (77 - 12 deprecated = 65) and no deprecated
+        # samplable features (77 - 13 deprecated = 64) and no deprecated
         # token leaks into the legal set.
         full_mask = build_action_mask(
             stack_sizes,
@@ -706,7 +707,7 @@ def gather_fairness_probes(repo_root: Path) -> dict[str, Any]:
 
     # Probe 2 (t59 ⑥): the GP primitive set enumerates the single registry
     # — exactly the four family-⑤ terminals under restriction, exactly the
-    # 65 samplable features unrestricted, no duplicates, no deprecated.
+    # 64 samplable features unrestricted, no duplicates, no deprecated.
     try:
         restricted = build_pset(vocab, feature_ids=list(family_ids))
         restricted_names = [

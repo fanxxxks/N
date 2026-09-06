@@ -762,3 +762,10 @@ engineering run type；不构成任何研究/收益结论。
   期间 tip 无移动）+ 计数精确闭合。本条目为该 tip 的本地串行门禁
   证据；ubuntu/py3.12 与 web 形态仍属 push 后 CI 验证范围（§10.2）。
 - 研究结论边界：engineering run type；不产生也不声称任何研究结论。
+
+## IP-03 decision-6 fairness re-probe record (2026-09-07, t22/p9 erratum t69)
+
+- 触发：p9 附录 B 勘误（t69）配套的 Part A 执行（弃 TURNOVER_MA20）使 GRAMMAR 6→7、可采样特征 65→64（77−13 deprecated）——词表布局合法演进，fairness probe 冻结常量按设计转红（fail-closed 复测触发器）。
+- 重测（新布局 grammar-7，fingerprint 2217cb8d4902）：五个 probe 全绿（frozen_vocab_layout 77/13/64、family-⑤ ids 74-77 不变、action_mask 双探针无 deprecated 泄漏、GP pset terminals 计数一致）。
+- baseline 刷新：docs/fairness_probe_baseline.json（fingerprint 2217cb8d4902、code_commit 31d079d、recorded_at 2026-09-07T06:38+08:00）。
+- 验证：tests/test_research_doctor.py + tests/test_searcher_bench.py 聚焦绿（tier-A 可采样 41→40 = TURNOVER_MA20 退出）。

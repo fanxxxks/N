@@ -280,7 +280,9 @@ def test_p14_tier_a_feature_ids_come_from_the_single_tier_authority():
         FORMULA_VOCAB.feature_names[token - FORMULA_VOCAB.feature_offset]
         for token in ids
     }
-    assert len(ids) == 41  # p14 appendix A: samplable tier-A features
+    # t22/p9 erratum (t69) Part A: TURNOVER_MA20 (tier A) left the
+    # samplable set, so the p14 appendix-A count drops 41 -> 40.
+    assert len(ids) == 40  # p14 appendix A: samplable tier-A features
     assert all(feature_tier(name).value == "A" for name in names)
     assert not (names & set(FORMULA_VOCAB.deprecated_names))
 
