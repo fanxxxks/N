@@ -16,6 +16,13 @@ their owner modules; the artifact-facing owner index lives in
 p19 (``docs/p19_market_price_semantics_contract.md`` §5): "25" -> "26" —
 the evaluation protocol's inputs changed (label price basis switched to
 the adjusted series and tradability to the exact constraint tables).
+
+p21 (``docs/p21_r1_domain_return_research_preregistration.md`` §8,
+APPROVED 2026-09-06): "26" -> "27" — the protocol gains the additive
+``protocol.tier_set`` run-level restriction and records ``tier_set`` /
+``tier_restricted_features`` in the artifact; ``tier_set=None`` is
+byte-identical to v26 behavior and v26 payloads stay legacy (version
+mismatch, never converted).
 """
 
-PROTOCOL_VERSION = "26"
+PROTOCOL_VERSION = "27"

@@ -556,3 +556,191 @@ def test_research_domain_data_home_and_facade_surface():
     # Unknown ids still fail fast through the facade.
     with pytest.raises(ValueError):
         facade.resolve_domain("no_such_domain")
+
+
+def test_tier_set_resolution_intersect_domain_minus_deprecated():
+    """p21 §8.2: the run feature set = domain features ∩ tier set −
+    deprecated names, resolved through the single authorities
+    (registry + ``data_tier.feature_tier`` + ``vocab.deprecated_names``).
+    Sizes are pinned by the approved p21 §4 table."""
+
+    from ashare_model.research_domain import tier_restricted_features
+
+    medium_a = tier_restricted_features("medium_cross_section", "A")
+    assert len(medium_a) == 17  # p21 §4 config 1
+    medium_ab = tier_restricted_features("medium_cross_section", "AB")
+    assert len(medium_ab) == 19  # p21 §4 config 2
+    short_a = tier_restricted_features("short_price_volume", "A")
+    assert len(short_a) == 23  # p21 §4 config 4
+
+    deprecated = FORMULA_VOCAB.deprecated_names
+    assert deprecated, "live vocabulary carries the deprecated set"
+    assert not (set(medium_a) & deprecated)
+    assert not (set(medium_ab) & deprecated)
+    assert not (set(short_a) & deprecated)
+
+    # A ⊆ AB within one domain: adding tier B only adds the margin pair.
+    assert set(medium_ab) - set(medium_a) == {
+        "MARGIN_BALANCE_CHG",
+        "MARGIN_CROWD_60",
+    }
+    # slow (no C members, no deprecated members): AB is the full domain.
+    slow = RESEARCH_DOMAINS["slow_fundamental"]
+    assert set(tier_restricted_features("slow_fundamental", "AB")) == set(
+        slow.features
+    )
+    # Vocab order, and always inside the owning domain.
+    medium = RESEARCH_DOMAINS["medium_cross_section"]
+    assert medium_ab == [
+        n for n in FORMULA_VOCAB.feature_names if n in set(medium_ab)
+    ]
+    assert set(medium_ab) <= set(medium.features)
+
+
+def test_tier_set_rejects_invalid_values():
+    """p21 §8.1: only None / "A" / "AB" are legal; unified never combines
+    with a tier set (the compatible semantic stays untouched)."""
+
+    from ashare_model.research_domain import (
+        feature_token_ids as _fti,
+        restrict_tensor as _rt,
+        tier_restricted_features as _trf,
+    )
+
+    n_features = len(FEATURE_NAMES)
+    tensor = np.zeros((n_features, 2, 2), dtype=np.float32)
+    for call in (
+        lambda: _trf("medium_cross_section", "BC"),
+        lambda: _fti("medium_cross_section", tier_set="BC"),
+        lambda: _rt(tensor, "medium_cross_section", tier_set="BC"),
+    ):
+        with pytest.raises(ValueError, match="tier_set"):
+            call()
+    for call in (
+        lambda: _trf(UNIFIED_DOMAIN_ID, "A"),
+        lambda: _fti(UNIFIED_DOMAIN_ID, tier_set="A"),
+        lambda: _rt(tensor, UNIFIED_DOMAIN_ID, tier_set="A"),
+    ):
+        with pytest.raises(ValueError, match="unified"):
+            call()
+
+
+def test_restrict_tensor_tier_set_zeroes_out_of_set_rows():
+    """p21 §8.2: with a tier set, rows outside (domain ∩ tier −
+    deprecated) become neutral — including deprecated in-domain members
+    (e.g. MOMENTUM_60, a deprecated medium feature); in-set rows keep
+    their values; tier_set=None is byte-identical to today."""
+
+    from ashare_model.research_domain import tier_restricted_features
+
+    n_features = len(FEATURE_NAMES)
+    tensor = np.full((n_features, 2, 3), 7.0, dtype=np.float32)
+    out = restrict_tensor(tensor, "medium_cross_section", tier_set="A")
+    assert out.shape == tensor.shape
+    resolved = set(tier_restricted_features("medium_cross_section", "A"))
+    for index, name in enumerate(FEATURE_NAMES):
+        expected = 7.0 if name in resolved else 0.0
+        assert (out[index] == expected).all()
+
+    # A deprecated in-domain medium feature must be zeroed by the tier set.
+    medium = RESEARCH_DOMAINS["medium_cross_section"]
+    deprecated_in_medium = sorted(
+        set(medium.features) & FORMULA_VOCAB.deprecated_names
+    )
+    assert "MOMENTUM_60" in deprecated_in_medium
+    mom_index = FORMULA_VOCAB.feature_names.index("MOMENTUM_60")
+    assert (out[mom_index] == 0.0).all()
+
+    # tier_set=None keeps today's (domain-as-is) behavior byte-identical.
+    none_implicit = restrict_tensor(tensor, "medium_cross_section")
+    none_explicit = restrict_tensor(tensor, "medium_cross_section", tier_set=None)
+    assert (none_implicit == none_explicit).all()
+    mom_index_none = FORMULA_VOCAB.feature_names.index("MOMENTUM_60")
+    assert (none_implicit[mom_index_none] == 7.0).all()
+
+
+def test_feature_token_ids_tier_set_excludes_deprecated():
+    """p21 §8.2: the sampling mask ids for a tier set are exactly the
+    resolved set's global token ids; tier_set=None is unchanged."""
+
+    from ashare_model.research_domain import tier_restricted_features
+
+    vocab = FORMULA_VOCAB
+    ids = feature_token_ids("medium_cross_section", tier_set="AB")
+    expected = {
+        vocab.feature_offset + vocab.feature_names.index(name)
+        for name in tier_restricted_features("medium_cross_section", "AB")
+    }
+    assert set(ids) == expected
+    assert feature_token_ids(UNIFIED_DOMAIN_ID, tier_set=None) is None
+    # tier_set=None keeps today's full-domain behavior (deprecated ids are
+    # still excluded downstream by the samplers' own deprecated mask).
+    full = feature_token_ids("medium_cross_section", tier_set=None)
+    expected_full = {
+        vocab.feature_offset + vocab.feature_names.index(name)
+        for name in RESEARCH_DOMAINS["medium_cross_section"].features
+    }
+    assert set(full) == expected_full
+
+
+def test_protocol_config_tier_set_parsing():
+    """p21 §8.1: ``protocol.tier_set`` parses as None / "A" / "AB";
+    anything else (and unified + tier_set) is rejected at config time."""
+
+    cfg = make_protocol_config(
+        {"protocol": {"domain": "medium_cross_section", "tier_set": "A"}}
+    )
+    assert cfg.tier_set == "A"
+    default = make_protocol_config(
+        {"protocol": {"domain": "medium_cross_section"}}
+    )
+    assert default.tier_set is None
+    with pytest.raises(ValueError, match="tier_set"):
+        make_protocol_config(
+            {"protocol": {"domain": "medium_cross_section", "tier_set": "BC"}}
+        )
+    with pytest.raises(ValueError, match="tier_set"):
+        make_protocol_config(
+            {"protocol": {"domain": UNIFIED_DOMAIN_ID, "tier_set": "A"}}
+        )
+
+
+def test_protocol_artifact_records_tier_set():
+    """p21 §8.3: the artifact records the tier set and the resolved
+    feature list; unified runs record None (no restriction)."""
+
+    from ashare_data.config import ProtocolConfig, TierConfig
+    from ashare_model.evaluation import build_result
+    from ashare_model.research_domain import tier_restricted_features
+
+    proto = ProtocolConfig(
+        domain="medium_cross_section",
+        frequency="every_10_days",
+        horizon=10,
+        tier_set="A",
+    )
+    result = build_result(
+        proto,
+        "screening",
+        TierConfig(),
+        rows=[],
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
+        data_end_date="20240201",
+    )
+    assert result["tier_set"] == "A"
+    assert result["tier_restricted_features"] == tier_restricted_features(
+        "medium_cross_section", "A"
+    )
+
+    unified = build_result(
+        ProtocolConfig(),
+        "screening",
+        TierConfig(),
+        rows=[],
+        spec_id=TEST_SPEC_ID,
+        run_id=TEST_RUN_ID,
+        data_end_date="20240201",
+    )
+    assert unified["tier_set"] is None
+    assert unified["tier_restricted_features"] is None

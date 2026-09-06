@@ -34,7 +34,7 @@ from .eval_metrics import (
     top_trial,
 )
 from .identity import candidate_id
-from .research_domain import RESEARCH_DOMAIN_VERSION
+from .research_domain import RESEARCH_DOMAIN_VERSION, tier_restricted_features
 from .versions import PROTOCOL_VERSION
 
 
@@ -258,6 +258,16 @@ def build_result(
             # registry generation its defaults resolve from.
             "research_domain": proto_cfg.domain,
             "research_domain_version": RESEARCH_DOMAIN_VERSION,
+            # p21 §8 (APPROVED 2026-09-06): the optional preregistered
+            # tier-set restriction and the resolved run feature set.
+            "tier_set": proto_cfg.tier_set,
+            "tier_restricted_features": (
+                tier_restricted_features(
+                    proto_cfg.domain, proto_cfg.tier_set
+                )
+                if proto_cfg.tier_set is not None
+                else None
+            ),
             **artifact_provenance,
             "dataset_id": dataset_id,
             "frequency": proto_cfg.frequency,

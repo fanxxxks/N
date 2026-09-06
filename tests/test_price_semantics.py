@@ -694,7 +694,8 @@ def test_version_impact_table_bumps_are_in_place():
     from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
 
     assert EXECUTION_SPEC_VERSION == 3
-    assert str(PROTOCOL_VERSION) == "26"
+    # p21 §8 (APPROVED 2026-09-06): PROTOCOL 26 -> 27 (tier_set additive).
+    assert str(PROTOCOL_VERSION) == "27"
     # p17/D5 (t16 F1): bumped 2 -> 3 for the industry membership PIT
     # switch; p17/D6 bumps to 4 for the family-⑤ source switch.
     assert FACTOR_COMPUTE_VERSION == 4  # t22 semantic fixes (covers D4/D5/D6 bases + t22 consumption fixes)

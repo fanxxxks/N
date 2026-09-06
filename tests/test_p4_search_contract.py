@@ -37,7 +37,8 @@ def test_p4_semantic_versions_are_pinned_by_contract():
     # per-track budgets); pre/post results are never matched comparisons
     # (AGENTS.md §10.1 case 2).
     assert SEARCH_CONTRACT_VERSION == 4
-    assert PROTOCOL_VERSION == "26"
+    # p21 §8 (APPROVED 2026-09-06): PROTOCOL 26 -> 27 (tier_set additive).
+    assert PROTOCOL_VERSION == "27"
     assert MODEL_VERSION == 3
     assert SEARCHER_BENCH_VERSION == 4
 

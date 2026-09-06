@@ -164,7 +164,10 @@ def test_current_semantic_versions_are_pinned():
     # §10.1 case 2) bumps the reward generation "14" -> "15" (band +/-10,
     # bad_reward -20, two-segment complexity penalty).
     assert REWARD_VERSION == "15"
-    assert PROTOCOL_VERSION == "26"
+    # p21 §8 (APPROVED 2026-09-06): the additive protocol.tier_set semantics
+    # and artifact fields bump PROTOCOL_VERSION "26" -> "27"; v26 payloads
+    # stay legacy (version mismatch, never converted).
+    assert PROTOCOL_VERSION == "27"
     assert EXECUTION_SPEC_VERSION == 3
     assert BARE_FACTOR_BACKTEST_VERSION == 4
     # p17/D5 (t16 F1): the industry membership PIT switch bumps
