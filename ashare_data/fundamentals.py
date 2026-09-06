@@ -403,17 +403,31 @@ def _family5_asof_frames(
                 timeline.sort(key=lambda item: item[0])
         return intervals
 
+    # Pre-group by ts_code once: O(N) total instead of O(N×M) per-code
+    # boolean mask scans (t74 perf: 24.7s → 0.56s on 415K×5542 synthetic;
+    # py-spy double-confirmed take/reindex_indexer hot path).
+    income_grouped = (
+        dict(tuple(income.groupby("ts_code", sort=False)))
+        if not income.empty else {}
+    )
+    balance_grouped = (
+        dict(tuple(balance.groupby("ts_code", sort=False)))
+        if not balance.empty else {}
+    )
+    cashflow_grouped = (
+        dict(tuple(cashflow.groupby("ts_code", sort=False)))
+        if not cashflow.empty else {}
+    )
+    code_index = {code: i for i, code in enumerate(ts_codes)}
+
+    _empty = pd.DataFrame()
     for code in ts_codes:
-        income_stock = income[income["ts_code"] == code] if not income.empty else income
-        balance_stock = (
-            balance[balance["ts_code"] == code] if not balance.empty else balance
-        )
-        cashflow_stock = (
-            cashflow[cashflow["ts_code"] == code] if not cashflow.empty else cashflow
-        )
+        income_stock = income_grouped.get(code, _empty)
+        balance_stock = balance_grouped.get(code, _empty)
+        cashflow_stock = cashflow_grouped.get(code, _empty)
         if income_stock.empty:
             continue
-        stock_row = ts_codes.index(code)
+        stock_row = code_index.get(code)
         if stock_row is None:
             continue
 
