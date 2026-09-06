@@ -1,6 +1,7 @@
 # P21 R1 分域收益研究预注册契约（五配置统一协议）
 
-- 状态：**DRAFT — 待用户批准**（起草：research-analyst，AgentTeams tushare-pit-migration t25，2026-09-06）。批准后本文保持前瞻性，禁止以实现或测量输出反向修改；测量只写入测量日志（`docs/p21_r1_measurement_log.md`，运行后建立），不回写本文。
+- 状态：**APPROVED — 2026-09-06 由 captain 代行签署批准**（转达渠道：AgentTeams tushare-pit-migration captain → research-analyst 邮箱消息，2026-09-06；授权依据：p17 勘误 #2 89dd121 授权扩展记录「这次批准，接下来你自行把握即可不用再问我」，p18 §4 框架）。批准原文（四项全部批准）：「(1) p21 契约全文批准（五配置统一协议、S=512 唯一语义预算、预算拆分 30S=15,360×5、墙钟 60h/12h、首折 2× 熔断、S 回退规则启动前预注册——协议结构与纪律完整）；(2) 条件前置最小实现批准：protocol.tier_set additive 接线 + PROTOCOL_VERSION 26→27 + RED 测试（runs 前实施）；version 核对表同步 +1 行（PROTOCOL 27）；(3) configs 3/5 not_run 知悉——D7 门挡住是预注册纪律的正确执行，阈值不放宽；(4) research 级证据定位知悉——R1 结论只支持研究级声明。」执行序列裁定：configs 1/2/4 先行（D7/G1-G8 复检→基线先行→搜索）；configs 3/5 待数据任务落地后复检 D7 解禁补跑；R1 正式运行等 t62 完成后串行（16GB 约束）；中期结论只覆盖 configs 1/2/4 并如实分窗记录。批准后本文保持前瞻性，禁止以实现或测量输出反向修改；测量只写入测量日志（`docs/p21_r1_measurement_log.md`，运行后建立），不回写本文。
+- 起草：research-analyst，AgentTeams tushare-pit-migration t25，2026-09-06。
 - 被执行任务：AgentTeams t25（R1：分域收益研究，独立配置，五协议统一）。
 - 仲裁顺序：本文/用户批准 → 契约测试 → 实现 → 测量日志。测量结果只能执行 §10 预注册裁决。
 - 本文使用 AGENTS.md 的"必须/禁止/应当"语义。工作分支 `codex/r1-domain-research`（base = `codex/factor-semantic-fixes@1ad7b73`，cherry-pick 前置 `02e361d` = D7 数据资格门 4a88d84、`512a551` = E2 因子缓存 8411811；本地提交，不 push/不合并——push/merge 另需授权）。
