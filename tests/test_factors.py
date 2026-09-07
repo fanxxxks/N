@@ -164,12 +164,16 @@ def test_fundamental_and_neutral_families_declared():
     # factors from the capital-flow pipeline, and NORTHBOUND_CHG stays
     # neutral (its daily feed stopped in Aug 2024); all metadata-driven.
     # P9 §5.4 (whitelist §10.1 case 2, contract APPROVED): MARGIN_CROWD_60
-    # joins the external capital-flow features.
+    # joins the external capital-flow features.  p24 (whitelist §10.1
+    # case 2, user-approved F2 batch): the two margin-crowding factors
+    # join as well.
     assert FUNDAMENTAL_PIT_NAMES
     assert set(EXTERNAL_FACTOR_NAMES) == {
         "MARGIN_BALANCE_CHG",
         "INDUSTRY_MOMENTUM",
         "MARGIN_CROWD_60",
+        "MARGIN_BALANCE_TO_CIRC_MV",
+        "MARGIN_BUY_PRESSURE_5",
     }
     assert NEUTRAL_FEATURE_NAMES == {"NORTHBOUND_CHG"}
     assert "MARKET_CAP" in FACTOR_REGISTRY  # local daily-bar size proxy

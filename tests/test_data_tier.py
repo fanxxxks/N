@@ -95,9 +95,13 @@ def test_tier_sets_partition_the_vocabulary():
     tier_c = _tier_set(DataTier.C)
     # P9 §5.4 (whitelist §10.1 case 2, contract APPROVED): MARGIN_CROWD_60
     # rides the same PIT margin feed as MARGIN_BALANCE_CHG -> Tier B.
+    # p24 (whitelist §10.1 case 2, user-approved F2 batch): the two
+    # margin-crowding factors ride the same feed -> Tier B.
     assert tier_b == set(FUNDAMENTAL_PIT_NAMES) | {
         "MARGIN_BALANCE_CHG",
         "MARGIN_CROWD_60",
+        "MARGIN_BALANCE_TO_CIRC_MV",
+        "MARGIN_BUY_PRESSURE_5",
     }
     assert tier_c == {n for n in FEATURE_NAMES if n.startswith("IND_REL_")} | {
         "INDUSTRY_MOMENTUM",
