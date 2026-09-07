@@ -17,6 +17,7 @@
   本记录保留因子线本地编号作核验史，登记与用户转达统一用 **p23**/p22。
 - **【编号二次纠正 + INDUSTRY_MOMENTUM 驳回（2026-09-07 factor-engineer
   执行 @ `825c929`，编号冲突纠正）——取代上一条的编号安排】**：
+  **【三阶段史摘要（2026-09-07 governance 按 factor-engineer 校准补强——现行态 = 阶段三）】**：**阶段一 = REJECTED**（2580c3e9：冗余预检驳回；实施 4eee145 = promotion_allowed=False、方向 +1 维持）→ **阶段二 = 批准实施**（captain 三项裁决 item 2；实施 12a7ed7 = 方向 −1 + REGISTRY 10→11 + 定向裁决方向符号证实）→ **阶段三 = 终裁回退（现行态）**（6644e662 终裁认定阶段二混淆两判据；实施 969a126 = 方向恢复 authored +1 + promotion_allowed=False 维持 + 双重发现注释 + REGISTRY 12→13；全量 1,691/1/0）。逐项证据见下文 1-4 与勘误节——现行态 = authored +1 + promotion block + 双重发现注释。
   1. **F1 四候选草案改号为 p22**：`docs/p22_f1_slow_fundamental_quality_draft.md`
      （内容不变、标题重编号；`825c929`）——**F1 的登记与索引行使用 p22
      文件名**（本记录此前"p23"的 F1 指称作废）；
