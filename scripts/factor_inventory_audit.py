@@ -227,6 +227,36 @@ _PROFILES: dict[str, dict] = {
         "cost_pressure_2x": True,
         "direction_tier_audit": True,
     },
+    # t27 (2026-09-08): the F2 batch retest — the same conventions on the
+    # 83-feature vocabulary (the user-approved p24 two appended after the
+    # p23 v4 four).
+    "f2": {
+        "out_dirname": "factor_inventory_audit_f2_20260908",
+        "expected_features": 83,
+        "audit_generation": (
+            "f2 (t27 post-F2 batch retest on the ashare_v2 Tushare/PIT "
+            "dataset, 83 features)"
+        ),
+        "baseline_predecessor": (
+            "docs/factor_inventory_audit_f1_20260907/metrics.json "
+            "(t24, 81-feature post-F1 audit)"
+        ),
+        "manifest_note": (
+            "v2 dataset_id computed read-only via "
+            "manifest.build_v2_dataset_manifest (p17 §4.4); the legacy "
+            "database stays read-only"
+        ),
+        "check_v4_tail": False,
+        "check_v5_tail": False,
+        "check_f1_tail": False,
+        "check_f2_tail": True,
+        "include_factor_compute": True,
+        "manifest_source": "v2",
+        "price_basis": "adjusted",
+        "fold_ic_stats": True,
+        "cost_pressure_2x": True,
+        "direction_tier_audit": True,
+    },
 }
 
 
@@ -519,6 +549,16 @@ def main(argv: list[str] | None = None) -> int:
 
         assert list(FEATURE_NAMES[-len(_FEATURE_NAMES_V8):]) == list(
             _FEATURE_NAMES_V8
+        )
+        assert set(DEPRECATED_FEATURE_NAMES) <= set(FEATURE_NAMES)
+    if profile.get("check_f2_tail"):
+        # p24 vocabulary tail: the two user-approved F2 margin-crowding
+        # factors (83 = 81 + 2); deprecated members still computed and
+        # measurable.  Local import mirrors the v4/v5/f1 blocks above.
+        from ashare_model.vocab import DEPRECATED_FEATURE_NAMES, _FEATURE_NAMES_V10
+
+        assert list(FEATURE_NAMES[-len(_FEATURE_NAMES_V10):]) == list(
+            _FEATURE_NAMES_V10
         )
         assert set(DEPRECATED_FEATURE_NAMES) <= set(FEATURE_NAMES)
     assert mask.shape == (s_n, t_n)
