@@ -22,6 +22,17 @@
 - **口径披露（p17 schema 缺口预注册）**：`income_statement_pit` 无 `operate_profit` 列（p17 §5.3 DDL）——F1-3 的"营业利润"以 `total_profit`（利润总额，含营业外收支）为预注册代理；若未来 p17 增补 `operate_profit` 列，须经勘误后重算。此为本批唯一的口径近似，明文预注册而非静默替代。
 - **与既有词表的非重复性论证**：ROA（legacy，净利/总资产静态）≠ 本批三比率的现金流/毛利/利润总额分子与平均资产分母口径；DEBT_RATIO（legacy，静态水平）≠ F1-4 的方向变化量；family-⑤ 的现金流确认（cfo/profit）≠ cfo/assets。预注册冗余预检：实施后重测若与 ROA/DEBT_RATIO/family-⑤ 任何成员 |ρ|≥0.9 → 按族内精简裁决（p9 §7.2 机制）。
 - **族原子性**：4 特征同 commit 进词表、同批裁决、同进退（p13 §8 先例）。
+- **CAPEX_INTENSITY 处置补充（captain 裁决 2b）**：v2 候选集 = 路线图四因子逐字采纳，v1 自提的 CAPEX_INTENSITY 已在 v2 重写中剔除（上表末行说明）——不存在无说明替换。
+
+- **路线图映射表（captain 裁决 2a：v1 自提候选 → 路线图 F1 指名单逐个对应）**：
+
+| v1 草案候选 | 路线图 F1 指名单 | 对应裁决 | 理由 |
+|---|---|---|---|
+| CFO_TO_DEBT（cfo/total_liab） | **CFO_TO_ASSETS**（cfo/平均总资产） | 改分母采纳路线图 | 分母选总资产（非总负债）理由：(1) 与 GROSS/OPERATING 两比率同分母（avg_assets），族内截面可比；(2) 资产口径覆盖全部资本结构（负债+权益），负债分母只覆盖债权人视角；(3) 文献标准（Novy-Marx 系均以资产为分母）。负债口径的未来提案走新预注册 |
+| （无 v1 对应——v1 以 NET_MARGIN_TREND_4Q 提名） | **GROSS_PROFITABILITY**（毛利/平均总资产） | 采纳路线图 | 毛利/资产比（Novy-Marx 2013）是文献最强截面之一；v1 的净利率趋势概念由 F1-3 的利润总额口径部分承载，趋势变体可未来提案 |
+| （无 v1 对应） | **OPERATING_PROFITABILITY**（利润总额/平均总资产） | 采纳路线图 | p17 DDL 无 operate_profit 列 → 预注册代理 = total_profit（利润总额，含营业外收支）——口径缺口已在 §2 明文披露 |
+| LEVERAGE_TREND_4Q（负债率 4 报告期变化） | **LEVERAGE_CHANGE**（负债率_t − 负债率_{t−4q}） | 同一概念，公式逐字一致 | ✓ 直接映射 |
+| CAPEX_INTENSITY（投资现金流/总资产） | （路线图之外） | **v2 已剔除** | 路线图指名单为四因子，v1 自提的第五概念无位； captain 裁决 2b：不許无说明替换——本行即说明：v2 按路线图集合执行，CAPEX_INTENSITY 保留为未来批次候选（需新预注册） |
 
 ## 3. 每因子预注册记录（t24 验收逐项）
 
@@ -47,8 +58,8 @@
 
 | 版本 | 旧 | 新 | 理由 |
 |---|---|---|---|
-| GRAMMAR（vocab.py） | 7 | 8 | 词表 77→81（追加，token id 不移位）；generation 8 注册 remap 分派（布局 = 7 布局追加） |
-| FEATURE_REGISTRY | 9 | 10 | 4 特征元数据 + depends_on |
+| GRAMMAR（vocab.py） | 7 | 8 | 词表 77→81（追加，token id 不移位）；generation 8 注册 remap 分派（布局 = 7 布局追加）。（captain 裁决 2c 原文为 8→9——其 Part A 基线假设 7；实际 Part A 基线为 6，落地 6→7，故 F1 为 7→8；语义内容一致） |
+| FEATURE_REGISTRY | 10 | 11 | 4 特征元数据 + depends_on。（captain 裁决 2c 原文为 9→10——未计入 INDUSTRY_MOMENTUM 负结果翻转的 9→10；F1 按其实际基线 10 顺延为 10→11） |
 | RESEARCH_DOMAIN | 3 | 4 | slow_fundamental 16→20 |
 | FACTOR_COMPUTE | 4 | 不变 | 纯特征追加，既有行计算语义零改动（p13 先例） |
 | DATA_TIER | 2 | 不变 | PIT_FUNDAMENTAL→B 既有映射 |
