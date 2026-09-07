@@ -169,6 +169,18 @@ _FEATURE_NAMES_V5 = (
     "EARNINGS_ACCEL",
 )
 
+# v8 (p23 v3, user-approved F1 batch) appends the four slow-fundamental
+# quality factors (net-margin trend, leverage trend, capex intensity,
+# CFO/debt).  Names are appended so every pre-v8 token id is stable (the
+# same discipline as v2..v5); the batch joins and leaves adjudication as
+# one atomic unit (p23 §7 族级裁决).
+_FEATURE_NAMES_V8 = (
+    "NET_MARGIN_TREND_4Q",
+    "LEVERAGE_TREND_4Q",
+    "CAPEX_INTENSITY",
+    "CFO_TO_DEBT",
+)
+
 FEATURE_NAMES = tuple(
     name
     for name in (
@@ -177,6 +189,7 @@ FEATURE_NAMES = tuple(
         + _FEATURE_NAMES_V3
         + _FEATURE_NAMES_V4
         + _FEATURE_NAMES_V5
+        + _FEATURE_NAMES_V8
     )
     if name not in FEATURE_ALIASES
 )
@@ -288,10 +301,12 @@ LEGACY_OPERATOR_NAMES = (
 # conditionally-deprecated TURNOVER_MA20 from the sampling space after its
 # Part-A trigger fired (rho = 0.914 stable across four audit rounds vs the
 # stronger TURNOVER_STD20; the token id and computation are retained).
+# v8 (p23 v3, user-approved F1 batch) appends the four slow-fundamental
+# quality factors (append-only, no existing token id moves).
 # Bumping this constant changes
 # ``feature_version`` and therefore invalidates the token layout recorded
 # in older training artifacts (which resolve by name, so they still load).
-GRAMMAR_VERSION = 7
+GRAMMAR_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -429,7 +444,7 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     **by name** and survive vocabulary additions.  Bare payloads (no
     metadata) dispatch on their declared ``grammar_version`` to the frozen
     per-generation layout (grammar 2/3 -> the grammar-3 layout, 4/5 -> the
-    grammar-5 layout, 6/7 -> live; unknown or missing generations are
+    grammar-5 layout, 6/7/8 -> live; unknown or missing generations are
     fail-closed rejected), and the by-name remapping keeps them valid
     after vocabulary growth; a bare legacy factor resolves to its
     :class:`~ashare_model.ir.Feature` token (the AST migration happens
@@ -454,9 +469,9 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     # against the latest table (that silent decode IS the t28 incident
     # mechanism).  Known generations and their frozen decode layouts:
     # 2/3 -> the grammar-3 layout (62 features, EOS 102), 4/5 -> the
-    # grammar-5 layout (73 features, EOS 113), 6/7 -> the live vocabulary
-    # (grammar 7 = the t22 sampling-set change; the token layout is
-    # identical to 6).
+    # grammar-5 layout (73 features, EOS 113), 6/7/8 -> the live
+    # vocabulary (grammar 7 = the t22 sampling-set change; grammar 8 = the
+    # F1 append; the token layouts are identical to 6 for ids <= 77).
     # Display layers mark such payloads legacy/unavailable (pre-P7
     # artifacts are read-only rejected per §4.6 and need an explicit
     # auditable migration).
@@ -471,10 +486,10 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     # deprecation removes a name from the SAMPLING space only — ids,
     # computations and by-name decoding are unchanged, so generation 7
     # decodes against the live vocabulary exactly like generation 6.
-    if src_grammar not in (2, 3, 4, 5, 6, 7):
+    if src_grammar not in (2, 3, 4, 5, 6, 7, 8):
         raise ValueError(
             f"unsupported grammar generation {src_grammar} for remap "
-            "decoding (known generations: 2, 3, 4, 5, 6, 7)"
+            "decoding (known generations: 2, 3, 4, 5, 6, 7, 8)"
         )
     src_has_eos = src_grammar >= 2
     src_features = payload.get("feature_names")

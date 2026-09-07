@@ -287,7 +287,7 @@ def test_version_pins():
     from ashare_model.search_contract import SEARCH_CONTRACT_VERSION
     from ashare_model.vocab import GRAMMAR_VERSION
 
-    assert GRAMMAR_VERSION == 7  # v7 (t22/p9 erratum t69) Part A deprecates TURNOVER_MA20; prior: v6 (P13 §5.3/§6.1): family ⑤ appends 4
+    assert GRAMMAR_VERSION == 8  # v8 (p23 v3, user-approved F1 batch) appends the four quality factors; prior: 7 = t22/p9 erratum t69
     # features (whitelist §10.1 case 2, docs/p13_fundamental_fields_contract.md).
     assert SEARCH_CONTRACT_VERSION == 4
     assert PROTOCOL_VERSION == "26"

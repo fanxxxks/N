@@ -495,3 +495,107 @@ def test_data_tier_version_bumped_with_revision_tracking_text():
     assert data_tier.DATA_TIER_VERSION == 2
     rule = data_tier.TIER_TIME_RULES["B"]
     assert "修订" in rule  # revision-tracking semantics for fundamentals
+
+
+# --- F1 batch (p23 v3, user-approved): the four slow-fundamental quality
+# --- factors from the v2 as-of source ---------------------------------------
+
+
+def _f1_statement_rows(code: str = '000001.SZ'):
+    """Eight quarters of synthetic statements with hand-computable TTM
+    values: 2023 revenue 100/qtr, profit 10/qtr; 2024 revenue 110/qtr,
+    profit 15/qtr; cashflow 15/qtr then 20/qtr; invest cashflow -5/qtr
+    then -8/qtr; assets 1000 flat; liabilities 500 flat."""
+    quarters = [
+        ("20230331", 100.0, 10.0), ("20230630", 200.0, 20.0),
+        ("20230930", 300.0, 30.0), ("20231231", 400.0, 40.0),
+        ("20240331", 110.0, 15.0), ("20240630", 220.0, 30.0),
+        ("20240930", 330.0, 45.0), ("20241231", 440.0, 60.0),
+    ]
+    cfo = [15.0, 30.0, 45.0, 60.0, 80.0, 100.0, 120.0, 140.0]
+    inv = [-5.0, -10.0, -15.0, -20.0, -28.0, -36.0, -44.0, -52.0]
+    income, balance, cashflow = [], [], []
+    for i, (end, rev_cum, prof_cum) in enumerate(quarters):
+        ann = f"2023040{i + 1}" if i < 4 else f"2024040{i - 3}"
+        ann = ("20230401", "20230701", "20231001", "20240101",
+               "20240401", "20240701", "20241001", "20250101")[i]
+        avail = ("20230402", "20230702", "20231002", "20240102",
+                 "20240402", "20240702", "20241002", "20250102")[i]
+        income.append({
+            "ts_code": code, "end_date": end, "ann_date": ann,
+            "f_ann_date": ann, "available_date": avail,
+            "report_type": "1", "comp_type": "1",
+            "update_flag": "0", "end_type": None,
+            "revenue": rev_cum, "oper_cost": rev_cum * 0.7,
+            "total_profit": prof_cum, "n_income": prof_cum,
+            "n_income_attr_p": prof_cum, "ingest_id": f"fi{i}",
+        })
+        balance.append({
+            "ts_code": code, "end_date": end, "ann_date": ann,
+            "f_ann_date": ann, "available_date": avail,
+            "report_type": "1", "comp_type": "1",
+            "update_flag": "0", "end_type": None,
+            "total_assets": 1000.0, "total_liab": 500.0,
+            "ingest_id": f"bi{i}",
+        })
+        cashflow.append({
+            "ts_code": code, "end_date": end, "ann_date": ann,
+            "f_ann_date": ann, "available_date": avail,
+            "report_type": "1", "comp_type": "1",
+            "update_flag": "0", "end_type": None,
+            "n_cashflow_act": cfo[i], "n_cashflow_inv_act": inv[i],
+            "ingest_id": f"ci{i}",
+        })
+    return income, balance, cashflow
+
+
+def test_f1_frames_built_from_v2_asof(tmp_path: Path):
+    """The four F1 features consume the v2 as-of source: the net-margin
+    trend, leverage trend, capex intensity and CFO/debt are computed from
+    the version tables with hand-computable TTM values."""
+
+    from ashare_data.fundamentals import build_pit_frames
+
+    config = _config(tmp_path)
+    income, balance, cashflow = _f1_statement_rows()
+    populate_v2_statement_tables(
+        config.duckdb_path.parent / "ashare_v2.duckdb",
+        income_rows=income, balance_rows=balance, cashflow_rows=cashflow,
+    )
+    dates = pd.bdate_range("2025-01-01", "2025-03-31").strftime("%Y%m%d").tolist()
+    close = pd.DataFrame(20.0, index=["000001.SZ"], columns=dates)
+    frames = build_pit_frames(config, ["000001.SZ"], dates, close)
+    for name in ("NET_MARGIN_TREND_4Q", "LEVERAGE_TREND_4Q",
+                 "CAPEX_INTENSITY", "CFO_TO_DEBT"):
+        assert name in frames, name
+        assert not frames[name].isna().all().all(), name
+    # Hand-computed values at the 2024Q4 as-of visibility (available
+    # 20250102): TTM profit 60, TTM revenue 440 -> nm = 0.13636;
+    # 2023Q4 nm = 0.1 -> trend = 0.03636.  Leverage 0.5 flat -> trend 0.
+    # Capex: TTM(-inv) = +52/1000 = 0.052 (the outflow negated to a
+    # positive intensity).  CFO/debt = 140/500 = 0.28.
+    assert frames["NET_MARGIN_TREND_4Q"].iloc[0, -1] == pytest.approx(60.0 / 440.0 - 0.1)
+    assert frames["LEVERAGE_TREND_4Q"].iloc[0, -1] == pytest.approx(0.0)
+    assert frames["CAPEX_INTENSITY"].iloc[0, -1] == pytest.approx(52.0 / 1000.0)
+    assert frames["CFO_TO_DEBT"].iloc[0, -1] == pytest.approx(140.0 / 500.0)
+
+
+def test_f1_nan_guards_denominator_and_ttm_break(tmp_path: Path):
+    """Missing quarters (TTM break) and non-positive denominators surface
+    as NaN — never fabricated (p23 §2 NaN guards)."""
+
+    from ashare_data.fundamentals import build_pit_frames
+
+    config = _config(tmp_path)
+    income, balance, cashflow = _f1_statement_rows()
+    # Drop the 2023Q4 income row: the 2024 TTM window breaks (a missing
+    # quarter in the trailing four) -> the net-margin trend NaN.
+    income = [r for r in income if r["end_date"] != "20231231"]
+    populate_v2_statement_tables(
+        config.duckdb_path.parent / "ashare_v2.duckdb",
+        income_rows=income, balance_rows=balance, cashflow_rows=cashflow,
+    )
+    dates = pd.bdate_range("2025-01-01", "2025-03-31").strftime("%Y%m%d").tolist()
+    close = pd.DataFrame(20.0, index=["000001.SZ"], columns=dates)
+    frames = build_pit_frames(config, ["000001.SZ"], dates, close)
+    assert frames["NET_MARGIN_TREND_4Q"].isna().all().all()

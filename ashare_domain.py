@@ -188,6 +188,13 @@ _SLOW_FEATURES = (
     "ACCRUALS",
     "ASSET_GROWTH",
     "EARNINGS_ACCEL",
+    # F1 batch (p23 v3, user-approved): the four slow-fundamental quality
+    # factors (asset-yield ratios and the leverage trend) are
+    # slow-fundamental by construction (report-period data).
+    "NET_MARGIN_TREND_4Q",
+    "LEVERAGE_TREND_4Q",
+    "CAPEX_INTENSITY",
+    "CFO_TO_DEBT",
 )
 
 RESEARCH_DOMAINS: dict[str, ResearchDomain] = {
