@@ -66,7 +66,10 @@ from .vocab import FEATURE_NAMES
 # MARGIN_BALANCE_CHG authored direction re-preregisters +1 -> -1 (four
 # audit rounds of falsification; metadata-only — the formula, source and
 # PIT visibility are unchanged, so FACTOR_COMPUTE is untouched).
-FEATURE_REGISTRY_VERSION = 9
+# v10 (t24 routing, captain ruling): INDUSTRY_MOMENTUM's authored +1 is a
+# negative result — promotion eligibility withdrawn (the feature keeps
+# computing; the authored direction is preserved as falsified evidence).
+FEATURE_REGISTRY_VERSION = 10
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

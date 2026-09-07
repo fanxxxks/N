@@ -319,3 +319,23 @@ def test_turnover_ma20_deprecated_per_part_a_ruling():
     assert GRAMMAR_VERSION == 7
     # Promotion eligibility lost (the registry mirrors the metadata).
     assert FEATURE_METADATA["TURNOVER_MA20"].promotion_allowed is False
+
+
+def test_industry_momentum_negative_result_promotion_blocked():
+    """Captain ruling (t24 routing): INDUSTRY_MOMENTUM's authored +1 is a
+    NEGATIVE RESULT — falsified on the repaired dataset (coverage 0.838,
+    IC negative at every horizon, corrected-baseline dIC -0.0167, annual
+    direction stability 4/13) — and the -1 reversal re-hypothesis FAILS
+    the redundancy pre-check (its dIC is below every IND_REL_* family
+    member's increment).  The feature keeps computing and stays in the
+    vocabulary but loses promotion eligibility; the authored +1 direction
+    is preserved as the negative-result evidence."""
+
+    from ashare_model.feature_metadata import FEATURE_METADATA
+
+    meta = FEATURE_METADATA["INDUSTRY_MOMENTUM"]
+    assert meta.promotion_allowed is False
+    # The authored +1 direction is retained as the falsified evidence —
+    # a future family-structure change may re-open the question with a
+    # NEW pre-registration, never a silent flip.
+    assert meta.expected_direction == 1

@@ -1,6 +1,6 @@
 # P22 草案：INDUSTRY_MOMENTUM 方向重预注册（authored +1 修复后证伪 → −1）+ F 批次相关性核对照表
 
-- 状态：**DRAFT — 待 governance-auditor 登记与 captain 代行批准**（起草：factor-engineer，2026-09-07；captain 裁定修正："INDUSTRY_MOMENTUM 的落点你提案"——本草案提案 = **独立方向重预注册注记**，理由见 §4）。本文使用 AGENTS.md 的"必须/禁止/应当"语义。
+- 状态：**REJECTED — 重假设预注册驳回（captain 裁决，t24 路由）：冗余预检不通过**——ΔIC −0.0167 低于 IND_REL_* 族内成员增量（+0.0079~+0.0283）且实证形态（行业反转）与族方向同源，纳入即违反 ΔIC 增量判据。处置 = 负结果 + 冗余预检失败完整留档（INDUSTRY_MOMENTUM promotion_allowed=False 已实施，authored +1 保留为证伪证据）；未来族结构变化可重新提案（新预注册）。本文件其余部分保留为驳回依据记录。
 - 证据基线：t22 修复后重算 `docs/factor_inventory_audit_v2_fix2_20260906/metrics.json`（dataset `157e0cf5…`，FACTOR_COMPUTE 4）；t18 轮 `docs/factor_inventory_audit_v2_20260905/metrics.json`（dataset `43ef1e4c…`）。勘察基线 commit：`327f102`。
 
 ## 1. 完整历史披露（captain 裁定第 1 条要求的三段式）

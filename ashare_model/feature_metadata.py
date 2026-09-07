@@ -406,6 +406,16 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         expected_direction=1,
         semantic_type=SemanticType.CROSS_SECTIONAL_SIGNAL,
         compute_cost=ComputeCost.LOW,
+        # t24 routing (captain ruling): the authored +1 is a NEGATIVE
+        # RESULT — falsified on the repaired dataset across two post-fix
+        # rounds (IC negative at every horizon, corrected-baseline dIC
+        # -0.0167, annual direction stability 4/13), and the -1 reversal
+        # re-hypothesis fails the redundancy pre-check (below every
+        # IND_REL_* family member's increment).  The feature keeps
+        # computing and stays in the vocabulary; promotion eligibility is
+        # withdrawn with the authored direction preserved as evidence
+        # (p22 draft record).
+        promotion_allowed=False,
         depends_on=("industry_membership_pit", "close"),
     ),
     # Intraday decomposition (return-like).
