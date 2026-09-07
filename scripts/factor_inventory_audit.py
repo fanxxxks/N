@@ -195,6 +195,38 @@ _PROFILES: dict[str, dict] = {
         "cost_pressure_2x": True,
         "direction_tier_audit": True,
     },
+    # t24 (2026-09-07): the F1 batch retest — the same conventions as the
+    # v2 profile on the 81-feature vocabulary (the user-approved p23 v3
+    # four appended).  The F1 frames ride the family-⑤ as-of builder, so
+    # the measurement conventions (h set, min_stocks, IS/OOS 2022 split,
+    # |w_b| corrected baseline, cost model, five folds) are inherited
+    # unchanged (p23 §7).
+    "f1": {
+        "out_dirname": "factor_inventory_audit_f1_20260907",
+        "expected_features": 81,
+        "audit_generation": (
+            "f1 (t24 post-F1 batch retest on the ashare_v2 Tushare/PIT "
+            "dataset, 81 features)"
+        ),
+        "baseline_predecessor": (
+            "docs/factor_inventory_audit_v2_fix2_20260906/metrics.json "
+            "(t22, 77-feature corrected re-computation)"
+        ),
+        "manifest_note": (
+            "v2 dataset_id computed read-only via "
+            "manifest.build_v2_dataset_manifest (p17 §4.4); the legacy "
+            "database stays read-only"
+        ),
+        "check_v4_tail": False,
+        "check_v5_tail": False,
+        "check_f1_tail": True,
+        "include_factor_compute": True,
+        "manifest_source": "v2",
+        "price_basis": "adjusted",
+        "fold_ic_stats": True,
+        "cost_pressure_2x": True,
+        "direction_tier_audit": True,
+    },
 }
 
 
@@ -213,7 +245,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "audit generation profile: v1 = t2 62-feature baseline "
             "(2026-08-31), v4 = t5 73-feature post-P9 audit (2026-09-01), "
             "v2 = t18 77-feature retest on the Tushare v2 PIT dataset "
-            "(2026-09-05)"
+            "(2026-09-05), f1 = t24 81-feature post-F1-batch retest "
+            "(2026-09-07)"
         ),
     )
     parser.add_argument(
@@ -476,6 +509,16 @@ def main(argv: list[str] | None = None) -> int:
 
         assert list(FEATURE_NAMES[-len(_FEATURE_NAMES_V5):]) == list(
             _FEATURE_NAMES_V5
+        )
+        assert set(DEPRECATED_FEATURE_NAMES) <= set(FEATURE_NAMES)
+    if profile.get("check_f1_tail"):
+        # p23 v3 vocabulary tail: the four user-approved F1 quality
+        # factors (81 = 77 + 4); deprecated members still computed and
+        # measurable.  Local import mirrors the v4/v5 blocks above.
+        from ashare_model.vocab import DEPRECATED_FEATURE_NAMES, _FEATURE_NAMES_V8
+
+        assert list(FEATURE_NAMES[-len(_FEATURE_NAMES_V8):]) == list(
+            _FEATURE_NAMES_V8
         )
         assert set(DEPRECATED_FEATURE_NAMES) <= set(FEATURE_NAMES)
     assert mask.shape == (s_n, t_n)
