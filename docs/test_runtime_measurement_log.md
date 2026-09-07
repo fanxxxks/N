@@ -770,9 +770,9 @@ engineering run type；不构成任何研究/收益结论。
 - baseline 刷新：docs/fairness_probe_baseline.json（fingerprint 2217cb8d4902、code_commit 31d079d、recorded_at 2026-09-07T06:38+08:00）。
 - 验证：tests/test_research_doctor.py + tests/test_searcher_bench.py 聚焦绿（tier-A 可采样 41→40 = TURNOVER_MA20 退出）。
 
-## IP-03 decision-6 fairness re-probe record (2026-09-07, p23 v4 F1 append)
+## IP-03 decision-6 fairness re-probe record (2026-09-07, p23 v5 F1 set)
 
-- 触发：p23 v4（用户批准 + captain 代行裁定，F1 批次）四特征入词表使 GRAMMAR 7→8、可采样特征 64→68（81−13 deprecated）——词表布局合法演进，fairness probe 冻结常量按设计转红。
-- 重测（新布局 grammar-8，fingerprint 52f0988fd76b）：五个 probe 全绿（frozen_vocab_layout 81/13/68、family-⑤ ids 74-77 不变、action_mask 双探针无 deprecated 泄漏、GP pset terminals 一致）。
-- baseline 刷新：docs/fairness_probe_baseline.json（fingerprint 52f0988fd76b、recorded_at 2026-09-07）。
+- 触发：p23 v5（用户批准集经 captain 纠正确认）四特征入词表使 GRAMMAR 8→9、可采样特征 64→68（81−13 deprecated）——词表布局合法演进，fairness probe 冻结常量按设计转红。
+- 重测（新布局 grammar-9，fingerprint ce13e7a67fb9）：五个 probe 全绿（frozen_vocab_layout 81/13/68、family-⑤ ids 74-77 不变、action_mask 双探针无 deprecated 泄漏、GP pset terminals 一致）。
+- baseline 刷新：docs/fairness_probe_baseline.json（fingerprint ce13e7a67fb9、recorded_at 2026-09-07）。
 - 验证：tests/test_research_doctor.py 聚焦绿；tier-A 可采样维持 40（F1 四因子 Tier B 不入 Tier A）。

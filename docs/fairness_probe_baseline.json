@@ -1,6 +1,6 @@
 {
  "baseline_version": 1,
- "vocab_fingerprint": "52f0988fd76b",
+ "vocab_fingerprint": "ce13e7a67fb9",
  "code_commit": "31d079d",
  "probe_names": [
   "frozen_vocab_layout",
@@ -10,8 +10,8 @@
   "gp_pset_full_vocab_terminal_count"
  ],
  "all_ok": true,
- "recorded_at": "2026-09-07T15:27:40+08:00",
- "evidence": "docs/test_runtime_measurement_log.md - IP-03 decision-6 re-probe record (p23 v4 F1 append, grammar 7->8)",
+ "recorded_at": "2026-09-07T17:22:52+08:00",
+ "evidence": "docs/test_runtime_measurement_log.md - IP-03 decision-6 re-probe record (p23 v5 F1 name swap, grammar 8->9)",
  "authority": "campaign_closure_decisions_20260902.md decision 6 (t59); AlphaGPT-improvement-plan-20260903.md IP-03",
  "note": "ashare_model.research_doctor.gather_fairness_probes compares only vocab_fingerprint (FORMULA_VOCAB.feature_version) for staleness; code_commit is provenance. A fingerprint mismatch triggers the decision-6 re-probe flow (fail-closed)."
 }

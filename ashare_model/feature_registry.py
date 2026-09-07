@@ -80,7 +80,10 @@ from .vocab import FEATURE_NAMES
 # the redundancy pre-check rejection stands (the direction confirmation
 # does not cure the increment deficiency); the direction returns to the
 # authored +1 preserved as falsified evidence.
-FEATURE_REGISTRY_VERSION = 13
+# v14 (p23 v5, the user-approved set confirmed by the captain's
+# correction): the F1 candidate names swap to the user-approved four
+# (the count stays 81; a name-swap content change).
+FEATURE_REGISTRY_VERSION = 14
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

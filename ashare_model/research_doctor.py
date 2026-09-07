@@ -555,8 +555,8 @@ _PROBE_FAMILY5_NAMES = (
 
 #: The frozen grammar-7 layout the t69 re-probe records against
 #: (feature ids 74-77 contiguous append; 77 features, 13 deprecated,
-#: 64 samplable; vocabulary fingerprint 52f0988fd76b — the p23 v4
-#: user-approved F1 append, grammar 7->8; token ids 1-77 unchanged).
+#: 64 samplable; vocabulary fingerprint ce13e7a67fb9 — the p23 v5
+#: user-approved F1 name swap, grammar 8->9; token ids 1-77 unchanged).
 _PROBE_FROZEN = {
     "family5_ids": (74, 75, 76, 77),
     "feature_count": 81,
