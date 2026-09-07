@@ -107,3 +107,16 @@
 - **裁决**：p22 注记（INDUSTRY_MOMENTUM 方向重预注册 +1 → −1）经 captain 批准执行（docs/p22_industry_momentum_direction_repreregistration_draft.md；落点 = 独立注记；§5 相关性核对照表认可）。t24 路由的冗余预检驳回被本批准取代——−1 重假设的有效性改由**定向测量裁决**。
 - **实施**：feature_metadata expected_direction +1 → −1 + hypothesis 重述（行业层反转）+ promotion_allowed=False 维持（待定向裁决）；FEATURE_REGISTRY 10→11（元数据翻转）；registry doc 再生；RED 先行（test_p22_industry_momentum_direction_flipped_to_minus_one 冻结代码失败：== +1）。改名回摆（INDUSTRY_MOMENTUM 注记保留 p22、F1 → p23_f1）随本 commit。
 - **定向测量裁决（基于既有修复后数据）**：修复后两轮实测 raw IC 全 horizon 为负（h1 −0.0063 / h10 −0.0096 / h20 −0.0176）——authored +1 下负 IC 即 −1 对齐下正 IC → **−1 方向被既有数据证实**（修正基线 ΔIC −0.0167 为对 +1 的证伪值，对 −1 即 +0.0167 增量方向一致）。下次全量重测在 −1 方向下复验。promotion_allowed 维持 False 直至 −1 裁决经全量重测确认。
+
+## 11. t70 定向测量裁决（MARGIN_BALANCE_CHG 方向 −1；追加节，2026-09-07）
+
+- **t70 任务门**：用既有 harness 同口径测量对 MARGIN_BALANCE_CHG（−1）按预注册判据裁决（PIT/覆盖/ΔIC/成本后空间）——通过则方向重注册生效并进候选池，证伪则回退并 promotion_allowed=False。
+- **裁决 = PASS（方向重注册生效，特征进候选池）**。证据（附录 B 修正重算 fix2，dataset 157e0cf5，全宇宙横截面 0.995）：
+  - PIT：Tier B，v2 margin_detail_pit T+1（p17 §6.1，t22 修复后单一路径）✓；
+  - 覆盖率：0.875 ✓；
+  - ΔIC_OOS（|w_b| 修正基线）：**+0.0407 ≥ +0.005** ✓；
+  - −1 对齐残差：+0.0308（同向）✓；年度方向稳定 vs −1 = **1.00**（13/13，vs +1 为 0.00 的镜像）✓；
+  - |ρ|max：MARGIN_CROWD_60 +0.794 < 0.9 ✓（同源不同变换，无 Part A 触发）；
+  - **成本后空间 caveat（如实记录）**：tau_h10 = 0.52 为全库最高、成本拖累 9.3%/yr（1x）/ 18.5%/yr（2x）@h10——显著高于 family-⑤ 先例（≈1-2%/yr）；候选池准入按预注册族门通过，成本后净空间的晋级时点评估留待 promotion 门（G6 系）。
+- **promotion_allowed 状态**：True 维持（t22 裁决未阻断——负结果留档 ≠ promotion 剥夺；t70 门通过后候选池身份确认，无 registry bump 需要）。
+- 方向 −1 已生效（6e11b76 元数据翻转）；下次全量重测在 −1 方向下复验（逐年表、ΔIC 全套）。
