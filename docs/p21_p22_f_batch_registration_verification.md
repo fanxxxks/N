@@ -75,7 +75,7 @@
         判据独立**（|ρ| 管共线性；ΔIC 增量管"是否在既有族之上增加预测
         价值"）——**ΔIC 增量为重假设预注册的约束性判据**（|ρ| 低但 ΔIC
         低于族内成员的因子依然冗余）。
-        (ii) **处置 = (b) 回退（factor-engineer 执行中）**：expected_
+        (ii) **处置 = (b) 回退（factor-engineer 已执行完毕 @ 969a126）**：expected_
         direction 回 **+1**（authored 证伪证据语义）、REGISTRY 11→10、
         元数据注释保留双重发现（"+1 已两轮证伪；−1 反转实证观察到但因
         冗余 REJECTED 未采纳"）、p23/REJECTED 记录不变。
