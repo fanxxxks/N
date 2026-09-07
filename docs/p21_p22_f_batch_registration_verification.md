@@ -1,5 +1,14 @@
 # P21/P22 F 批次登记核验记录（governance——批准链、版本基线、sequencing）
 
+- **【终态权威声明（2026-09-07 captain 确认后 governance 定稿）】**：本
+  记录各历史层的编号与状态陈述**以下条为准**——**F1 = p23**
+  （docs/p23_f1_slow_fundamental_quality_draft.md，用户「批准」亲批、
+  实施 = `eab1061`）；**INDUSTRY_MOMENTUM = p22**（方向重预注册提案
+  REJECTED——`12a7ed7` 的 −1 翻转系基于 captain 阶段二误批准（未核
+  在案 REJECTED 冗余裁决），已被 `6644e662` (b) 回退裁定取代：
+  expected_direction 回 +1、REGISTRY 11→10、−1 观察留档；驳回人/理由/
+  证据链见下文勘误节）。各历史层陈述保留作裁决史。
+
 - **编号纠正（2026-09-07 captain）**：本记录第 1 节核验的 F1 四候选草案
   正式编号为 **p23**（原起草号 p21 已被 R1 线预注册契约
   `p21_r1_domain_return_research_preregistration.md` 占用，且已批准）；
@@ -46,8 +55,8 @@
        governance 升级有效、captain 自行更正（"评审抓住了仲裁语言的
        含混"）；修复任务已派 factor-engineer。三段式证伪历史与本驳回
        记录不受回退影响（回退 = 驳回处置的落实，非状态再反转）。
-  4. F1（p22）的用户批准（上一条「批准」）不受影响，实施按 sequencing
-     推进；REGISTRY 序号以实施时点真实常量重算。
+  4. F1（p23，编号终态见顶部权威声明）的用户批准（上一条「批准」）不受
+     影响，实施按 sequencing 推进；REGISTRY 序号以实施时点真实常量重算。
 - **p23 用户批准记录（2026-09-07，governance 入册）**：**用户批准原文
   （逐字）**：「批准」（2026-09-07，经 captain 会话转达）——p23 四候选
   （新特征入词表批次）经**用户亲批**，为 p18 §3.2 保留项的正确执行
