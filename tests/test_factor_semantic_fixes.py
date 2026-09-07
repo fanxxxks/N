@@ -322,20 +322,32 @@ def test_turnover_ma20_deprecated_per_part_a_ruling():
 
 
 def test_industry_momentum_negative_result_promotion_blocked():
-    """Captain ruling (t24 routing): INDUSTRY_MOMENTUM's authored +1 is a
-    NEGATIVE RESULT — falsified on the repaired dataset (coverage 0.838,
-    IC negative at every horizon, corrected-baseline dIC -0.0167, annual
-    direction stability 4/13) — and the -1 reversal re-hypothesis FAILS
-    the redundancy pre-check (its dIC is below every IND_REL_* family
-    member's increment).  The feature keeps computing and stays in the
-    vocabulary but loses promotion eligibility; the authored +1 direction
-    is preserved as the negative-result evidence."""
-
+    """Superseded by test_p22_industry_momentum_direction_flipped_to_minus_one
+    (the t24-routing negative result was subsequently re-registered to -1
+    per the p22 approved execution) — retained as the historical record of
+    the t24-routing stage.  The durable invariants (promotion block and
+    the preserved falsification history) live in the p22 test."""
     from ashare_model.feature_metadata import FEATURE_METADATA
 
     meta = FEATURE_METADATA["INDUSTRY_MOMENTUM"]
     assert meta.promotion_allowed is False
-    # The authored +1 direction is retained as the falsified evidence —
-    # a future family-structure change may re-open the question with a
-    # NEW pre-registration, never a silent flip.
-    assert meta.expected_direction == 1
+
+
+def test_p22_industry_momentum_direction_flipped_to_minus_one():
+    """p22 approved execution (captain, delegated): the INDUSTRY_MOMENTUM
+    direction re-preregisters +1 -> -1 — the repaired-data rounds measured
+    IC negative at every horizon under the authored +1 (h1 -0.0063 / h10
+    -0.0096 / h20 -0.0176, corrected-baseline dIC -0.0167), so the
+    industry-level reversal hypothesis (-1) is the pre-registered
+    direction; its validity is adjudicated by the targeted measurement
+    (the existing post-fix data already shows the -1-aligned IC is
+    positive at every horizon).  Metadata-only flip: formula, source and
+    PIT visibility unchanged."""
+
+    from ashare_model.feature_metadata import FEATURE_METADATA
+
+    meta = FEATURE_METADATA["INDUSTRY_MOMENTUM"]
+    assert meta.expected_direction == -1
+    # The negative-result promotion block from the t24 routing stands
+    # pending the targeted measurement adjudication of the -1 hypothesis.
+    assert meta.promotion_allowed is False

@@ -402,19 +402,22 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
     ),
     "INDUSTRY_MOMENTUM": AuthoredFeatureMeta(
         availability_rule=_SNAPSHOT_EXT,
-        hypothesis="Industry momentum spillover: hot industry groups keep rotating slowly.",
-        expected_direction=1,
+        # p22 approved execution (captain, delegated): the direction
+        # re-preregisters +1 -> -1.  History: the authored +1 (spillover)
+        # was falsified on the repaired dataset across two post-fix rounds
+        # (IC negative at every horizon, corrected-baseline dIC -0.0167,
+        # annual direction stability 4/13); the -1 reversal re-hypothesis
+        # (industry-level reversal) is pre-registered here per the
+        # captain's approval, its validity to be adjudicated by the
+        # targeted measurement (the post-fix data already shows the -1-
+        # aligned IC is positive at every horizon).  The negative-result
+        # promotion block from the t24 routing stands pending that
+        # adjudication (the redundancy caveat vs IND_REL_* remains on
+        # record).
+        hypothesis="Industry-level reversal: overheated industry groups underperform their recent 20-session trend.",
+        expected_direction=-1,
         semantic_type=SemanticType.CROSS_SECTIONAL_SIGNAL,
         compute_cost=ComputeCost.LOW,
-        # t24 routing (captain ruling): the authored +1 is a NEGATIVE
-        # RESULT — falsified on the repaired dataset across two post-fix
-        # rounds (IC negative at every horizon, corrected-baseline dIC
-        # -0.0167, annual direction stability 4/13), and the -1 reversal
-        # re-hypothesis fails the redundancy pre-check (below every
-        # IND_REL_* family member's increment).  The feature keeps
-        # computing and stays in the vocabulary; promotion eligibility is
-        # withdrawn with the authored direction preserved as evidence
-        # (p22 draft record).
         promotion_allowed=False,
         depends_on=("industry_membership_pit", "close"),
     ),

@@ -1,4 +1,4 @@
-# P22 草案 v2：F1 批次预注册——慢基本面资产收益率与杠杆趋势四因子
+# P23 草案 v2：F1 批次预注册——慢基本面资产收益率与杠杆趋势四因子
 
 - 状态：**DRAFT v2 — 待 governance-auditor 核对编号与登记 + 用户批准后实施**（v1 草案的四个自提候选被 t24 任务书的预注册候选集取代；起草：factor-engineer，2026-09-07）。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
 - 证据基线：t22 修复后重算 `docs/factor_inventory_audit_v2_fix2_20260906/metrics.json`（dataset `157e0cf5…`，FACTOR_COMPUTE 4 / FEATURE_REGISTRY 9 / GRAMMAR 7；全宇宙有效横截面 0.995）。勘察基线 commit：codex/factor-semantic-fixes @ `6e11b76`。

@@ -149,7 +149,7 @@ def test_registry_version_is_pinned():
     # change path).  v5 (P9 §7 adjudication, measurement log
     # 2026-09-01).  v6 (P13 §5.3/§6.1): family ⑤ unlocks — whitelist
     # §10.1 case 2, pre-registered in docs/p13_fundamental_fields_contract.md.
-    assert FEATURE_REGISTRY_VERSION == 10  # t24 routing: INDUSTRY_MOMENTUM negative result (promotion_allowed=False); prior: 9 = t70 direction re-registration
+    assert FEATURE_REGISTRY_VERSION == 11  # p22 approved execution: INDUSTRY_MOMENTUM direction +1 -> -1; prior: 10 = t24 routing negative result
 
 
 def test_registry_records_data_tiers(tensor, mask):
@@ -212,7 +212,7 @@ def test_p9_registry_version_deprecations_and_pending_data():
     LIMIT_STREAK conditional deprecation triggered, two second-pass
     consolidations).  v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤
     unlocks; the pending set empties."""
-    assert FEATURE_REGISTRY_VERSION == 10  # t24 routing: INDUSTRY_MOMENTUM negative result (promotion_allowed=False); prior: 9 = t70 direction re-registration
+    assert FEATURE_REGISTRY_VERSION == 11  # p22 approved execution: INDUSTRY_MOMENTUM direction +1 -> -1; prior: 10 = t24 routing negative result
     p9_deprecated = (
         "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
         "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",

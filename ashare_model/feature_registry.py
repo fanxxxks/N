@@ -69,7 +69,12 @@ from .vocab import FEATURE_NAMES
 # v10 (t24 routing, captain ruling): INDUSTRY_MOMENTUM's authored +1 is a
 # negative result — promotion eligibility withdrawn (the feature keeps
 # computing; the authored direction is preserved as falsified evidence).
-FEATURE_REGISTRY_VERSION = 10
+# v11 (p22 approved execution, captain delegated): the INDUSTRY_MOMENTUM
+# direction re-preregisters +1 -> -1 (metadata-only — the formula, source
+# and PIT visibility are unchanged; FACTOR_COMPUTE untouched).  The
+# negative-result promotion block stands pending the targeted measurement
+# adjudication of the -1 hypothesis.
+FEATURE_REGISTRY_VERSION = 11
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

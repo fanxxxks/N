@@ -101,3 +101,9 @@
 - **版本号披露**：governance 指令原文 7→8/8→9 以 F1 先行为前提；实际执行时点 F1 尚未批准，按当时现值 6→7/7→8 落地并在 p9 勘误执行记录中披露，F1 批准时顺延。
 - **全量验证**：本轮聚焦集 220 passed/2 skipped（platform skips）；全量串行（.venv）在本节 commit 后执行并记录于完成报告。
 - 证据：p9_erratum_draft_t22.md（EXECUTED 状态 + 四轮表 + 裁决记录）、logs/t22_full_suite*.out。
+
+## 10. p22 方向翻转执行（追加节，2026-09-07）
+
+- **裁决**：p22 注记（INDUSTRY_MOMENTUM 方向重预注册 +1 → −1）经 captain 批准执行（docs/p22_industry_momentum_direction_repreregistration_draft.md；落点 = 独立注记；§5 相关性核对照表认可）。t24 路由的冗余预检驳回被本批准取代——−1 重假设的有效性改由**定向测量裁决**。
+- **实施**：feature_metadata expected_direction +1 → −1 + hypothesis 重述（行业层反转）+ promotion_allowed=False 维持（待定向裁决）；FEATURE_REGISTRY 10→11（元数据翻转）；registry doc 再生；RED 先行（test_p22_industry_momentum_direction_flipped_to_minus_one 冻结代码失败：== +1）。改名回摆（INDUSTRY_MOMENTUM 注记保留 p22、F1 → p23_f1）随本 commit。
+- **定向测量裁决（基于既有修复后数据）**：修复后两轮实测 raw IC 全 horizon 为负（h1 −0.0063 / h10 −0.0096 / h20 −0.0176）——authored +1 下负 IC 即 −1 对齐下正 IC → **−1 方向被既有数据证实**（修正基线 ΔIC −0.0167 为对 +1 的证伪值，对 −1 即 +0.0167 增量方向一致）。下次全量重测在 −1 方向下复验。promotion_allowed 维持 False 直至 −1 裁决经全量重测确认。
