@@ -76,7 +76,11 @@ from .vocab import FEATURE_NAMES
 # adjudication of the -1 hypothesis.
 # v12 (p23 v4, user-approved F1 batch): the four slow-fundamental quality
 # factors join the vocabulary and registry (metadata + depends_on).
-FEATURE_REGISTRY_VERSION = 12
+# v13 (captain final arbitration): the INDUSTRY_MOMENTUM -1 flip REVERTED —
+# the redundancy pre-check rejection stands (the direction confirmation
+# does not cure the increment deficiency); the direction returns to the
+# authored +1 preserved as falsified evidence.
+FEATURE_REGISTRY_VERSION = 13
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

@@ -402,20 +402,22 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
     ),
     "INDUSTRY_MOMENTUM": AuthoredFeatureMeta(
         availability_rule=_SNAPSHOT_EXT,
-        # p22 approved execution (captain, delegated): the direction
-        # re-preregisters +1 -> -1.  History: the authored +1 (spillover)
-        # was falsified on the repaired dataset across two post-fix rounds
-        # (IC negative at every horizon, corrected-baseline dIC -0.0167,
-        # annual direction stability 4/13); the -1 reversal re-hypothesis
-        # (industry-level reversal) is pre-registered here per the
-        # captain's approval, its validity to be adjudicated by the
-        # targeted measurement (the post-fix data already shows the -1-
-        # aligned IC is positive at every horizon).  The negative-result
-        # promotion block from the t24 routing stands pending that
-        # adjudication (the redundancy caveat vs IND_REL_* remains on
-        # record).
-        hypothesis="Industry-level reversal: overheated industry groups underperform their recent 20-session trend.",
-        expected_direction=-1,
+        # Dual-finding record (captain final arbitration 2026-09-07):
+        # (1) the authored +1 (spillover) is FALSIFIED on the repaired
+        # dataset across two post-fix rounds (IC negative at every
+        # horizon, corrected-baseline dIC -0.0167, annual direction
+        # stability 4/13); (2) the -1 reversal (industry-level reversal)
+        # was empirically OBSERVED (the -1-aligned IC positive at every
+        # horizon) but its re-hypothesis was REJECTED on the redundancy
+        # pre-check (the corrected dIC -0.0167 sits below every IND_REL_*
+        # family member's increment +0.0079..+0.0283) — a direction
+        # confirmation does not cure the increment deficiency, so the
+        # -1 re-hypothesis was NOT adopted.  The direction field keeps the
+        # authored original value (the pre-registered-hypothesis history
+        # semantics); promotion eligibility stays withdrawn; a future
+        # family-structure change may re-open via a NEW pre-registration.
+        hypothesis="Industry momentum spillover: hot industry groups keep rotating slowly.",
+        expected_direction=1,
         semantic_type=SemanticType.CROSS_SECTIONAL_SIGNAL,
         compute_cost=ComputeCost.LOW,
         promotion_allowed=False,
