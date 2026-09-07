@@ -36,5 +36,5 @@
 | [p16_data_freshness_gate_contract.md](p16_data_freshness_gate_contract.md) | P16 数据新鲜度门禁（G8）+ 交易日历回退 fail-closed 预注册契约（IP-05a） |
 | [p19_market_price_semantics_contract.md](p19_market_price_semantics_contract.md) | P19（暂定编号）市场价格语义切换预注册契约（D4：raw 成交 / 复权因子序列） |
 | [p20_margin_balance_direction_repreregistration_draft.md](p20_margin_balance_direction_repreregistration_draft.md) | P20 MARGIN_BALANCE_CHG 方向重预注册（authored +1 四轮证伪 → −1；t70 已实施，原草案文件名保留） |
-| [p22_industry_momentum_direction_repreregistration_draft.md](p22_industry_momentum_direction_repreregistration_draft.md) | P22 INDUSTRY_MOMENTUM 方向重预注册（authored +1 修复后证伪 → −1；t24 路由负结果翻转 + p22 批准实施 @ 12a7ed7；IND_REL_* 冗余 caveat 在案） |
+| [p22_industry_momentum_direction_repreregistration_draft.md](p22_industry_momentum_direction_repreregistration_draft.md) | P22 INDUSTRY_MOMENTUM 方向重预注册（authored +1 修复后证伪；t24 路由负结果处置 + p22 注记 REJECTED 维持——12a7ed7 的 −1 翻转经 captain 终裁回退 969a126，方向证实 ≠ 冗余预检通过；IND_REL_* 冗余 caveat 在案） |
 | [p23_f1_slow_fundamental_quality_draft.md](p23_f1_slow_fundamental_quality_draft.md) | P23 F1 批次预注册（v4 = 路线图原指名四因子 CFO_TO_ASSETS/GROSS_PROFITABILITY/OPERATING_PROFITABILITY/LEVERAGE_CHANGE，用户「批准」+ captain 代行裁定） |
