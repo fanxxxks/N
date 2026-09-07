@@ -84,3 +84,36 @@ FACTOR_COMPUTE 计划值以 main 谱系为基线，与 factor-semantic-fixes 谱
 
 p21/p22 在批准与实施落地前均为 DRAFT 草案（不索引、不生效、不授权任何
 registry/词表变更）；本记录仅为治理侧核验与登记安排。
+
+## 7. v2 增补核验（t24 权威候选集，2026-09-07）——附批准范围确认点
+
+**核验对象**：`docs/p21_f1_slow_fundamental_quality_draft.md` v2
+（codex/factor-semantic-fixes @ `0b2d612`，2026-09-07 09:25:59 +0800）——
+F1 预注册按 **t24 任务书的权威候选集**重写（取代 v1 自提候选集）。
+
+**核验通过项**：
+1. 候选集与 t24 任务书**逐字一致**：CFO_TO_ASSETS / GROSS_PROFITABILITY /
+   OPERATING_PROFITABILITY / LEVERAGE_CHANGE，方向 +/+/+/−，全部
+   slow_fundamental / Tier B；
+2. 版本表以真实常量正确重算：GRAMMAR 7→8、FEATURE_REGISTRY 9→10、
+   RESEARCH_DOMAIN 3→4（该分支实测 GRAMMAR 7 / REGISTRY 9 / DOMAIN 3
+   ——Part A 与 p22 已落地；FACTOR_COMPUTE 4 不变、dataset 157e0cf5 不变）；
+3. **口径缺口明文预注册**：income_statement_pit 无 operate_profit 列 →
+   F1-3"营业利润"以 total_profit 为预注册代理，未来 p17 增列须勘误重算
+   （诚实处理，非静默替代）——p17 DDL 零改动；
+4. 零 schema 变更、零 DB 写入（dataset 157e0cf5 不变）；公式/守卫/
+   非重复性论证/族原子性/RED/族门（|w_b| 修正基线）齐备。
+
+**批准范围确认点（实施前置，governance 标记）**：用户「批准」原文
+（2026-09-07 经 captain 转达）的**转达时点早于 v2 重写 commit**
+（0b2d612，09:25:59 +0800）——若 captain 转达用户的内容为 t24 权威
+候选集（= v2），则批准覆盖 v2，实施可按 sequencing 启动；**若转达的
+是 v1 自提候选集（NET_MARGIN_TREND_4Q/LEVERAGE_TREND_4Q/CAPEX_INTENSITY/
+CFO_TO_DEBT），则 v2 候选集（其中 CFO_TO_ASSETS/GROSS_PROFITABILITY/
+OPERATING_PROFITABILITY 三项为 v1 之外的新候选）需按 t24 流程第 1 步
+补用户批准后方可实施**。请 captain 确认转达内容；governance 侧在确认前
+不视为已获批准。
+
+**编号与登记**：草案文件名/标题仍为 p21——登记前须按 captain 编号纠正
+改为 **p23**（文件名 + 标题 + 自引用，factor-engineer 在实施 commit
+落地），CONTRACTS.md 索引行同 commit 以 p23 登记。
