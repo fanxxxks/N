@@ -6,6 +6,22 @@
   第 2 节的 p22 = INDUSTRY_MOMENTUM 方向重预注册注记（编号不变，已获
   captain 代行批准生效，按 sequencing p20 → p9 Part A → p22 实施）。
   本记录保留因子线本地编号作核验史，登记与用户转达统一用 **p23**/p22。
+- **【编号二次纠正 + INDUSTRY_MOMENTUM 驳回（2026-09-07 factor-engineer
+  执行 @ `825c929`，编号冲突纠正）——取代上一条的编号安排】**：
+  1. **F1 四候选草案改号为 p22**：`docs/p22_f1_slow_fundamental_quality_draft.md`
+     （内容不变、标题重编号；`825c929`）——**F1 的登记与索引行使用 p22
+     文件名**（本记录此前"p23"的 F1 指称作废）；
+  2. **INDUSTRY_MOMENTUM 方向注记让位改号为 p23 且状态 = REJECTED**：
+     `docs/p23_industry_momentum_direction_repreregistration_draft.md`
+     （REJECTED 记录）——**方向重预注册提案被驳回，编号不参与后续
+     实施**；本记录此前"p22 = INDUSTRY_MOMENTUM 已获代行批准生效、
+     进入实施"的陈述**被本驳回取代**（该特征的方向问题维持 authored
+     +1 + 三段式证伪历史作为负结果证据留存，p23 文件完整保留）；
+  3. **待 captain 确认（记录完整性）**：驳回的裁决来源与理由（用户/
+     captain、触发点）——factor-engineer 的消息未引用驳回依据，本记录
+     在 captain 确认前将 REJECTED 状态标记为"待证据链补全"；
+  4. F1（p22）的用户批准（上一条「批准」）不受影响，实施按 sequencing
+     推进；REGISTRY 序号以实施时点真实常量重算。
 - **p23 用户批准记录（2026-09-07，governance 入册）**：**用户批准原文
   （逐字）**：「批准」（2026-09-07，经 captain 会话转达）——p23 四候选
   （新特征入词表批次）经**用户亲批**，为 p18 §3.2 保留项的正确执行
@@ -13,7 +29,9 @@
   批准路径裁定一致）。批准链：用户亲批 → captain 转达 → factor-engineer
   实施（sequencing：t70/p20 与 F1 按序推进；GRAMMAR/REGISTRY 序号以
   实施时点真实常量重算）。p23 文件头的批准行由实施 commit 按 p16
-  `2f5e18b` 先例补记（引用本核验记录 + 批准原文）。
+  `2f5e18b` 先例补记（引用本核验记录 + 批准原文）。**【编号二次纠正
+  后更正】本条的"p23 四候选"指称按新编号读作 p22 四候选（F1），批准
+  范围与效力不变。**
 
 - 性质：治理登记核验（evidence-only）。核验对象 = factor-engineer 的
   F 批次登记包（codex/factor-semantic-fixes）：
