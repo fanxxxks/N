@@ -191,3 +191,59 @@ export interface OverviewData {
   sim: SimState
   status: DataStatus
 }
+
+
+// --- RunStore-backed run view (E2/t26 re-dispatch) --------------------------
+
+export type LifecycleState =
+  | 'IDEA'
+  | 'SPEC_LOCKED'
+  | 'DATA_QUALIFIED'
+  | 'FACTOR_SET_QUALIFIED'
+  | 'SEARCH_PLAN_ADMITTED'
+  | 'OOS_QUALIFIED'
+  | 'PAPER_OBSERVING'
+  | 'PROMOTED'
+  | 'REJECTED'
+  | 'FAILED'
+  | 'RETIRED'
+
+export interface RunInventoryEntry {
+  spec_id: string
+  run_id: string
+  state: LifecycleState | null
+  artifact_count: number
+  dataset_id: string | null
+  error: string | null
+}
+
+export interface RunsIndex {
+  runs: RunInventoryEntry[]
+  runs_dir: string
+}
+
+export interface RunEvent {
+  seq: number
+  from_state: string | null
+  to_state: LifecycleState
+  completed: boolean
+  reason: string | null
+  ts: string
+}
+
+export interface RunArtifactRef {
+  artifact_id: string
+  artifact_type: string
+}
+
+export interface RunDetail {
+  spec_id: string
+  run_id: string
+  state: LifecycleState
+  dataset_id: string | null
+  research_domain: string | null
+  git_commit: string | null
+  artifacts: RunArtifactRef[]
+  events: RunEvent[]
+  trials: { total: number; by_status: Record<string, number> }
+}

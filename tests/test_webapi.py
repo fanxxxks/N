@@ -260,3 +260,85 @@ def test_mutating_endpoints_enforce_token(
     assert ok.json()["ok"] is True
     # Read endpoints stay unauthenticated.
     assert client.get("/api/health").status_code == 200
+
+
+# --- E2/t26 re-dispatch: RunStore-backed run inventory + detail ------------
+
+
+def _webapi_run(tmp_path: Path):
+    from tests.conftest import make_test_spec
+    from ashare_model import lifecycle
+    from ashare_model.run_store import RunStore
+
+    spec = make_test_spec(dataset_id='ds-webapi-0001')
+    store = RunStore(tmp_path)
+    handle = store.open_run(spec)
+    writer = lifecycle.LifecycleWriter(handle)
+    idea = {
+        'idea_record_schema_version': 1,
+        'hypothesis': 'webapi run view',
+        'scope': 'webapi contract tests',
+        'economic_mechanism': 'n/a',
+        'non_goals': 'no research claim',
+    }
+    writer.record_idea(idea)
+    return tmp_path, store, handle, writer, spec
+
+
+def test_list_runs_reads_runstore_directly(tmp_path, monkeypatch):
+    from webapi import service
+
+    root, store, handle, writer, spec = _webapi_run(tmp_path)
+    writer.lock_spec()
+    monkeypatch.setattr(service, 'ROOT', root)
+    result = service.list_runs()
+    assert result['runs_dir'] == str(root / 'runs')
+    assert len(result['runs']) == 1
+    entry = result['runs'][0]
+    assert entry['spec_id'] == spec.spec_id
+    assert entry['run_id'] == handle.run_id
+    assert entry['state'] == 'SPEC_LOCKED'
+    assert entry['dataset_id'] == 'ds-webapi-0001'
+    assert entry['error'] is None
+
+
+def test_list_runs_empty_store_is_empty_not_error(tmp_path):
+    from webapi import service
+
+    monkeypatch_needed = False
+    result = service.list_runs(tmp_path)
+    assert result['runs'] == []
+
+
+def test_run_detail_endpoint_state_events_and_404(tmp_path, monkeypatch):
+    from webapi import service
+    from webapi.app import app
+
+    root, store, handle, writer, spec = _webapi_run(tmp_path)
+    writer.lock_spec()
+    monkeypatch.setattr(service, 'ROOT', root)
+    client = TestClient(app)
+    response = client.get('/api/runs/' + spec.spec_id + '/' + handle.run_id)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['state'] == 'SPEC_LOCKED'
+    assert payload['dataset_id'] == 'ds-webapi-0001'
+    assert payload['events'][0]['to_state'] == 'IDEA'
+    assert payload['events'][1]['to_state'] == 'SPEC_LOCKED'
+    missing = client.get('/api/runs/nope/nope')
+    assert missing.status_code == 404
+
+
+def test_artifact_classification_delegates_to_authority(tmp_path):
+    from ashare_model.artifact_schemas import classify_schema_version
+    from webapi.service import _artifact_classification
+
+    payload = {'artifact_schema_version': 1, 'formula': [1], 'direction': 1}
+    path = tmp_path / 'strategy.json'
+    import json as _json
+    path.write_text(_json.dumps(payload), encoding='utf-8')
+    assert _artifact_classification(path) == classify_schema_version(payload)
+    # Non-JSON artifacts classify as binary (not silently healthy/unknown).
+    binary = tmp_path / 'model.pt'
+    binary.write_bytes(b'x')
+    assert _artifact_classification(binary) == 'binary'

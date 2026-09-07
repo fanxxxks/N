@@ -16,7 +16,6 @@ from ashare_data.config import (
     make_sim_config,
 )
 from ashare_data.db import AshareDB
-from ashare_trading.signals import request_stop
 
 from .data_service import (
     load_backtest_result,
@@ -135,9 +134,13 @@ def main() -> None:
         else:
             st.info("暂无模拟盘状态")
 
-        if st.button("写入紧急停止信号"):
-            request_stop(sim_config.stop_signal_path)
-            st.success("已写入 STOP_SIGNAL")
+        # E2/t26 re-dispatch: the Streamlit dashboard is AUDIT-ONLY (read-
+        # only).  The legacy emergency-stop write is retired from this
+        # surface — paper-account mutations belong to the authenticated
+        # webapi (/api/sim/stop) so the two control paths cannot drift.
+        # Retirement decision: audit-only over full retirement keeps the
+        # read views alive for audit; flag for captain confirmation.
+        st.warning("此看板为 audit-only（只读审计）：模拟盘控制请使用经过鉴权的 Web API（/api/sim/stop）。")
 
     with tab_data:
         st.header("数据状态")

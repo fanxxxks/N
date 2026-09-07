@@ -67,6 +67,32 @@ export default function DataStatusPage() {
                     </Space>
                   ),
                 },
+                {
+                  title: '产物分级',
+                  dataIndex: 'classification',
+                  render: (cls: string | undefined, row) => {
+                    if (!row.exists) return <Tag>missing</Tag>
+                    // Status visibility: legacy/unknown/binary must never
+                    // render as healthy (E2/t26 re-dispatch).
+                    const palette: Record<string, string> = {
+                      current: 'success',
+                      legacy: 'warning',
+                      unknown: 'error',
+                      binary: 'default',
+                    }
+                    const label: Record<string, string> = {
+                      current: 'current',
+                      legacy: 'legacy（只读）',
+                      unknown: 'unknown',
+                      binary: 'binary',
+                    }
+                    return (
+                      <Tag color={palette[cls ?? 'unknown'] ?? 'error'}>
+                        {label[cls ?? 'unknown'] ?? cls}
+                      </Tag>
+                    )
+                  },
+                },
                 { title: '大小', dataIndex: 'size', align: 'right', render: (s: number) => (s > 0 ? fmtSize(s) : '—') },
                 { title: '更新时间', dataIndex: 'mtime', align: 'right', render: (v: string) => v || '—' },
               ]}
