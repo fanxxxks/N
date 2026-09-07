@@ -149,7 +149,7 @@ def test_registry_version_is_pinned():
     # change path).  v5 (P9 §7 adjudication, measurement log
     # 2026-09-01).  v6 (P13 §5.3/§6.1): family ⑤ unlocks — whitelist
     # §10.1 case 2, pre-registered in docs/p13_fundamental_fields_contract.md.
-    assert FEATURE_REGISTRY_VERSION == 12  # p23 v3 (user-approved F1 batch): the four quality factors join; prior: 11 = p22 direction flip
+    assert FEATURE_REGISTRY_VERSION == 11  # p22 approved execution: INDUSTRY_MOMENTUM direction +1 -> -1; prior: 10 = t24 routing negative result
 
 
 def test_registry_records_data_tiers(tensor, mask):
@@ -212,7 +212,7 @@ def test_p9_registry_version_deprecations_and_pending_data():
     LIMIT_STREAK conditional deprecation triggered, two second-pass
     consolidations).  v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤
     unlocks; the pending set empties."""
-    assert FEATURE_REGISTRY_VERSION == 12  # p23 v3 (user-approved F1 batch): the four quality factors join; prior: 11 = p22 direction flip
+    assert FEATURE_REGISTRY_VERSION == 11  # p22 approved execution: INDUSTRY_MOMENTUM direction +1 -> -1; prior: 10 = t24 routing negative result
     p9_deprecated = (
         "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
         "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",
@@ -266,16 +266,10 @@ def test_p13_family5_unlock_appends_vocabulary_without_id_shift():
     family5 = [
         "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
     ]
-    f1 = [
-        "NET_MARGIN_TREND_4Q", "LEVERAGE_TREND_4Q", "CAPEX_INTENSITY",
-        "CFO_TO_DEBT",
-    ]
-    # Append-only growth: 73 -> 77 (p13) -> 81 (p23 F1), existing prefix
-    # byte-identical at every step.
-    assert len(FEATURE_NAMES) == 81
+    # Append-only growth: 73 -> 77, existing prefix byte-identical.
+    assert len(FEATURE_NAMES) == 77
     assert list(FEATURE_NAMES[:73]) == list(_PRE_P13_FEATURE_NAMES)
-    assert list(FEATURE_NAMES[73:77]) == family5
-    assert list(FEATURE_NAMES[77:]) == f1
+    assert list(FEATURE_NAMES[73:]) == family5
     # Sentinel id-parity (independently pinned from the pre-P13 registry):
     assert FEATURE_NAMES[0] == "RET_1"
     assert FEATURE_NAMES[16] == "PE_TTM"

@@ -49,12 +49,9 @@ from .vocab import FORMULA_VOCAB
 # (docs/p9_factor_family_contract.md §5, APPROVED 2026-09-01).
 # v3 (P13 §5.5): the four family-⑤ features join slow_fundamental
 # (docs/p13_fundamental_fields_contract.md, APPROVED 2026-09-02).
-# v4 (p23 v3, user-approved F1 batch): the four slow-fundamental quality
-# factors join slow_fundamental (docs/p23_f1_slow_fundamental_quality_
-# draft.md).
 # Home-address migration only (IP-12): the version stayed pinned here
 # while the data definitions moved to ``ashare_domain`` — no bump.
-RESEARCH_DOMAIN_VERSION = 4
+RESEARCH_DOMAIN_VERSION = 3
 
 __all__ = [
     "RESEARCH_DOMAIN_VERSION",

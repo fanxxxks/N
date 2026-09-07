@@ -286,13 +286,6 @@ def test_t70_margin_balance_chg_direction_reregistered_negative():
     assert meta.expected_direction == -1
     assert meta.availability_rule.startswith("v2 margin_detail_pit")
     assert meta.depends_on == ("margin_detail_pit",)
-    # The t70 targeted adjudication PASSED (fix2 corrected-baseline data:
-    # dIC_OOS +0.0407 >= +0.005; the -1-aligned residual +0.0308 positive;
-    # annual direction stability vs -1 = 1.00) -> the direction
-    # re-registration takes effect and the feature re-enters the candidate
-    # pool.  Cost caveat recorded: tau_h10 0.52 / drag 9.3%/yr (1x) is the
-    # book's highest — evaluated at promotion time.
-    assert meta.promotion_allowed is True
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +316,7 @@ def test_turnover_ma20_deprecated_per_part_a_ruling():
     assert "TURNOVER_MA20" in FORMULA_VOCAB.feature_names
     # The deprecation leaves the sampling space -> the grammar generation
     # bumps (the same discipline as every prior deprecated-set change).
-    assert GRAMMAR_VERSION == 8  # v8 (p23 v3, user-approved F1 batch)
+    assert GRAMMAR_VERSION == 7
     # Promotion eligibility lost (the registry mirrors the metadata).
     assert FEATURE_METADATA["TURNOVER_MA20"].promotion_allowed is False
 

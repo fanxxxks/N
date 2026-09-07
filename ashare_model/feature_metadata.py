@@ -421,41 +421,6 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         promotion_allowed=False,
         depends_on=("industry_membership_pit", "close"),
     ),
-    # F1 batch (p23 v3, user-approved): the four slow-fundamental quality
-    # factors (asset-yield ratios and the leverage trend) — all as-of
-    # computed from the v2 version tables via the family-5 single path.
-    "NET_MARGIN_TREND_4Q": AuthoredFeatureMeta(
-        availability_rule=_FUNDAMENTAL_TTM,
-        hypothesis="Net-margin trend: a 4-report-period improvement in TTM net margin (pricing power / cost control) sustains outperformance.",
-        expected_direction=1,
-        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
-        compute_cost=ComputeCost.LOW,
-        depends_on=("n_income_attr_p", "revenue"),
-    ),
-    "LEVERAGE_TREND_4Q": AuthoredFeatureMeta(
-        availability_rule=_FUNDAMENTAL_TTM,
-        hypothesis="Leverage trend: a 4-report-period rise in the debt ratio marks distress-driven underperformance.",
-        expected_direction=-1,
-        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
-        compute_cost=ComputeCost.LOW,
-        depends_on=("total_liab", "total_assets"),
-    ),
-    "CAPEX_INTENSITY": AuthoredFeatureMeta(
-        availability_rule=_FUNDAMENTAL_TTM,
-        hypothesis="Capex intensity: heavy investment cash outflow per unit of assets signals overinvestment and agency costs.",
-        expected_direction=-1,
-        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
-        compute_cost=ComputeCost.LOW,
-        depends_on=("n_cashflow_inv_act", "total_assets"),
-    ),
-    "CFO_TO_DEBT": AuthoredFeatureMeta(
-        availability_rule=_FUNDAMENTAL_TTM,
-        hypothesis="CFO/debt coverage: operating cash flow covering total liabilities marks balance-sheet quality and financial flexibility.",
-        expected_direction=1,
-        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
-        compute_cost=ComputeCost.LOW,
-        depends_on=("n_cashflow_act", "total_liab"),
-    ),
     # Intraday decomposition (return-like).
     "OVERNIGHT_RET": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=2),

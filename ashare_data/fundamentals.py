@@ -46,9 +46,6 @@ from .processor import is_valid_a_share_code
 # local daily-bar factor, not a PIT field).  The four family-⑤ features
 # (P13, docs/p13_fundamental_fields_contract.md §5.3) consume the cash-flow
 # statement and balance-sheet fields synced alongside the earnings table.
-# The four F1 features (p23 v3, user-approved) consume the same v2 as-of
-# statement pipeline (net-margin/leverage trends, capex intensity, CFO
-# coverage).
 FUNDAMENTAL_PIT_NAMES = (
     "PE_TTM",
     "PB",
@@ -65,10 +62,6 @@ FUNDAMENTAL_PIT_NAMES = (
     "ACCRUALS",
     "ASSET_GROWTH",
     "EARNINGS_ACCEL",
-    "NET_MARGIN_TREND_4Q",
-    "LEVERAGE_TREND_4Q",
-    "CAPEX_INTENSITY",
-    "CFO_TO_DEBT",
 )
 
 # Level fields that fill forward from their announcement date unchanged.
@@ -317,16 +310,6 @@ def _fetch_fundamental_rows(
 
 _FAMILY5_NAMES = ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL")
 
-# F1 batch (p23 v3, user-approved): the four slow-fundamental quality
-# factors computed from the same winner-resolved as-of timelines
-# (net-margin trend, leverage trend, capex intensity, CFO/debt).
-_F1_NAMES = (
-    "NET_MARGIN_TREND_4Q",
-    "LEVERAGE_TREND_4Q",
-    "CAPEX_INTENSITY",
-    "CFO_TO_DEBT",
-)
-
 
 def _piecewise_lookup(
     timeline: list[tuple[str, str, float]], session: str
@@ -397,7 +380,7 @@ def _family5_asof_frames(
 
     frames = {
         name: pd.DataFrame(np.nan, index=ts_codes, columns=dates)
-        for name in _FAMILY5_NAMES + _F1_NAMES
+        for name in _FAMILY5_NAMES
     }
     date_index = {date: position for position, date in enumerate(dates)}
 
@@ -449,11 +432,8 @@ def _family5_asof_frames(
             continue
 
         income_cum = _per_stock_intervals(income_stock, "n_income_attr_p").get(code, {})
-        revenue_cum = _per_stock_intervals(income_stock, "revenue").get(code, {})
         cashflow_cum = _per_stock_intervals(cashflow_stock, "n_cashflow_act").get(code, {})
-        inv_cum = _per_stock_intervals(cashflow_stock, "n_cashflow_inv_act").get(code, {})
         assets_level = _per_stock_intervals(balance_stock, "total_assets").get(code, {})
-        liab_level = _per_stock_intervals(balance_stock, "total_liab").get(code, {})
 
         def _cum_maps(end_date: str, cum: dict[str, list[tuple[str, str, float]]]):
             return [
@@ -475,52 +455,71 @@ def _family5_asof_frames(
         del _segment_session
         profit_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
         _cashflow_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
-        revenue_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
-        inv_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
 
-        def _flow_ttm_timeline_for(cum_map, cache):
-            """Shared cumulative-flow TTM timeline builder (the F1-batch
-            dedup: the profit/cashflow/revenue/invest timelines share one
-            combine — four single quarters from the trailing cumulative
-            window, the 0331 single-quarter special case included)."""
+        def _profit_ttm_timeline(end_date: str) -> list[tuple[str, str, float]]:
+            if end_date in profit_ttm_cache:
+                return profit_ttm_cache[end_date]
+            maps = _cum_maps(end_date, income_cum)
 
-            def timeline_for(end_date: str) -> list[tuple[str, str, float]]:
-                if end_date in cache:
-                    return cache[end_date]
-                maps = _cum_maps(end_date, cum_map)
-
-                def combine(values):
-                    # values: [cum(E-4), cum(E-3), cum(E-2), cum(E-1), cum(E)]
-                    cums = list(values)
-                    singles: list[float] = []
-                    for position in range(1, 5):
-                        current = cums[position]
-                        previous = cums[position - 1]
-                        quarter_end = _shift_report_date(end_date, 4 - position)
-                        if current is None or not np.isfinite(current):
-                            return None
-                        if quarter_end[4:] == "0331" or previous is None or not np.isfinite(
-                            previous
-                        ):
-                            if quarter_end[4:] != "0331":
-                                return None
-                            singles.append(float(current))
-                        else:
-                            singles.append(float(current) - float(previous))
-                    if len(singles) != 4:
+            def combine(values):
+                # values: [cum(E-4), cum(E-3), cum(E-2), cum(E-1), cum(E)]
+                cums = list(values)
+                singles: list[float] = []
+                for position in range(1, 5):
+                    current = cums[position]
+                    previous = cums[position - 1]
+                    quarter_end = _shift_report_date(end_date, 4 - position)
+                    if current is None or not np.isfinite(current):
                         return None
-                    return float(sum(singles))
+                    if quarter_end[4:] == "0331" or previous is None or not np.isfinite(
+                        previous
+                    ):
+                        if quarter_end[4:] != "0331":
+                            return None
+                        singles.append(float(current))
+                    else:
+                        singles.append(float(current) - float(previous))
+                if len(singles) != 4:
+                    return None
+                # The quarter identity comes from exact period arithmetic
+                # (_shift_report_date), so a missing quarter yields None
+                # above and the 265-285-day span check of the legacy path
+                # is satisfied by construction.
+                return float(sum(singles))
 
-                timeline = _merge_timelines(maps, combine)
-                cache[end_date] = timeline
-                return timeline
+            timeline = _merge_timelines(maps, combine)
+            profit_ttm_cache[end_date] = timeline
+            return timeline
 
-            return timeline_for
+        def _cashflow_ttm_timeline(end_date: str) -> list[tuple[str, str, float]]:
+            if end_date in _cashflow_ttm_cache:
+                return _cashflow_ttm_cache[end_date]
+            maps = _cum_maps(end_date, cashflow_cum)
 
-        _profit_ttm_timeline = _flow_ttm_timeline_for(income_cum, profit_ttm_cache)
-        _cashflow_ttm_timeline = _flow_ttm_timeline_for(cashflow_cum, _cashflow_ttm_cache)
-        _revenue_ttm_timeline = _flow_ttm_timeline_for(revenue_cum, revenue_ttm_cache)
-        _inv_ttm_timeline = _flow_ttm_timeline_for(inv_cum, inv_ttm_cache)
+            def combine(values):
+                cums = list(values)
+                singles: list[float] = []
+                for position in range(1, 5):
+                    current = cums[position]
+                    previous = cums[position - 1]
+                    quarter_end = _shift_report_date(end_date, 4 - position)
+                    if current is None or not np.isfinite(current):
+                        return None
+                    if quarter_end[4:] == "0331" or previous is None or not np.isfinite(
+                        previous
+                    ):
+                        if quarter_end[4:] != "0331":
+                            return None
+                        singles.append(float(current))
+                    else:
+                        singles.append(float(current) - float(previous))
+                if len(singles) != 4:
+                    return None
+                return float(sum(singles))
+
+            timeline = _merge_timelines(maps, combine)
+            _cashflow_ttm_cache[end_date] = timeline
+            return timeline
 
         def _piecewise_fill(frame: pd.DataFrame, timeline: list[tuple[str, str, float]]):
             date_ints = np.asarray([int(d) for d in dates])
@@ -625,77 +624,6 @@ def _family5_asof_frames(
                 ),
             )
             _piecewise_fill(frames["EARNINGS_ACCEL"], accel)
-
-            # F1 batch (p23 v3, user-approved): the four slow-fundamental
-            # quality factors — net-margin 4-report-period trend, leverage
-            # trend, capex intensity, CFO/debt coverage — composed from the
-            # same winner-resolved as-of timelines (p23 §2 formulas).
-            def _div_guarded(a_tl, b_tl):
-                return _merge_timelines(
-                    [a_tl, b_tl],
-                    combine=lambda values: (
-                        values[0] / values[1]
-                        if values[0] is not None
-                        and np.isfinite(values[0])
-                        and values[1] is not None
-                        and np.isfinite(values[1])
-                        and values[1] > 0
-                        else None
-                    ),
-                )
-
-            def _sub_guarded(a_tl, b_tl):
-                return _merge_timelines(
-                    [a_tl, b_tl],
-                    combine=lambda values: (
-                        values[0] - values[1]
-                        if values[0] is not None
-                        and np.isfinite(values[0])
-                        and values[1] is not None
-                        and np.isfinite(values[1])
-                        else None
-                    ),
-                )
-
-            prev_end_f1 = _shift_report_date(end_date, 4)
-
-            nm_now = _div_guarded(
-                _profit_ttm_timeline(end_date), _revenue_ttm_timeline(end_date)
-            )
-            nm_prev = _div_guarded(
-                _profit_ttm_timeline(prev_end_f1),
-                _revenue_ttm_timeline(prev_end_f1),
-            )
-            _piecewise_fill(
-                frames["NET_MARGIN_TREND_4Q"], _sub_guarded(nm_now, nm_prev)
-            )
-
-            liab_tl = liab_level.get(end_date, [])
-            liab_prev_tl = liab_level.get(prev_end_f1, [])
-            assets_tl = assets_level.get(end_date, [])
-            assets_prev_tl = assets_level.get(prev_end_f1, [])
-            lev_now = _div_guarded(liab_tl, assets_tl)
-            lev_prev = _div_guarded(liab_prev_tl, assets_prev_tl)
-            _piecewise_fill(
-                frames["LEVERAGE_TREND_4Q"], _sub_guarded(lev_now, lev_prev)
-            )
-
-            capex_tl = _merge_timelines(
-                [_inv_ttm_timeline(end_date), assets_tl],
-                combine=lambda values: (
-                    -values[0] / values[1]
-                    if values[0] is not None
-                    and np.isfinite(values[0])
-                    and values[1] is not None
-                    and np.isfinite(values[1])
-                    and values[1] > 0
-                    else None
-                ),
-            )
-            _piecewise_fill(frames["CAPEX_INTENSITY"], capex_tl)
-
-            cfo_debt_tl = _div_guarded(_cashflow_ttm_timeline(end_date), liab_tl)
-            _piecewise_fill(frames["CFO_TO_DEBT"], cfo_debt_tl)
 
     return frames
 

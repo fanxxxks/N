@@ -74,9 +74,7 @@ from .vocab import FEATURE_NAMES
 # and PIT visibility are unchanged; FACTOR_COMPUTE untouched).  The
 # negative-result promotion block stands pending the targeted measurement
 # adjudication of the -1 hypothesis.
-# v12 (p23 v3, user-approved F1 batch): the four slow-fundamental quality
-# factors join the vocabulary and registry (metadata + depends_on).
-FEATURE_REGISTRY_VERSION = 12
+FEATURE_REGISTRY_VERSION = 11
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

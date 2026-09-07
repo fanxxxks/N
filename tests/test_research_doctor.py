@@ -326,7 +326,7 @@ def test_cli_output_writes_report_file(tmp_path, capsys, cli_env):
 
 
 def _green_probe_section(
-    fingerprint: str = "93a1ad5c71f6", baseline: str = "match"
+    fingerprint: str = "2217cb8d4902", baseline: str = "match"
 ) -> dict:
     """All-green fairness_probes section for pure build_report tests."""
 
@@ -409,7 +409,7 @@ def test_fairness_probes_live_on_current_tree():
 
     This is the option-b pin working inside the option-a pre-check: the
     frozen layout constants in ``gather_fairness_probes`` (grammar-6
-    fingerprint 93a1ad5c71f6, family-⑤ ids 74-77, 68 = 81-13 samplable (p23 v3 F1 append))
+    fingerprint 2217cb8d4902, family-⑤ ids 74-77, 64 = 77-13 samplable (t22/p9 erratum t69 Part A))
     turn RED whenever the vocabulary layout legally evolves.  That is the
     designed fail-closed re-probe trigger, NOT a flaky test: after a legal
     vocabulary change, re-run the probes on the new layout, refresh
@@ -419,7 +419,7 @@ def test_fairness_probes_live_on_current_tree():
 
     root = Path(__file__).resolve().parents[1]
     section = doctor.gather_fairness_probes(root)
-    assert section["vocab_fingerprint"] == "93a1ad5c71f6"
+    assert section["vocab_fingerprint"] == "2217cb8d4902"
     assert section["all_ok"] is True, section["probes"]
     assert [p["name"] for p in section["probes"]] == [
         "frozen_vocab_layout",
