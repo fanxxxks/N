@@ -461,6 +461,28 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         compute_cost=ComputeCost.LOW,
         depends_on=("total_liab", "total_assets"),
     ),
+    # F2 batch (p24, user-approved): the two margin-crowding factors —
+    # the raw ratios computed in capital_flow (ashare_data) with the
+    # per-date cross-sectional z applied loader-side (the dependency-
+    # correct layer for the single xcs-z implementation).  The margin
+    # detail visibility = T+1 (p17 §6.1); circ_mv = the trade-date
+    # same-session convention (the D4-era daily-basic semantics).
+    "MARGIN_BALANCE_TO_CIRC_MV": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Margin balance to float cap: a high leveraged-position intensity relative to the free float marks crowding that unwinds.",
+        expected_direction=-1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("rzye", "circ_mv"),
+    ),
+    "MARGIN_BUY_PRESSURE_5": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Margin buy pressure: heavy 5-session margin buying per unit of float cap marks leveraged chasing that subsequently retraces (the -1 main hypothesis; the +1 chase-continuation alternative adjudicated by the measurement).",
+        expected_direction=-1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("rzmre", "circ_mv"),
+    ),
     # Intraday decomposition (return-like).
     "OVERNIGHT_RET": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=2),

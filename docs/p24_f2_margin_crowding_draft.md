@@ -1,6 +1,7 @@
 # P24 草案：F2 批次预注册——融资拥挤两因子（medium 域）
 
-- 状态：**DRAFT — 待 governance-auditor 核对编号与登记 + 用户批准后实施**（起草：factor-engineer，AgentTeams tushare-pit-migration，2026-09-07；t27 任务书候选集）。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
+- 状态：**APPROVED — 用户原文「批准」+ captain 代行签署（89dd121 授权扩展）**——本版 = t27 任务书两候选。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
+- **实施期澄清（circ_mv 可见性，2026-09-07）**：生产 `daily_basic_pit` 无 `available_date` 列（trade_date 键控）——circ_mv 的可见性 = **trade_date 同会话约定**（会话 t 的 daily_basic 值于 t 收盘时点已知，与 loader 既有 turnover_rate 路径同一约定，D4 评审通过的 PIT 语义），**非**本文初稿措辞的"同 T+1"。该澄清不改变公式结构（分母仍为 t 会话 circ_mv），仅明确其可见性来源；margin 明细维持 T+1（t−1 数据 t 日可用）——两源可见性节奏不同，组合在 t 会话收盘时点无未来泄漏。
 - 证据基线：F1 批次重测 `docs/factor_inventory_audit_f1_20260907/metrics.json`（dataset `157e0cf5…`，FACTOR_COMPUTE 4 / FEATURE_REGISTRY 14 / GRAMMAR 9 / RESEARCH_DOMAIN 4；词表 81）。勘察基线 commit：codex/factor-semantic-fixes @ `0cb6493`。
 - 本文使用 AGENTS.md 的"必须/禁止/应当"语义。任务路由：**研究语义变更**（AGENTS §3.2：新增特征）。
 

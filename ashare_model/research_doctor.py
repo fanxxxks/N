@@ -559,9 +559,9 @@ _PROBE_FAMILY5_NAMES = (
 #: user-approved F1 append, grammar 7->8; token ids 1-77 unchanged).
 _PROBE_FROZEN = {
     "family5_ids": (74, 75, 76, 77),
-    "feature_count": 81,
+    "feature_count": 83,
     "deprecated_count": 13,
-    "samplable_feature_count": 68,
+    "samplable_feature_count": 70,
 }
 
 

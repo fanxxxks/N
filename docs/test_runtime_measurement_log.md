@@ -776,3 +776,10 @@ engineering run type；不构成任何研究/收益结论。
 - 重测（新布局 grammar-8，fingerprint 52f0988fd76b）：五个 probe 全绿（frozen_vocab_layout 81/13/68、family-⑤ ids 74-77 不变、action_mask 双探针无 deprecated 泄漏、GP pset terminals 一致）。
 - baseline 刷新：docs/fairness_probe_baseline.json（fingerprint 52f0988fd76b、recorded_at 2026-09-07）。
 - 验证：tests/test_research_doctor.py 聚焦绿；tier-A 可采样维持 40（F1 四因子 Tier B 不入 Tier A）。
+
+## IP-03 decision-6 fairness re-probe record (2026-09-08, p24 F2 append)
+
+- 触发：p24（用户批准 F2 批次）两特征入词表使 GRAMMAR 9→10、可采样特征 68→70（83−13 deprecated）——词表布局合法演进，fairness probe 冻结常量按设计转红。
+- 重测（新布局 grammar-10，fingerprint f4476177f85f）：五个 probe 全绿（frozen_vocab_layout 83/13/70、family-⑤ ids 74-77 不变、action_mask 双探针无 deprecated 泄漏、GP pset terminals 一致）。
+- baseline 刷新：docs/fairness_probe_baseline.json（fingerprint f4476177f85f、recorded_at 2026-09-08）。
+- 验证：tests/test_research_doctor.py 聚焦绿；tier-A 可采样维持 40（F2 两因子 Tier B 不入 Tier A）。

@@ -224,3 +224,57 @@ def test_sync_capital_flow_offline_skips(tmp_path: Path):
         "industry_rows": 0,
         "capital_failures": 0,
     }
+
+
+def test_f2_frames_raw_ratios(tmp_path: Path):
+    """The two F2 frames carry the RAW ratios (the balance-to-float and
+    the 5-day buy pressure); the per-date xcs-z is applied loader-side
+    (p24 §2 — the dependency-correct split)."""
+
+    from tests.conftest import populate_v2_margin_table, _V2_PRICE_DDL
+
+    cfg = _data_config(tmp_path)
+    dates = _dates(8)
+    codes = ("000001.SZ", "600000.SH")
+    v2_path = cfg.duckdb_path.parent / "ashare_v2.duckdb"
+    margin_rows = []
+    for i, d in enumerate(dates[:-1]):
+        margin_rows.append({
+            "ts_code": "000001.SZ", "trade_date": d,
+            "available_date": dates[i + 1], "rzye": 100.0 + 10.0 * i,
+            "rzmre": 50.0 + 5.0 * i,
+        })
+        margin_rows.append({
+            "ts_code": "600000.SH", "trade_date": d,
+            "available_date": dates[i + 1], "rzye": 300.0,
+            "rzmre": 150.0,
+        })
+    populate_v2_margin_table(v2_path, margin_rows)
+    # The basic rows (the circ_mv denominators) written directly: the
+    # trade_date-keyed daily_basic_pit (the D4-era convention).
+    with AshareDB(v2_path) as db:
+        for ddl in _V2_PRICE_DDL.values():
+            if "daily_basic_pit" in ddl:
+                db.execute(ddl)
+        db.execute("DELETE FROM daily_basic_pit")
+        for code in codes:
+            for d in dates:
+                db.execute(
+                    "INSERT INTO daily_basic_pit (ts_code, trade_date, "
+                    "turnover_rate, circ_mv) VALUES (?, ?, ?, ?)",
+                    [code, d, 1.0, 1000.0],
+                )
+    frames = build_capital_frames(cfg, list(codes), dates)
+    for name in ("MARGIN_BALANCE_TO_CIRC_MV", "MARGIN_BUY_PRESSURE_5"):
+        assert name in frames, name
+        assert not frames[name].isna().all().all(), name
+    # The raw ratios at the last visible date (dates[-2]'s detail visible
+    # at dates[-1]): A: 160/1000 = 0.16; B: 300/1000 = 0.3.
+    assert frames["MARGIN_BALANCE_TO_CIRC_MV"].loc["000001.SZ", dates[-1]] == pytest.approx(0.16)
+    assert frames["MARGIN_BALANCE_TO_CIRC_MV"].loc["600000.SH", dates[-1]] == pytest.approx(0.3)
+    # The 5-session buy sum for A: the rzmre visible at the last five
+    # columns (the trade_dates dates[-6..-2], the values 50+5*i).
+    a5 = sum(50.0 + 5.0 * i for i in range(len(dates) - 6, len(dates) - 1))
+    assert frames["MARGIN_BUY_PRESSURE_5"].loc["000001.SZ", dates[-1]] == pytest.approx(a5 / 1000.0)
+    b5 = 150.0 * 5
+    assert frames["MARGIN_BUY_PRESSURE_5"].loc["600000.SH", dates[-1]] == pytest.approx(b5 / 1000.0)

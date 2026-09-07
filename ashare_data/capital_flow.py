@@ -38,7 +38,15 @@ from .gates import FRESHNESS_TOLERANCE_SESSIONS
 from .universe import OPEN_ENDED_OUT_DATE
 
 # Vocabulary feature names produced by this module.
-EXTERNAL_FACTOR_NAMES = ("MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM", "MARGIN_CROWD_60")
+EXTERNAL_FACTOR_NAMES = (
+    "MARGIN_BALANCE_CHG",
+    "INDUSTRY_MOMENTUM",
+    "MARGIN_CROWD_60",
+    # F2 batch (p24, user-approved): the margin-crowding cross-sectional
+    # intensity factors (the raw ratios; the xcs-z applied loader-side).
+    "MARGIN_BALANCE_TO_CIRC_MV",
+    "MARGIN_BUY_PRESSURE_5",
+)
 
 _MARGIN_WINDOW = 20
 _MARGIN_CROWD_WINDOW = 60
@@ -462,7 +470,7 @@ def build_capital_frames(
         v2_path = resolve_v2_duckdb_path(config)
         with AshareDB(v2_path, read_only=True) as v2db:
             margin = v2db.query(
-                "SELECT ts_code, available_date, rzye FROM margin_detail_pit "
+                "SELECT ts_code, available_date, rzye, rzmre FROM margin_detail_pit "
                 f"WHERE ts_code IN ({quoted}) AND available_date IS NOT NULL"
             )
     except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
@@ -471,6 +479,20 @@ def build_capital_frames(
         # family-⑤ as-of frames (logger.debug, not a warning).
         logger.debug(f"Margin frames unavailable: {exc}")
         margin = pd.DataFrame()
+    try:
+        # F2 denominators (p24 §2): the session-t float market cap from
+        # daily_basic_pit — trade_date-keyed (the D4-era daily-basic
+        # convention: the session-t basic values are known at the
+        # session-t close; no available_date column exists).
+        v2_path = resolve_v2_duckdb_path(config)
+        with AshareDB(v2_path, read_only=True) as v2db:
+            basics = v2db.query(
+                "SELECT ts_code, trade_date, circ_mv FROM daily_basic_pit "
+                f"WHERE ts_code IN ({quoted})"
+            )
+    except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
+        logger.debug(f" daily_basic circ_mv unavailable: {exc}")
+        basics = pd.DataFrame()
     try:
         with AshareDB(config.duckdb_path, read_only=True) as db:
             sw_index = db.query(
@@ -502,6 +524,39 @@ def build_capital_frames(
             change = wide / wide.shift(_MARGIN_WINDOW, axis=1) - 1.0
         frames["MARGIN_BALANCE_CHG"] = change.replace([np.inf, -np.inf], np.nan)
         frames["MARGIN_CROWD_60"] = _margin_crowd(wide, _MARGIN_CROWD_WINDOW)
+
+        # F2 batch (p24, user-approved): the margin-crowding cross-sectional
+        # intensity factors — the RAW ratios (the per-date cross-sectional
+        # z is applied loader-side in ashare_model, the dependency-correct
+        # layer for the single xcs-z implementation; p24 §2 formulas).
+        if not basics.empty:
+            circ_wide = (
+                basics.pivot_table(
+                    index="ts_code", columns="trade_date", values="circ_mv",
+                    aggfunc="last",
+                )
+                .reindex(index=ts_codes, columns=dates)
+            )
+            balance_ratio = (wide / circ_wide).replace(
+                [np.inf, -np.inf], np.nan
+            )
+            frames["MARGIN_BALANCE_TO_CIRC_MV"] = balance_ratio
+            buy_wide = (
+                margin.pivot_table(
+                    index="ts_code", columns="available_date", values="rzmre",
+                    aggfunc="last",
+                )
+                .reindex(index=ts_codes, columns=dates)
+            )
+            # The five most recent VISIBLE sessions at each column: the
+            # rolling 5-column sum over the available_date pivots (the T+1
+            # visibility makes column k carry the session-k detail).  The
+            # transpose pattern: the newer pandas rolling() has no axis.
+            buy_5 = buy_wide.T.rolling(5, min_periods=5).sum().T
+            pressure_ratio = (buy_5 / circ_wide).replace(
+                [np.inf, -np.inf], np.nan
+            )
+            frames["MARGIN_BUY_PRESSURE_5"] = pressure_ratio
 
     if not sw_index.empty and not industry_frame.empty:
         index_wide = sw_index.pivot_table(

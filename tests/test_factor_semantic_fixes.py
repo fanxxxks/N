@@ -318,7 +318,7 @@ def test_turnover_ma20_deprecated_per_part_a_ruling():
     # bumped (the same discipline as every prior deprecated-set change).
     # The p23 v4 F1 append subsequently bumped 7 -> 8 (the append keeps
     # ids 1-77 stable, so this test's assertions are unchanged).
-    assert GRAMMAR_VERSION == 8  # v8 (p23 v4 F1 batch) on top of v7 (this deprecation)
+    assert GRAMMAR_VERSION == 9  # v9 (p24, the user-approved F2 batch) on top of v7 (this deprecation) + the p23 v5 round-trip
     # Promotion eligibility lost (the registry mirrors the metadata).
     assert FEATURE_METADATA["TURNOVER_MA20"].promotion_allowed is False
 

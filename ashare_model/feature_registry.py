@@ -80,7 +80,9 @@ from .vocab import FEATURE_NAMES
 # the redundancy pre-check rejection stands (the direction confirmation
 # does not cure the increment deficiency); the direction returns to the
 # authored +1 preserved as falsified evidence.
-FEATURE_REGISTRY_VERSION = 13
+# v14 (p24, user-approved F2 batch): the two margin-crowding factors join
+# the vocabulary and registry (metadata + depends_on).
+FEATURE_REGISTRY_VERSION = 14
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

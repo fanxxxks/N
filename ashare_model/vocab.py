@@ -181,6 +181,15 @@ _FEATURE_NAMES_V8 = (
     "LEVERAGE_CHANGE",
 )
 
+# v10 (p24, user-approved F2 batch) appends the two margin-crowding
+# factors (the balance-to-float intensity and the 5-day buy pressure).
+# Names are appended so every pre-v10 token id is stable; the batch joins
+# and leaves adjudication as one atomic unit (p23 §7 precedent).
+_FEATURE_NAMES_V10 = (
+    "MARGIN_BALANCE_TO_CIRC_MV",
+    "MARGIN_BUY_PRESSURE_5",
+)
+
 FEATURE_NAMES = tuple(
     name
     for name in (
@@ -190,6 +199,7 @@ FEATURE_NAMES = tuple(
         + _FEATURE_NAMES_V4
         + _FEATURE_NAMES_V5
         + _FEATURE_NAMES_V8
+        + _FEATURE_NAMES_V10
     )
     if name not in FEATURE_ALIASES
 )
@@ -304,7 +314,7 @@ LEGACY_OPERATOR_NAMES = (
 # Bumping this constant changes
 # ``feature_version`` and therefore invalidates the token layout recorded
 # in older training artifacts (which resolve by name, so they still load).
-GRAMMAR_VERSION = 8
+GRAMMAR_VERSION = 9
 
 
 @dataclass(frozen=True)
@@ -484,10 +494,10 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     # deprecation removes a name from the SAMPLING space only — ids,
     # computations and by-name decoding are unchanged, so generation 7
     # decodes against the live vocabulary exactly like generation 6.
-    if src_grammar not in (2, 3, 4, 5, 6, 7, 8):
+    if src_grammar not in (2, 3, 4, 5, 6, 7, 8, 9):
         raise ValueError(
             f"unsupported grammar generation {src_grammar} for remap "
-            "decoding (known generations: 2, 3, 4, 5, 6, 7, 8)"
+            "decoding (known generations: 2, 3, 4, 5, 6, 7, 8, 9)"
         )
     src_has_eos = src_grammar >= 2
     src_features = payload.get("feature_names")

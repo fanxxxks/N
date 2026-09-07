@@ -161,6 +161,10 @@ _MEDIUM_FEATURES = (
     "CROWD_TURNOVER_60",
     "CROWD_AMOUNT_60",
     "MARGIN_CROWD_60",
+    # F2 batch (p24, user-approved): the margin-crowding intensity factors
+    # are medium-cross-section by construction (the daily margin feed).
+    "MARGIN_BALANCE_TO_CIRC_MV",
+    "MARGIN_BUY_PRESSURE_5",
 )
 
 _SLOW_FEATURES = (

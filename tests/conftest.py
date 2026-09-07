@@ -65,7 +65,8 @@ _V2_PRICE_DDL = {
         )""",
     "daily_basic_pit": """
         CREATE TABLE IF NOT EXISTS daily_basic_pit (
-            ts_code VARCHAR, trade_date VARCHAR, turnover_rate DOUBLE
+            ts_code VARCHAR, trade_date VARCHAR, turnover_rate DOUBLE,
+            circ_mv DOUBLE
         )""",
 }
 
@@ -121,11 +122,11 @@ def populate_v2_margin_table(v2_path: Path, rows: list[dict]) -> Path:
         for row in rows:
             db.execute(
                 "INSERT INTO margin_detail_pit "
-                "(ts_code, trade_date, rzye, available_date, ingest_id, source_row_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(ts_code, trade_date, rzye, rzmre, available_date, ingest_id, "
+                "source_row_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
                     row["ts_code"], row["trade_date"], row.get("rzye"),
-                    row["available_date"],
+                    row.get("rzmre"), row["available_date"],
                     row.get("ingest_id", "test_ingest"),
                     row.get("source_row_hash", f"test-{row['ts_code']}-{row['trade_date']}"),
                 ],
@@ -260,6 +261,7 @@ def populate_v2_price_tables(
     drop_adj_for: set[tuple[str, str]] | None = None,
     suspensions: list[dict] | None = None,
     turnover_rate: float | dict[tuple[str, str], float] = 1.0,
+    circ_mv: float | dict[tuple[str, str], float | None] | None = None,
 ) -> Path:
     """Populate the v2 price source (p19 §2 formal loader input) in tmp DuckDB.
 
@@ -346,8 +348,18 @@ def populate_v2_price_tables(
                 if isinstance(turnover_rate, dict)
                 else turnover_rate
             )
+            circ = (
+                circ_mv.get((code, date))
+                if isinstance(circ_mv, dict)
+                else circ_mv
+            )
             basic_rows.append(
-                {"ts_code": code, "trade_date": date, "turnover_rate": value}
+                {
+                    "ts_code": code,
+                    "trade_date": date,
+                    "turnover_rate": value,
+                    "circ_mv": circ,
+                }
             )
     with AshareDB(v2_path) as db:
         for ddl in _V2_PRICE_DDL.values():
