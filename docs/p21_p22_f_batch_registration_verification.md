@@ -171,6 +171,15 @@
      （78-81 = V2 四因子）、CONTRACTS p23 行 ✓。300cf70 的 V1 表集
      恢复被本终局裁定回退；F1 现行实施 = eab1061（V2 集）+ 3d2a9f1
      （草案 v6 定稿）+ 测量运行中。
+  7. **【F1 终态登记（2026-09-07 族门裁决落地——通过，候选池准入）】**：
+     factor-engineer 报告族门裁决**通过**（t22 日志 §14，`0cb6493`）——
+     **OPERATING_PROFITABILITY 双腿达标**（ΔIC +0.0075 ≥ +0.005 且残差
+     +0.0013 同向）→ 四特征进候选池 **promotion_allowed=True 维持**；
+     metrics = docs/factor_inventory_audit_f1_20260907/metrics.json
+     （81 名，eab1061-era V2 集 = 终局裁定集合）；逐因子备注 +
+     相关性（无 Part A 触发）+ 成本达标全记录；t24 已置 completed、
+     F2 解锁。p23 线治理记录至此终态闭环（用户批准链 + 实施链 +
+     族门通过全链在案）。
 
 - 性质：治理登记核验（evidence-only）。核验对象 = factor-engineer 的
   F 批次登记包（codex/factor-semantic-fixes）：
