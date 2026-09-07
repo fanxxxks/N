@@ -128,9 +128,13 @@ def apply_cross_sectional_z(
         frame = frames[name]
         values = frame.to_numpy(dtype=np.float64)
         eligible = np.isfinite(values)
+        # The layout (1, stocks, dates): _zscore_per_date computes the
+        # cross-sectional z over axis 1 (the stocks) per date — the
+        # (stocks, 1, dates) feed would degenerate to z=0 over a
+        # size-1 axis.
         z = _zscore_per_date(
-            values[:, None, :], eligible[:, None, :]
-        )[:, 0, :]
+            values[None, :, :], eligible[None, :, :]
+        )[0, :, :]
         z = np.where(eligible, z, np.nan)
         frames[name] = pd.DataFrame(
             z, index=frame.index, columns=frame.columns
