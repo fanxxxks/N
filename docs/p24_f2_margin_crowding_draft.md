@@ -45,16 +45,17 @@
 
 ## 5. 版本影响（预注册；以实施时点现值重算）
 
-| 版本 | 旧（现值） | 新 | 理由 |
+| 版本 | 旧（git show 41e9aa0 实测） | 新（实施已落地） | 理由 |
 |---|---|---|---|
-| GRAMMAR（vocab.py） | 9 | 10 | 词表 81→83（追加，token id 不移位）；generation 10 注册 remap 分派 |
-| FEATURE_REGISTRY | 14 | 15 | 2 特征元数据 + depends_on |
+| GRAMMAR（vocab.py） | 8 | 9 | 词表 81→83（追加，token id 不移位）；generation 9 注册 remap 分派。（初稿误写 9→10——基线取自 F1 后预期态；governance cc55e71 git show 实测更正） |
+| FEATURE_REGISTRY | 13 | 14 | 2 特征元数据 + depends_on。（初稿误写 14→15，同上更正） |
 | RESEARCH_DOMAIN | 4 | 5 | medium external-flows 18→20 |
 | FACTOR_COMPUTE | 4 | 不变 | 纯特征追加，既有行计算语义零改动（p13 先例） |
 | DATA_TIER | 2 | 不变 | pit_capital→B 既有映射 |
 | dataset_id | 157e0cf5 | 157e0cf5（不变） | 零 DB 写入 |
 
-- 旧 artifact：GRAMMAR 10 注册进 remap 分派（布局 = 9 布局追加，by-name 解码不变）；deprecated 集（13 名）维持退出采样。
+- 旧 artifact：GRAMMAR 9 注册进 remap 分派（布局 = 8 布局追加，by-name 解码不变）；deprecated 集（13 名）维持退出采样。
+- **基线更正注（governance cc55e71 核验）**：本表初稿旧值（G9/R14）系统性差一（取自 F1 后预期态而非 git show 实测 G8/R13）；已按实测更正——实施 commit（0c1f0bb/d1c651d）与本表一致 ✓。
 
 ## 6. 预期 RED 测试（实现前先红）
 
