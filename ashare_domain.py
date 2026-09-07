@@ -188,13 +188,12 @@ _SLOW_FEATURES = (
     "ACCRUALS",
     "ASSET_GROWTH",
     "EARNINGS_ACCEL",
-    # F1 batch (p23 v5, the user-approved set confirmed by the captain's
-    # correction): the four slow-fundamental quality factors are
-    # slow-fundamental by construction (report-period data).
-    "NET_MARGIN_TREND_4Q",
-    "LEVERAGE_TREND_4Q",
-    "CAPEX_INTENSITY",
-    "CFO_TO_DEBT",
+    # F1 batch (p23 v4, user-approved): the four slow-fundamental quality
+    # factors are slow-fundamental by construction (report-period data).
+    "CFO_TO_ASSETS",
+    "GROSS_PROFITABILITY",
+    "OPERATING_PROFITABILITY",
+    "LEVERAGE_CHANGE",
 )
 
 RESEARCH_DOMAINS: dict[str, ResearchDomain] = {

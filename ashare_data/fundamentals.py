@@ -62,10 +62,10 @@ FUNDAMENTAL_PIT_NAMES = (
     "ACCRUALS",
     "ASSET_GROWTH",
     "EARNINGS_ACCEL",
-    "NET_MARGIN_TREND_4Q",
-    "LEVERAGE_TREND_4Q",
-    "CAPEX_INTENSITY",
-    "CFO_TO_DEBT",
+    "CFO_TO_ASSETS",
+    "GROSS_PROFITABILITY",
+    "OPERATING_PROFITABILITY",
+    "LEVERAGE_CHANGE",
 )
 
 # Level fields that fill forward from their announcement date unchanged.
@@ -314,15 +314,15 @@ def _fetch_fundamental_rows(
 
 _FAMILY5_NAMES = ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL")
 
-# F1 batch (p23 v5, the user-approved set confirmed by the captain's
-# correction): the four slow-fundamental quality factors computed from the
-# same winner-resolved as-of timelines (the net-margin trend, the leverage
-# trend, capex intensity, CFO/debt coverage).
+# F1 batch (p23 v4, user-approved via the captain's delegated ruling): the
+# four slow-fundamental quality factors computed from the same
+# winner-resolved as-of timelines (CFO/assets, gross profitability,
+# operating profitability, leverage change).
 _F1_NAMES = (
-    "NET_MARGIN_TREND_4Q",
-    "LEVERAGE_TREND_4Q",
-    "CAPEX_INTENSITY",
-    "CFO_TO_DEBT",
+    "CFO_TO_ASSETS",
+    "GROSS_PROFITABILITY",
+    "OPERATING_PROFITABILITY",
+    "LEVERAGE_CHANGE",
 )
 
 
@@ -452,7 +452,8 @@ def _family5_asof_frames(
 
         income_cum = _per_stock_intervals(income_stock, "n_income_attr_p").get(code, {})
         revenue_cum = _per_stock_intervals(income_stock, "revenue").get(code, {})
-        inv_cum = _per_stock_intervals(cashflow_stock, "n_cashflow_inv_act").get(code, {})
+        oper_cost_cum = _per_stock_intervals(income_stock, "oper_cost").get(code, {})
+        total_profit_cum = _per_stock_intervals(income_stock, "total_profit").get(code, {})
         cashflow_cum = _per_stock_intervals(cashflow_stock, "n_cashflow_act").get(code, {})
         assets_level = _per_stock_intervals(balance_stock, "total_assets").get(code, {})
         liab_level = _per_stock_intervals(balance_stock, "total_liab").get(code, {})
@@ -547,7 +548,8 @@ def _family5_asof_frames(
         # ruling): the flow-TTM machinery is shared across every
         # cumulative-flow column (§9.1 dedup — one combine, four users).
         revenue_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
-        inv_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
+        oper_cost_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
+        total_profit_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
 
         def _flow_ttm_timeline_for(cum_map, cache):
             def timeline_for(end_date: str) -> list[tuple[str, str, float]]:
@@ -583,7 +585,10 @@ def _family5_asof_frames(
             return timeline_for
 
         _revenue_ttm_timeline = _flow_ttm_timeline_for(revenue_cum, revenue_ttm_cache)
-        _inv_ttm_timeline = _flow_ttm_timeline_for(inv_cum, inv_ttm_cache)
+        _oper_cost_ttm_timeline = _flow_ttm_timeline_for(oper_cost_cum, oper_cost_ttm_cache)
+        _total_profit_ttm_timeline = _flow_ttm_timeline_for(
+            total_profit_cum, total_profit_ttm_cache
+        )
 
         def _piecewise_fill(frame: pd.DataFrame, timeline: list[tuple[str, str, float]]):
             date_ints = np.asarray([int(d) for d in dates])
@@ -689,11 +694,11 @@ def _family5_asof_frames(
             )
             _piecewise_fill(frames["EARNINGS_ACCEL"], accel)
 
-            # F1 batch (p23 v5, the user-approved set confirmed by the
-            # captain's correction): the four slow-fundamental quality
-            # factors — the net-margin 4-report-period trend, the leverage
-            # trend, capex intensity, and CFO/debt coverage — composed from
-            # the same winner-resolved as-of timelines (p23 §2 formulas).
+            # F1 batch (p23 v4, user-approved via the captain's delegated
+            # ruling): the four slow-fundamental quality factors — CFO per
+            # average assets, the gross and operating profitability ratios,
+            # and the leverage 4-report-period change — composed from the
+            # same winner-resolved as-of timelines (p23 v4 §2 formulas).
             def _div_guarded(a_tl, b_tl):
                 return _merge_timelines(
                     [a_tl, b_tl],
@@ -721,19 +726,40 @@ def _family5_asof_frames(
                     ),
                 )
 
+            def _mean_guarded(a_tl, b_tl):
+                return _merge_timelines(
+                    [a_tl, b_tl],
+                    combine=lambda values: (
+                        (values[0] + values[1]) / 2.0
+                        if values[0] is not None
+                        and np.isfinite(values[0])
+                        and values[1] is not None
+                        and np.isfinite(values[1])
+                        else None
+                    ),
+                )
+
             prev_end_f1 = _shift_report_date(end_date, 4)
             assets_tl_f1 = assets_level.get(end_date, [])
             assets_prev_tl_f1 = assets_level.get(prev_end_f1, [])
+            avg_assets_tl = _mean_guarded(assets_tl_f1, assets_prev_tl_f1)
 
-            def _nm_ratio(e: str):
-                return _div_guarded(
-                    _profit_ttm_timeline(e), _revenue_ttm_timeline(e)
-                )
+            cfo_to_assets_tl = _div_guarded(
+                _cashflow_ttm_timeline(end_date), avg_assets_tl
+            )
+            _piecewise_fill(frames["CFO_TO_ASSETS"], cfo_to_assets_tl)
 
-            nm_now = _nm_ratio(end_date)
-            nm_prev = _nm_ratio(prev_end_f1)
+            gross_tl = _sub_guarded(
+                _revenue_ttm_timeline(end_date), _oper_cost_ttm_timeline(end_date)
+            )
+            gross_profitability_tl = _div_guarded(gross_tl, avg_assets_tl)
+            _piecewise_fill(frames["GROSS_PROFITABILITY"], gross_profitability_tl)
+
+            operating_profitability_tl = _div_guarded(
+                _total_profit_ttm_timeline(end_date), avg_assets_tl
+            )
             _piecewise_fill(
-                frames["NET_MARGIN_TREND_4Q"], _sub_guarded(nm_now, nm_prev)
+                frames["OPERATING_PROFITABILITY"], operating_profitability_tl
             )
 
             liab_tl = liab_level.get(end_date, [])
@@ -741,25 +767,8 @@ def _family5_asof_frames(
             lev_now = _div_guarded(liab_tl, assets_tl_f1)
             lev_prev = _div_guarded(liab_prev_tl, assets_prev_tl_f1)
             _piecewise_fill(
-                frames["LEVERAGE_TREND_4Q"], _sub_guarded(lev_now, lev_prev)
+                frames["LEVERAGE_CHANGE"], _sub_guarded(lev_now, lev_prev)
             )
-
-            capex_tl = _merge_timelines(
-                [_inv_ttm_timeline(end_date), assets_tl_f1],
-                combine=lambda values: (
-                    -values[0] / values[1]
-                    if values[0] is not None
-                    and np.isfinite(values[0])
-                    and values[1] is not None
-                    and np.isfinite(values[1])
-                    and values[1] > 0
-                    else None
-                ),
-            )
-            _piecewise_fill(frames["CAPEX_INTENSITY"], capex_tl)
-
-            cfo_debt_tl = _div_guarded(_cashflow_ttm_timeline(end_date), liab_tl)
-            _piecewise_fill(frames["CFO_TO_DEBT"], cfo_debt_tl)
 
     return frames
 

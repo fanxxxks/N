@@ -173,10 +173,10 @@ def test_feature_version_pinned():
     # t22/p9 erratum (t69, governance option A): the grammar bump 6 -> 7
     # (TURNOVER_MA20 leaves the sampling space) changes the hash by design —
     # whitelist §10.1 case 2, the intended discipline catching the bump.
-    assert FORMULA_VOCAB.feature_version == "ce13e7a67fb9"
+    assert FORMULA_VOCAB.feature_version == "52f0988fd76b"
     assert len(FORMULA_VOCAB.feature_version) == 12
     # v6 grammar: the v5 layout plus the P13 family-⑤ feature append.
-    assert GRAMMAR_VERSION == 9  # v9 (p23 v5, the user-approved F1 set confirmed)  # v7 (t22/p9 erratum t69): TURNOVER_MA20 exits the sampling space
+    assert GRAMMAR_VERSION == 8  # v8 (p23 v4, user-approved F1 batch)  # v7 (t22/p9 erratum t69): TURNOVER_MA20 exits the sampling space
     # A grammar bump changes the version even with identical name lists.
     legacy = FormulaVocab(
         feature_names=FORMULA_VOCAB.feature_names,
@@ -241,14 +241,14 @@ def test_resolve_formula_tokens_fails_closed_without_grammar_version():
 
 def test_resolve_formula_tokens_fails_closed_on_unknown_grammar_generation():
     """t46 captain pre-ruling + t57 F2 + t22/p9 appendix-B erratum (t69):
-    only known generations (2-9) enter remap decoding; anything else fails
+    only known generations (2-8) enter remap decoding; anything else fails
     closed."""
     payload = _sample_payload()
     payload["grammar_version"] = 1
     with pytest.raises(ValueError, match="unsupported grammar generation 1"):
         resolve_formula_tokens(payload)
-    payload["grammar_version"] = 10
-    with pytest.raises(ValueError, match="unsupported grammar generation 10"):
+    payload["grammar_version"] = 9
+    with pytest.raises(ValueError, match="unsupported grammar generation 9"):
         resolve_formula_tokens(payload)
 
 
@@ -491,19 +491,18 @@ P9_DEPRECATED_FEATURES = (
 def test_p9_grammar_v4_with_additive_feature_generation():
     # v5 = the v4 P9 layout + the §7 adjudicated deprecations.
     # v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤ appends 4 more.
-    assert GRAMMAR_VERSION == 9  # v9 (p23 v5, the user-approved F1 set confirmed)  # v7 (t22/p9 erratum t69): TURNOVER_MA20 exits the sampling space
+    assert GRAMMAR_VERSION == 8  # v8 (p23 v4, user-approved F1 batch)  # v7 (t22/p9 erratum t69): TURNOVER_MA20 exits the sampling space
     for name in P9_NEW_FEATURES:
         assert name in FEATURE_NAMES
     # v4 names are appended, so every pre-v4 token id stays stable; the
-    # P13 family-⑤ names append after them, and the p23 F1 names append
-    # after those (the user-approved set) — every pre-v9 token id
-    # (including the deprecated v4 names) stays stable.
+    # P13 family-⑤ names append after them, so every pre-v5 token id
+    # (including the deprecated v4 names) stays stable too.
     assert len(FEATURE_NAMES) == 81
     assert list(FEATURE_NAMES[62:73]) == list(P9_NEW_FEATURES)
     assert list(FEATURE_NAMES[73:]) == [
         "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
-        "NET_MARGIN_TREND_4Q", "LEVERAGE_TREND_4Q", "CAPEX_INTENSITY",
-        "CFO_TO_DEBT",
+        "CFO_TO_ASSETS", "GROSS_PROFITABILITY", "OPERATING_PROFITABILITY",
+        "LEVERAGE_CHANGE",
     ]
 
 

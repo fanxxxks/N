@@ -505,8 +505,7 @@ def _f1_statement_rows(code: str = "000001.SZ"):
     """Eight quarters of synthetic statements with hand-computable TTM
     values: 2023 revenue 100/qtr (oper cost 70/qtr, profit 10/qtr); 2024
     revenue 110/qtr (oper cost 77/qtr, profit 15/qtr); cashflow 15/qtr
-    then 20/qtr; invest cashflow -5/qtr then -8/qtr; assets 1000 flat;
-    liabilities 500 flat."""
+    then 20/qtr; assets 1000 flat; liabilities 500 flat."""
     quarters = [
         ("20230331", 100.0, 70.0, 10.0), ("20230630", 200.0, 140.0, 20.0),
         ("20230930", 300.0, 210.0, 30.0), ("20231231", 400.0, 280.0, 40.0),
@@ -514,7 +513,6 @@ def _f1_statement_rows(code: str = "000001.SZ"):
         ("20240930", 330.0, 231.0, 45.0), ("20241231", 440.0, 308.0, 60.0),
     ]
     cfo = [15.0, 30.0, 45.0, 60.0, 80.0, 100.0, 120.0, 140.0]
-    inv = [-5.0, -10.0, -15.0, -20.0, -28.0, -36.0, -44.0, -52.0]
     anns = ("20230401", "20230701", "20231001", "20240101",
             "20240401", "20240701", "20241001", "20250101")
     avails = ("20230402", "20230702", "20231002", "20240102",
@@ -544,7 +542,6 @@ def _f1_statement_rows(code: str = "000001.SZ"):
             "report_type": "1", "comp_type": "1",
             "update_flag": "0", "end_type": None,
             "n_cashflow_act": cfo[i],
-            "n_cashflow_inv_act": inv[i],
             "ingest_id": f"ci{i}",
         })
     return income, balance, cashflow
@@ -565,19 +562,18 @@ def test_f1_frames_built_from_v2_asof(tmp_path: Path):
     dates = pd.bdate_range("2025-01-01", "2025-03-31").strftime("%Y%m%d").tolist()
     close = pd.DataFrame(20.0, index=["000001.SZ"], columns=dates)
     frames = build_pit_frames(config, ["000001.SZ"], dates, close)
-    for name in ("NET_MARGIN_TREND_4Q", "LEVERAGE_TREND_4Q",
-                 "CAPEX_INTENSITY", "CFO_TO_DEBT"):
+    for name in ("CFO_TO_ASSETS", "GROSS_PROFITABILITY",
+                 "OPERATING_PROFITABILITY", "LEVERAGE_CHANGE"):
         assert name in frames, name
         assert not frames[name].isna().all().all(), name
-    # Hand-computed at 2024Q4: TTM profit 60, TTM revenue 440 ->
-    # nm(2024Q4) = 0.13636; nm(2023Q4) = 0.1 -> the trend = 0.03636.
-    # Leverage 0.5 flat -> the trend 0.  Capex: TTM(-inv) = +52/1000
-    # (the outflow negated to a positive intensity).  CFO/debt =
-    # 140/500 = 0.28.
-    assert frames["NET_MARGIN_TREND_4Q"].iloc[0, -1] == pytest.approx(60.0 / 440.0 - 0.1)
-    assert frames["LEVERAGE_TREND_4Q"].iloc[0, -1] == pytest.approx(0.0)
-    assert frames["CAPEX_INTENSITY"].iloc[0, -1] == pytest.approx(52.0 / 1000.0)
-    assert frames["CFO_TO_DEBT"].iloc[0, -1] == pytest.approx(140.0 / 500.0)
+    # Hand-computed at 2024Q4 (avg_assets = mean(1000, 1000) = 1000):
+    # CFO TTM = 140 (the FY cumulative value) -> 0.14; gross TTM =
+    # 440 - 308 = 132 -> 0.132; total_profit TTM = 60 -> 0.06;
+    # leverage 0.5 flat -> change 0.
+    assert frames["CFO_TO_ASSETS"].iloc[0, -1] == pytest.approx(140.0 / 1000.0)
+    assert frames["GROSS_PROFITABILITY"].iloc[0, -1] == pytest.approx(132.0 / 1000.0)
+    assert frames["OPERATING_PROFITABILITY"].iloc[0, -1] == pytest.approx(60.0 / 1000.0)
+    assert frames["LEVERAGE_CHANGE"].iloc[0, -1] == pytest.approx(0.0)
 
 
 def test_f1_nan_guards_missing_source_stays_nan(tmp_path: Path):
@@ -591,7 +587,7 @@ def test_f1_nan_guards_missing_source_stays_nan(tmp_path: Path):
     income, balance, cashflow = _f1_statement_rows("000001.SZ")
     # A second stock with balance/cashflow rows but NO income rows: its
     # income-TTM-derived F1 frames must stay NaN (no fallback, no zeros),
-    # while its leverage-trend and CFO-to-debt frames compute from the
+    # while its leverage-change and CFO-to-assets frames compute from the
     # balance/cashflow sources alone.
     _, balance2, cashflow2 = _f1_statement_rows("600000.SH")
     balance.extend(balance2)
@@ -604,13 +600,13 @@ def test_f1_nan_guards_missing_source_stays_nan(tmp_path: Path):
     dates = pd.bdate_range("2025-01-01", "2025-03-31").strftime("%Y%m%d").tolist()
     close = pd.DataFrame(20.0, index=codes, columns=dates)
     frames = build_pit_frames(config, codes, dates, close)
-    assert frames["NET_MARGIN_TREND_4Q"].loc["600000.SH"].isna().all()
-    # CAPEX_INTENSITY and CFO_TO_DEBT need only cashflow + balance (no
-    # income) — they compute for the income-less stock.
-    assert not frames["CAPEX_INTENSITY"].loc["600000.SH"].isna().all()
-    assert not frames["CFO_TO_DEBT"].loc["600000.SH"].isna().all()
-    assert not frames["LEVERAGE_TREND_4Q"].loc["600000.SH"].isna().all()
+    assert frames["GROSS_PROFITABILITY"].loc["600000.SH"].isna().all()
+    assert frames["OPERATING_PROFITABILITY"].loc["600000.SH"].isna().all()
+    # CFO_TO_ASSETS needs only cashflow + balance (no income) — it
+    # computes for the income-less stock.
+    assert not frames["CFO_TO_ASSETS"].loc["600000.SH"].isna().all()
+    assert not frames["LEVERAGE_CHANGE"].loc["600000.SH"].isna().all()
     # The fully-populated stock keeps all four frames populated.
-    for name in ("NET_MARGIN_TREND_4Q", "LEVERAGE_TREND_4Q",
-                 "CAPEX_INTENSITY", "CFO_TO_DEBT"):
+    for name in ("CFO_TO_ASSETS", "GROSS_PROFITABILITY",
+                 "OPERATING_PROFITABILITY", "LEVERAGE_CHANGE"):
         assert not frames[name].loc["000001.SZ"].isna().all(), name

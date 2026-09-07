@@ -169,17 +169,16 @@ _FEATURE_NAMES_V5 = (
     "EARNINGS_ACCEL",
 )
 
-# v9 (p23 v5, the user-approved set confirmed by the captain's correction)
-# replaces the v8 candidate names with the user-approved four
-# slow-fundamental quality factors (the net-margin trend, the leverage
-# trend, capex intensity, CFO/debt).  The count stays 81 (a name swap, no
-# existing token id moves); the batch joins and leaves adjudication as one
-# atomic unit (p23 §7).
+# v8 (p23 v4, user-approved via the captain's delegated ruling) appends the
+# four slow-fundamental quality factors (CFO/assets, gross profitability,
+# operating profitability, leverage change).  Names are appended so every
+# pre-v8 token id is stable (the same discipline as v2..v5); the batch
+# joins and leaves adjudication as one atomic unit (p23 §7).
 _FEATURE_NAMES_V8 = (
-    "NET_MARGIN_TREND_4Q",
-    "LEVERAGE_TREND_4Q",
-    "CAPEX_INTENSITY",
-    "CFO_TO_DEBT",
+    "CFO_TO_ASSETS",
+    "GROSS_PROFITABILITY",
+    "OPERATING_PROFITABILITY",
+    "LEVERAGE_CHANGE",
 )
 
 FEATURE_NAMES = tuple(
@@ -305,7 +304,7 @@ LEGACY_OPERATOR_NAMES = (
 # Bumping this constant changes
 # ``feature_version`` and therefore invalidates the token layout recorded
 # in older training artifacts (which resolve by name, so they still load).
-GRAMMAR_VERSION = 9
+GRAMMAR_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -485,10 +484,10 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     # deprecation removes a name from the SAMPLING space only — ids,
     # computations and by-name decoding are unchanged, so generation 7
     # decodes against the live vocabulary exactly like generation 6.
-    if src_grammar not in (2, 3, 4, 5, 6, 7, 8, 9):
+    if src_grammar not in (2, 3, 4, 5, 6, 7, 8):
         raise ValueError(
             f"unsupported grammar generation {src_grammar} for remap "
-            "decoding (known generations: 2, 3, 4, 5, 6, 7, 8, 9)"
+            "decoding (known generations: 2, 3, 4, 5, 6, 7, 8)"
         )
     src_has_eos = src_grammar >= 2
     src_features = payload.get("feature_names")
