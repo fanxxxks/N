@@ -113,6 +113,15 @@ CFO_TO_DEBT），则 v2 候选集（其中 CFO_TO_ASSETS/GROSS_PROFITABILITY/
 OPERATING_PROFITABILITY 三项为 v1 之外的新候选）需按 t24 流程第 1 步
 补用户批准后方可实施**。请 captain 确认转达内容；governance 侧在确认前
 不视为已获批准。
+**【确认点关闭（2026-09-07 captain 裁定：v2 被批准覆盖）】**：依据
+(a) 用户路线图 F1 批次**逐字指名** CFO_TO_ASSETS/GROSS_PROFITABILITY/
+OPERATING_PROFITABILITY/LEVERAGE_CHANGE（含方向与公式建议）——四因子的
+用户背书先于一切流程；(b) 用户「批准」批准了 F1 批次推进；(c) v2 恢复
+路线图原指名 = 比用户所见 v1（成员自提替代集）更贴近原始规格——候选集
+修正方向是**回归用户路线图而非扩张**。v1 中间集被取代（批准基础 =
+路线图 F1 背书 + 批次批准，演变在本登记中如实记录）；若用户有异议会
+主动提出（其持续关注交付报告）。**实施前置解除：factor-engineer 可按
+sequencing 启动实施。**
 
 **编号与登记**：草案文件名/标题仍为 p21——登记前须按 captain 编号纠正
 改为 **p23**（文件名 + 标题 + 自引用，factor-engineer 在实施 commit
