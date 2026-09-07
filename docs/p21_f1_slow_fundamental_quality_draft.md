@@ -1,66 +1,88 @@
-# P21 草案：F1 批次预注册——慢基本面质量因子（≤4，第⑤族之外的补位）
+# P21 草案 v2：F1 批次预注册——慢基本面资产收益率与杠杆趋势四因子
 
-- 状态：**DRAFT — 待 governance-auditor 登记与 captain 代行批准**（起草：factor-engineer，2026-09-07；captain t22 验收通知 item 4 "F1 批次解锁：预注册起草开始"）。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
-- 证据基线：t22 修复后重测 `docs/factor_inventory_audit_v2_fix2_20260906/metrics.json`（dataset `157e0cf5…`，FACTOR_COMPUTE 4 / FEATURE_REGISTRY 7 / GRAMMAR 6；全部 77 名有效横截面 0.995）。勘察基线 commit：codex/factor-semantic-fixes @ `327f102`。
+- 状态：**DRAFT v2 — 待 governance-auditor 核对编号与登记 + 用户批准后实施**（v1 草案的四个自提候选被 t24 任务书的预注册候选集取代；起草：factor-engineer，2026-09-07）。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
+- 证据基线：t22 修复后重算 `docs/factor_inventory_audit_v2_fix2_20260906/metrics.json`（dataset `157e0cf5…`，FACTOR_COMPUTE 4 / FEATURE_REGISTRY 9 / GRAMMAR 7；全宇宙有效横截面 0.995）。勘察基线 commit：codex/factor-semantic-fixes @ `6e11b76`。
 - 本文使用 AGENTS.md 的"必须/禁止/应当"语义。任务路由：**研究语义变更**（AGENTS §3.2：新增特征）。
 
-## 1. 问题陈述与批次依据
+## 1. 批次依据与问题陈述
 
-词表 77 名中慢基本面（slow_fundamental 域，16 名）的质量经济学存在三个未覆盖维度：**方向**（利率/杠杆的 4 季度趋势——存量水平已在词表，方向缺位）、**投资强度**（流量面资本开支——ASSET_GROWTH 只覆盖存量变化）、**偿债质量**（经营现金流对负债的覆盖——CASHFLOW_QUALITY 只覆盖对盈利的确认）。本批次按 p13 §8 模式补位 ≤4 个新特征，全部只用 p17 §5.3 已落库的 v2 三表字段（零 schema 变更），复用 t22 已修复的单一路径（`asof_winner_intervals` + `_ttm`/单期转换）。
+词表 77 名中慢基本面（slow_fundamental 域，16 名）的质量经济学缺少**资产收益率（Novy-Marx 系）**维度：既有 ROE/ROA（legacy 静态水平读）、family-⑤（现金流确认/应计/资产存量增长/盈利加速度）之外，**经营现金流对资产的比率、毛利对资产的比率、利润总额对资产的比率**（资产调整后的盈利能力三截面）与**杠杆的期间变化**（DEBT_RATIO 只存水平，方向缺位）均无词表表达。本批按 t24 任务书预注册 4 个候选，全部只用 p17 §5.3 已落库的 v2 三表字段（零 schema 变更），复用 t22 已修复的单一路径（`asof_winner_intervals` + `_ttm`/单期转换）。
 
 ## 2. 候选因子（预注册公式；全部 slow_fundamental 域；Tier B）
 
-记号：`TTM(x)_t` = 截至 t 报告期的滚动四季和（`_ttm` 单一路径）；`Δ4q(x)_t` = x_t − x_{t−4 报告期}；可见性一律经 `asof_winner_intervals`（p17 §6.2，修订追踪），分母/分子各取 winner-resolved 值、较晚可见。
+记号：`TTM(x)_t` = 截至 t 报告期的滚动四季和（`_ttm` 单一路径）；`avg_assets_t` = mean(total_assets_t, total_assets_{t−4 报告期})（两端均 winner-resolved as-of t，经典平均资产口径）；`lev_t` = total_liab_t / total_assets_t（同批 winner-resolved）；可见性一律经 `asof_winner_intervals`（p17 §6.2 修订追踪），分母/分子各取 winner-resolved 值、较晚可见。
 
-| # | 特征 | 预注册公式 | 经济假设 | 方向（预注册） | NaN 守卫 |
+| # | 特征 | 预注册公式 | 经济假设 | 方向 | NaN 守卫 |
 |---|---|---|---|---|---|
-| F1-1 | NET_MARGIN_TREND_4Q | `TTM(n_income_attr_p)/TTM(revenue)` 的 Δ4q | 净利率改善（定价权/成本控制）延续为正收益；恶化惩罚 | **+1** | 任一 TTM 断档/分母 ≤0 → NaN |
-| F1-2 | LEVERAGE_TREND_4Q | `total_liab/total_assets` 的 Δ4q | 杠杆 4 季度恶化（被动加杠杆）→ 财务困境风险上升 | **−1** | 任一端缺失或 total_assets ≤0 → NaN |
-| F1-3 | CAPEX_INTENSITY | `TTM(−n_cashflow_inv_act)/total_assets` | 投资/资本开支强度高 → 过度投资与代理成本 → 后续收益转负（投资因子流量面，与 ASSET_GROWTH 的存量面互补） | **−1** | total_assets ≤0 或投资现金流符号缺失 → NaN（n_cashflow_inv_act 通常 ≤0，取负） |
-| F1-4 | CFO_TO_DEBT | `TTM(n_cashflow_act)/total_liab` | 经营现金流对总负债覆盖高 → 偿债质量与财务弹性 | **+1** | total_liab ≤0 或 TTM 断档 → NaN |
+| F1-1 | CFO_TO_ASSETS | `TTM(n_cashflow_act)_t / avg_assets_t` | 经营现金流对资产的转化率（应计质量之外的现金创造强度）高 → 盈利质量与财务弹性 | **+1** | TTM 断档或 avg_assets ≤0/缺任一端 → NaN |
+| F1-2 | GROSS_PROFITABILITY | `(TTM(revenue)_t − TTM(oper_cost)_t) / avg_assets_t` | 毛利/资产比（Novy-Marx 毛利盈利能力）：定价权与成本结构的质量截面 | **+1** | 同上；revenue 或 oper_cost 缺失 → NaN |
+| F1-3 | OPERATING_PROFITABILITY | `TTM(total_profit)_t / avg_assets_t` | 利润总额/资产比（综合盈利能力） | **+1** | 同上 |
+| F1-4 | LEVERAGE_CHANGE | `lev_t − lev_{t−4 报告期}` | 杠杆 4 报告期恶化（被动加杠杆）→ 困境风险 | **−1** | 任一期 lev 缺失或 assets ≤0 → NaN |
 
-- **与既有词表的非重复性论证**：ROE/DEBT_RATIO/GROSS_MARGIN/NET_MARGIN（legacy 读，静态水平）不在本批——它们的 v2 as-of 切换是 db76700 已登记的后置任务，不是新特征；family-⑤ 覆盖盈利-现金确认（CASHFLOW_QUALITY）与存量增长（ASSET_GROWTH），本批补**趋势/流量/偿债**三维度。预注册的冗余预检：实施后重测若与 ROE/DEBT_RATIO/NET_MARGIN/family-⑤ 任何成员 |ρ|≥0.9 → 按族内精简裁决（同 p9 §7.2 机制）。
-- **族原子性**：4 特征同 commit 进词表、同批裁决、同进退（p13 §8 同款）。
+- **口径披露（p17 schema 缺口预注册）**：`income_statement_pit` 无 `operate_profit` 列（p17 §5.3 DDL）——F1-3 的"营业利润"以 `total_profit`（利润总额，含营业外收支）为预注册代理；若未来 p17 增补 `operate_profit` 列，须经勘误后重算。此为本批唯一的口径近似，明文预注册而非静默替代。
+- **与既有词表的非重复性论证**：ROA（legacy，净利/总资产静态）≠ 本批三比率的现金流/毛利/利润总额分子与平均资产分母口径；DEBT_RATIO（legacy，静态水平）≠ F1-4 的方向变化量；family-⑤ 的现金流确认（cfo/profit）≠ cfo/assets。预注册冗余预检：实施后重测若与 ROA/DEBT_RATIO/family-⑤ 任何成员 |ρ|≥0.9 → 按族内精简裁决（p9 §7.2 机制）。
+- **族原子性**：4 特征同 commit 进词表、同批裁决、同进退（p13 §8 先例）。
 
-## 3. 范围与非目标
+## 3. 每因子预注册记录（t24 验收逐项）
 
-- **范围**：`ashare_data/fundamentals.py` 新增 4 帧（复用 `_family5_asof_frames` 同构路径与 `_ttm`/单期转换单一路径）；`ashare_model/{vocab,feature_metadata,feature_registry,research_domain}.py` 追加登记；`docs/feature_registry.md` 再生。
-- **非目标**：不改既有特征公式/源；不动 `financial_indicator_audit`（p17 §5.4 禁止进入因子正式路径）；不改族-⑤/11 legacy 特征；不做 paper/lifecycle 转换。
+| 维度 | 记录 |
+|---|---|
+| 经济假设 | 见 §2 表（现金流创造强度 + / 毛利盈利能力 + / 综合盈利能力 + / 杠杆恶化 −） |
+| 数据源 | v2 `income_statement_pit`（revenue/oper_cost/total_profit）、`balance_sheet_pit`（total_assets/total_liab）、`cashflow_statement_pit`（n_cashflow_act）——全部经 `asof_winner_intervals` 单一路径 |
+| PIT 可用时间 | p17 §6.2：候选 = available_date ≤ s；胜者字典序；公告日次日可见；修订按 winner 时间线精确反映 |
+| Tier | B（PIT_FUNDAMENTAL，既有映射） |
+| 预期方向 | +1/+1/+1/−1（预注册，按测量裁决；证伪即如实降级） |
+| 预测周期 | slow（every_20_days，slow_fundamental 域） |
+| 覆盖率 | 预期 ≈ family-⑤ 量级（0.9+；TTM 断档按 NaN）；重测实测为准 |
+| 换手/成本 | slow 域低换手（family-⑤ 先例 tau_h10 ≈0.02-0.09）；成本后空间按 ΔIC 与成本拖累联合评估 |
+| 相关簇 | 预检 vs ROA/DEBT_RATIO/NET_MARGIN/family-⑤；|ρ|≥0.9 → 族内精简 |
+| 增量 OOS 计划 | ΔIC_OOS（h=10，|w_b| 修正基线 per p9 附录 B）≥ +0.005 且残差符号同向 → 族门通过 |
 
-## 4. 版本影响（预注册）
+## 4. 范围与非目标
+
+- **范围**：`ashare_data/fundamentals.py` 新增 4 帧（`_family5_asof_frames` 同构路径扩展）；`ashare_model/{vocab,feature_metadata,feature_registry,research_domain}.py` 登记追加；`docs/feature_registry.md` 再生。
+- **非目标**：不改既有特征公式/源；不动 `financial_indicator_audit`（p17 §5.4 禁入因子路径）；不动 family-⑤ 与 11 legacy 特征；不做 paper/lifecycle 转换；零 DB 写入（三表已含全部字段，dataset 不变）。
+
+## 5. 版本影响（预注册）
 
 | 版本 | 旧 | 新 | 理由 |
 |---|---|---|---|
-| GRAMMAR（vocab.py） | 7 | 8 | 词表 77→81（追加，token id 不移位）。（sequencing 注：草案起草时基线为 6；t70 方向重注册与 p9 t69 Part A 弃用先行落地后，基线已是 7——实施时按当时现值顺延） |
-| FEATURE_REGISTRY | 9 | 10 | 4 特征元数据 + depends_on。（sequencing 注：t70 方向重注册已消费 8→9，实施时按当时现值顺延） |
+| GRAMMAR（vocab.py） | 7 | 8 | 词表 77→81（追加，token id 不移位）；generation 8 注册 remap 分派（布局 = 7 布局追加） |
+| FEATURE_REGISTRY | 9 | 10 | 4 特征元数据 + depends_on |
 | RESEARCH_DOMAIN | 3 | 4 | slow_fundamental 16→20 |
 | FACTOR_COMPUTE | 4 | 不变 | 纯特征追加，既有行计算语义零改动（p13 先例） |
 | DATA_TIER | 2 | 不变 | PIT_FUNDAMENTAL→B 既有映射 |
-| dataset_id | 157e0cf5 | 随内容重算 | 无 DB 写入——三表已含全部所需字段，**dataset 不变** |
+| dataset_id | 157e0cf5 | 157e0cf5（不变） | 零 DB 写入 |
 
-- 旧 artifact 拒绝：GRAMMAR 6 公式仍可按名解码（分派机制既有），新特征仅进未来搜索空间。
+- 旧 artifact：GRAMMAR 8 注册进 remap 分派（布局 = 7 布局追加，by-name 解码不变）；deprecated 集（13 名，含 TURNOVER_MA20）维持退出采样。
 
-## 5. 预期 RED 测试（实现前先红）
+## 6. 预期 RED 测试（实现前先红）
 
-1. 合成三表上四公式逐值断言（含 TTM 断档 NaN、分母守卫、Δ4q 对齐）。
-2. as-of 可见性：公告日前不可见、修订按 winner 时间线反映。
-3. 词表 77→81 追加不移位（既有 token 往返 parity）；GRAMMAR 7 钉值。
+1. 合成三表上四公式逐值断言（TTM 断档 NaN、avg_assets 口径、分母守卫、Δ4q 对齐、winner-revision 反映）。
+2. as-of 可见性：公告日前不可见、修订按 winner 时间线。
+3. 词表 77→81 追加不移位（既有 token 往返 parity）；GRAMMAR 8 钉值 + generation 8 分派注册。
 4. 域归属 slow_fundamental ×4；RESEARCH_DOMAIN 4 钉值。
 5. 未回填态 fail-closed：新特征帧 NaN → 质量门拒绝。
 
-## 6. 测量方案与裁决（预注册）
+## 7. 测量方案与裁决（预注册）
 
-- 实现后按 t18/t22 同口径全量重测（81 名；h∈{1,2,3,5,10,15,20}、非重叠 IC、min_stocks=10、IS/OOS 2022 分界、|w_b| 修正基线 per p9 附录 B、同成本模型、五 folds）。
-- **族门（4 特征整族原子）**：以 7 信号等权复合为基线（|w_b| 修正语义），族内 ≥1 成员 ΔIC_OOS ≥ +0.005 且残差符号与预注册方向一致 → 族通过（成员维持 promotion_allowed=True）；否则负结果：保留计算与采样、promotion_allowed=False（p13 §8 先例）。
-- 相关性：与既有特征或族内 |ρ|≥0.9 → Part A 机制裁决；coverage=0 因子的 ΔIC 腿按附录 B 记 not-evaluable。
+- 实现后按 t18/t22 同口径全量重测（81 名；h∈{1,2,3,5,10,15,20} 非重叠 IC、min_stocks=10、IS/OOS 2022 分界、|w_b| 修正基线 per p9 附录 B、同成本模型、五 folds、方向/PIT/Tier 审计）。
+- **族门（4 特征整族原子）**：7 信号等权复合基线（|w_b| 修正语义），族内 ≥1 成员 ΔIC_OOS ≥ +0.005 且残差符号与预注册方向一致 → 族通过（成员维持 promotion_allowed=True）；否则负结果：保留计算与采样、promotion_allowed=False（p13 §8 先例）。
+- 相关性：|ρ|≥0.9 → Part A 机制裁决；coverage=0 因子的 ΔIC 腿按附录 B 记 not-evaluable。
 - 方向按测量裁决（P9 §5.4 惯例）；证伪即如实降级，禁止单方改向。
+- 负结果保留全部证据；禁止因搜索表现不好继续扩库。
 
-## 7. 资源上限与停止条件
+## 8. 资源上限与停止条件
 
 - 重测单次 ≤30 分钟（参考口径；同 p13 §9.1）。
-- 停止：任一 RED 无法稳定失败 → 回到本文修订；覆盖率/门禁红 → 带证据上报；governance/captain 否决候选集 → 修订再批。
+- 停止：任一 RED 无法稳定失败 → 回到本文修订；governance/captain 否决候选集 → 修订再批；门禁红 → 带证据上报。
 
-## 8. 批准与实施边界
+## 9. 批准与实施边界
 
-- 批准流程：governance-auditor 登记（CONTRACTS.md 同 commit）+ captain 代行批准 → 实施由 factor-engineer 在 codex/factor-semantic-fixes 上执行（RED → 最小实现 → GREEN → 全量 → 重测 → 裁决 → 测量日志）。
+- 批准流程：governance-auditor 核对编号与登记（CONTRACTS.md 同 commit）+ **用户批准**（t24 任务书门禁）→ factor-engineer 实施（RED → 最小实现 → GREEN → 全量 → 重测 → 裁决 → 测量日志）。
 - 本草案不授权 push/PR/merge。
+
+## 10. 草案沿革
+
+- v1（2026-09-07，已废弃）：四个自提候选（NET_MARGIN_TREND_4Q / LEVERAGE_TREND_4Q / CAPEX_INTENSITY / CFO_TO_DEBT）——被 t24 任务书的预注册候选集取代（其中 LEVERAGE_TREND 概念演化为 F1-4 LEVERAGE_CHANGE，其余三个资产收益率候选按 Novy-Marx 系口径重定义）。
+- v2（本版）：t24 任务书候选集。
