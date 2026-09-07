@@ -5,8 +5,15 @@
   `p21_r1_domain_return_research_preregistration.md` 占用，且已批准）；
   第 2 节的 p22 = INDUSTRY_MOMENTUM 方向重预注册注记（编号不变，已获
   captain 代行批准生效，按 sequencing p20 → p9 Part A → p22 实施）。
-  本记录保留因子线本地编号作核验史，登记与用户转达统一用 **p23**/p22；
-  p23 转呈用户批准中（captain 转达）。
+  本记录保留因子线本地编号作核验史，登记与用户转达统一用 **p23**/p22。
+- **p23 用户批准记录（2026-09-07，governance 入册）**：**用户批准原文
+  （逐字）**：「批准」（2026-09-07，经 captain 会话转达）——p23 四候选
+  （新特征入词表批次）经**用户亲批**，为 p18 §3.2 保留项的正确执行
+  （新特征批次由用户批准，代行授权不覆盖——与本记录第 4 节第 2 条的
+  批准路径裁定一致）。批准链：用户亲批 → captain 转达 → factor-engineer
+  实施（sequencing：t70/p20 与 F1 按序推进；GRAMMAR/REGISTRY 序号以
+  实施时点真实常量重算）。p23 文件头的批准行由实施 commit 按 p16
+  `2f5e18b` 先例补记（引用本核验记录 + 批准原文）。
 
 - 性质：治理登记核验（evidence-only）。核验对象 = factor-engineer 的
   F 批次登记包（codex/factor-semantic-fixes）：
