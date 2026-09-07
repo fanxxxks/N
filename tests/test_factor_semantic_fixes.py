@@ -271,6 +271,23 @@ def test_margin_frames_read_v2_margin_detail_with_t_plus_1_visibility(tmp_path: 
     assert np.isnan(margin.loc["600000.SH", dates[24]])
 
 
+def test_t70_margin_balance_chg_direction_reregistered_negative():
+    """t70 (p20 draft, captain+governance double-signed): the authored +1
+    of MARGIN_BALANCE_CHG was falsified in four independent audit rounds
+    (t2/v4 legacy, t18/t22 v2 — IC10 -0.0263..-0.0335, ICIR -0.237..-0.414,
+    annual direction stability <=0.08) — the direction re-preregisters to
+    -1 (leveraged-inflow crowding economics, four-round-consistent with
+    the MARGIN_CROWD_60 -1 family member).  The factor formula, source and
+    PIT visibility are unchanged (metadata-only flip)."""
+
+    from ashare_model.feature_metadata import FEATURE_METADATA
+
+    meta = FEATURE_METADATA["MARGIN_BALANCE_CHG"]
+    assert meta.expected_direction == -1
+    assert meta.availability_rule.startswith("v2 margin_detail_pit")
+    assert meta.depends_on == ("margin_detail_pit",)
+
+
 # ---------------------------------------------------------------------------
 # 5. p9 Part A execution (governance ruling on the keep-list conflict):
 #    TURNOVER_MA20 deprecated — exits the sampling space, keeps its token

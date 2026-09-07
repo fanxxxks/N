@@ -31,8 +31,8 @@
 
 | 版本 | 旧 | 新 | 理由 |
 |---|---|---|---|
-| GRAMMAR（vocab.py） | 6 | 7 | 词表 77→81（追加，token id 不移位） |
-| FEATURE_REGISTRY | 7 | 8 | 4 特征元数据 + depends_on |
+| GRAMMAR（vocab.py） | 7 | 8 | 词表 77→81（追加，token id 不移位）。（sequencing 注：草案起草时基线为 6；t70 方向重注册与 p9 t69 Part A 弃用先行落地后，基线已是 7——实施时按当时现值顺延） |
+| FEATURE_REGISTRY | 9 | 10 | 4 特征元数据 + depends_on。（sequencing 注：t70 方向重注册已消费 8→9，实施时按当时现值顺延） |
 | RESEARCH_DOMAIN | 3 | 4 | slow_fundamental 16→20 |
 | FACTOR_COMPUTE | 4 | 不变 | 纯特征追加，既有行计算语义零改动（p13 先例） |
 | DATA_TIER | 2 | 不变 | PIT_FUNDAMENTAL→B 既有映射 |

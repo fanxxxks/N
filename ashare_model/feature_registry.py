@@ -62,7 +62,11 @@ from .vocab import FEATURE_NAMES
 # (Part A trigger fired: 0.914 vs TURNOVER_STD20 across four audit rounds;
 # the stronger representative kept) — keeps computing, exits the sampling
 # space, loses promotion eligibility.
-FEATURE_REGISTRY_VERSION = 8
+# v9 (t70, p20 draft — captain+governance double-signed): the
+# MARGIN_BALANCE_CHG authored direction re-preregisters +1 -> -1 (four
+# audit rounds of falsification; metadata-only — the formula, source and
+# PIT visibility are unchanged, so FACTOR_COMPUTE is untouched).
+FEATURE_REGISTRY_VERSION = 9
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

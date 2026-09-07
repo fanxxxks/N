@@ -376,8 +376,13 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
     ),
     "MARGIN_BALANCE_CHG": AuthoredFeatureMeta(
         availability_rule=_MARGIN,
-        hypothesis="Margin-flow momentum: leveraged inflows chase and lift prices over short horizons.",
-        expected_direction=1,
+        # t70 (p20 draft, captain+governance double-signed): the authored
+        # +1 "inflows chase and lift prices" was falsified in four audit
+        # rounds — the direction re-preregisters to -1 (leveraged-inflow
+        # crowding economics, consistent with MARGIN_CROWD_60); the
+        # formula, source and PIT visibility are unchanged.
+        hypothesis="Margin-flow crowding: leveraged-inflow acceleration marks late-stage chase that subsequently underperforms.",
+        expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
         compute_cost=ComputeCost.LOW,
         depends_on=("margin_detail_pit",),
