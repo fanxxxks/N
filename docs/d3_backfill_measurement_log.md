@@ -121,3 +121,12 @@
 ## 19/19 表完整声明
 
 以上 19 表全部有数据（industry_membership_pit 16,611 行勘误后补齐）。source_ingest_runs 58,860 批全部 succeeded（0 failed）。回填完成。
+
+## SW 指数滞后修复（t77，勘误 #5 AkShare 窄口径）
+
+- **数据源**：AkShare `index_hist_sw`（申万指数日线，801xxx 窄口径唯一 feed）
+- **生产表**：sw_industry_index 31 码，latest=20260814 → lag 15 会话 > 容差 3
+- **补拉**：AkShare 采集 20260815..20260904 缺失会话 → 465 行 / 31 码 / 0 错误
+- **存储**：v2 `_akshare_sw_index_daily` 表（source='akshare' 显式标注）
+- **新鲜度**：lag 15 → **0**（覆盖 15/15 开市会话，目标 ≤3 ✓）
+- **fail-closed**：0 错误（全部成功；若有错误 → 源标 stale、正式运行拒绝）
