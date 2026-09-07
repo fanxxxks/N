@@ -3,7 +3,7 @@
 - **【终态权威声明（2026-09-07 captain 确认后 governance 定稿）】**：本
   记录各历史层的编号与状态陈述**以下条为准**——**F1 = p23**
   （docs/p23_f1_slow_fundamental_quality_draft.md，用户「批准」亲批、
-  实施 = `eab1061`）；**INDUSTRY_MOMENTUM = p22**（方向重预注册提案
+  实施 = `eab1061` + `300cf70`（候选名更正，见 F1 实施闭环第 5 条））；**INDUSTRY_MOMENTUM = p22**（方向重预注册提案
   REJECTED——`12a7ed7` 的 −1 翻转系基于 captain 阶段二误批准（未核
   在案 REJECTED 冗余裁决），已被 `6644e662` (b) 回退裁定取代：
   expected_direction 回 +1、REGISTRY 11→10、−1 观察留档；驳回人/理由/
@@ -137,6 +137,19 @@
      核验与该实施逐项对应；
   4. **在途**：81 名重测（detached）→ 族门裁决 → 测量日志 → t24 闭环；
      裁决结果（通过/负结果）由 factor-engineer 通知后治理记录补终态。
+  5. **【第三次反转（2026-09-07 captain 纠正确认，实施 = `300cf70`）——
+     取代上条第 3 项的 V2 集实施】**：captain 纠正确认（逐字）：「我的
+     『v2 覆盖』裁定错误，用户「批准」效力 = v1 表格」——**恢复用户
+     亲批四因子**（NET_MARGIN_TREND_4Q/LEVERAGE_TREND_4Q/
+     CAPEX_INTENSITY/CFO_TO_DEBT），实施 = `300cf70`（p23 v5）：
+     GRAMMAR 8→**9**（generation 9 分派注册）、FEATURE_REGISTRY 12→
+     **14**（现值链：t70 8→9 → t24 路由 9→10 → p22 10→11 → F1 11→12
+     → 本反转回退 12→13 → 本纠正确认 13→14，单调无跳号）、
+     RESEARCH_DOMAIN 3→**4**、词表 81 名 78-81 = 上述四因子、
+     fingerprint ce13e7a67fb9、CONTRACTS p23 索引行候选名在 `300cf70`
+     更正（eab1061 登记该行、300cf70 更正候选名）。链上每次名称集
+     变更恰一次 bump，全程 p23 §5/§10 披露（含 captain 纠正确认逐字）。
+     本条取代上条第 3 项（V2 集实施）为 F1 实施的现行终态。
 
 - 性质：治理登记核验（evidence-only）。核验对象 = factor-engineer 的
   F 批次登记包（codex/factor-semantic-fixes）：
