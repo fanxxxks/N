@@ -57,7 +57,32 @@
   实施时点真实常量重算）。p23 文件头的批准行由实施 commit 按 p16
   `2f5e18b` 先例补记（引用本核验记录 + 批准原文）。**【编号二次纠正
   后更正】本条的"p23 四候选"指称按新编号读作 p22 四候选（F1），批准
-  范围与效力不变。**
+  范围与效力不变。****【2026-09-07 编号回摆终定】该更正再次被编号回摆
+   取代——F1 终定 = p23（docs/p23_f1_slow_fundamental_quality_draft.md，
+   标题 v4；CONTRACTS 索引行随实施 commit `eab1061` 同 commit 登记），
+   本条指称恢复字面正确；p22 = INDUSTRY_MOMENTUM REJECTED 记录占用。
+   批准范围与效力始终不变。
+
+- **【F1 实施闭环 + V1 实施回退披露（2026-09-07 factor-engineer 报告，
+  governance 按 eab1061 树状态复核）】**：
+  1. **编号终定**：F1 = **p23**（`docs/p23_f1_slow_fundamental_quality_draft.md`，
+     标题 v4 = 路线图原指名四因子；CONTRACTS.md p23 索引行随实施 commit
+     `eab1061` 同 commit 登记）——本记录此前的 p22 指称（825c929/12a7ed7
+     中间态）被编号回摆取代，p22 编号由 INDUSTRY_MOMENTUM REJECTED 记录
+     占用；
+  2. **V1 集实施曾发生并按批准范围裁定回退**：`c132ae7` 实施了 V1 自提
+     候选集（早于 captain 批准范围裁定 90d40661 的生效）→ 按裁定
+     （批准效力覆盖 v2 而非 v1）revert（`24520cb`）——本核验 §7 的
+     批准范围确认点先行标记了该风险，回退即裁定的落实；
+  3. **V2 集（路线图四因子）实施 = `eab1061`**：GRAMMAR 7→8（generation 8
+     分派注册）、FEATURE_REGISTRY 11→12（现值链：t70 8→9 → t24 路由
+     9→10 → p22 10→11 → F1 11→12，单调无跳号）、RESEARCH_DOMAIN 3→4、
+     词表 77→81 追加不移位、CONTRACTS p23 索引同 commit、RED 先行、
+     fail-closed 连锁（probe 81/13/68 + fingerprint 52f0988fd76b +
+     baseline 刷新）、全量串行 1,690/1/0——核验记录 §1/§7 的 p23 内容
+     核验与该实施逐项对应；
+  4. **在途**：81 名重测（detached）→ 族门裁决 → 测量日志 → t24 闭环；
+     裁决结果（通过/负结果）由 factor-engineer 通知后治理记录补终态。
 
 - 性质：治理登记核验（evidence-only）。核验对象 = factor-engineer 的
   F 批次登记包（codex/factor-semantic-fixes）：
