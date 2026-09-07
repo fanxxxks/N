@@ -66,7 +66,9 @@ L3 消费层       AshareDataLoader / 因子注册表（既有唯一正式路径
 
 - 正式路径**禁止**在 Tushare 失败后静默混入 AkShare/BaoStock 数据（AkShare/
   BaoStock 只可作审计对比且必须显式标注；Tushare 失败 → 数据标 stale + 正式
-  运行拒绝启动）。
+  运行拒绝启动）。**预注册显式例外（唯一，勘误 #5）**：申万指数日线
+  （801xxx）单一 feed 允许 AkShare 采集——条件与边界见 §15.2 勘误 #5
+  （2026-09-07 用户批准「选2」）。
 - `TUSHARE_TOKEN` 为机密：只允许存在于进程环境或 git-ignored 的 `config/.env`
   （`.gitignore` 的无斜杠模式 `.env` 覆盖任意层级同名文件，已核对
   main @ 8ff21f6 的 `.gitignore` L12）；禁止进入本计划、代码、日志、异常、
@@ -587,6 +589,20 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
 2. **正式路径静默混入 AkShare/BaoStock**：Tushare 失败后未经显式裁决换源；
    审计对比数据未标注混入正式表。Tushare 失败 → 该源标 stale、依赖它的
    正式运行拒绝启动。
+   **预注册显式例外（勘误 #5，2026-09-07 用户批准「选2」——唯一例外）**：
+   **申万指数日线（801xxx）单一 feed 允许 AkShare 采集**。事实基础：
+   Tushare 2000 积分档不含申万指数日线（`index_daily` 对 801xxx 实测
+   0 行，D1c/D3 实证）——属**权限缺口而非接口失败**，本例外不是"Tushare
+   失败后换源"；生产老库 `sw_industry_index` 本就源自 AkShare（legacy
+   同源先例）。例外条件（全部必须成立，任一失守即回到本红线禁止状态）：
+   (a) **仅此一个 feed**——申万指数日线（801xxx）之外的一切数据保持
+   Tushare 单源，本例外不得类推至任何其他端点或数据类；
+   (b) **source='akshare' 显式标注入库**（行级/台账级可追溯，禁止无标注
+   混入）；
+   (c) **失败 fail-closed**：AkShare 拉取失败 → 该源标 stale、依赖它的
+   正式运行拒绝启动（与 Tushare 失败同款处置），禁止静默降级或换源凑数；
+   (d) §12 覆盖率门同等适用（申万指数滞后 ≤3 会话）。
+   实施归属：data-engineer（akshare_client 窄口径采集路径，仅此端点）。
 3. **行业区间重叠**：同股同层同会话多有效行业（含回填审计与消费端校验）。
 4. **财务修订版本被覆盖/删除**：任何对版本表的按业务键 UPDATE/DELETE；
    update_flag 被过滤或丢失。
@@ -777,3 +793,26 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
 - **执行清单（本 commit 实际改动）**：§6.2 增补第 6 条消费语义（非季末
   end_date 行不参与季度累计 TTM 期间算术、相关特征该期 NaN + 审计计数、
   balance/cashflow 零不规则行记录、禁止静默丢弃行）。其余 DDL/规则零改动。
+
+### 勘误 #5（t76，2026-09-07，用户批准「选2」——申万指数日线 AkShare 显式标注例外）
+
+- **触发链**：v2 回填实测——Tushare 2000 积分档**不含申万指数日线**
+  （`index_daily` 对 801xxx 返回 0 行，data-engineer 实测）；行业指数
+  数据滞后 15 会话 **> 3** → §12 覆盖率门拒绝、D7 数据资格门拒绝
+  config 5。申万指数日线是行业相对/动量特征（IND_REL_*/INDUSTRY_
+  MOMENTUM）与 §12 申万指数新鲜度门的输入。
+- **两选项对比（用户裁决输入）**：(1) Tushare 积分升级以获得 801xxx
+  index_daily 权限——**花钱方案（≈¥500/年量级）**；(2) AkShare 显式
+  标注例外——零成本，生产行业指数数据本就源自 AkShare。**用户选择 (2)**
+  （批准原文见下）。
+- **用户批准原文（逐字）**：「选2」（2026-09-07，经 captain 会话转达）
+  ——即采纳 AkShare 显式标注勘误方案（否决积分升级花钱方案）。
+- **例外边界（显式，见 §15.2 勘误 #5 全文）**：仅限申万指数日线
+  （801xxx）这一个 feed；其余全部数据保持 Tushare 单源；AkShare 采集
+  路径需 source='akshare' 显式标注 + 失败 fail-closed（不静默降级）；
+  生产老库 sw_industry_index 同源先例引用。
+- **实施归属**：data-engineer（akshare_client 窄口径采集路径，仅此
+  端点；AkShare 采集实现任务已 deps 本勘误）。
+- **执行清单（本 commit 实际改动）**：§15.2 红线 2 增补预注册显式例外
+  全文（事实基础/四条件/实施归属）；§1.3 铁律补例外指针。其余 DDL/
+  规则零改动。
