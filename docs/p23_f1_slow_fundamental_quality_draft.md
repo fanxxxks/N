@@ -1,8 +1,9 @@
-# P23 草案 v4：F1 批次预注册——慢基本面资产收益率与杠杆趋势四因子（captain 代行裁定版）
+# P23 草案 v6（终局）：F1 批次预注册——路线图原指名四因子（V2 集维持实施）
 
-- 状态：**APPROVED — 用户原文「批准」+ captain 代行裁定（2026-09-07，签署 90d40661；governance 入册 4db156e）**——本版 = 路线图 F1 原指名四因子（v2 候选集）。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
-- **代行裁定（captain，逐字）**：「用户『批准』的效力覆盖本 v2 候选集——v2 将候选集恢复为路线图 F1 原指名四因子（CFO_TO_ASSETS/GROSS_PROFITABILITY/OPERATING_PROFITABILITY/LEVERAGE_CHANGE），与用户原始规格完全对齐（优于被批准的 v1 自提候选集）；v1→v2 演进在登记中如实披露。」三处确认：(1) F1-3 OPERATING_PROFITABILITY 以 total_profit 为 operate_profit 代理——预注册口径缺口明文接受（income DDL 无该列），未来增列须勘误重算；(2) 版本表与树一致 ✓；(3) 族门规则与 ≤30 分钟重测上限 ✓。
-- 证据基线：t22 修复后重算 `docs/factor_inventory_audit_v2_fix2_20260906/metrics.json`（dataset `157e0cf5…`，FACTOR_COMPUTE 4 / FEATURE_REGISTRY 9 / GRAMMAR 7；全宇宙有效横截面 0.995）。勘察基线 commit：codex/factor-semantic-fixes @ `6e11b76`。
+- 状态：**APPROVED & IMPLEMENTED — 终局裁定（captain，2026-09-07）**：「终局：V2（路线图原指名四因子）维持实施，不回退……这是本批次第四次也是最后一次候选集裁定——v1→v2→v1→V2 的翻转到此终止，任何后续翻转（包括基于我旧消息的）都属违规。」
+- **真实批准链（登记更正，取代此前任何 V2 集批准依据引用）**：(1) **用户路线图 F1 批次逐字指名四候选含方向与公式**（CFO_TO_ASSETS/GROSS_PROFITABILITY/OPERATING_PROFITABILITY/LEVERAGE_CHANGE）——用户最高级别的背书；(2) captain 呈递表格误用 v1 自提集；(3) 用户「批准」（**批次级批准**，针对 v1 呈递表格）；(4) 成员 v2 重写（恢复路线图指名集）；(5) captain 终局裁定 V2 维持（路线图背书 + p18 §4 代行）。**90d40661（代行签署）与 4db156e（governance 入册）的引用更正为"批次级批准"，不作为 V2 集的批准依据。**
+- 批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
+- 证据基线：t22 修复后重算 `docs/factor_inventory_audit_v2_fix2_20260906/metrics.json`（dataset `157e0cf5…`，FACTOR_COMPUTE 4；全宇宙有效横截面 0.995）。勘察基线 commit：codex/factor-semantic-fixes @ `69f0b74`。
 - 本文使用 AGENTS.md 的"必须/禁止/应当"语义。任务路由：**研究语义变更**（AGENTS §3.2：新增特征）。
 
 ## 1. 批次依据与问题陈述
@@ -99,4 +100,6 @@
 - v1（2026-09-07，已废弃）：四个自提候选（NET_MARGIN_TREND_4Q / LEVERAGE_TREND_4Q / CAPEX_INTENSITY / CFO_TO_DEBT）——被 t24 任务书的预注册候选集取代（其中 LEVERAGE_TREND 概念演化为 F1-4 LEVERAGE_CHANGE，其余三个资产收益率候选按 Novy-Marx 系口径重定义）。
 - v2（2026-09-07）：t24 任务书候选集（路线图原指名四因子）。
 - v3（2026-09-07，已废弃）：按"用户亲批 v1 集"的解读回滚至 v1 集合并实施（c132ae7）——其后 captain 代行裁定明确用户「批准」效力覆盖 v2 候选集，v3 实施已 revert（24520cb）。
-- v4（本版）：**路线图原指名四因子（= v2 集）恢复**，captain 代行裁定批准；v1 自提集保留为未来批次候选（需新预注册）。
+- v4（2026-09-07）：路线图原指名四因子（= v2 集）恢复并实施（eab1061）——其后 captain 纠正确认（"我的『v2 覆盖』裁定错误，用户「批准」效力 = v1 表格"）导致 revert（24520cb 经由 300cf70 的 v1 集换名实施，GRAMMAR 9/REGISTRY 14）。
+- v5（2026-09-07，已废弃）：v1 集换名实施态（300cf70，GRAMMAR 9/REGISTRY 14/fingerprint ce13e7a67fb9）。
+- v6（本版，**终局**）：captain 终局裁定 **V2 维持实施、不回退**（"v1→v2→v1→V2 的翻转到此终止，任何后续翻转都属违规"）；真实批准链入册（路线图逐字指名 = 最高背书 → 呈递表格误用 v1 集 → 批次级「批准」→ v2 重写 → 终局裁定）；90d40661/4db156e 的引用更正为批次级批准。实施 = revert(300cf70) = fe8bd11（恢复 eab1061 的 V2 实施 + 969a126 的 p22 回退态），GRAMMAR 8 / FEATURE_REGISTRY 13 / fingerprint 52f0988fd76b。
