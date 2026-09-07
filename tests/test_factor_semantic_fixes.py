@@ -314,9 +314,11 @@ def test_turnover_ma20_deprecated_per_part_a_ruling():
     # survive (legacy formulas keep resolving by name).
     assert "TURNOVER_MA20" in FEATURE_NAMES
     assert "TURNOVER_MA20" in FORMULA_VOCAB.feature_names
-    # The deprecation leaves the sampling space -> the grammar generation
-    # bumps (the same discipline as every prior deprecated-set change).
-    assert GRAMMAR_VERSION == 7
+    # The deprecation left the sampling space -> the grammar generation
+    # bumped (the same discipline as every prior deprecated-set change).
+    # The p23 v4 F1 append subsequently bumped 7 -> 8 (the append keeps
+    # ids 1-77 stable, so this test's assertions are unchanged).
+    assert GRAMMAR_VERSION == 8  # v8 (p23 v4 F1 batch) on top of v7 (this deprecation)
     # Promotion eligibility lost (the registry mirrors the metadata).
     assert FEATURE_METADATA["TURNOVER_MA20"].promotion_allowed is False
 

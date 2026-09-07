@@ -1,6 +1,7 @@
-# P23 草案 v2：F1 批次预注册——慢基本面资产收益率与杠杆趋势四因子
+# P23 草案 v4：F1 批次预注册——慢基本面资产收益率与杠杆趋势四因子（captain 代行裁定版）
 
-- 状态：**DRAFT v2 — 待 governance-auditor 核对编号与登记 + 用户批准后实施**（v1 草案的四个自提候选被 t24 任务书的预注册候选集取代；起草：factor-engineer，2026-09-07）。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
+- 状态：**APPROVED — 用户原文「批准」+ captain 代行裁定（2026-09-07，签署 90d40661；governance 入册 4db156e）**——本版 = 路线图 F1 原指名四因子（v2 候选集）。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
+- **代行裁定（captain，逐字）**：「用户『批准』的效力覆盖本 v2 候选集——v2 将候选集恢复为路线图 F1 原指名四因子（CFO_TO_ASSETS/GROSS_PROFITABILITY/OPERATING_PROFITABILITY/LEVERAGE_CHANGE），与用户原始规格完全对齐（优于被批准的 v1 自提候选集）；v1→v2 演进在登记中如实披露。」三处确认：(1) F1-3 OPERATING_PROFITABILITY 以 total_profit 为 operate_profit 代理——预注册口径缺口明文接受（income DDL 无该列），未来增列须勘误重算；(2) 版本表与树一致 ✓；(3) 族门规则与 ≤30 分钟重测上限 ✓。
 - 证据基线：t22 修复后重算 `docs/factor_inventory_audit_v2_fix2_20260906/metrics.json`（dataset `157e0cf5…`，FACTOR_COMPUTE 4 / FEATURE_REGISTRY 9 / GRAMMAR 7；全宇宙有效横截面 0.995）。勘察基线 commit：codex/factor-semantic-fixes @ `6e11b76`。
 - 本文使用 AGENTS.md 的"必须/禁止/应当"语义。任务路由：**研究语义变更**（AGENTS §3.2：新增特征）。
 
@@ -59,7 +60,7 @@
 | 版本 | 旧 | 新 | 理由 |
 |---|---|---|---|
 | GRAMMAR（vocab.py） | 7 | 8 | 词表 77→81（追加，token id 不移位）；generation 8 注册 remap 分派（布局 = 7 布局追加）。（captain 裁决 2c 原文为 8→9——其 Part A 基线假设 7；实际 Part A 基线为 6，落地 6→7，故 F1 为 7→8；语义内容一致） |
-| FEATURE_REGISTRY | 10 | 11 | 4 特征元数据 + depends_on。（captain 裁决 2c 原文为 9→10——未计入 INDUSTRY_MOMENTUM 负结果翻转的 9→10；F1 按其实际基线 10 顺延为 10→11） |
+| FEATURE_REGISTRY | 11 | 12 | 4 特征元数据 + depends_on。（captain 裁决 2c 原文为 9→10——未计入 t70 8→9、INDUSTRY_MOMENTUM 翻转 9→10、p22 翻转 10→11 的先行消费；V1 实施 c132ae7 曾消费 11→12，revert 24520cb 后由本 v4 实施重新消费——终值一致） |
 | RESEARCH_DOMAIN | 3 | 4 | slow_fundamental 16→20 |
 | FACTOR_COMPUTE | 4 | 不变 | 纯特征追加，既有行计算语义零改动（p13 先例） |
 | DATA_TIER | 2 | 不变 | PIT_FUNDAMENTAL→B 既有映射 |
@@ -96,4 +97,6 @@
 ## 10. 草案沿革
 
 - v1（2026-09-07，已废弃）：四个自提候选（NET_MARGIN_TREND_4Q / LEVERAGE_TREND_4Q / CAPEX_INTENSITY / CFO_TO_DEBT）——被 t24 任务书的预注册候选集取代（其中 LEVERAGE_TREND 概念演化为 F1-4 LEVERAGE_CHANGE，其余三个资产收益率候选按 Novy-Marx 系口径重定义）。
-- v2（本版）：t24 任务书候选集。
+- v2（2026-09-07）：t24 任务书候选集（路线图原指名四因子）。
+- v3（2026-09-07，已废弃）：按"用户亲批 v1 集"的解读回滚至 v1 集合并实施（c132ae7）——其后 captain 代行裁定明确用户「批准」效力覆盖 v2 候选集，v3 实施已 revert（24520cb）。
+- v4（本版）：**路线图原指名四因子（= v2 集）恢复**，captain 代行裁定批准；v1 自提集保留为未来批次候选（需新预注册）。

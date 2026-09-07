@@ -103,7 +103,7 @@ def test_registry_version_is_pinned():
     # placeholders become authoritative metadata (4 features join the
     # vocabulary).  Whitelist §10.1 case 2 — requirement change pre-registered
     # in the approved p13 contract.
-    assert FEATURE_REGISTRY_VERSION == 11  # p22 approved execution: INDUSTRY_MOMENTUM direction +1 -> -1; prior: 10 = t24 routing negative result
+    assert FEATURE_REGISTRY_VERSION == 12  # p23 v4 (user-approved F1 batch)  # p22 approved execution: INDUSTRY_MOMENTUM direction +1 -> -1; prior: 10 = t24 routing negative result
 
 
 def test_expected_horizon_derives_from_research_domains():

@@ -421,6 +421,44 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         promotion_allowed=False,
         depends_on=("industry_membership_pit", "close"),
     ),
+    # F1 batch (p23 v4, user-approved via the captain's delegated ruling):
+    # the four slow-fundamental quality factors (asset-yield ratios and the
+    # leverage trend) — all as-of computed from the v2 version tables via
+    # the family-5 single path.  OPERATING_PROFITABILITY's pre-registered
+    # proxy: total_profit stands in for operate_profit (absent from the
+    # p17 income DDL; an erratum + recompute if the column is added).
+    "CFO_TO_ASSETS": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="CFO-to-assets: operating cash flow per unit of average total assets marks cash-creation intensity and financial flexibility.",
+        expected_direction=1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("n_cashflow_act", "total_assets"),
+    ),
+    "GROSS_PROFITABILITY": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Gross profitability (Novy-Marx): gross profit per unit of average total assets marks pricing power and cost-structure quality.",
+        expected_direction=1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("revenue", "oper_cost", "total_assets"),
+    ),
+    "OPERATING_PROFITABILITY": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Operating profitability: total profit per unit of average total assets marks comprehensive earning power.",
+        expected_direction=1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("total_profit", "total_assets"),
+    ),
+    "LEVERAGE_CHANGE": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Leverage trend: a 4-report-period rise in the debt ratio marks distress-driven underperformance.",
+        expected_direction=-1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("total_liab", "total_assets"),
+    ),
     # Intraday decomposition (return-like).
     "OVERNIGHT_RET": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=2),

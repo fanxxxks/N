@@ -62,6 +62,10 @@ FUNDAMENTAL_PIT_NAMES = (
     "ACCRUALS",
     "ASSET_GROWTH",
     "EARNINGS_ACCEL",
+    "CFO_TO_ASSETS",
+    "GROSS_PROFITABILITY",
+    "OPERATING_PROFITABILITY",
+    "LEVERAGE_CHANGE",
 )
 
 # Level fields that fill forward from their announcement date unchanged.
@@ -310,6 +314,17 @@ def _fetch_fundamental_rows(
 
 _FAMILY5_NAMES = ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL")
 
+# F1 batch (p23 v4, user-approved via the captain's delegated ruling): the
+# four slow-fundamental quality factors computed from the same
+# winner-resolved as-of timelines (CFO/assets, gross profitability,
+# operating profitability, leverage change).
+_F1_NAMES = (
+    "CFO_TO_ASSETS",
+    "GROSS_PROFITABILITY",
+    "OPERATING_PROFITABILITY",
+    "LEVERAGE_CHANGE",
+)
+
 
 def _piecewise_lookup(
     timeline: list[tuple[str, str, float]], session: str
@@ -380,7 +395,7 @@ def _family5_asof_frames(
 
     frames = {
         name: pd.DataFrame(np.nan, index=ts_codes, columns=dates)
-        for name in _FAMILY5_NAMES
+        for name in _FAMILY5_NAMES + _F1_NAMES
     }
     date_index = {date: position for position, date in enumerate(dates)}
 
@@ -425,15 +440,23 @@ def _family5_asof_frames(
         income_stock = income_grouped.get(code, _empty)
         balance_stock = balance_grouped.get(code, _empty)
         cashflow_stock = cashflow_grouped.get(code, _empty)
-        if income_stock.empty:
+        if income_stock.empty and balance_stock.empty and cashflow_stock.empty:
+            # Nothing to compose for any feature (the F1 leverage change
+            # composes from balance alone — a stock with balance rows but
+            # no income rows still gets it; its income-TTM-derived frames
+            # degrade to NaN inside the loop).
             continue
         stock_row = code_index.get(code)
         if stock_row is None:
             continue
 
         income_cum = _per_stock_intervals(income_stock, "n_income_attr_p").get(code, {})
+        revenue_cum = _per_stock_intervals(income_stock, "revenue").get(code, {})
+        oper_cost_cum = _per_stock_intervals(income_stock, "oper_cost").get(code, {})
+        total_profit_cum = _per_stock_intervals(income_stock, "total_profit").get(code, {})
         cashflow_cum = _per_stock_intervals(cashflow_stock, "n_cashflow_act").get(code, {})
         assets_level = _per_stock_intervals(balance_stock, "total_assets").get(code, {})
+        liab_level = _per_stock_intervals(balance_stock, "total_liab").get(code, {})
 
         def _cum_maps(end_date: str, cum: dict[str, list[tuple[str, str, float]]]):
             return [
@@ -520,6 +543,52 @@ def _family5_asof_frames(
             timeline = _merge_timelines(maps, combine)
             _cashflow_ttm_cache[end_date] = timeline
             return timeline
+
+        # F1 batch (p23 v4, user-approved via the captain's delegated
+        # ruling): the flow-TTM machinery is shared across every
+        # cumulative-flow column (§9.1 dedup — one combine, four users).
+        revenue_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
+        oper_cost_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
+        total_profit_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
+
+        def _flow_ttm_timeline_for(cum_map, cache):
+            def timeline_for(end_date: str) -> list[tuple[str, str, float]]:
+                if end_date in cache:
+                    return cache[end_date]
+                maps = _cum_maps(end_date, cum_map)
+
+                def combine(values):
+                    cums = list(values)
+                    singles: list[float] = []
+                    for position in range(1, 5):
+                        current = cums[position]
+                        previous = cums[position - 1]
+                        quarter_end = _shift_report_date(end_date, 4 - position)
+                        if current is None or not np.isfinite(current):
+                            return None
+                        if quarter_end[4:] == "0331" or previous is None or not np.isfinite(
+                            previous
+                        ):
+                            if quarter_end[4:] != "0331":
+                                return None
+                            singles.append(float(current))
+                        else:
+                            singles.append(float(current) - float(previous))
+                    if len(singles) != 4:
+                        return None
+                    return float(sum(singles))
+
+                timeline = _merge_timelines(maps, combine)
+                cache[end_date] = timeline
+                return timeline
+
+            return timeline_for
+
+        _revenue_ttm_timeline = _flow_ttm_timeline_for(revenue_cum, revenue_ttm_cache)
+        _oper_cost_ttm_timeline = _flow_ttm_timeline_for(oper_cost_cum, oper_cost_ttm_cache)
+        _total_profit_ttm_timeline = _flow_ttm_timeline_for(
+            total_profit_cum, total_profit_ttm_cache
+        )
 
         def _piecewise_fill(frame: pd.DataFrame, timeline: list[tuple[str, str, float]]):
             date_ints = np.asarray([int(d) for d in dates])
@@ -624,6 +693,82 @@ def _family5_asof_frames(
                 ),
             )
             _piecewise_fill(frames["EARNINGS_ACCEL"], accel)
+
+            # F1 batch (p23 v4, user-approved via the captain's delegated
+            # ruling): the four slow-fundamental quality factors — CFO per
+            # average assets, the gross and operating profitability ratios,
+            # and the leverage 4-report-period change — composed from the
+            # same winner-resolved as-of timelines (p23 v4 §2 formulas).
+            def _div_guarded(a_tl, b_tl):
+                return _merge_timelines(
+                    [a_tl, b_tl],
+                    combine=lambda values: (
+                        values[0] / values[1]
+                        if values[0] is not None
+                        and np.isfinite(values[0])
+                        and values[1] is not None
+                        and np.isfinite(values[1])
+                        and values[1] > 0
+                        else None
+                    ),
+                )
+
+            def _sub_guarded(a_tl, b_tl):
+                return _merge_timelines(
+                    [a_tl, b_tl],
+                    combine=lambda values: (
+                        values[0] - values[1]
+                        if values[0] is not None
+                        and np.isfinite(values[0])
+                        and values[1] is not None
+                        and np.isfinite(values[1])
+                        else None
+                    ),
+                )
+
+            def _mean_guarded(a_tl, b_tl):
+                return _merge_timelines(
+                    [a_tl, b_tl],
+                    combine=lambda values: (
+                        (values[0] + values[1]) / 2.0
+                        if values[0] is not None
+                        and np.isfinite(values[0])
+                        and values[1] is not None
+                        and np.isfinite(values[1])
+                        else None
+                    ),
+                )
+
+            prev_end_f1 = _shift_report_date(end_date, 4)
+            assets_tl_f1 = assets_level.get(end_date, [])
+            assets_prev_tl_f1 = assets_level.get(prev_end_f1, [])
+            avg_assets_tl = _mean_guarded(assets_tl_f1, assets_prev_tl_f1)
+
+            cfo_to_assets_tl = _div_guarded(
+                _cashflow_ttm_timeline(end_date), avg_assets_tl
+            )
+            _piecewise_fill(frames["CFO_TO_ASSETS"], cfo_to_assets_tl)
+
+            gross_tl = _sub_guarded(
+                _revenue_ttm_timeline(end_date), _oper_cost_ttm_timeline(end_date)
+            )
+            gross_profitability_tl = _div_guarded(gross_tl, avg_assets_tl)
+            _piecewise_fill(frames["GROSS_PROFITABILITY"], gross_profitability_tl)
+
+            operating_profitability_tl = _div_guarded(
+                _total_profit_ttm_timeline(end_date), avg_assets_tl
+            )
+            _piecewise_fill(
+                frames["OPERATING_PROFITABILITY"], operating_profitability_tl
+            )
+
+            liab_tl = liab_level.get(end_date, [])
+            liab_prev_tl = liab_level.get(prev_end_f1, [])
+            lev_now = _div_guarded(liab_tl, assets_tl_f1)
+            lev_prev = _div_guarded(liab_prev_tl, assets_prev_tl_f1)
+            _piecewise_fill(
+                frames["LEVERAGE_CHANGE"], _sub_guarded(lev_now, lev_prev)
+            )
 
     return frames
 
