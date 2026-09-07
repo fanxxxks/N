@@ -40,4 +40,4 @@ P9 契约 §4.1 的淘汰表以 TURNOVER 族共线证据淘汰了 TURNOVER_MA5�
 - **governance-auditor 裁决：选项 A**（Part A 机械执行）——理由要点：(1) t69 豁免是有条件豁免，条件已触发（四轮 rho 0.914/0.914/0.919/0.914 持续 >=0.9 跨两代底座与修复边界 + 增量证据 STD20 ICIR 四轮恒强）；再次豁免 = 把条件豁免变成无条件豁免；(2) Part A tiebreaker（弃弱者）无歧义（MA20 每轮更弱）；(3) 语义代价有界（水平维度由 TURNOVER 覆盖、波动维度由 STD20 覆盖）；(4) 内在一致性（新因子须过 |corr|<0.9 而书内自持 0.914 对不自洽）；(5) 选项 B（看完四轮数据追认例外）属 AGENTS §1 防的事后放宽形态，否决。
 - **实施 @ 596550a**：DEPRECATION_REASONS += TURNOVER_MA20；GRAMMAR 6→7（采样空间变更；generation 7 注册进 remap 分派，token 布局与 6 相同——弃用不移 id）；FEATURE_REGISTRY 7→8（TURNOVER_MA20 promotion_allowed=False）；docs/feature_registry.md 再生；钉值更新（GRAMMAR 7、REGISTRY 8、feature_version hash 2217cb8d4902——按设计变更）；RED 先行（test_turnover_ma20_deprecated_per_part_a_ruling 在冻结代码上失败）。
 - **版本号披露**：governance 指令原文 GRAMMAR 7→8 / FEATURE_REGISTRY 8→9 以 F1 先行为前提；实际执行时点 F1 尚未批准，按当时现值 6→7 / 7→8 落地，F1 批准时顺延（其草案版本表将随实施更新）。
-- p21（F1 四因子草案）不受本弃用影响（四候选与 TURNOVER_MA20 无共线关系）；p22（INDUSTRY_MOMENTUM 方向注记）同。
+- p22（F1 四因子草案，原编号 p21）不受本弃用影响（四候选与 TURNOVER_MA20 无共线关系）；p23（INDUSTRY_MOMENTUM 方向注记，原编号 p22）同。
