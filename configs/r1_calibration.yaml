@@ -39,8 +39,11 @@ protocol:
   frequency: every_10_days
   horizon: 10
   seeds: [42]
-  screening: {steps: 2, batch_size: 32}
-  confirmation: {steps: 2, batch_size: 32}
+  # steps/batch mirror the campaign screening tier (S=512, batch>=256 for
+  # the trained arm's advantage normalization) so the measured s/eval is
+  # the campaign's own cost, not a degenerate-small-batch artifact.
+  screening: {steps: 2, batch_size: 256}
+  confirmation: {steps: 2, batch_size: 256}
 
 backtest:
   start_date: "2015-01-01"
