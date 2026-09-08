@@ -55,9 +55,9 @@ P6 已把研究域按预测周期拆分（short/medium/slow，`RESEARCH_DOMAIN_V
 |---|---|---|---|---|---|---|---|
 | 1 | r1_medium_a | medium_cross_section | 17（域 31 ∩ A 22 − deprecated 5） | every_10_days / h=10 | MOMENTUM_20, RSQ_60, REVERSAL_60（域默认去掉 Tier C 的 IND_REL_RET_20；方向=训练窗规则，§2.8） | A | D7 PASS，可运行 |
 | 2 | r1_medium_ab | medium_cross_section | 19（17 A + 2 B） | every_10_days / h=10 | 同上 | AB | D7 PASS，可运行 |
-| 3 | r1_slow_ab | slow_fundamental | 16（1×A + 15×B，无 C，域全集） | every_20_days / h=20 | ROE, PE_TTM, REVENUE_YOY, DIVIDEND_YIELD, MARKET_CAP（域默认） | AB | **D7 FAIL**（income_statement_pit 期间覆盖 86.53% < 90%）→ not_run 待数据任务 |
+| 3 | r1_slow_ab | slow_fundamental | 16（1×A + 15×B，无 C，域全集） | every_20_days / h=20 | ROE, PE_TTM, REVENUE_YOY, DIVIDEND_YIELD, MARKET_CAP（域默认） | AB | **可运行**（t73 分母修正 85cf416 后复检 94.15% > 90%，2026-09-08） |
 | 4 | r1_short_a | short_price_volume | 23（域 29 ∩ A 29 − deprecated 6，域全集） | every_5_days / h=5 | REVERSAL_5, TURNOVER, ILLIQ_20, OVERNIGHT_RET, LIMIT_UP_CNT_20（域默认） | A | D7 PASS，可运行 |
-| 5 | r1_unified_base | unified（兼容基线） | 65（全部可采样特征） | daily / h=1 | 生产默认 7 信号（REVERSAL_5, RSQ_60, ILLIQ_20, OVERNIGHT_RET, MOMENTUM_20, ROE, TURNOVER） | 无 | **D7 FAIL**（同 #3 income 项 + industry_index lag 15 > 3）→ not_run 待数据任务 |
+| 5 | r1_unified_base | unified（兼容基线） | 65（全部可采样特征） | daily / h=1 | 生产默认 7 信号（REVERSAL_5, RSQ_60, ILLIQ_20, OVERNIGHT_RET, MOMENTUM_20, ROE, TURNOVER） | 无 | **可运行**（t86 生产 sw_industry_index 刷新后 lag=0，2026-09-08 复检；财报项随 t73 解除） |
 
 配置 1/2 是唯一预注册的域内配对对照（差异 = Tier B 两融对 `MARGIN_BALANCE_CHG`+`MARGIN_CROWD_60` 的纳入）；配置 3/4 的 tier 集合是其域全集的自然构成（声明性标注）。运行特征集的单一解析规则（域 ∩ tier − deprecated）由 §8.2 的单一实现承载，`scripts/r1_data_eligibility_check.py` 消费同一函数。**预算计数器唯一**：S 对五配置取同一值（§5），全部行进同一 campaign ledger，DSR/max-t 同时输出配置级与 campaign 级（§9）。
 
@@ -66,7 +66,7 @@ P6 已把研究域按预测周期拆分（short/medium/slow，`RESEARCH_DOMAIN_V
 - **S = 512**（screening `steps=2, batch_size=256`；batch_size ≥ 256 为 trained 臂优势归一化的稳定性硬约束）。五配置取同一 S；验证子窗口（validation_fraction 0.35 / 4 splits，中位数 val_reward）在一次唯一语义评价内完成，**不产生额外预算行**（reward v15 既有语义）。
 - 每配置每 fold 预算：random S + gp S + tpe S + trained 3×S；每配置合计 **30S = 15,360** 请求评价；五配置合计 **150S = 76,800**（+基线行与 benchmark 行，不计预算）。
 - **预算标定基础**（engineering，仅用于预算 sizing）：2026-09-01 p10 附录 A 实测 0.56–1.01 s/eval（300×400 封顶窗口、daily 调仓、当日数据集）；R1 为全窗口 + 稀疏调仓（medium ~145 个调仓日 vs p10 封顶 ~300），量级相近但未实测。**预注册回退规则**：campaign 启动前（engineering 步骤 0，无任何研究结果产生时）以 medium 配置实测 s/eval；实测均值 > 4 s/eval → S 降为 256（steps=1, batch_size=256）后再启动，其余情况 S 不变。
-- **墙钟上限**：campaign 总墙钟 ≤ 60h（含 5 次全窗口加载，实测单次加载在 t62 并发负载下 > 55 min；无并发时预计显著更短）；单配置 ≤ 12h；首个 fold 的四臂完成后，实测行均墙钟 > 工程投影 2× → 停止后续 seed/配置，campaign 标 FAILED（fail-closed，p10 §4.5 先例）；单行墙钟 > 投影 3× → 测量日志强制解释。
+- **墙钟上限（2026-09-08 修订，captain 代行批准依据 89dd121 授权扩展记录）**：campaign 总墙钟 ≤ **72h**；单配置 ≤ **14h**。修订理由（纯操作性参数，零研究语义影响——因子/公式/判据/预算不变，2× 熔断条款不动，S=512 维持）：实测 load 重尾（r1_medium_a 实测 4h07m vs 校准 3h17m——t75/P14 竞争残余 + 全窗口张量构建重尾）+ 后段 fold 训练窗增长（fold 4 ≈ fold 0 的 1.5–1.7× 单评价成本）。修订前原值：campaign ≤ 60h / 单配置 ≤ 12h。首个 fold 的四臂完成后，实测行均墙钟 > 工程投影 2× → 停止后续 seed/配置，campaign 标 FAILED（fail-closed，p10 §4.5 先例）；单行墙钟 > 投影 3× → 测量日志强制解释。
 - 2026-09-06 fold-0 小预算工程校准在 6C/12T 主机与 t62（P14 测量）并发下运行，全窗口加载阶段 > 55 min 未完成即转后台；其完成后的实测数字只进测量日志，不改已冻结的 S（除非触发上面的回退规则）。
 
 ## 6. 门禁（每配置运行前置，全部硬性）
