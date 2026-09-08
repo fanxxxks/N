@@ -138,3 +138,11 @@
 - **存储**：v2 `_akshare_sw_index_daily` 表（source='akshare' 显式标注）
 - **新鲜度**：lag 15 → **0**（覆盖 15/15 开市会话，目标 ≤3 ✓）
 - **fail-closed**：0 错误（全部成功；若有错误 → 源标 stale、正式运行拒绝）
+
+## t83 生产库 daily_bar 同步（0902-0907 常规日更，G1-G8 全绿）
+
+- **授权依据（透明记录，p18 §3.4）**：生产库 daily_bar 同步为 Tushare 常规日更（生产库一直在做的操作），0902-0907 = 上次同步（0901）后的开市会话（实际 4 个：0902/0903/0904/0907；0905-0906 周末休市）。零 schema 变更、纯追加可逆、非新数据源。captain 裁定用户概括授权（勘误 #2 批准原文「接下来你自行把握即可不用再问我」）覆盖此例行维护——本条为该例外的唯一一次执行。
+- **AGENTS §5.6 有状态操作纪律**：① 只读审计（生产 daily_bar max=20260901，0902-0907 零行，calendar 4 开市会话确认）→ ② 执行（Tushare daily+adj_factor+daily_basic 按日增量，merge 为 legacy schema，db.upsert_daily ON CONFLICT 幂等）→ ③ 复核（逐会话行数对账 + G1-G8）。
+- **增量**：0902 5,547 / 0903 5,549 / 0904 5,548 / 0907 5,549 = **22,193 行**。daily_bar 总量 4,896,877 → 4,919,070，max 20260901 → **20260907**。
+- **G1-G8 复核（生产库，check_production_gates.py）**：**8/8 ALL PASS** ✓（G5 strict-mode ✓、G6 ≥100 eligible ✓、G7 zero-bar ✓、G8 freshness lag ≤3 ✓）——生产库此前 G6/G7 均绿（生产 schema 有完整 index 成分表）。
+- **P14 解锁**：platform-engineer 测量 config（duckdb_path=生产库）的 G8 新鲜度阻塞解除。
