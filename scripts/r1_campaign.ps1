@@ -3,13 +3,17 @@
 # Phase 1 runs the engineering calibration (step 0: the preregistered
 # s/eval measurement behind the p21 §5 S-fallback rule) and stops — the
 # S=512-vs-256 decision is taken from the calibration evidence BEFORE any
-# formal config run.  Phase 2 (-RunConfigs) runs the three runnable
-# configs (r1_medium_a, r1_medium_ab, r1_short_a) strictly sequentially,
-# each as its own evaluation invocation (fresh run_id, one full-window
-# load per config), with marker files so an interrupted driver can be
-# relaunched: completed configs are skipped, incomplete ones re-run
-# (killed partial runs stay in the append-only ledger as attempts; reruns
-# use new run ids — AGENTS §4.3).
+# formal config run.  Phase 2 (-RunConfigs) runs the four runnable
+# configs (r1_medium_a, r1_medium_ab, r1_slow_ab, r1_short_a) strictly
+# sequentially, each as its own evaluation invocation (fresh run_id, one
+# full-window load per config), with marker files so an interrupted
+# driver can be relaunched: completed configs are skipped, incomplete
+# ones re-run (killed partial runs stay in the append-only ledger as
+# attempts; reruns use new run ids — AGENTS §4.3).
+#
+# Native redirection uses Start-Process (PowerShell 5.1 turns redirected
+# native stderr into ErrorRecords under ErrorActionPreference=Stop —
+# loguru writes stderr, so plain `*>` kills the script).
 #
 # The driver never edits configs, never touches production defaults, and
 # performs no data writes: every leg is a read-only-input evaluation whose
@@ -33,21 +37,29 @@ function Write-Marker([string]$name, [string]$state, [string]$detail) {
     Write-Host $line
 }
 
+function Invoke-Eval([string]$id, [string]$config, [string]$output, [string]$ledger, [string[]]$extraArgs) {
+    $outLog = "logs\r1_$id.out.log"
+    $errLog = "logs\r1_$id.err.log"
+    $args = @('-m', 'ashare_model.evaluation', '--config', $config,
+        '--tier', 'screening', '--output', $output, '--ledger', $ledger) + $extraArgs
+    $proc = Start-Process -FilePath $py -ArgumentList $args -NoNewWindow -Wait -PassThru `
+        -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+    return $proc.ExitCode
+}
+
 New-Item -ItemType Directory -Force -Path "data\r1" | Out-Null
 
 # ---- step 0: engineering calibration (budget fallback gate, p21 §5) ----
 if (-not (Test-Path "data\r1\calibration.done")) {
     Write-Marker "calibration" "START" "S=512 preview: fold 0, medium, seed 42"
-    & $py -m ashare_model.evaluation --config configs/r1_calibration.yaml `
-        --tier screening --folds 1 --seeds 42 `
-        --output data/r1/calibration/protocol_result.json `
-        --ledger data/r1/calibration/ledger.jsonl `
-        *> "logs\r1_calibration.log"
-    if ($LASTEXITCODE -eq 0) {
+    $exit = Invoke-Eval "calibration" "configs/r1_calibration.yaml" `
+        "data/r1/calibration/protocol_result.json" "data/r1/calibration/ledger.jsonl" `
+        @('--folds', '1', '--seeds', '42')
+    if ($exit -eq 0) {
         New-Item -ItemType File -Force -Path "data\r1\calibration.done" | Out-Null
-        Write-Marker "calibration" "DONE" "read logs/r1_calibration.log + data/r1/calibration/ledger.jsonl; the preregistered p21 §5 rule decides S=512 vs S=256 BEFORE any config run"
+        Write-Marker "calibration" "DONE" "read logs/r1_calibration.out.log/.err.log + data/r1/calibration/ledger.jsonl; the preregistered p21 §5 rule decides S=512 vs S=256 BEFORE any config run"
     } else {
-        Write-Marker "calibration" "FAILED" "exit $LASTEXITCODE — campaign stopped, evidence in logs/r1_calibration.log"
+        Write-Marker "calibration" "FAILED" "exit $exit — campaign stopped, evidence in logs/r1_calibration.err.log"
         exit 1
     }
 } else {
@@ -76,19 +88,15 @@ foreach ($c in $configs) {
     }
     New-Item -ItemType Directory -Force -Path "data\r1\$id" | Out-Null
     Write-Marker $id "START" "formal run, screening S=512, 5 folds x seeds 42/7/2024"
-    & $py -m ashare_model.evaluation --config $c.cfg `
-        --tier screening `
-        --output "data/r1/$id/protocol_result.json" `
-        --ledger "data/r1/ledger.jsonl" `
-        *> "logs\r1_$id.log"
-    if ($LASTEXITCODE -eq 0) {
+    $exit = Invoke-Eval $id $c.cfg "data/r1/$id/protocol_result.json" "data/r1/ledger.jsonl" @()
+    if ($exit -eq 0) {
         New-Item -ItemType File -Force -Path "data\r1\$id.done" | Out-Null
         Write-Marker $id "DONE" "protocol_result.json written"
     } else {
         # fail-closed per config: keep the evidence, record not_run/failed,
         # continue with the remaining configs (p21 §6: not_run is recorded,
         # never silently skipped).
-        Write-Marker $id "FAILED" "exit $LASTEXITCODE — evidence in logs\r1_$id.log; continuing with remaining configs"
+        Write-Marker $id "FAILED" "exit $exit — evidence in logs\r1_$id.err.log; continuing with remaining configs"
     }
 }
 
