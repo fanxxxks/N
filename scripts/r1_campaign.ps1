@@ -59,10 +59,12 @@ if (-not $RunConfigs) {
     exit 0
 }
 
-# ---- configs 1/2/4 (p21 §4; 3/5 not_run until the data task unblocks) ----
+# ---- configs 1/2/3/4 (p21 §4; config 3 unblocked 2026-09-08 via t73
+# denominator fix 85cf416; config 5 not_run until t81 clears industry_index) ----
 $configs = @(
     @{ id = "r1_medium_a";  cfg = "configs/r1_medium_a.yaml" },
     @{ id = "r1_medium_ab"; cfg = "configs/r1_medium_ab.yaml" },
+    @{ id = "r1_slow_ab";   cfg = "configs/r1_slow_ab.yaml" },
     @{ id = "r1_short_a";   cfg = "configs/r1_short_a.yaml" }
 )
 
