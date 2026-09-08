@@ -146,3 +146,10 @@
 - **增量**：0902 5,547 / 0903 5,549 / 0904 5,548 / 0907 5,549 = **22,193 行**。daily_bar 总量 4,896,877 → 4,919,070，max 20260901 → **20260907**。
 - **G1-G8 复核（生产库，check_production_gates.py）**：**8/8 ALL PASS** ✓（G5 strict-mode ✓、G6 ≥100 eligible ✓、G7 zero-bar ✓、G8 freshness lag ≤3 ✓）——生产库此前 G6/G7 均绿（生产 schema 有完整 index 成分表）。
 - **P14 解锁**：platform-engineer 测量 config（duckdb_path=生产库）的 G8 新鲜度阻塞解除。
+
+## t86 生产库 sw_industry_index 刷新（AkShare established 源，config 5 解禁）
+
+- **授权依据（t83 同授权模式扩展，透明记录）**：AkShare 为该表 established 源（生产 sw_industry_index 本就源自 AkShare legacy），非新数据源；零 schema 变更、纯追加可逆；用户概括授权 + p18 §3.4 例行维护解读。
+- **AGENTS §5.6 纪律**：① 只读审计（生产 max=20260814，gap 0902-0907 共 17 开市会话，31 码）→ ② 执行（AkShare index_hist_sw 801xxx 窄口径采集，delete-then-insert KEYED 幂等 upsert）→ ③ 复核（D7 gate 路径 freshness 直查）。
+- **增量**：**496 行 / 31 码 / 0 错误**。总量 141,378 → 141,874，max 20260814 → **20260907**。
+- **freshness 复检（D7 gate 路径，生产 config）**：lag 16 → **0**（tolerance 3，PASS ✓）——config 5 D7 industry_index 条件解禁。
