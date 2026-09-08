@@ -71,13 +71,15 @@ if (-not $RunConfigs) {
     exit 0
 }
 
-# ---- configs 1/2/3/4 (p21 §4; config 3 unblocked 2026-09-08 via t73
-# denominator fix 85cf416; config 5 not_run until t81 clears industry_index) ----
+# ---- configs 1/2/3/4/5 (p21 §4; config 3 unblocked 2026-09-08 via t73
+# denominator fix 85cf416; config 5 unblocked 2026-09-08 via t86 production
+# sw_industry_index refresh - D7 PASS gate_d7_20260908_t86.json) ----
 $configs = @(
     @{ id = "r1_medium_a";  cfg = "configs/r1_medium_a.yaml" },
     @{ id = "r1_medium_ab"; cfg = "configs/r1_medium_ab.yaml" },
     @{ id = "r1_slow_ab";   cfg = "configs/r1_slow_ab.yaml" },
-    @{ id = "r1_short_a";   cfg = "configs/r1_short_a.yaml" }
+    @{ id = "r1_short_a";   cfg = "configs/r1_short_a.yaml" },
+    @{ id = "r1_unified_base"; cfg = "configs/r1_unified_base.yaml" }
 )
 
 foreach ($c in $configs) {
