@@ -954,3 +954,68 @@ class AkShareClient:
         df = df[df["ts_code"].apply(is_valid_a_share_code)]
         df["index_code"] = index_code
         return df[["index_code", "ts_code"]]
+
+
+def sync_sw_index_source(v2_db_path: str, prod_db_path: str) -> str | None:
+    """Populate the v2 ``sw_industry_index`` table so the D7 freshness
+    gate reads current data (erratum #5 continuation, t81 routing fix).
+
+    The production ``sw_industry_index`` (AkShare legacy source) carries
+    the full history; the v2 ``_akshare_sw_index_daily`` table (t77
+    narrow-scope AkShare collection) carries the fresh sessions.  This
+    sync copies the history into v2 and overlays the fresh rows — no
+    production writes (p18 §3.4 boundary).
+
+    Returns the resulting ``MAX(trade_date)`` (``None`` when the source
+    has no data); the caller's freshness gate computes the lag from it.
+    """
+
+    import duckdb
+
+    prod = duckdb.connect(prod_db_path, read_only=True)
+    try:
+        history = prod.execute(
+            "SELECT index_code, industry_name, trade_date, close "
+            "FROM sw_industry_index"
+        ).fetchdf()
+    finally:
+        prod.close()
+
+    v2 = duckdb.connect(v2_db_path)
+    try:
+        v2.execute(
+            "CREATE TABLE IF NOT EXISTS sw_industry_index ("
+            "index_code VARCHAR, industry_name VARCHAR, "
+            "trade_date VARCHAR, close DOUBLE)"
+        )
+        if not history.empty:
+            v2.register("_sw_history", history)
+            v2.execute("DELETE FROM sw_industry_index")
+            v2.execute(
+                "INSERT INTO sw_industry_index "
+                "SELECT index_code, industry_name, trade_date, close "
+                "FROM _sw_history"
+            )
+        # Overlay the fresh AkShare rows (t77 collection) on top —
+        # delete-then-insert (idempotent; the copied history has no PK
+        # so INSERT OR REPLACE cannot target conflict columns).
+        try:
+            v2.execute(
+                "DELETE FROM sw_industry_index WHERE trade_date IN "
+                "(SELECT trade_date FROM _akshare_sw_index_daily)"
+            )
+            v2.execute(
+                "INSERT INTO sw_industry_index "
+                "SELECT index_code, industry_name, trade_date, close "
+                "FROM _akshare_sw_index_daily"
+            )
+        except duckdb.CatalogException:
+            # t77 table absent — history-only sync (still better than
+            # the gate finding no v2 table at all).
+            pass
+        latest = v2.execute(
+            "SELECT MAX(trade_date) AS latest FROM sw_industry_index"
+        ).fetchone()[0]
+    finally:
+        v2.close()
+    return str(latest) if latest is not None else None
