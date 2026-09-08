@@ -691,3 +691,126 @@ class TestV2Manifest:
         third = build_v2_dataset_manifest(db)
         assert third.dataset_id != first.dataset_id
         assert first.source_versions["tushare_store"] == "1"
+
+
+class TestGateAdapter:
+    """The v2 gate adapter uses parameterized temp tables (not views) to
+    map v2 data to production shapes for G1-G8 (captain裁决: views would
+    silently apply production gate semantics to semantically different
+    v2 tables)."""
+
+    def test_gate_tables_map_v2_to_production_shapes(self, store, tmp_path):
+        st, db = store
+        st.ingest_batch("daily_bar_raw",
+                        _frame("daily_bar_raw", _daily_rows(2)),
+                        params={"trade_date": "20240315"},
+                        fields=["ts_code", "trade_date"], row_limit=6000)
+        st.ingest_batch("daily_adj_factor",
+                        _frame("daily_adj_factor", [
+                            {"ts_code": "000000.SZ", "trade_date": "20240315",
+                             "adj_factor": 1.0},
+                            {"ts_code": "000001.SZ", "trade_date": "20240315",
+                             "adj_factor": 1.0}]),
+                        params={"trade_date": "20240315"},
+                        fields=["ts_code"], row_limit=6000)
+        member_row = {
+            "ts_code": "000001.SZ", "in_date": "20220729",
+            "out_date": None, "is_new": "Y",
+            "l1_code": "801010.SI", "l1_name": "农林牧渔",
+            "l2_code": None, "l2_name": None,
+            "l3_code": None, "l3_name": None,
+        }
+        st.ingest_batch("industry_membership_pit",
+                        _frame("industry_membership_pit", [member_row]),
+                        params={"ts_code": "000001.SZ"},
+                        fields=list(member_row), row_limit=2000)
+        # index_weight_pit is the constituents source for the gate adapter
+        st.ingest_batch("index_weight_pit",
+                        _frame("index_weight_pit", [
+                            {"index_code": "000300.SH",
+                             "con_code": "000001.SZ",
+                             "trade_date": "20240315", "weight": 0.9},
+                        ]),
+                        params={"index_code": "000300.SH"},
+                        fields=["index_code", "con_code"], row_limit=3000)
+        prod_path = str(tmp_path / "prod_ref.duckdb")
+        prod = AshareDB(prod_path)
+        prod.execute(
+            "CREATE TABLE stocks (ts_code VARCHAR, list_date VARCHAR)")
+        prod.execute(
+            "INSERT INTO stocks VALUES ('000001.SZ', '19910403')")
+        prod.execute(
+            "CREATE TABLE trade_calendar (trade_date VARCHAR, is_open BOOLEAN)")
+        prod.execute(
+            "INSERT INTO trade_calendar VALUES ('20240315', true)")
+        prod.close()
+        from ashare_data.config import DataConfig
+        base_config = DataConfig(duckdb_path="dummy")
+        gate_config = st.prepare_gate_tables(prod_path, base_config)
+        assert gate_config.constituents_table == "_gate_constituents"
+        assert gate_config.daily_table == "_gate_daily_bar"
+        assert gate_config.stocks_table == "_gate_stocks"
+        cons = db.query("SELECT * FROM _gate_constituents")
+        assert len(cons) == 1
+        assert cons.iloc[0]["index_code"] == "000300.SH"
+        bars = db.query("SELECT ts_code, volume FROM _gate_daily_bar")
+        assert len(bars) == 2
+        assert "volume" in bars.columns
+        stocks = db.query("SELECT * FROM _gate_stocks")
+        assert stocks.iloc[0]["list_date"] == "19910403"
+        # Cleanup after all assertions
+        st.cleanup_gate_tables()
+        tables_after = set(
+            r[0] for r in db.query(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main'").itertuples(index=False)
+        )
+        assert "_gate_constituents" not in tables_after
+
+
+class TestHashExplicitLevel:
+    """The membership expansion's source_row_hash must explicitly include
+    the level discriminator in its canonical input — not rely on
+    index_code happening to differ.  Each expanded row's content dict
+    contains level (from spec.source_columns), which flows into
+    row_source_hash."""
+
+    def test_expanded_level_rows_have_distinct_hashes(self, store):
+        st, db = store
+        row = {
+            "ts_code": "000001.SZ", "in_date": "20220729",
+            "out_date": None, "is_new": "Y",
+            "l1_code": "801010.SI", "l1_name": "农林牧渔",
+            "l2_code": "801012.SI", "l2_name": "养殖业",
+            "l3_code": "850531.SI", "l3_name": "畜牧养殖",
+        }
+        st.ingest_batch("industry_membership_pit",
+                        _frame("industry_membership_pit", [row]),
+                        params={"ts_code": "000001.SZ"},
+                        fields=list(row), row_limit=2000)
+        stored = db.query(
+            "SELECT level, index_code, source_row_hash "
+            "FROM industry_membership_pit ORDER BY level"
+        )
+        assert len(stored) == 3
+        hashes = list(stored["source_row_hash"])
+        assert len(set(hashes)) == 3, "all three expanded rows must have distinct hashes"
+        assert list(stored["level"]) == [1, 2, 3]
+        assert list(stored["index_code"]) == [
+            "801010.SI", "801012.SI", "850531.SI"]
+
+    def test_level_is_in_hash_content(self):
+        """Direct assertion: the canonical hash input for an expanded row
+        explicitly contains the level field (not a coincidental side
+        effect of index_code differing)."""
+
+        content_with_level = {"index_code": "801010.SI", "level": 1,
+                              "ts_code": "000001.SZ"}
+        content_without_level = {"index_code": "801010.SI",
+                                 "ts_code": "000001.SZ"}
+        h_with = row_source_hash(content_with_level)
+        h_without = row_source_hash(content_without_level)
+        assert h_with != h_without, (
+            "level must be part of the hash input — removing it must "
+            "change the hash"
+        )

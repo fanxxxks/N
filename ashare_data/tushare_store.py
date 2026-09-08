@@ -62,6 +62,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import duckdb
 import pandas as pd
 
 from .db import AshareDB
@@ -704,6 +705,86 @@ class TushareStore:
         self.db.execute(_SOURCE_INGEST_RUNS_DDL)
         for spec in _V2_TABLE_SPECS:
             self.db.execute(spec.ddl)
+
+    def prepare_gate_tables(self, prod_db_path: str, config) -> Any:
+        """Create explicitly-mapped gate tables from v2 data and return a
+        DataConfig pointing to them for the G1-G8 gate runner.
+
+        This is a **parameterized adapter** (captain裁决: 不建兼容视图):
+        each gate table is a physically materialized temp table with the
+        production schema, populated by explicit column mapping from v2
+        data.  Missing v2 tables or columns raise TushareStoreError
+        (fail-closed) — production gate semantics are never silently
+        applied to semantically different v2 tables.
+
+        ``stocks`` and ``trade_calendar`` are reference/metadata tables
+        not present in v2 (p17 §11.2); they are copied from the
+        production database (read-only) into local gate tables.
+
+        Returns a DataConfig copy with the gate table names substituted.
+        """
+
+        import dataclasses
+
+        prod = duckdb.connect(prod_db_path, read_only=True)
+        try:
+            # Copy reference tables from production (read-only source).
+            for table in ("stocks", "trade_calendar"):
+                self.db.execute(f"DROP TABLE IF EXISTS _gate_{table}")
+                ref = prod.execute(f"SELECT * FROM {table}").fetchdf()
+                self.db.register(f"_ref_gate_{table}", ref)
+                self.db.execute(
+                    f"CREATE TABLE _gate_{table} AS "
+                    f"SELECT * FROM _ref_gate_{table}"
+                )
+        finally:
+            prod.close()
+
+        # _gate_constituents: derived from index_weight_pit (p19 §6.4:
+        # index_weight is the PIT source for the production universe
+        # 300+500 pool).  Each (index_code, con_code) pair's membership
+        # interval: in_date = first appearance, out_date = '99991231'
+        # (conservative: all stocks treated as still in index; monthly
+        # snapshot granularity — documented limitation).
+        # industry_membership_pit (SW industry) is NOT mapped here — it's
+        # a different concept (行业成员 ≠ 指数成分).
+        self.db.execute("DROP TABLE IF EXISTS _gate_constituents")
+        self.db.execute(
+            "CREATE TABLE _gate_constituents AS "
+            "SELECT index_code, con_code AS ts_code, "
+            "MIN(trade_date) AS in_date, "
+            "'99991231' AS out_date "
+            "FROM index_weight_pit "
+            "GROUP BY index_code, con_code"
+        )
+        # _gate_daily_bar: join raw + adj_factor, explicit column mapping
+        # (vol → volume per production schema).
+        self.db.execute("DROP TABLE IF EXISTS _gate_daily_bar")
+        self.db.execute(
+            "CREATE TABLE _gate_daily_bar AS "
+            "SELECT r.ts_code, r.trade_date, r.open, r.high, r.low, "
+            "r.close, r.pre_close, r.vol AS volume, r.amount, "
+            "a.adj_factor "
+            "FROM daily_bar_raw r "
+            "JOIN daily_adj_factor a "
+            "ON r.ts_code = a.ts_code AND r.trade_date = a.trade_date"
+        )
+        gate_config = dataclasses.replace(
+            config,
+            duckdb_path=str(self.db.path),
+            constituents_table="_gate_constituents",
+            stocks_table="_gate_stocks",
+            calendar_table="_gate_trade_calendar",
+            daily_table="_gate_daily_bar",
+        )
+        return gate_config
+
+    def cleanup_gate_tables(self) -> None:
+        """Drop the temporary gate tables created by prepare_gate_tables."""
+
+        for table in ("_gate_constituents", "_gate_daily_bar",
+                      "_gate_stocks", "_gate_trade_calendar"):
+            self.db.execute(f"DROP TABLE IF EXISTS {table}")
 
     # -- ingest ------------------------------------------------------------
 
