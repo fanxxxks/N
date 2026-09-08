@@ -122,6 +122,14 @@
 
 以上 19 表全部有数据（industry_membership_pit 16,611 行勘误后补齐）。source_ingest_runs 58,860 批全部 succeeded（0 failed）。回填完成。
 
+## t80 v2 市场表增量刷新（0907 会话，G8 复检转绿）
+
+- **增量拉取**：0907（周一，首个 0904 之后开市会话）四表 KEYED 幂等入库——daily_bar_raw 5,549 / daily_adj_factor 5,558 / daily_basic_pit 5,549 / daily_price_limit 5,637，全部 succeeded。
+- **覆盖**：v2 四市场表 latest 均从 20260904 → 20260907（只增不删，既有数据零改动）。
+- **Manifest**：dataset_id `157e0cf5…` → `af825c2e…`（57,156,485 行，range 20140102..20260907）。
+- **G8 复检（经 adapter）**：**PASS**——bars fresh lag ≤ 3 ✓（G1-G5/G8 不变 6/8 PASS；G6/G7 维持 N/A-with-reason）。
+- 0908（周二）日盘未收/未发布，0905-0906 周末休市（0 行确认）。
+
 ## SW 指数滞后修复（t77，勘误 #5 AkShare 窄口径）
 
 - **数据源**：AkShare `index_hist_sw`（申万指数日线，801xxx 窄口径唯一 feed）
