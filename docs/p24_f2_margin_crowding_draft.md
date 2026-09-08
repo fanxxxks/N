@@ -1,6 +1,7 @@
 # P24 草案：F2 批次预注册——融资拥挤两因子（medium 域）
 
-- 状态：**APPROVED — 用户原文「批准」+ captain 代行签署（89dd121 授权扩展）**——本版 = t27 任务书两候选。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
+- 状态：**APPROVED & EXECUTED — 用户「批准」+ captain 代行签署（89dd121 授权扩展）+ 用户追认批准（p24_registration_verification.md §7，96876ea）**——本版 = t27 任务书两候选。批准后本文保持前瞻性，禁止以实现/测量输出反向修改。
+- **批准记录（p16 `2f5e18b` 先例，回写义务模式；p20 `ff7280d`/`9b817ab` 同款）**：**批准链**：(1) 用户「批准」（批次级，针对 captain 呈递的 v1 表格——captain 纠正确认在案）；(2) captain 代行签署（89dd121 授权扩展）；(3) governance 核验（cc55e71 + ec67997：编号 p24/内容/双判据预检通过 + 版本表基线更正）；(4) **用户追认批准**（p24_registration_verification.md §7，96876ea——F2 实施后追认，时序倒置已披露）。**实施** = `0c1f0bb`（两帧 + 登记链）+ `d1c651d`（钉值）+ `57fab0a`（索引行补登）+ 族门裁决通过（t22 日志 §15，`09f005e`：MARGIN_BALANCE_TO_CIRC_MV 门承载 ΔIC +0.0065 且残差同向，同源共线风险实证排除；MARGIN_BUY_PRESSURE_5 晋级高风险标记）。本批准行补记 = p20 先例模式收口。
 - **实施期澄清（circ_mv 可见性，2026-09-07）**：生产 `daily_basic_pit` 无 `available_date` 列（trade_date 键控）——circ_mv 的可见性 = **trade_date 同会话约定**（会话 t 的 daily_basic 值于 t 收盘时点已知，与 loader 既有 turnover_rate 路径同一约定，D4 评审通过的 PIT 语义），**非**本文初稿措辞的"同 T+1"。该澄清不改变公式结构（分母仍为 t 会话 circ_mv），仅明确其可见性来源；margin 明细维持 T+1（t−1 数据 t 日可用）——两源可见性节奏不同，组合在 t 会话收盘时点无未来泄漏。
 - 证据基线：F1 批次重测 `docs/factor_inventory_audit_f1_20260907/metrics.json`（dataset `157e0cf5…`，FACTOR_COMPUTE 4 / FEATURE_REGISTRY 14 / GRAMMAR 9 / RESEARCH_DOMAIN 4；词表 81）。勘察基线 commit：codex/factor-semantic-fixes @ `0cb6493`。
 - 本文使用 AGENTS.md 的"必须/禁止/应当"语义。任务路由：**研究语义变更**（AGENTS §3.2：新增特征）。
