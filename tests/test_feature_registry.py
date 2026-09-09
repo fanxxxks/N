@@ -149,7 +149,7 @@ def test_registry_version_is_pinned():
     # change path).  v5 (P9 §7 adjudication, measurement log
     # 2026-09-01).  v6 (P13 §5.3/§6.1): family ⑤ unlocks — whitelist
     # §10.1 case 2, pre-registered in docs/p13_fundamental_fields_contract.md.
-    assert FEATURE_REGISTRY_VERSION == 6
+    assert FEATURE_REGISTRY_VERSION == 14  # p24 (the user-approved F2 batch); prior: 13 = the p22-flip revert
 
 
 def test_registry_records_data_tiers(tensor, mask):
@@ -180,13 +180,16 @@ def test_summary_reports_tiers_and_deprecations(tensor, mask):
     # P9 §4.1 + §7 adjudication (whitelist §10.1 case 2, contract
     # APPROVED): the eight window variants, the triggered conditional
     # LIMIT_STREAK and the two second-pass consolidations join
-    # NORTHBOUND_CHG in the deprecated set.
+    # NORTHBOUND_CHG in the deprecated set.  t22/p9 erratum (t69,
+    # governance option A): TURNOVER_MA20 joins them (0.914 vs
+    # TURNOVER_STD20 across four audit rounds).
     assert summary["deprecated"] == sorted(
         [
             "NORTHBOUND_CHG",
             "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
             "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",
             "LIMIT_STREAK", "LIQ_SHOCK_20", "CROWD_TURNOVER_60",
+            "TURNOVER_MA20",
         ]
     )
     assert PitLevel.PIT_DAILY.value in summary["by_pit_level"]
@@ -209,7 +212,7 @@ def test_p9_registry_version_deprecations_and_pending_data():
     LIMIT_STREAK conditional deprecation triggered, two second-pass
     consolidations).  v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤
     unlocks; the pending set empties."""
-    assert FEATURE_REGISTRY_VERSION == 6
+    assert FEATURE_REGISTRY_VERSION == 14  # p24 (the user-approved F2 batch); prior: 13 = the p22-flip revert
     p9_deprecated = (
         "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
         "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",
@@ -263,15 +266,25 @@ def test_p13_family5_unlock_appends_vocabulary_without_id_shift():
     family5 = [
         "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
     ]
-    # Append-only growth: 73 -> 77, existing prefix byte-identical.
-    assert len(FEATURE_NAMES) == 77
+    f1 = [
+        "CFO_TO_ASSETS", "GROSS_PROFITABILITY", "OPERATING_PROFITABILITY",
+        "LEVERAGE_CHANGE",
+    ]
+    f2 = ["MARGIN_BALANCE_TO_CIRC_MV", "MARGIN_BUY_PRESSURE_5"]
+    # Append-only growth: 73 -> 77 (p13) -> 81 (p23 F1) -> 83 (p24 F2),
+    # prefix identical at every step.
+    assert len(FEATURE_NAMES) == 83
     assert list(FEATURE_NAMES[:73]) == list(_PRE_P13_FEATURE_NAMES)
-    assert list(FEATURE_NAMES[73:]) == family5
+    assert list(FEATURE_NAMES[73:77]) == family5
+    assert list(FEATURE_NAMES[77:81]) == f1
+    assert list(FEATURE_NAMES[81:]) == f2
     # Sentinel id-parity (independently pinned from the pre-P13 registry):
     assert FEATURE_NAMES[0] == "RET_1"
     assert FEATURE_NAMES[16] == "PE_TTM"
     assert FEATURE_NAMES[19] == "ROE"
     assert FEATURE_NAMES[72] == "MARGIN_CROWD_60"
+    assert FEATURE_NAMES[77] == "CFO_TO_ASSETS"
+    assert FEATURE_NAMES[81] == "MARGIN_BALANCE_TO_CIRC_MV"
     assert FEATURE_NAMES.index("MARGIN_CROWD_60") == 72
 
     tensor = np.zeros((len(FEATURE_NAMES), 3, 4), dtype=np.float32)

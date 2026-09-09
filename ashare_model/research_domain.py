@@ -51,7 +51,7 @@ from .vocab import FORMULA_VOCAB
 # (docs/p13_fundamental_fields_contract.md, APPROVED 2026-09-02).
 # Home-address migration only (IP-12): the version stayed pinned here
 # while the data definitions moved to ``ashare_domain`` — no bump.
-RESEARCH_DOMAIN_VERSION = 3
+RESEARCH_DOMAIN_VERSION = 5
 
 __all__ = [
     "RESEARCH_DOMAIN_VERSION",

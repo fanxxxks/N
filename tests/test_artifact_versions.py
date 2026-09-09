@@ -171,7 +171,7 @@ def test_current_semantic_versions_are_pinned():
     # FACTOR_COMPUTE to 3.
     from ashare_model.factors import FACTOR_COMPUTE_VERSION
 
-    assert FACTOR_COMPUTE_VERSION == 3
+    assert FACTOR_COMPUTE_VERSION == 4  # t22: exact-limit / per-date industry / margin v2 (FACTOR_COMPUTE 4)
 
 
 def test_pre_p7e_strategy_is_legacy_by_protocol_generation():

@@ -62,7 +62,7 @@ def test_domains_partition_vocabulary_exhaustively():
     # features minus the deprecated neutral member.  P13 §5.5 (whitelist
     # §10.1 case 2, docs/p13_fundamental_fields_contract.md APPROVED):
     # family ⑤ appends four more -> 76.
-    assert len(live) == 76
+    assert len(live) == 82
     with pytest.raises(ValueError, match="NORTHBOUND_CHG"):
         domain_of_feature("NORTHBOUND_CHG")
 
@@ -508,7 +508,7 @@ def test_p9_research_domain_version_and_single_domain_assignments():
     momentum, PV divergence, crowding -> medium).  v3 (P13 §5.5,
     whitelist §10.1 case 2, docs/p13_fundamental_fields_contract.md
     APPROVED): the four family-⑤ features join slow_fundamental."""
-    assert RESEARCH_DOMAIN_VERSION == 3
+    assert RESEARCH_DOMAIN_VERSION == 5  # p24 (the user-approved F2 batch)
     from ashare_model.research_domain import domain_of_feature
 
     expectations = {

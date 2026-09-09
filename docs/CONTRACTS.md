@@ -37,3 +37,8 @@
 | [p17_tushare_pit_data_contract.md](p17_tushare_pit_data_contract.md) | P17 Tushare/PIT 数据底座预注册契约（四层架构 + D4/D5/D6 语义基座） |
 | [p18_captain_authority_clause.md](p18_captain_authority_clause.md) | P18 Captain 调度权与批准记录回写义务条款（治理授权） |
 | [p19_market_price_semantics_contract.md](p19_market_price_semantics_contract.md) | P19（暂定编号）市场价格语义切换预注册契约（D4：raw 成交 / 复权因子序列） |
+| [p20_margin_balance_direction_repreregistration_draft.md](p20_margin_balance_direction_repreregistration_draft.md) | P20 MARGIN_BALANCE_CHG 方向重预注册（authored +1 四轮证伪 → −1；t70 已实施，原草案文件名保留） |
+| [p22_industry_momentum_direction_repreregistration_draft.md](p22_industry_momentum_direction_repreregistration_draft.md) | P22 INDUSTRY_MOMENTUM 方向重预注册（authored +1 修复后证伪；t24 路由负结果处置 + p22 注记 REJECTED 维持——12a7ed7 的 −1 翻转经 captain 终裁回退 969a126，方向证实 ≠ 冗余预检通过；IND_REL_* 冗余 caveat 在案） |
+| [p23_f1_slow_fundamental_quality_draft.md](p23_f1_slow_fundamental_quality_draft.md) | P23 F1 批次预注册（v5 = 用户亲批四因子 NET_MARGIN_TREND_4Q/LEVERAGE_TREND_4Q/CAPEX_INTENSITY/CFO_TO_DEBT，用户「批准」+ captain 纠正确认；族门通过，候选池准入） |
+| [p24_f2_margin_crowding_draft.md](p24_f2_margin_crowding_draft.md) | P24 F2 批次预注册（v2 = 路线图两因子 MARGIN_BALANCE_TO_CIRC_MV/MARGIN_BUY_PRESSURE_5，用户「批准」+ captain 代行签署；族门通过——MARGIN_BALANCE_TO_CIRC_MV 门承载 ΔIC +0.0065 且残差同向，同源共线风险实证排除；候选池准入。索引行补登：F2 实施 commit 0c1f0bb/d1c651d 遗漏 same-commit 登记，governance cc55e71/ec67997 发现后本行补记） |
+| [p25_f3_expectation_event_draft.md](p25_f3_expectation_event_draft.md) | P25 F3 批次预注册（v1 = 预期与事件四因子 FORECAST_GROWTH_MIDPOINT/FORECAST_UNCERTAINTY/EXPRESS_VS_FORECAST/BUYBACK_INTENSITY，用户「批准」+ captain 代行签署；event 域首成员 F3-3） |

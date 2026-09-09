@@ -169,6 +169,27 @@ _FEATURE_NAMES_V5 = (
     "EARNINGS_ACCEL",
 )
 
+# v8 (p23 v4, user-approved via the captain's delegated ruling) appends the
+# four slow-fundamental quality factors (CFO/assets, gross profitability,
+# operating profitability, leverage change).  Names are appended so every
+# pre-v8 token id is stable (the same discipline as v2..v5); the batch
+# joins and leaves adjudication as one atomic unit (p23 §7).
+_FEATURE_NAMES_V8 = (
+    "CFO_TO_ASSETS",
+    "GROSS_PROFITABILITY",
+    "OPERATING_PROFITABILITY",
+    "LEVERAGE_CHANGE",
+)
+
+# v10 (p24, user-approved F2 batch) appends the two margin-crowding
+# factors (the balance-to-float intensity and the 5-day buy pressure).
+# Names are appended so every pre-v10 token id is stable; the batch joins
+# and leaves adjudication as one atomic unit (p23 §7 precedent).
+_FEATURE_NAMES_V10 = (
+    "MARGIN_BALANCE_TO_CIRC_MV",
+    "MARGIN_BUY_PRESSURE_5",
+)
+
 FEATURE_NAMES = tuple(
     name
     for name in (
@@ -177,6 +198,8 @@ FEATURE_NAMES = tuple(
         + _FEATURE_NAMES_V3
         + _FEATURE_NAMES_V4
         + _FEATURE_NAMES_V5
+        + _FEATURE_NAMES_V8
+        + _FEATURE_NAMES_V10
     )
     if name not in FEATURE_ALIASES
 )
@@ -239,6 +262,11 @@ DEPRECATION_REASONS: dict[str, str] = {
     "LIMIT_STREAK": "P9 §7.3 conditional deprecation TRIGGERED post-fix: |corr| with LIMIT_UP_EVENT = 0.980 >= 0.9",
     "LIQ_SHOCK_20": "P9 §7.1 second-pass: 0.968 correlated with VOLUME_IMPACT; marginal family-gate margin (dIC +0.0054)",
     "CROWD_TURNOVER_60": "P9 §7.1 second-pass: 0.971 correlated with CROWD_AMOUNT_60 (the stronger family member)",
+    # t22/p9 appendix-B (t69) erratum ruling, governance option A: the
+    # conditional exemption's trigger fired — rho = 0.914 stable across all
+    # four audit rounds vs the consistently stronger TURNOVER_STD20
+    # representative (Part A: deprecate the weaker one).
+    "TURNOVER_MA20": "t22/p9 erratum (t69) Part A: 0.914 correlated with TURNOVER_STD20 across four audit rounds (the stronger representative kept)",
 }
 DEPRECATED_FEATURE_NAMES = frozenset(DEPRECATION_REASONS)
 
@@ -279,10 +307,14 @@ LEGACY_OPERATOR_NAMES = (
 # LIMIT_STREAK and the two second-pass consolidations to that set;
 # v6 (P13 §5.3/§6.1) appends the four family-⑤ slow-fundamental features
 # (append-only, no existing token id moves).
+# v7 (t22/p9 erratum t69, governance option A) removes the
+# conditionally-deprecated TURNOVER_MA20 from the sampling space after its
+# Part-A trigger fired (rho = 0.914 stable across four audit rounds vs the
+# stronger TURNOVER_STD20; the token id and computation are retained).
 # Bumping this constant changes
 # ``feature_version`` and therefore invalidates the token layout recorded
 # in older training artifacts (which resolve by name, so they still load).
-GRAMMAR_VERSION = 6
+GRAMMAR_VERSION = 9
 
 
 @dataclass(frozen=True)
@@ -420,7 +452,7 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     **by name** and survive vocabulary additions.  Bare payloads (no
     metadata) dispatch on their declared ``grammar_version`` to the frozen
     per-generation layout (grammar 2/3 -> the grammar-3 layout, 4/5 -> the
-    grammar-5 layout, 6 -> live; unknown or missing generations are
+    grammar-5 layout, 6/7 -> live; unknown or missing generations are
     fail-closed rejected), and the by-name remapping keeps them valid
     after vocabulary growth; a bare legacy factor resolves to its
     :class:`~ashare_model.ir.Feature` token (the AST migration happens
@@ -445,7 +477,9 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
     # against the latest table (that silent decode IS the t28 incident
     # mechanism).  Known generations and their frozen decode layouts:
     # 2/3 -> the grammar-3 layout (62 features, EOS 102), 4/5 -> the
-    # grammar-5 layout (73 features, EOS 113), 6 -> the live vocabulary.
+    # grammar-5 layout (73 features, EOS 113), 6/7 -> the live vocabulary
+    # (grammar 7 = the t22 sampling-set change; the token layout is
+    # identical to 6).
     # Display layers mark such payloads legacy/unavailable (pre-P7
     # artifacts are read-only rejected per §4.6 and need an explicit
     # auditable migration).
@@ -456,10 +490,14 @@ def resolve_formula_tokens(payload, vocab: FormulaVocab | None = None) -> list[i
             "fail-closed rejected from remap decoding (AGENTS §4.3/§4.6)"
         )
     src_grammar = int(src_grammar_raw)
-    if src_grammar not in (2, 3, 4, 5, 6):
+    # Grammar 7 (t22/p9 erratum t69) shares grammar 6's token layout: the
+    # deprecation removes a name from the SAMPLING space only — ids,
+    # computations and by-name decoding are unchanged, so generation 7
+    # decodes against the live vocabulary exactly like generation 6.
+    if src_grammar not in (2, 3, 4, 5, 6, 7, 8, 9):
         raise ValueError(
             f"unsupported grammar generation {src_grammar} for remap "
-            "decoding (known generations: 2, 3, 4, 5, 6)"
+            "decoding (known generations: 2, 3, 4, 5, 6, 7, 8, 9)"
         )
     src_has_eos = src_grammar >= 2
     src_features = payload.get("feature_names")

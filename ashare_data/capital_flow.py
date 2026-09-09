@@ -38,7 +38,15 @@ from .gates import FRESHNESS_TOLERANCE_SESSIONS
 from .universe import OPEN_ENDED_OUT_DATE
 
 # Vocabulary feature names produced by this module.
-EXTERNAL_FACTOR_NAMES = ("MARGIN_BALANCE_CHG", "INDUSTRY_MOMENTUM", "MARGIN_CROWD_60")
+EXTERNAL_FACTOR_NAMES = (
+    "MARGIN_BALANCE_CHG",
+    "INDUSTRY_MOMENTUM",
+    "MARGIN_CROWD_60",
+    # F2 batch (p24, user-approved): the margin-crowding cross-sectional
+    # intensity factors (the raw ratios; the xcs-z applied loader-side).
+    "MARGIN_BALANCE_TO_CIRC_MV",
+    "MARGIN_BUY_PRESSURE_5",
+)
 
 _MARGIN_WINDOW = 20
 _MARGIN_CROWD_WINDOW = 60
@@ -406,12 +414,46 @@ def _margin_crowd(wide: pd.DataFrame, window: int = _MARGIN_CROWD_WINDOW) -> pd.
     return (base / baseline).replace([np.inf, -np.inf], np.nan)
 
 
+def _canonical_sw_code(code: str) -> str:
+    """One canonical Shenwan index-code form (``801010``) for the
+    membership/index-close join: the v2 membership carries ``.SI``-suffixed
+    codes while the legacy close table carries bare codes (p17 §14; the
+    t18 INDUSTRY_MOMENTUM coverage-0.000 finding)."""
+
+    return str(code)[:-3] if str(code).endswith(".SI") else str(code)
+
+
+def _canonicalize_sw_codes(frame: pd.DataFrame) -> pd.DataFrame:
+    """Apply :func:`_canonical_sw_code` to every finite cell of a
+    ``[stock x date]`` industry-code frame (vectorized per cell)."""
+
+    if frame is None or frame.empty:
+        return frame
+    arr = frame.to_numpy(dtype=object)
+    flat = [
+        _canonical_sw_code(cell) if isinstance(cell, str) and cell else cell
+        for cell in arr.ravel()
+    ]
+    return pd.DataFrame(
+        np.asarray(flat, dtype=object).reshape(arr.shape),
+        index=frame.index,
+        columns=frame.columns,
+    )
+
+
 def build_capital_frames(
     config,
     ts_codes: list[str],
     dates: list[str],
 ) -> dict[str, pd.DataFrame]:
     """Build ``[stock x date]`` frames for the capital-flow features.
+
+    Margin semantics read the v2 ``margin_detail_pit`` source (p17 §5.2
+    table 18) pivoted by ``available_date`` — the p17 §6.1 T+1 visibility:
+    the value visible at session *s* is the detail whose
+    ``available_date == s`` (the previous session's margin detail), never
+    the detail of *s* itself (t22 in-place fix; the legacy
+    ``margin_balance`` trade-date pivot carried no availability lag).
 
     Any failure (e.g. the tables do not exist yet) degrades to neutral
     frames, keeping the loader independent of this data source.
@@ -425,25 +467,56 @@ def build_capital_frames(
         return frames
     quoted = sql_quoted_list(ts_codes)
     try:
-        with AshareDB(config.duckdb_path, read_only=True) as db:
-            margin = db.query(
-                f"SELECT ts_code, trade_date, rzye FROM {config.margin_table} "
+        v2_path = resolve_v2_duckdb_path(config)
+        with AshareDB(v2_path, read_only=True) as v2db:
+            margin = v2db.query(
+                "SELECT ts_code, available_date, rzye, rzmre FROM margin_detail_pit "
+                f"WHERE ts_code IN ({quoted}) AND available_date IS NOT NULL"
+            )
+    except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
+        # The v2 margin source is expected to be absent in pre-D3 /
+        # fixture databases — the same expected-absent convention as the
+        # family-⑤ as-of frames (logger.debug, not a warning).
+        logger.debug(f"Margin frames unavailable: {exc}")
+        margin = pd.DataFrame()
+    try:
+        # F2 denominators (p24 §2): the session-t float market cap from
+        # daily_basic_pit — trade_date-keyed (the D4-era daily-basic
+        # convention: the session-t basic values are known at the
+        # session-t close; no available_date column exists).
+        v2_path = resolve_v2_duckdb_path(config)
+        with AshareDB(v2_path, read_only=True) as v2db:
+            basics = v2db.query(
+                "SELECT ts_code, trade_date, circ_mv FROM daily_basic_pit "
                 f"WHERE ts_code IN ({quoted})"
             )
+    except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
+        logger.debug(f" daily_basic circ_mv unavailable: {exc}")
+        basics = pd.DataFrame()
+    try:
+        with AshareDB(config.duckdb_path, read_only=True) as db:
             sw_index = db.query(
                 f"SELECT index_code, trade_date, close FROM {config.sw_index_table}"
             )
     except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
-        logger.warning(f"Capital-flow frames unavailable: {exc}")
-        return frames
+        logger.warning(f"Industry index closes unavailable: {exc}")
+        sw_index = pd.DataFrame()
     # D5: the membership dimension comes from the v2 PIT intervals; the
-    # industry index closes stay on the legacy source (no v2 SW-close table).
+    # industry index closes stay on the legacy source (no v2 SW-close
+    # table).  The legacy close table carries bare codes (``801010``)
+    # while the v2 membership carries ``801010.SI`` — canonicalize both
+    # sides to one form so the per-date membership join cannot silently
+    # match nothing (t18 finding: INDUSTRY_MOMENTUM coverage 0.000).
     industry_frame = build_industry_member_frame(config, ts_codes, dates)
+    industry_frame = _canonicalize_sw_codes(industry_frame)
+    if not sw_index.empty:
+        sw_index["index_code"] = sw_index["index_code"].map(_canonical_sw_code)
 
     if not margin.empty:
         wide = (
             margin.pivot_table(
-                index="ts_code", columns="trade_date", values="rzye", aggfunc="last"
+                index="ts_code", columns="available_date", values="rzye",
+                aggfunc="last",
             )
             .reindex(index=ts_codes, columns=dates)
         )
@@ -451,6 +524,39 @@ def build_capital_frames(
             change = wide / wide.shift(_MARGIN_WINDOW, axis=1) - 1.0
         frames["MARGIN_BALANCE_CHG"] = change.replace([np.inf, -np.inf], np.nan)
         frames["MARGIN_CROWD_60"] = _margin_crowd(wide, _MARGIN_CROWD_WINDOW)
+
+        # F2 batch (p24, user-approved): the margin-crowding cross-sectional
+        # intensity factors — the RAW ratios (the per-date cross-sectional
+        # z is applied loader-side in ashare_model, the dependency-correct
+        # layer for the single xcs-z implementation; p24 §2 formulas).
+        if not basics.empty:
+            circ_wide = (
+                basics.pivot_table(
+                    index="ts_code", columns="trade_date", values="circ_mv",
+                    aggfunc="last",
+                )
+                .reindex(index=ts_codes, columns=dates)
+            )
+            balance_ratio = (wide / circ_wide).replace(
+                [np.inf, -np.inf], np.nan
+            )
+            frames["MARGIN_BALANCE_TO_CIRC_MV"] = balance_ratio
+            buy_wide = (
+                margin.pivot_table(
+                    index="ts_code", columns="available_date", values="rzmre",
+                    aggfunc="last",
+                )
+                .reindex(index=ts_codes, columns=dates)
+            )
+            # The five most recent VISIBLE sessions at each column: the
+            # rolling 5-column sum over the available_date pivots (the T+1
+            # visibility makes column k carry the session-k detail).  The
+            # transpose pattern: the newer pandas rolling() has no axis.
+            buy_5 = buy_wide.T.rolling(5, min_periods=5).sum().T
+            pressure_ratio = (buy_5 / circ_wide).replace(
+                [np.inf, -np.inf], np.nan
+            )
+            frames["MARGIN_BUY_PRESSURE_5"] = pressure_ratio
 
     if not sw_index.empty and not industry_frame.empty:
         index_wide = sw_index.pivot_table(

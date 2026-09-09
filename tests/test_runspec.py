@@ -300,7 +300,8 @@ def test_p9_factor_compute_version_wired_into_the_version_registry():
     )
     from ashare_model.factors import FACTOR_COMPUTE_VERSION
 
-    # p17/D5+D6 (t16 F1): bumped 2 -> 3 covering both input basis switches.
-    assert FACTOR_COMPUTE_VERSION == 3
+    # p17/D5+D6 (t16 F1): bumped 2 -> 3 covering both input basis switches;
+    # t22 semantic fixes further bump 3 -> 4 (in-place factor repairs).
+    assert FACTOR_COMPUTE_VERSION == 4  # t22 semantic fixes
     assert "factor_compute_version" in RunSpec.model_fields
     assert RunSpec.model_fields["factor_compute_version"].default is None

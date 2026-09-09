@@ -24,13 +24,13 @@ def test_formula_vocab_consistency():
     # EOS 117 -- and legacy grammar-5 formulas are kept decodable through
     # the frozen grammar-5 layout + by-name remap (see
     # test_grammar5_seed7_decodes_via_frozen_layout_and_remap).
-    assert FORMULA_VOCAB.feature_count == len(FEATURE_NAMES) == 77
-    assert FORMULA_VOCAB.operator_offset == 78
+    assert FORMULA_VOCAB.feature_count == len(FEATURE_NAMES) == 83
+    assert FORMULA_VOCAB.operator_offset == 84
     assert FORMULA_VOCAB.token_names[0] == "PAD"
     assert FORMULA_VOCAB.token_names[1] == FEATURE_NAMES[0]
-    assert FORMULA_VOCAB.size == len(FORMULA_VOCAB.token_names) == 118
+    assert FORMULA_VOCAB.size == len(FORMULA_VOCAB.token_names) == 124
     assert FORMULA_VOCAB.has_eos
-    assert FORMULA_VOCAB.eos_token_id == FORMULA_VOCAB.size - 1 == 117
+    assert FORMULA_VOCAB.eos_token_id == FORMULA_VOCAB.size - 1 == 123
     assert FORMULA_VOCAB.token_names[-1] == "EOS"
     # Probe (a): the four family-⑤ features sit at token ids 74-77.
     family5 = ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL")
@@ -170,10 +170,13 @@ def test_feature_version_pinned():
     # t46 Plan A: the appended names keep the contiguous feature block
     # (ids 74-77) and legacy grammar-5 decoding goes through the frozen
     # grammar-5 layout -- the t14 feature_version hash is restored.
-    assert FORMULA_VOCAB.feature_version == "0e64ad614bfd"
+    # t22/p9 erratum (t69, governance option A): the grammar bump 6 -> 7
+    # (TURNOVER_MA20 leaves the sampling space) changes the hash by design —
+    # whitelist §10.1 case 2, the intended discipline catching the bump.
+    assert FORMULA_VOCAB.feature_version == "f4476177f85f"
     assert len(FORMULA_VOCAB.feature_version) == 12
     # v6 grammar: the v5 layout plus the P13 family-⑤ feature append.
-    assert GRAMMAR_VERSION == 6
+    assert GRAMMAR_VERSION == 9  # v9 (p24, the user-approved F2 batch); prior: 8 = p23 v4-era
     # A grammar bump changes the version even with identical name lists.
     legacy = FormulaVocab(
         feature_names=FORMULA_VOCAB.feature_names,
@@ -237,14 +240,15 @@ def test_resolve_formula_tokens_fails_closed_without_grammar_version():
 
 
 def test_resolve_formula_tokens_fails_closed_on_unknown_grammar_generation():
-    """t46 captain pre-ruling + t57 F2: only known generations (2-6) enter
-    remap decoding; anything else fails closed."""
+    """t46 captain pre-ruling + t57 F2 + t22/p9 appendix-B erratum (t69):
+    only known generations (2-9) enter remap decoding; anything else fails
+    closed."""
     payload = _sample_payload()
     payload["grammar_version"] = 1
     with pytest.raises(ValueError, match="unsupported grammar generation 1"):
         resolve_formula_tokens(payload)
-    payload["grammar_version"] = 7
-    with pytest.raises(ValueError, match="unsupported grammar generation 7"):
+    payload["grammar_version"] = 10
+    with pytest.raises(ValueError, match="unsupported grammar generation 10"):
         resolve_formula_tokens(payload)
 
 
@@ -399,7 +403,7 @@ def test_resolve_formula_tokens_grammar5_payload_remaps_operators_and_eos():
     """t46 Plan A Gap-1 evidence: the by-name remap covers ALL token
     dimensions across the grammar-5 -> grammar-6 shift -- an operator id
     (74..112 under grammar 5) resolves to its shifted operator id
-    (78..116) and EOS 113 resolves to 117, while feature ids 1-73 stay
+    (84..122) and EOS 113 resolves to 123, while feature ids 1-73 stay
     bit-stable.  t57 F2: grammar-2 payloads now dispatch to the frozen
     grammar-3 layout; unknown generations still fail closed."""
     feature = 1 + FEATURE_NAMES.index("ROE")  # grammar-5 feature id (bit-stable)
@@ -411,7 +415,7 @@ def test_resolve_formula_tokens_grammar5_payload_remaps_operators_and_eos():
         "grammar_version": 5,
     }
     resolved = resolve_formula_tokens(payload, FORMULA_VOCAB)
-    assert resolved == [feature, 78 + 3, 117]
+    assert resolved == [feature, 84 + 3, 123]
     # The names survive: same AST under both layouts.
     assert tokens_to_names(resolved, FORMULA_VOCAB) == tokens_to_names(
         [feature, operator, 113], GRAMMAR_V5_VOCAB
@@ -487,17 +491,21 @@ P9_DEPRECATED_FEATURES = (
 def test_p9_grammar_v4_with_additive_feature_generation():
     # v5 = the v4 P9 layout + the §7 adjudicated deprecations.
     # v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤ appends 4 more.
-    assert GRAMMAR_VERSION == 6
+    assert GRAMMAR_VERSION == 9  # v9 (p24, the user-approved F2 batch); prior: 8 = p23 v4-era
     for name in P9_NEW_FEATURES:
         assert name in FEATURE_NAMES
     # v4 names are appended, so every pre-v4 token id stays stable; the
     # P13 family-⑤ names append after them, so every pre-v5 token id
     # (including the deprecated v4 names) stays stable too.
-    assert len(FEATURE_NAMES) == 77
+    assert len(FEATURE_NAMES) == 83
     assert list(FEATURE_NAMES[62:73]) == list(P9_NEW_FEATURES)
     assert list(FEATURE_NAMES[73:]) == [
         "CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL",
+        "CFO_TO_ASSETS", "GROSS_PROFITABILITY", "OPERATING_PROFITABILITY",
+        "LEVERAGE_CHANGE", "MARGIN_BALANCE_TO_CIRC_MV", "MARGIN_BUY_PRESSURE_5",
     ]
+    # p23 v6 final (the numbering + the candidate-set final states): the
+    # v5-era round-trip net-zero is preserved in the chain disclosure.
 
 
 def test_p9_deprecated_names_stay_in_the_token_space():

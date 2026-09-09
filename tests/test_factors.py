@@ -100,7 +100,7 @@ def test_limit_event_features_detect_one_word_moves():
         {"ts_code": "600000.SH", "trade_date": "20240102", "open": 8.1, "high": 8.3, "low": 8.0, "close": 8.2, "pre_close": 8.0, "volume": 1e6, "amount": 8e6, "turnover_rate": 1.0, "adj_factor": 1.0},
         {"ts_code": "600000.SH", "trade_date": "20240103", "open": 8.2, "high": 8.4, "low": 8.1, "close": 8.3, "pre_close": 8.2, "volume": 1e6, "amount": 8e6, "turnover_rate": 1.0, "adj_factor": 1.0},
     ]
-    bars = pd.DataFrame(rows)
+    bars = _rows_to_bars(rows)
     tensor = compute_factor_tensor(
         bars, codes, dates, np.ones((len(codes), len(dates)), dtype=bool)
     )
@@ -164,12 +164,16 @@ def test_fundamental_and_neutral_families_declared():
     # factors from the capital-flow pipeline, and NORTHBOUND_CHG stays
     # neutral (its daily feed stopped in Aug 2024); all metadata-driven.
     # P9 §5.4 (whitelist §10.1 case 2, contract APPROVED): MARGIN_CROWD_60
-    # joins the external capital-flow features.
+    # joins the external capital-flow features.  p24 (whitelist §10.1
+    # case 2, user-approved F2 batch): the two margin-crowding factors
+    # join as well.
     assert FUNDAMENTAL_PIT_NAMES
     assert set(EXTERNAL_FACTOR_NAMES) == {
         "MARGIN_BALANCE_CHG",
         "INDUSTRY_MOMENTUM",
         "MARGIN_CROWD_60",
+        "MARGIN_BALANCE_TO_CIRC_MV",
+        "MARGIN_BUY_PRESSURE_5",
     }
     assert NEUTRAL_FEATURE_NAMES == {"NORTHBOUND_CHG"}
     assert "MARKET_CAP" in FACTOR_REGISTRY  # local daily-bar size proxy
@@ -248,7 +252,21 @@ def _context_for(bars: pd.DataFrame, dates: list[str], codes: list[str], names: 
 
 
 def _rows_to_bars(rows: list[dict]) -> pd.DataFrame:
-    return pd.DataFrame(rows)
+    """Synthetic bars for the scale-1 fixtures, extended with the exact-limit
+    columns the event family declares (p17 §5.2 table 5; t22): raw prices
+    mirror close/high/low, and the limit prices default to the 10% board
+    band of the row's pre_close — tests that exercise other boards or
+    unusual limits set them explicitly."""
+
+    bars = pd.DataFrame(rows)
+    if "close_raw" not in bars.columns:
+        bars["close_raw"] = bars["close"]
+        bars["high_raw"] = bars["high"]
+        bars["low_raw"] = bars["low"]
+    if "up_limit" not in bars.columns and "pre_close" in bars.columns:
+        bars["up_limit"] = (bars["pre_close"] * 1.10).round(2)
+        bars["down_limit"] = (bars["pre_close"] * 0.90).round(2)
+    return bars
 
 
 def test_overnight_and_intraday_decomposition_values():
@@ -660,9 +678,13 @@ def _limit_rows(dates: list[str], closes: list[float], highs=None, lows=None) ->
                 "amount": 1e7,
                 "turnover_rate": 1.0,
                 "adj_factor": 1.0,
+                # Exact-limit contract (p17 §5.2 table 5): the fixture's
+                # 10% board limit prices, published per session.
+                "up_limit": round(pre * 1.10, 2),
+                "down_limit": round(pre * 0.90, 2),
             }
         )
-    return pd.DataFrame(rows)
+    return _rows_to_bars(rows)
 
 
 def test_limit_streak_counts_consecutive_one_word_days():
@@ -703,14 +725,18 @@ def test_limit_break_detects_touch_without_lock():
         {"ts_code": "000001.SZ", "trade_date": "d3", "open": 11.0, "high": 11.2, "low": 10.9,
          "close": 11.0, "pre_close": 11.55, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
     ]
-    ctx = _context_for(pd.DataFrame(rows), dates, ["000001.SZ"], ["LIMIT_BREAK"])
+    ctx = _context_for(_rows_to_bars(rows), dates, ["000001.SZ"], ["LIMIT_BREAK"])
     breaks = _factor_fn("LIMIT_BREAK")(ctx)
     assert breaks.iloc[0].tolist() == [0.0, 1.0, 0.0, 0.0]
 
 
-def test_limit_break_uses_board_specific_limit_rate():
-    # A 20%-board stock (300001.SZ) touching +20% without locking is a
-    # break, while +9% on a 10%-board stock below its limit is not.
+def test_limit_break_uses_exact_daily_price_limit():
+    # Exact-limit contract (p17 §5.2 table 5, t22): the break decision
+    # reads each stock's published limit price — a 20%-board stock touching
+    # its 12.00 limit is a break, while a 10%-board stock touching 10.99
+    # below its 11.00 limit is not.  (Pre-t22 this discriminated via the
+    # per-board limit_rate approximation; the table prices now carry the
+    # board specificity.)
     dates = ["d0", "d1"]
     rows = [
         {"ts_code": "300001.SZ", "trade_date": "d0", "open": 10.0, "high": 10.2, "low": 9.9,
@@ -722,14 +748,19 @@ def test_limit_break_uses_board_specific_limit_rate():
         {"ts_code": "600000.SH", "trade_date": "d1", "open": 10.5, "high": 10.99, "low": 10.5,
          "close": 10.9, "pre_close": 10.0, "volume": 1e6, "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0},
     ]
-    bars = pd.DataFrame(rows)
+    bars = _rows_to_bars(rows)
+    bars["up_limit"] = [9.9 * 1.2, 12.0, 9.9 * 1.1, 11.0]
+    bars["down_limit"] = [8.91, 8.0, 8.91, 9.0]
+    bars["close_raw"] = bars["close"]
+    bars["high_raw"] = bars["high"]
+    bars["low_raw"] = bars["low"]
     codes = ["300001.SZ", "600000.SH"]
     tensor = compute_factor_tensor(
         bars, codes, dates, np.ones((len(codes), len(dates)), dtype=bool)
     )
     breaks = tensor[FEATURE_NAMES.index("LIMIT_BREAK")]
-    # 300001 (+15%, touched its 20% limit) is a break; 600000 (+9%, below
-    # its 10% limit) is not.
+    # 300001 (touched its exact 12.00 limit) is a break; 600000 (10.99
+    # below its exact 11.00 limit) is not.
     assert breaks[0, 1] > 0
     assert breaks[1, 1] <= 0
 
@@ -744,7 +775,7 @@ def test_medium_term_reversal_and_ret120_values():
          "amount": 1e7, "turnover_rate": 1.0, "adj_factor": 1.0}
         for i, (d, c) in enumerate(zip(dates, closes))
     ]
-    ctx = _context_for(pd.DataFrame(rows), dates, ["000001.SZ"],
+    ctx = _context_for(_rows_to_bars(rows), dates, ["000001.SZ"],
                        ["RET_120", "REVERSAL_60", "REVERSAL_120"])
     ret120 = _factor_fn("RET_120")(ctx)
     rev60 = _factor_fn("REVERSAL_60")(ctx)
@@ -823,7 +854,7 @@ def _join_bars(
                     "adj_factor": 1.0,
                 }
             )
-    return codes, dates, pd.DataFrame(rows)
+    return codes, dates, _rows_to_bars(rows)
 
 
 def test_future_member_extreme_does_not_move_eligible_factors():
@@ -1010,7 +1041,7 @@ def test_p9_factor_compute_version_pinned():
 
     # p19 (D4): bumped 1 -> 2 for the adjusted price basis.
     # p17/D5 (t16 F1): bumped 2 -> 3 for the industry membership PIT switch.
-    assert FACTOR_COMPUTE_VERSION == 3
+    assert FACTOR_COMPUTE_VERSION == 4  # t22 semantic fixes
 
 
 def test_p9_new_factors_registered():
@@ -1105,7 +1136,7 @@ def test_p9_sparse_event_features_survive_standardization():
                     "adj_factor": 1.0,
                 }
             )
-    bars = pd.DataFrame(rows)
+    bars = _rows_to_bars(rows)
     mask = np.ones((n, n_dates), dtype=bool)
     tensor = compute_factor_tensor(bars, ts_codes, dates, mask)
     row_idx = FEATURE_NAMES.index("LIMIT_UP_EVENT")
@@ -1148,7 +1179,7 @@ def test_p9_sparse_safe_path_leaves_dense_features_unchanged():
                     "adj_factor": 1.0,
                 }
             )
-    bars = pd.DataFrame(rows)
+    bars = _rows_to_bars(rows)
     mask = np.ones((n, n_dates), dtype=bool)
     engine = AshareFactorEngine()
     close = engine._pivot(bars, ts_codes, dates, "close")

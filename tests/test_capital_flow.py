@@ -86,24 +86,34 @@ def test_build_capital_frames_margin_and_industry(tmp_path: Path):
     codes = ["000001.SZ", "600000.SH", "000505.SZ"]
     with AshareDB(cfg.duckdb_path) as db:
         db.create_schema(cfg)
-        # Margin balance: 000001 grows 10% per day; 600000 constant.
-        margin_rows = []
-        for i, d in enumerate(dates):
-            margin_rows.append({"ts_code": "000001.SZ", "trade_date": d, "rzye": 100.0 * 1.001**i})
-            margin_rows.append({"ts_code": "600000.SH", "trade_date": d, "rzye": 50.0})
-        db.upsert_margin(margin_rows, cfg)
         # Industry: 801010 index grows 1% per day; members 000001/000505.
         index_rows = [
             {"index_code": "801010", "industry_name": "农业", "trade_date": d, "close": 1000.0 * 1.01**i}
             for i, d in enumerate(dates)
         ]
         db.upsert_sw_index(index_rows, cfg)
+    # Margin: t22 — the frames read the v2 margin_detail_pit source with
+    # p17 §6.1 T+1 availability (pivot by available_date).  000001 grows
+    # 0.1% per day; 600000 constant; the detail of trade_date dates[i]
+    # becomes visible at dates[i+1].
+    from tests.conftest import populate_v2_industry_tables, populate_v2_margin_table
+
+    v2_path = cfg.duckdb_path.parent / "ashare_v2.duckdb"
+    margin_rows = []
+    for i, d in enumerate(dates[:-1]):
+        margin_rows.append({
+            "ts_code": "000001.SZ", "trade_date": d,
+            "available_date": dates[i + 1], "rzye": 100.0 * 1.001**i,
+        })
+        margin_rows.append({
+            "ts_code": "600000.SH", "trade_date": d,
+            "available_date": dates[i + 1], "rzye": 50.0,
+        })
+    populate_v2_margin_table(v2_path, margin_rows)
     # D5: membership comes from the v2 PIT intervals (in_date before the
     # window, so the whole window is visible).
-    from tests.conftest import populate_v2_industry_tables
-
     populate_v2_industry_tables(
-        cfg.duckdb_path.parent / "ashare_v2.duckdb",
+        v2_path,
         membership_rows=[
             {
                 "ts_code": code,
@@ -132,11 +142,17 @@ def test_build_capital_frames_margin_and_industry(tmp_path: Path):
     assert set(frames) == set(EXTERNAL_FACTOR_NAMES)
 
     margin = frames["MARGIN_BALANCE_CHG"]
-    # 20-day change of the growing balance: 1.001^20 - 1 for 000001; 0 for
-    # the constant stock; the first 20 days have no base -> NaN.
-    assert margin.loc["000001.SZ", dates[20]] == pytest.approx(1.001**20 - 1.0)
-    assert margin.loc["600000.SH", dates[20]] == pytest.approx(0.0)
-    assert np.isnan(margin.loc["000001.SZ", dates[19]])
+    # 20-session change of the visible balance at dates[21]: the visible
+    # value is the detail of dates[20] (available at dates[21]) and the
+    # base is the detail of dates[0] (available at dates[1]):
+    # 1.001^20 - 1 for 000001; 0 for the constant stock.
+    assert margin.loc["000001.SZ", dates[21]] == pytest.approx(1.001**20 - 1.0)
+    assert margin.loc["600000.SH", dates[21]] == pytest.approx(0.0)
+    # The detail of dates[20] is NOT visible before dates[21]: the change
+    # at dates[20] consumes the base available at dates[0]... the first
+    # visible observation is at dates[1], so the 20-session change is
+    # defined from dates[21] on and NaN before it.
+    assert np.isnan(margin.loc["000001.SZ", dates[20]])
 
     industry = frames["INDUSTRY_MOMENTUM"]
     # Every member inherits the industry index 20-day return; non-members
@@ -208,3 +224,57 @@ def test_sync_capital_flow_offline_skips(tmp_path: Path):
         "industry_rows": 0,
         "capital_failures": 0,
     }
+
+
+def test_f2_frames_raw_ratios(tmp_path: Path):
+    """The two F2 frames carry the RAW ratios (the balance-to-float and
+    the 5-day buy pressure); the per-date xcs-z is applied loader-side
+    (p24 §2 — the dependency-correct split)."""
+
+    from tests.conftest import populate_v2_margin_table, _V2_PRICE_DDL
+
+    cfg = _data_config(tmp_path)
+    dates = _dates(8)
+    codes = ("000001.SZ", "600000.SH")
+    v2_path = cfg.duckdb_path.parent / "ashare_v2.duckdb"
+    margin_rows = []
+    for i, d in enumerate(dates[:-1]):
+        margin_rows.append({
+            "ts_code": "000001.SZ", "trade_date": d,
+            "available_date": dates[i + 1], "rzye": 100.0 + 10.0 * i,
+            "rzmre": 50.0 + 5.0 * i,
+        })
+        margin_rows.append({
+            "ts_code": "600000.SH", "trade_date": d,
+            "available_date": dates[i + 1], "rzye": 300.0,
+            "rzmre": 150.0,
+        })
+    populate_v2_margin_table(v2_path, margin_rows)
+    # The basic rows (the circ_mv denominators) written directly: the
+    # trade_date-keyed daily_basic_pit (the D4-era convention).
+    with AshareDB(v2_path) as db:
+        for ddl in _V2_PRICE_DDL.values():
+            if "daily_basic_pit" in ddl:
+                db.execute(ddl)
+        db.execute("DELETE FROM daily_basic_pit")
+        for code in codes:
+            for d in dates:
+                db.execute(
+                    "INSERT INTO daily_basic_pit (ts_code, trade_date, "
+                    "turnover_rate, circ_mv) VALUES (?, ?, ?, ?)",
+                    [code, d, 1.0, 1000.0],
+                )
+    frames = build_capital_frames(cfg, list(codes), dates)
+    for name in ("MARGIN_BALANCE_TO_CIRC_MV", "MARGIN_BUY_PRESSURE_5"):
+        assert name in frames, name
+        assert not frames[name].isna().all().all(), name
+    # The raw ratios at the last visible date (dates[-2]'s detail visible
+    # at dates[-1]): A: 160/1000 = 0.16; B: 300/1000 = 0.3.
+    assert frames["MARGIN_BALANCE_TO_CIRC_MV"].loc["000001.SZ", dates[-1]] == pytest.approx(0.16)
+    assert frames["MARGIN_BALANCE_TO_CIRC_MV"].loc["600000.SH", dates[-1]] == pytest.approx(0.3)
+    # The 5-session buy sum for A: the rzmre visible at the last five
+    # columns (the trade_dates dates[-6..-2], the values 50+5*i).
+    a5 = sum(50.0 + 5.0 * i for i in range(len(dates) - 6, len(dates) - 1))
+    assert frames["MARGIN_BUY_PRESSURE_5"].loc["000001.SZ", dates[-1]] == pytest.approx(a5 / 1000.0)
+    b5 = 150.0 * 5
+    assert frames["MARGIN_BUY_PRESSURE_5"].loc["600000.SH", dates[-1]] == pytest.approx(b5 / 1000.0)

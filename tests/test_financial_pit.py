@@ -495,3 +495,118 @@ def test_data_tier_version_bumped_with_revision_tracking_text():
     assert data_tier.DATA_TIER_VERSION == 2
     rule = data_tier.TIER_TIME_RULES["B"]
     assert "修订" in rule  # revision-tracking semantics for fundamentals
+
+
+# --- F1 batch (p23 v4, user-approved via the captain's delegated ruling):
+# --- the four slow-fundamental quality factors from the v2 as-of source ---
+
+
+def _f1_statement_rows(code: str = "000001.SZ"):
+    """Eight quarters of synthetic statements with hand-computable TTM
+    values: 2023 revenue 100/qtr (oper cost 70/qtr, profit 10/qtr); 2024
+    revenue 110/qtr (oper cost 77/qtr, profit 15/qtr); cashflow 15/qtr
+    then 20/qtr; assets 1000 flat; liabilities 500 flat."""
+    quarters = [
+        ("20230331", 100.0, 70.0, 10.0), ("20230630", 200.0, 140.0, 20.0),
+        ("20230930", 300.0, 210.0, 30.0), ("20231231", 400.0, 280.0, 40.0),
+        ("20240331", 110.0, 77.0, 15.0), ("20240630", 220.0, 154.0, 30.0),
+        ("20240930", 330.0, 231.0, 45.0), ("20241231", 440.0, 308.0, 60.0),
+    ]
+    cfo = [15.0, 30.0, 45.0, 60.0, 80.0, 100.0, 120.0, 140.0]
+    anns = ("20230401", "20230701", "20231001", "20240101",
+            "20240401", "20240701", "20241001", "20250101")
+    avails = ("20230402", "20230702", "20231002", "20240102",
+              "20240402", "20240702", "20241002", "20250102")
+    income, balance, cashflow = [], [], []
+    for i, (end, rev_cum, cost_cum, prof_cum) in enumerate(quarters):
+        income.append({
+            "ts_code": code, "end_date": end, "ann_date": anns[i],
+            "f_ann_date": anns[i], "available_date": avails[i],
+            "report_type": "1", "comp_type": "1",
+            "update_flag": "0", "end_type": None,
+            "revenue": rev_cum, "oper_cost": cost_cum,
+            "total_profit": prof_cum, "n_income": prof_cum,
+            "n_income_attr_p": prof_cum, "ingest_id": f"fi{i}",
+        })
+        balance.append({
+            "ts_code": code, "end_date": end, "ann_date": anns[i],
+            "f_ann_date": anns[i], "available_date": avails[i],
+            "report_type": "1", "comp_type": "1",
+            "update_flag": "0", "end_type": None,
+            "total_assets": 1000.0, "total_liab": 500.0,
+            "ingest_id": f"bi{i}",
+        })
+        cashflow.append({
+            "ts_code": code, "end_date": end, "ann_date": anns[i],
+            "f_ann_date": anns[i], "available_date": avails[i],
+            "report_type": "1", "comp_type": "1",
+            "update_flag": "0", "end_type": None,
+            "n_cashflow_act": cfo[i],
+            "ingest_id": f"ci{i}",
+        })
+    return income, balance, cashflow
+
+
+def test_f1_frames_built_from_v2_asof(tmp_path: Path):
+    """The four F1 features consume the v2 as-of source with
+    hand-computable values at the 2024Q4 visibility (p23 v4 §2)."""
+
+    from ashare_data.fundamentals import build_pit_frames
+
+    config = _config(tmp_path)
+    income, balance, cashflow = _f1_statement_rows()
+    populate_v2_statement_tables(
+        config.duckdb_path.parent / "ashare_v2.duckdb",
+        income_rows=income, balance_rows=balance, cashflow_rows=cashflow,
+    )
+    dates = pd.bdate_range("2025-01-01", "2025-03-31").strftime("%Y%m%d").tolist()
+    close = pd.DataFrame(20.0, index=["000001.SZ"], columns=dates)
+    frames = build_pit_frames(config, ["000001.SZ"], dates, close)
+    for name in ("CFO_TO_ASSETS", "GROSS_PROFITABILITY",
+                 "OPERATING_PROFITABILITY", "LEVERAGE_CHANGE"):
+        assert name in frames, name
+        assert not frames[name].isna().all().all(), name
+    # Hand-computed at 2024Q4 (avg_assets = mean(1000, 1000) = 1000):
+    # CFO TTM = 140 (the FY cumulative value) -> 0.14; gross TTM =
+    # 440 - 308 = 132 -> 0.132; total_profit TTM = 60 -> 0.06;
+    # leverage 0.5 flat -> change 0.
+    assert frames["CFO_TO_ASSETS"].iloc[0, -1] == pytest.approx(140.0 / 1000.0)
+    assert frames["GROSS_PROFITABILITY"].iloc[0, -1] == pytest.approx(132.0 / 1000.0)
+    assert frames["OPERATING_PROFITABILITY"].iloc[0, -1] == pytest.approx(60.0 / 1000.0)
+    assert frames["LEVERAGE_CHANGE"].iloc[0, -1] == pytest.approx(0.0)
+
+
+def test_f1_nan_guards_missing_source_stays_nan(tmp_path: Path):
+    """A stock with no income rows has every income-TTM-derived F1 frame
+    NaN — the missing source is never fabricated (p23 v4 §2 NaN guards;
+    the same discipline as the family-⑤ degradation)."""
+
+    from ashare_data.fundamentals import build_pit_frames
+
+    config = _config(tmp_path)
+    income, balance, cashflow = _f1_statement_rows("000001.SZ")
+    # A second stock with balance/cashflow rows but NO income rows: its
+    # income-TTM-derived F1 frames must stay NaN (no fallback, no zeros),
+    # while its leverage-change and CFO-to-assets frames compute from the
+    # balance/cashflow sources alone.
+    _, balance2, cashflow2 = _f1_statement_rows("600000.SH")
+    balance.extend(balance2)
+    cashflow.extend(cashflow2)
+    populate_v2_statement_tables(
+        config.duckdb_path.parent / "ashare_v2.duckdb",
+        income_rows=income, balance_rows=balance, cashflow_rows=cashflow,
+    )
+    codes = ["000001.SZ", "600000.SH"]
+    dates = pd.bdate_range("2025-01-01", "2025-03-31").strftime("%Y%m%d").tolist()
+    close = pd.DataFrame(20.0, index=codes, columns=dates)
+    frames = build_pit_frames(config, codes, dates, close)
+    assert frames["GROSS_PROFITABILITY"].loc["600000.SH"].isna().all()
+    assert frames["OPERATING_PROFITABILITY"].loc["600000.SH"].isna().all()
+    # CFO_TO_ASSETS needs only cashflow + balance (no income) — it
+    # computes for the income-less stock.
+    assert not frames["CFO_TO_ASSETS"].loc["600000.SH"].isna().all()
+    assert not frames["LEVERAGE_CHANGE"].loc["600000.SH"].isna().all()
+    # The fully-populated stock keeps all four frames populated.
+    for name in ("CFO_TO_ASSETS", "GROSS_PROFITABILITY",
+                 "OPERATING_PROFITABILITY", "LEVERAGE_CHANGE"):
+        assert not frames[name].loc["000001.SZ"].isna().all(), name

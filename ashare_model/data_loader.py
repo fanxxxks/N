@@ -108,6 +108,39 @@ def _v2_table(table: str) -> str:
     return V2_TABLES[table].name
 
 
+def apply_cross_sectional_z(
+    frames: dict[str, pd.DataFrame], names: tuple[str, ...]
+) -> None:
+    """Per-date cross-sectional z-score of the named frames, in place.
+
+    F2 (p24 §2): the margin-crowding factors are pre-registered as the
+    per-date cross-sectional z of the raw ratios.  The single xcs-z
+    implementation (``feature_registry._zscore_per_date``) is reused via
+    this frame adapter — no second standardization implementation (§1
+    principle 3).  NaN cells (no margin/basic coverage) are restored
+    after the z so missing sources stay NaN (never neutral-0; p24 §2 NaN
+    guards).
+    """
+
+    from .feature_registry import _zscore_per_date
+
+    for name in names:
+        frame = frames[name]
+        values = frame.to_numpy(dtype=np.float64)
+        eligible = np.isfinite(values)
+        # The layout (1, stocks, dates): _zscore_per_date computes the
+        # cross-sectional z over axis 1 (the stocks) per date — the
+        # (stocks, 1, dates) feed would degenerate to z=0 over a
+        # size-1 axis.
+        z = _zscore_per_date(
+            values[None, :, :], eligible[None, :, :]
+        )[0, :, :]
+        z = np.where(eligible, z, np.nan)
+        frames[name] = pd.DataFrame(
+            z, index=frame.index, columns=frame.columns
+        )
+
+
 class AshareDataLoader:
     def __init__(
         self,
@@ -484,6 +517,10 @@ class AshareDataLoader:
         close_wide = pivot_wide(df, self.ts_codes, self.dates, "close")
         pit = build_pit_frames(self.config, self.ts_codes, self.dates, close_wide)
         capital = build_capital_frames(self.config, self.ts_codes, self.dates)
+        apply_cross_sectional_z(
+            capital,
+            ("MARGIN_BALANCE_TO_CIRC_MV", "MARGIN_BUY_PRESSURE_5"),
+        )
         industry_frame = build_industry_member_frame(
             self.config, self.ts_codes, self.dates
         )
@@ -506,9 +543,15 @@ class AshareDataLoader:
             )
 
         # Factors consume the ADJUSTED continuous basis (p19 §2.3); volume,
-        # amount and turnover_rate stay raw (nominal shares / yuan).
+        # amount and turnover_rate stay raw (nominal shares / yuan).  The
+        # exact-limit event family additionally reads the raw nominal
+        # prices (close_raw/high_raw/low_raw) and the daily_price_limit
+        # columns already merged into df_adj — p17 §5.2 table 5, t22
+        # in-place fix.
         factors = compute_factor_tensor(
-            df_adj,
+            df_adj.assign(
+                close_raw=df["close"], high_raw=df["high"], low_raw=df["low"],
+            ),
             self.ts_codes,
             self.dates,
             pit_fundamentals=pit,

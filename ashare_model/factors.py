@@ -23,7 +23,6 @@ import numpy as np
 import pandas as pd
 
 from ashare_data.processor import (
-    limit_rate,
     normalize_daily_bars,
     pivot_wide,
     winsorize_cross_section,
@@ -55,8 +54,19 @@ NEUTRAL_FEATURE_NAMES = {
 # from the legacy fundamental_pit table to the three v2 financial version
 # tables via asof_winner_intervals (p17 §6.2 as-of).  Both change factor
 # values for affected stocks — no historical migration.
+# v4 (t22 factor semantic fixes; findings in
+# docs/t18_factor_retest_measurement_log.md): THREE consumption semantics
+# change on the already-switched sources — (a) _industry_demean consumes
+# the per-date PIT membership column instead of the window-start column
+# (t18: industry-family coverage 0.033/0.000); (b) the limit-event family
+# seals/breaks against the exact v2 daily_price_limit prices instead of
+# the per-board limit_rate approximation + 0.5pp band; (c) the margin
+# frames read the v2 margin_detail_pit source with the p17 §6.1 T+1
+# availability instead of the legacy margin_balance trade-date pivot.
+# Every factor value of the affected families changes — no historical
+# migration.
 # Recorded in run artifacts via the runspec version registry.
-FACTOR_COMPUTE_VERSION = 3
+FACTOR_COMPUTE_VERSION = 4
 
 # Sparse event features standardize on the sparse-safe path: the 1%/99%
 # winsorize quantiles flatten any day whose event incidence is below the
@@ -97,6 +107,9 @@ FAMILIES = (
 
 # Daily-bar columns a factor may draw from.  Registry metadata is validated
 # against this set in tests so a typo can never hide a missing pivot.
+# ``close_raw``/``high_raw``/``low_raw`` carry the raw nominal prices the
+# exact daily_price_limit comparisons need (the adjusted ``close``/``high``/
+# ``low`` fields keep feeding every other factor, p19 §2.3).
 BAR_COLUMNS = (
     "close",
     "open",
@@ -106,6 +119,11 @@ BAR_COLUMNS = (
     "volume",
     "amount",
     "turnover_rate",
+    "close_raw",
+    "high_raw",
+    "low_raw",
+    "up_limit",
+    "down_limit",
 )
 
 
@@ -153,6 +171,11 @@ class FactorContext:
     turnover: pd.DataFrame
     eligible: pd.DataFrame
     industry: pd.DataFrame | None = None
+    close_raw: pd.DataFrame | None = None
+    high_raw: pd.DataFrame | None = None
+    low_raw: pd.DataFrame | None = None
+    up_limit: pd.DataFrame | None = None
+    down_limit: pd.DataFrame | None = None
     _cache: dict | None = None
 
     def __post_init__(self) -> None:
@@ -398,27 +421,42 @@ def _factor_macd(
     return dif, dea
 
 
-def _limit_events(
-    close: pd.DataFrame,
-    high: pd.DataFrame,
-    low: pd.DataFrame,
-    pre_close: pd.DataFrame,
-    ts_codes: list[str],
-    direction: str,
-) -> pd.DataFrame:
-    """One-word limit move events (1.0 where the close is locked at the limit)."""
-    rates = _limit_rate_per_stock(ts_codes)
-    one_word = np.isclose(close.to_numpy(), high.to_numpy()) & np.isclose(
-        close.to_numpy(), low.to_numpy()
+def _limit_events(ctx: FactorContext, direction: str) -> pd.DataFrame:
+    """One-word limit move events (1.0 where the close is locked at the
+    limit), sealed against the EXACT ``daily_price_limit`` prices (p17
+    §5.2 table 5 — the t22 in-place fix of the per-board ``limit_rate``
+    approximation + 0.5pp tolerance band, which fabricated events inside
+    the band and missed touches exactly at the limit price).
+
+    Missing raw/limit inputs stay "no event observed" (the frozen event
+    convention: the 0/1 frame is finite everywhere), never a fabricated
+    event.
+    """
+
+    close = ctx.close_raw
+    high = ctx.high_raw
+    low = ctx.low_raw
+    limit = ctx.up_limit if direction == "up" else ctx.down_limit
+    if any(
+        frame is None or frame.empty
+        for frame in (close, high, low, limit)
+    ):
+        return pd.DataFrame(np.nan, index=ctx.close.index, columns=ctx.close.columns)
+    close_np = close.to_numpy(dtype=float)
+    one_word = np.isclose(close_np, high.to_numpy(dtype=float)) & np.isclose(
+        close_np, low.to_numpy(dtype=float)
     )
     with np.errstate(all="ignore"):
-        change = close.to_numpy() / pre_close.to_numpy() - 1.0
-    if direction == "up":
-        event = one_word & (change >= rates[:, None] - 0.005)
-    else:
-        event = one_word & (change <= -rates[:, None] + 0.005)
+        # Seal = the close is locked at the exact limit price: at/above the
+        # ceiling for an up limit, at/below the floor for a down limit
+        # (prices cannot legitimately trade outside the band).
+        if direction == "up":
+            sealed = close_np >= limit.to_numpy(dtype=float) - 1e-6
+        else:
+            sealed = close_np <= limit.to_numpy(dtype=float) + 1e-6
+    event = one_word & sealed
     event = np.nan_to_num(event, nan=False).astype(float)
-    return pd.DataFrame(event, index=close.index, columns=close.columns)
+    return pd.DataFrame(event, index=ctx.close.index, columns=ctx.close.columns)
 
 
 def _limit_event_frame(ctx: FactorContext, direction: str) -> pd.DataFrame:
@@ -427,9 +465,7 @@ def _limit_event_frame(ctx: FactorContext, direction: str) -> pd.DataFrame:
     key = f"limit_{direction}"
     cached = ctx._cache.get(key)
     if cached is None:
-        cached = _limit_events(
-            ctx.close, ctx.high, ctx.low, ctx.pre_close, ctx.ts_codes, direction
-        )
+        cached = _limit_events(ctx, direction)
         ctx._cache[key] = cached
     return cached
 
@@ -474,21 +510,25 @@ def _limit_up_count(ctx: FactorContext, window: int = 20) -> pd.DataFrame:
 def _limit_break(ctx: FactorContext) -> pd.DataFrame:
     """Limit-up touch without a sealed limit-up close (intraday break, 炸板).
 
-    The high touched the board's limit price but the close fell back below
-    the limit band: 1.0 on such days, 0.0 otherwise.  A close at the limit
-    counts as sealed even when the day was not one-word (e.g. opened below
-    the limit and closed locked).
+    The high touched the EXACT daily_price_limit up price but the close
+    fell back below it: 1.0 on such days, 0.0 otherwise (p17 §5.2 table 5;
+    the t22 in-place fix of the per-board rate approximation).  A close at
+    the limit counts as sealed even when the day was not one-word (e.g.
+    opened below the limit and closed locked).  Missing inputs stay "no
+    event observed" (frozen convention).
     """
 
-    rates = _limit_rate_per_stock(ctx.ts_codes)[:, None]
+    high = ctx.high_raw
+    close = ctx.close_raw
+    up_limit = ctx.up_limit
+    if any(
+        frame is None or frame.empty
+        for frame in (high, close, up_limit)
+    ):
+        return pd.DataFrame(np.nan, index=ctx.close.index, columns=ctx.close.columns)
     with np.errstate(all="ignore"):
-        limit_price = ctx.pre_close.to_numpy(dtype=float) * (1.0 + rates)
-        touched = ctx.high.to_numpy(dtype=float) >= limit_price - 1e-9
-        change = (
-            ctx.close.to_numpy(dtype=float) / ctx.pre_close.to_numpy(dtype=float)
-            - 1.0
-        )
-        sealed = change >= rates - 0.005
+        touched = high.to_numpy(dtype=float) >= up_limit.to_numpy(dtype=float) - 1e-6
+        sealed = close.to_numpy(dtype=float) >= up_limit.to_numpy(dtype=float) - 1e-6
     touched = np.nan_to_num(touched, nan=False)
     sealed = np.nan_to_num(sealed, nan=False)
     return pd.DataFrame(
@@ -648,11 +688,15 @@ def _sparse_safe_standardize(wide: pd.DataFrame, eligible) -> pd.DataFrame:
 def _industry_demean(ctx: FactorContext, frame: pd.DataFrame) -> pd.DataFrame:
     """Subtract the per-industry cross-sectional mean of ``frame``.
 
-    Membership comes from the (current-snapshot) Shenwan mapping carried in
-    ``ctx.industry``; stocks without an industry stay NaN (neutral after
-    standardization), and no industry is fabricated when the frame is
-    absent.  Industry means are computed only over the *eligible and
-    finite* members (``ctx.eligible``, the PIT universe mask), so an
+    Membership comes from the D5 ``industry_membership_pit`` PIT interval
+    frame carried in ``ctx.industry`` — consumed **per date**: each session
+    demeans its own cross-section by the industry that is valid and visible
+    for the stock on THAT session (the t22 in-place fix of the frozen
+    window-start-column read, which collapsed the family to ~3% coverage
+    under the PIT intervals).  Stocks without a visible industry stay NaN
+    (neutral after standardization), and no industry is fabricated when the
+    frame is absent.  Industry means are computed only over the *eligible
+    and finite* members (``ctx.eligible``, the PIT universe mask), so an
     ineligible stock can never shift its industry's mean — its own raw
     value is still demeaned with that mean so its history stays observable.
     A stock's own NaN never contaminates its industry's mean.
@@ -660,23 +704,21 @@ def _industry_demean(ctx: FactorContext, frame: pd.DataFrame) -> pd.DataFrame:
 
     if ctx.industry is None or ctx.industry.empty:
         return pd.DataFrame(np.nan, index=frame.index, columns=frame.columns)
-    codes = ctx.industry.reindex(frame.index).iloc[:, 0]
-    if int(codes.notna().sum()) == 0:
+    codes = ctx.industry.reindex(index=frame.index, columns=frame.columns)
+    if not codes.notna().to_numpy().any():
         # No usable membership at all: stay neutral rather than asking
         # groupby to demean an empty set of groups.
         return pd.DataFrame(np.nan, index=frame.index, columns=frame.columns)
-    reference = frame.where(
-        ctx.eligible.reindex(index=frame.index, columns=frame.columns)
-    )
-    means = reference.groupby(codes, dropna=True).transform("mean")
-    return frame - means
-
-
-def _limit_rate_per_stock(ts_codes: list[str]) -> np.ndarray:
-    """Board daily limit rate per stock: factors are historical by
-    construction and there is no dated ST status, so the shared rule is
-    evaluated without any ST flag."""
-    return np.asarray([limit_rate(code) for code in ts_codes], dtype=float)
+    eligible = ctx.eligible.reindex(index=frame.index, columns=frame.columns)
+    out = frame.copy()
+    for column in frame.columns:
+        group = codes[column]
+        if not group.notna().any():
+            continue
+        reference = frame[column].where(eligible[column])
+        means = reference.groupby(group, dropna=True).transform("mean")
+        out[column] = frame[column] - means
+    return out
 
 
 def _factor_macd_cached(ctx: FactorContext) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -795,7 +837,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add(
         "LIMIT_UP_EVENT",
         "event",
-        ("close", "high", "low", "pre_close"),
+                ("close_raw", "high_raw", "low_raw", "up_limit", "down_limit"),
         2,
         "One-word limit-up close (1.0 on the event day)",
         lambda ctx: _limit_event_frame(ctx, "up"),
@@ -803,7 +845,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add(
         "LIMIT_DOWN_EVENT",
         "event",
-        ("close", "high", "low", "pre_close"),
+                ("close_raw", "high_raw", "low_raw", "up_limit", "down_limit"),
         2,
         "One-word limit-down close (1.0 on the event day)",
         lambda ctx: _limit_event_frame(ctx, "down"),
@@ -811,7 +853,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add(
         "LIMIT_STREAK",
         "event",
-        ("close", "high", "low", "pre_close"),
+                ("close_raw", "high_raw", "low_raw", "up_limit", "down_limit"),
         2,
         "Consecutive one-word limit-up days ending today",
         _limit_streak,
@@ -819,7 +861,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add(
         "LIMIT_UP_CNT_20",
         "event",
-        ("close", "high", "low", "pre_close"),
+                ("close_raw", "high_raw", "low_raw", "up_limit", "down_limit"),
         20,
         "One-word limit-up days in the trailing 20 days",
         _limit_up_count,
@@ -827,7 +869,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add(
         "LIMIT_BREAK",
         "event",
-        ("close", "high", "low", "pre_close"),
+                ("close_raw", "high_raw", "low_raw", "up_limit", "down_limit"),
         2,
         "Limit-up touch without a limit-up close (intraday break)",
         _limit_break,
@@ -1053,7 +1095,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add(
         "LIMIT_UP_CNT_5",
         "event",
-        ("close", "high", "low", "pre_close"),
+                ("close_raw", "high_raw", "low_raw", "up_limit", "down_limit"),
         5,
         "One-word limit-up days in the trailing 5 days",
         lambda ctx: _limit_up_count(ctx, 5),
@@ -1061,7 +1103,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add(
         "LIMIT_DOWN_STREAK",
         "event",
-        ("close", "high", "low", "pre_close"),
+                ("close_raw", "high_raw", "low_raw", "up_limit", "down_limit"),
         2,
         "Consecutive one-word limit-down days ending today",
         _limit_down_streak,
@@ -1069,7 +1111,7 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add(
         "LIMIT_BREAK_5",
         "event",
-        ("close", "high", "low", "pre_close"),
+                ("close_raw", "high_raw", "low_raw", "up_limit", "down_limit"),
         5,
         "Limit-up breaks (intraday touch without a sealed close) in the trailing 5 days",
         lambda ctx: _limit_break(ctx).T.rolling(5, min_periods=1).sum().T,
@@ -1149,6 +1191,11 @@ class AshareFactorEngine:
             turnover=frames["turnover_rate"],
             industry=industry_frame,
             eligible=eligible_frame,
+            close_raw=frames["close_raw"],
+            high_raw=frames["high_raw"],
+            low_raw=frames["low_raw"],
+            up_limit=frames["up_limit"],
+            down_limit=frames["down_limit"],
         )
 
     def compute_factor_tensor(

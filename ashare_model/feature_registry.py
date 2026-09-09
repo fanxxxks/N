@@ -58,7 +58,31 @@ from .vocab import FEATURE_NAMES
 # the family-⑤ pending_data placeholders lift into authoritative metadata
 # and the four slow-fundamental features join the vocabulary (grammar v6,
 # research domain v3); registry summary exposes no pending_data members.
-FEATURE_REGISTRY_VERSION = 6
+# v7 (t22/p9 erratum t69, governance option A): TURNOVER_MA20 deprecated
+# (Part A trigger fired: 0.914 vs TURNOVER_STD20 across four audit rounds;
+# the stronger representative kept) — keeps computing, exits the sampling
+# space, loses promotion eligibility.
+# v9 (t70, p20 draft — captain+governance double-signed): the
+# MARGIN_BALANCE_CHG authored direction re-preregisters +1 -> -1 (four
+# audit rounds of falsification; metadata-only — the formula, source and
+# PIT visibility are unchanged, so FACTOR_COMPUTE is untouched).
+# v10 (t24 routing, captain ruling): INDUSTRY_MOMENTUM's authored +1 is a
+# negative result — promotion eligibility withdrawn (the feature keeps
+# computing; the authored direction is preserved as falsified evidence).
+# v11 (p22 approved execution, captain delegated): the INDUSTRY_MOMENTUM
+# direction re-preregisters +1 -> -1 (metadata-only — the formula, source
+# and PIT visibility are unchanged; FACTOR_COMPUTE untouched).  The
+# negative-result promotion block stands pending the targeted measurement
+# adjudication of the -1 hypothesis.
+# v12 (p23 v4, user-approved F1 batch): the four slow-fundamental quality
+# factors join the vocabulary and registry (metadata + depends_on).
+# v13 (captain final arbitration): the INDUSTRY_MOMENTUM -1 flip REVERTED —
+# the redundancy pre-check rejection stands (the direction confirmation
+# does not cure the increment deficiency); the direction returns to the
+# authored +1 preserved as falsified evidence.
+# v14 (p24, user-approved F2 batch): the two margin-crowding factors join
+# the vocabulary and registry (metadata + depends_on).
+FEATURE_REGISTRY_VERSION = 14
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9

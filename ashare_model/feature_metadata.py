@@ -81,7 +81,10 @@ _FUNDAMENTAL_TTM = (
     "(Q1 04-30 / H1 08-31 / Q3 10-31 / annual next-year 04-30); TTM ratios "
     "require four complete consecutive quarters (docs/p13_fundamental_fields_contract.md §5.3)"
 )
-_CAPITAL = "point-in-time margin/capital-flow feed as of session t"
+_MARGIN = (
+    "v2 margin_detail_pit (p17 §5.2 table 18): the detail of session t-1 "
+    "becomes visible at session t (p17 §6.1 T+1 availability)"
+)
 _SNAPSHOT_EXT = (
     "industry membership snapshot + daily bars up to session t inclusive "
     "(PIT-bounded by the universe contract)"
@@ -128,7 +131,7 @@ def resolve_depends_on(name: str, meta: AuthoredFeatureMeta) -> tuple[str, ...]:
     spec = FACTOR_REGISTRY[name][0]
     deps = tuple(spec.required_columns)
     if spec.family == "industry":
-        deps = deps + ("industry_membership_snapshot",)
+        deps = deps + ("industry_membership_pit",)
     return deps
 
 
@@ -372,12 +375,17 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         depends_on=(),
     ),
     "MARGIN_BALANCE_CHG": AuthoredFeatureMeta(
-        availability_rule=_CAPITAL,
-        hypothesis="Margin-flow momentum: leveraged inflows chase and lift prices over short horizons.",
-        expected_direction=1,
+        availability_rule=_MARGIN,
+        # t70 (p20 draft, captain+governance double-signed): the authored
+        # +1 "inflows chase and lift prices" was falsified in four audit
+        # rounds — the direction re-preregisters to -1 (leveraged-inflow
+        # crowding economics, consistent with MARGIN_CROWD_60); the
+        # formula, source and PIT visibility are unchanged.
+        hypothesis="Margin-flow crowding: leveraged-inflow acceleration marks late-stage chase that subsequently underperforms.",
+        expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
         compute_cost=ComputeCost.LOW,
-        depends_on=("capital_flow_pit",),
+        depends_on=("margin_detail_pit",),
     ),
     # Limit-move event family (boolean/event).
     "LIMIT_UP_EVENT": AuthoredFeatureMeta(
@@ -394,11 +402,86 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
     ),
     "INDUSTRY_MOMENTUM": AuthoredFeatureMeta(
         availability_rule=_SNAPSHOT_EXT,
+        # Dual-finding record (captain final arbitration 2026-09-07):
+        # (1) the authored +1 (spillover) is FALSIFIED on the repaired
+        # dataset across two post-fix rounds (IC negative at every
+        # horizon, corrected-baseline dIC -0.0167, annual direction
+        # stability 4/13); (2) the -1 reversal (industry-level reversal)
+        # was empirically OBSERVED (the -1-aligned IC positive at every
+        # horizon) but its re-hypothesis was REJECTED on the redundancy
+        # pre-check (the corrected dIC -0.0167 sits below every IND_REL_*
+        # family member's increment +0.0079..+0.0283) — a direction
+        # confirmation does not cure the increment deficiency, so the
+        # -1 re-hypothesis was NOT adopted.  The direction field keeps the
+        # authored original value (the pre-registered-hypothesis history
+        # semantics); promotion eligibility stays withdrawn; a future
+        # family-structure change may re-open via a NEW pre-registration.
         hypothesis="Industry momentum spillover: hot industry groups keep rotating slowly.",
         expected_direction=1,
         semantic_type=SemanticType.CROSS_SECTIONAL_SIGNAL,
         compute_cost=ComputeCost.LOW,
-        depends_on=("industry_membership_snapshot", "close"),
+        promotion_allowed=False,
+        depends_on=("industry_membership_pit", "close"),
+    ),
+    # F1 batch (p23 v4, user-approved via the captain's delegated ruling):
+    # the four slow-fundamental quality factors (asset-yield ratios and the
+    # leverage trend) — all as-of computed from the v2 version tables via
+    # the family-5 single path.  OPERATING_PROFITABILITY's pre-registered
+    # proxy: total_profit stands in for operate_profit (absent from the
+    # p17 income DDL; an erratum + recompute if the column is added).
+    "CFO_TO_ASSETS": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="CFO-to-assets: operating cash flow per unit of average total assets marks cash-creation intensity and financial flexibility.",
+        expected_direction=1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("n_cashflow_act", "total_assets"),
+    ),
+    "GROSS_PROFITABILITY": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Gross profitability (Novy-Marx): gross profit per unit of average total assets marks pricing power and cost-structure quality.",
+        expected_direction=1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("revenue", "oper_cost", "total_assets"),
+    ),
+    "OPERATING_PROFITABILITY": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Operating profitability: total profit per unit of average total assets marks comprehensive earning power.",
+        expected_direction=1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("total_profit", "total_assets"),
+    ),
+    "LEVERAGE_CHANGE": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Leverage trend: a 4-report-period rise in the debt ratio marks distress-driven underperformance.",
+        expected_direction=-1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("total_liab", "total_assets"),
+    ),
+    # F2 batch (p24, user-approved): the two margin-crowding factors —
+    # the raw ratios computed in capital_flow (ashare_data) with the
+    # per-date cross-sectional z applied loader-side (the dependency-
+    # correct layer for the single xcs-z implementation).  The margin
+    # detail visibility = T+1 (p17 §6.1); circ_mv = the trade-date
+    # same-session convention (the D4-era daily-basic semantics).
+    "MARGIN_BALANCE_TO_CIRC_MV": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Margin balance to float cap: a high leveraged-position intensity relative to the free float marks crowding that unwinds.",
+        expected_direction=-1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("rzye", "circ_mv"),
+    ),
+    "MARGIN_BUY_PRESSURE_5": AuthoredFeatureMeta(
+        availability_rule=_FUNDAMENTAL_TTM,
+        hypothesis="Margin buy pressure: heavy 5-session margin buying per unit of float cap marks leveraged chasing that subsequently retraces (the -1 main hypothesis; the +1 chase-continuation alternative adjudicated by the measurement).",
+        expected_direction=-1,
+        semantic_type=SemanticType.FUNDAMENTAL_LIKE,
+        compute_cost=ComputeCost.LOW,
+        depends_on=("rzmre", "circ_mv"),
     ),
     # Intraday decomposition (return-like).
     "OVERNIGHT_RET": AuthoredFeatureMeta(
@@ -536,6 +619,7 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         hypothesis="Monthly crowding level.",
         expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
+        promotion_allowed=False,  # t22/p9 erratum (t69) Part A: 0.914 vs TURNOVER_STD20 across four rounds
     ),
     "TURNOVER_STD20": AuthoredFeatureMeta(
         availability_rule=_BAR.format(warmup=20),
@@ -663,12 +747,12 @@ FEATURE_METADATA: dict[str, AuthoredFeatureMeta] = {
         semantic_type=SemanticType.VOLUME_LIKE,
     ),
     "MARGIN_CROWD_60": AuthoredFeatureMeta(
-        availability_rule=_CAPITAL,
+        availability_rule=_MARGIN,
         hypothesis="Margin crowding: a financing balance far above its own baseline marks leveraged crowding that unwinds.",
         expected_direction=-1,
         semantic_type=SemanticType.VOLUME_LIKE,
         compute_cost=ComputeCost.LOW,
-        depends_on=("capital_flow_pit",),
+        depends_on=("margin_detail_pit",),
     ),
     # Family ⑤ (P13 §5.3, docs/p13_fundamental_fields_contract.md): the
     # pending_data placeholders become authoritative metadata -- same
