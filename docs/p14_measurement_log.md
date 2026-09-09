@@ -29,8 +29,8 @@
 ## 4. 正式 campaign（budget 2000 = 1200/800 预注册拆分）
 
 - **命令**: `python -m ashare_model.searcher_bench --config configs/p14_measurement.yaml --run-dir experiments/p14_formal --seeds 42,7,2024 --searchers gp,tpe,random,rl --budget 2000 --fold 0 --wall-cap-hours 7`
-- **状态**: 启动于 2026-09-08（后台）；产物 `experiments/p14_formal/`；campaign 整体单任务粒度（E3 内部 ledger 行级 resume，已裁定）。
-- **结果与 §9 三判据**: 待 campaign 完成后追加（§9 判据只能执行预注册裁决，禁止预写）。
+- **状态**: 启动于 2026-09-08 14:52（后台）；**中止于同日**——worker 于 loader/frames 阶段因会话边界终止（ledger 未创建、零 trial 消费、零测量输出），随后**用户决定收尾合并，campaign 永久中止（USER ABORT — 用户决定，非失败非机制失效）**。产物目录 `experiments/p14_formal/` 保留。
+- **结果与 §9 三判据**: **判据未执行**——campaign 中止时无测量输出可裁决（本次为用户中止，非研究裁决）。测量结论边界：**本测量未产生任何 GP/TPE/random/RL 消化率或 Tier-A 纯度的正式结论**；P1-1/P1-2 机制的有效性在收尾时点**尚无测量证据**（AGENTS §4.4 "尚无证据"口径）。
 
 ## 5. 全部偏差与裁定（跨四次派发累计）
 
@@ -43,9 +43,9 @@
 7. **688xxx 降级审计**: STAR 板 daily_price_limit 缺失（p19 §2.4 逐股 fail-closed，按设计）——与 t18 发现（1630/1630 degraded）互证，D3 已知 stk_limit 缺口。
 8. **CLI 拆分旗标**: 91eebbe 补 --research-budget/--promotion-budget（API 有参数 CLI 未暴露的集成缺口）；正式 campaign 使用预注册默认 1200/800，旗标仅服务冒烟缩放。
 
-## 6. §9 三判据（待 campaign 完成后执行）
+## 6. §9 三判据（campaign 用户中止——判据未执行）
 
-- 判据 1: GP research 轨三 seed 中位 consumed/requested ≥ 0.50 → 待填
-- 判据 2: tpe/random 全部行 content=11 占比 ≤ 50% → 待填
-- 判据 3: promotion Tier-A 轨计费候选 max_tier==A 占比 == 100% → 待填
-- 裁决: 待填（允许负结果；不达标即如实记录并停止，禁止重跑换样本）
+- 判据 1: GP research 轨三 seed 中位 consumed/requested ≥ 0.50 → **未执行（campaign 中止）**
+- 判据 2: tpe/random 全部行 content=11 占比 ≤ 50% → **未执行（campaign 中止）**
+- 判据 3: promotion Tier-A 轨计费候选 max_tier==A 占比 == 100% → **未执行（campaign 中止）**
+- 裁决: **无研究裁决**——用户于收尾合并决定中永久中止正式 campaign（冒烟证据完整在案：24 行全管线跑通 + append-only ledger 48 trials；正式 campaign 零 trial 消费）。P1-1/P1-2 机制有效性判定留待未来测量。
