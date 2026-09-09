@@ -279,6 +279,7 @@ from .research_domain import (
     feature_token_ids,
     restrict_tensor,
     resolve_domain,
+    tier_restricted_features,
 )
 from .reward import REWARD_VERSION
 from .search_contract import SearchResult
@@ -351,20 +352,48 @@ def run_protocol(
                 f"baseline signals {out_of_domain} are outside domain "
                 f"{domain.id!r} (docs/p6_research_domain_contract.md §3.2)"
             )
-        feature_ids = feature_token_ids(proto_cfg.domain)
+        # p21 §8 (APPROVED 2026-09-06): optional preregistered tier-set
+        # restriction.  tier_set=None keeps every value byte-identical.
+        tier_restricted: list[str] | None = None
+        if proto_cfg.tier_set is not None:
+            tier_restricted = tier_restricted_features(
+                proto_cfg.domain, proto_cfg.tier_set
+            )
+            out_of_tier = [
+                name
+                for name in proto_cfg.baseline_signals
+                if name not in tier_restricted
+            ]
+            if out_of_tier:
+                raise ValueError(
+                    f"baseline signals {out_of_tier} are outside the "
+                    f"{proto_cfg.tier_set!r} tier set of domain "
+                    f"{domain.id!r} (docs/"
+                    "p21_r1_domain_return_research_preregistration.md §8)"
+                )
+        feature_ids = feature_token_ids(
+            proto_cfg.domain, tier_set=proto_cfg.tier_set
+        )
         if loader.factor_tensor is None:
             raise ValueError(
                 "the loader must be loaded before a domain protocol run"
             )
         loader.factor_tensor = torch.tensor(
-            restrict_tensor(loader.factor_tensor.numpy(), proto_cfg.domain),
+            restrict_tensor(
+                loader.factor_tensor.numpy(),
+                proto_cfg.domain,
+                tier_set=proto_cfg.tier_set,
+            ),
             dtype=torch.float32,
         )
         logger.info(
-            "protocol.domain domain={} features={} frequency={} horizon={} "
+            "protocol.domain domain={} features={} tier_set={} "
+            "tier_restricted_features={} frequency={} horizon={} "
             "turnover_budget={} cost_weight={}",
             domain.id,
             len(domain.features),
+            proto_cfg.tier_set,
+            len(tier_restricted) if tier_restricted is not None else None,
             proto_cfg.frequency,
             proto_cfg.horizon,
             backtest_config.turnover_budget,

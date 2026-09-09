@@ -1,0 +1,67 @@
+# R1 config 4/5 — short domain, Tier A (= full short domain; p21 preregistration).
+# Independent experiment config; production defaults untouched.  Domain-mode
+# defaults (turnover_budget 0.20, cost_weight 1.0) resolve from the registry.
+# No secrets here (TUSHARE_TOKEN lives in git-ignored config/.env only).
+
+data_dir: D:/minequant/AlphaGPT-r1/data
+duckdb_path: D:/minequant/AlphaGPT/data/ashare.duckdb
+parquet_dir: D:/minequant/AlphaGPT-r1/data/parquet
+v2_duckdb_path: D:/minequant/AlphaGPT-d2/data/ashare_v2.duckdb
+
+calendar_table: trade_calendar
+stocks_table: stocks
+daily_table: daily_bar
+constituents_table: constituents
+
+start_date: "2015-01-01"
+end_date: "2026-12-31"
+adjust: qfq
+
+index_codes:
+  - "000300.SH"
+  - "000905.SH"
+
+index_names:
+  - "沪深300"
+  - "中证500"
+
+min_listed_sessions: 60
+
+model:
+  searcher: gp
+
+protocol:
+  domain: short_price_volume
+  # p21 §8 condition precedent: tier_set lands with PROTOCOL_VERSION 27.
+  tier_set: A
+  frequency: every_5_days
+  horizon: 5
+  seeds: [42, 7, 2024]
+  folds:
+    - {train_end: "2020-12-31", test_end: "2021-12-31"}
+    - {train_end: "2021-12-31", test_end: "2022-12-31"}
+    - {train_end: "2022-12-31", test_end: "2023-12-31"}
+    - {train_end: "2023-12-31", test_end: "2024-12-31"}
+    - {train_end: "2024-12-31", test_end: "2025-12-31"}
+  baseline_signals: [REVERSAL_5, TURNOVER, ILLIQ_20, OVERNIGHT_RET, LIMIT_UP_CNT_20]
+  screening: {steps: 2, batch_size: 256}
+  confirmation: {steps: 2, batch_size: 256}
+
+backtest:
+  start_date: "2015-01-01"
+  end_date: "2026-12-31"
+  train_end_date: "2023-12-31"
+  initial_capital: 100000.0
+  top_n: 20
+  portfolio_method: equal_weight
+  buy_rank: 20
+  sell_rank: 30
+  min_trade_amount: 5000.0
+  target_weight_change_threshold: 0.01
+  single_weight_cap: 0.05
+  commission_rate: 0.00025
+  min_commission: 5.0
+  stamp_tax_rate: 0.0005
+  transfer_fee_rate: 0.00001
+  slippage_rate: 0.0005
+  benchmark: "全市场等权"

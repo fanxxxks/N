@@ -62,6 +62,21 @@ MIN_ELIGIBLE_DEFAULT = 100
 # and catches the 8-session drift observed in the p15 freshness log.
 FRESHNESS_TOLERANCE_SESSIONS = 3
 
+# p17 §12: D7 per-formula-dependency eligibility thresholds (P8
+# FACTOR_SET_QUALIFIED's data check; the gate itself lives in
+# ashare_model.data_eligibility).  The lag unit is open sessions behind
+# the most recent completed open session, per the p17 §6.1 availability
+# mapping; the coverage values are the p17 §12 verbatim numbers.  A
+# global "all optional sources must be fresh" gate is a preregistered
+# NON-goal (p17 §12) — these thresholds are consumed only for sources a
+# RunSpec actually depends on.
+DAILY_ELIGIBILITY_MAX_LAG_SESSIONS = 3
+PRICE_LIMIT_MAX_LAG_SESSIONS = 3
+MARGIN_MAX_LAG_SESSIONS = 2
+INDUSTRY_INDEX_MAX_LAG_SESSIONS = 3
+INDUSTRY_MEMBERSHIP_MIN_COVERAGE = 0.98
+FINANCIAL_REPORT_COVERAGE_MIN = 0.90
+
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 

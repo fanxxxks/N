@@ -243,6 +243,14 @@ class ProtocolConfig:
     # frequency/horizon/baseline ladder from the versioned registry
     # (docs/p6_research_domain_contract.md §3).
     domain: str = "unified"
+    # p21 §8 (APPROVED 2026-09-06): optional preregistered tier-set
+    # restriction for domain runs (None = no restriction, byte-identical
+    # to pre-p21 behavior; "A" / "AB" mirror the P2 §6 collections).
+    # Unified never combines with a tier set.  The tier semantics (the
+    # feature intersection minus deprecated names) live in
+    # ashare_model.research_domain — this layer only carries the config
+    # grammar, validated below.
+    tier_set: str | None = None
     seeds: list[int] = field(default_factory=lambda: [42, 7, 2024])
     folds: list[FoldConfig] = field(
         default_factory=lambda: [
@@ -571,6 +579,23 @@ def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
     folds = validate_folds(folds)
 
     domain_id, domain = _resolve_protocol_domain(proto_raw)
+    # p21 §8.1: tier_set grammar is validated at config time (the tier
+    # semantics themselves resolve in ashare_model.research_domain).
+    tier_set = proto_raw.get("tier_set")
+    if tier_set is not None:
+        tier_set = str(tier_set)
+        if tier_set not in ("A", "AB"):
+            raise ValueError(
+                f"invalid protocol.tier_set {tier_set!r}: expected "
+                "'A', 'AB' or None (docs/"
+                "p21_r1_domain_return_research_preregistration.md §8)"
+            )
+        if domain_id == "unified":
+            raise ValueError(
+                "protocol.tier_set requires a research domain; the "
+                "unified compatible semantic has no tier restriction "
+                "(docs/p21_r1_domain_return_research_preregistration.md §8)"
+            )
     if domain is not None:
         frequency = str(proto_raw.get("frequency", domain.default_frequency))
         horizon = int(proto_raw.get("horizon", domain.default_horizon))
@@ -606,6 +631,7 @@ def make_protocol_config(raw: dict[str, Any]) -> ProtocolConfig:
         frequency=frequency,
         horizon=horizon,
         domain=domain_id,
+        tier_set=tier_set,
         seeds=[int(s) for s in proto_raw.get("seeds", defaults.seeds)],
         folds=folds,
         baseline_signals=baseline_signals,

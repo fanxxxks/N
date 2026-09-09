@@ -1,0 +1,71 @@
+# R1 config 5/5 — unified daily/h1 baseline anchor (p21 preregistration).
+# The pre-P6 compatible semantics at the production execution point; serves
+# only as the campaign's baseline reference (rewards are NOT comparable with
+# the domain configs).  BLOCKED as of 2026-09-06: D7 gate FAIL (financial
+# coverage < 90% + industry_index lag 15 > 3 sessions).
+# Production baseline_signals/defaults replicated here EXPLICITLY (unified
+# applies no domain defaults).  No secrets (TUSHARE_TOKEN in config/.env).
+
+data_dir: D:/minequant/AlphaGPT-r1/data
+duckdb_path: D:/minequant/AlphaGPT/data/ashare.duckdb
+parquet_dir: D:/minequant/AlphaGPT-r1/data/parquet
+v2_duckdb_path: D:/minequant/AlphaGPT-d2/data/ashare_v2.duckdb
+
+calendar_table: trade_calendar
+stocks_table: stocks
+daily_table: daily_bar
+constituents_table: constituents
+
+start_date: "2015-01-01"
+end_date: "2026-12-31"
+adjust: qfq
+
+index_codes:
+  - "000300.SH"
+  - "000905.SH"
+
+index_names:
+  - "沪深300"
+  - "中证500"
+
+min_listed_sessions: 60
+
+model:
+  searcher: gp
+
+protocol:
+  domain: unified
+  frequency: daily
+  horizon: 1
+  seeds: [42, 7, 2024]
+  folds:
+    - {train_end: "2020-12-31", test_end: "2021-12-31"}
+    - {train_end: "2021-12-31", test_end: "2022-12-31"}
+    - {train_end: "2022-12-31", test_end: "2023-12-31"}
+    - {train_end: "2023-12-31", test_end: "2024-12-31"}
+    - {train_end: "2024-12-31", test_end: "2025-12-31"}
+  baseline_signals: [REVERSAL_5, RSQ_60, ILLIQ_20, OVERNIGHT_RET, MOMENTUM_20, ROE, TURNOVER]
+  screening: {steps: 2, batch_size: 256}
+  confirmation: {steps: 2, batch_size: 256}
+
+backtest:
+  start_date: "2015-01-01"
+  end_date: "2026-12-31"
+  train_end_date: "2023-12-31"
+  initial_capital: 100000.0
+  top_n: 20
+  portfolio_method: equal_weight
+  buy_rank: 20
+  sell_rank: 30
+  min_trade_amount: 5000.0
+  # unified applies no domain defaults (p6 §3): the production L1 turnover
+  # budget must be explicit here (config/ashare_config.yaml value).
+  turnover_budget: 0.20
+  target_weight_change_threshold: 0.01
+  single_weight_cap: 0.05
+  commission_rate: 0.00025
+  min_commission: 5.0
+  stamp_tax_rate: 0.0005
+  transfer_fee_rate: 0.00001
+  slippage_rate: 0.0005
+  benchmark: "全市场等权"

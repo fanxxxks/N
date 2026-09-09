@@ -313,6 +313,11 @@ class ProtocolResultArtifact(_LineageBase):
     reward_version: str
     research_domain: str
     research_domain_version: int
+    # p21 §8 (APPROVED 2026-09-06): the optional preregistered tier-set
+    # restriction and the resolved run feature set (None = unrestricted;
+    # unified runs record None).
+    tier_set: str | None = None
+    tier_restricted_features: list[str] | None = None
     execution_version: int
     portfolio_constructor_version: int
     portfolio_config: dict
