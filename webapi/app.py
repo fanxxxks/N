@@ -28,6 +28,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from ashare_model.lifecycle import LifecycleError
+from ashare_model.run_store import RunStoreError
+
 from . import service
 from .auth import require_mutation_token
 
@@ -151,6 +154,26 @@ def sim_config_update(patch: service.SimConfigPatch) -> JSONResponse:
 @app.get("/api/data-status")
 def data_status() -> dict:
     return service.get_data_status()
+
+
+@app.get("/api/runs")
+def runs() -> dict:
+    """RunStore-backed run inventory (spec_id/run_id → replayed lifecycle
+    state).  The run view reads the RunStore directly — never stitched
+    convenience JSONs (E2/t26 re-dispatch)."""
+    return service.list_runs()
+
+
+@app.get("/api/runs/{spec_id}/{run_id}")
+def run_detail(spec_id: str, run_id: str) -> dict:
+    """One run's RunStore view: lifecycle state, event trail, typed
+    artifacts, ledger trial summary."""
+    try:
+        return service.get_run_detail(service.ROOT, spec_id, run_id)
+    except RunStoreError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LifecycleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/logs")

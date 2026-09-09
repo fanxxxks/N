@@ -4,6 +4,7 @@ import {
   DatabaseOutlined,
   ExperimentOutlined,
   FileTextOutlined,
+  HistoryOutlined,
   HomeOutlined,
   LineChartOutlined,
   StockOutlined,
@@ -15,6 +16,7 @@ import SelectionPage from './pages/Selection'
 import SimPage from './pages/Sim'
 import DataStatusPage from './pages/DataStatus'
 import LogsPage from './pages/Logs'
+import RunsPage from './pages/Runs'
 import { api } from './api/client'
 
 const { Sider, Content, Header } = Layout
@@ -24,6 +26,7 @@ const MENU_ITEMS = [
   { key: '/backtest', icon: <LineChartOutlined />, label: '回测' },
   { key: '/selection', icon: <StockOutlined />, label: '选股' },
   { key: '/sim', icon: <ExperimentOutlined />, label: '模拟盘' },
+  { key: '/runs', icon: <HistoryOutlined />, label: '研究运行' },
   { key: '/data', icon: <DatabaseOutlined />, label: '数据状态' },
   { key: '/logs', icon: <FileTextOutlined />, label: '运行日志' },
 ]
@@ -86,6 +89,7 @@ function Shell() {
             <Route path="/backtest" element={<BacktestPage />} />
             <Route path="/selection" element={<SelectionPage />} />
             <Route path="/sim" element={<SimPage />} />
+            <Route path="/runs" element={<RunsPage />} />
             <Route path="/data" element={<DataStatusPage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -6,6 +6,8 @@ import type {
   LogFile,
   OverviewData,
   PositionPage,
+  RunDetail,
+  RunsIndex,
   SimConfigData,
   SimDayData,
   SimDays,
@@ -63,6 +65,11 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   dataStatus: () => request<DataStatus>('/api/data-status'),
+  runs: () => request<RunsIndex>('/api/runs'),
+  runDetail: (specId: string, runId: string) =>
+    request<RunDetail>(
+      `/api/runs/${encodeURIComponent(specId)}/${encodeURIComponent(runId)}`,
+    ),
   logs: () => request<LogFile[]>('/api/logs'),
   logContent: (name: string, tail = 1000) =>
     request<LogContent>(`/api/logs/${encodeURIComponent(name)}?tail=${tail}`),

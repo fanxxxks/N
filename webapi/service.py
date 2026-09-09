@@ -7,6 +7,7 @@ a JSON payload is temporarily truncated by an atomic-write rename.
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,8 @@ from ashare_execution import execution_config_mismatches, validate_execution_con
 from ashare_data.db import AshareDB
 from ashare_data.io_utils import read_json_safe
 from ashare_data.universe import UniverseContractError, require_production_universe
+from ashare_model import run_store
+from ashare_model.run_store import RunStore, RunStoreError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -264,6 +267,7 @@ def get_data_status() -> dict:
         data_config.data_dir / "ashare.duckdb",
     ):
         stat = _stat(path)
+        stat["classification"] = _artifact_classification(path)
         artifacts.append(stat)
 
     config_summary = {
@@ -298,6 +302,129 @@ def get_data_status() -> dict:
         },
     }
     return {"db": db_info, "artifacts": artifacts, "config": config_summary}
+
+
+def list_runs(root: Path | None = None) -> dict:
+    """RunStore-backed run inventory (E2/t26 re-dispatch): every
+    ``runs/<spec_id>/<run_id>`` with its replayed lifecycle state, the
+    manifest/dataset identity from the frozen runspec, and the artifact
+    count — read directly from the RunStore, never stitched from
+    convenience JSONs.  Runs whose replay fails surface with
+    ``error`` set (fail-closed visibility, never silently dropped)."""
+
+    from ashare_model import lifecycle
+    from ashare_model.run_store import RunStore
+
+    resolved = Path(root) if root is not None else ROOT
+    store = RunStore(resolved)
+    if not store.runs_dir.is_dir():
+        return {"runs": [], "runs_dir": str(store.runs_dir)}
+    runs: list[dict] = []
+    for run_dir in sorted(store.runs_dir.glob("*/*")):
+        if not run_dir.is_dir():
+            continue
+        spec_id, run_id = run_dir.parent.name, run_dir.name
+        entry: dict = {
+            "spec_id": spec_id,
+            "run_id": run_id,
+            "state": None,
+            "artifact_count": 0,
+            "dataset_id": None,
+            "error": None,
+        }
+        try:
+            entry["state"] = lifecycle.replay_run(resolved, spec_id, run_id)
+            index = store.load_index(spec_id, run_id)
+            entry["artifact_count"] = len(index.get("artifacts", []))
+            runspec = json.loads(
+                (run_dir / run_store.RUNSPEC_FILENAME).read_text(
+                    encoding="utf-8"
+                )
+            )
+            entry["dataset_id"] = runspec.get("dataset_id")
+        except (lifecycle.LifecycleError, RunStoreError) as exc:
+            entry["error"] = str(exc)
+        runs.append(entry)
+    return {"runs": runs, "runs_dir": str(store.runs_dir)}
+
+
+def get_run_detail(root: Path | None, spec_id: str, run_id: str) -> dict:
+    """One run's RunStore view: replayed lifecycle state, the event
+    trail, the typed artifact index, the runspec identity block, and the
+    ledger trial summary — the single source for the run detail page."""
+
+    from ashare_model import lifecycle
+    from ashare_model.ledger import ExperimentLedger
+    from ashare_model.run_store import RunStore
+
+    store = RunStore(root)
+    run_dir = store.runs_dir / spec_id / run_id
+    if not run_dir.is_dir():
+        raise RunStoreError(f"run {spec_id}/{run_id} does not exist")
+    state = lifecycle.replay_run(root, spec_id, run_id)
+    index = store.load_index(spec_id, run_id)
+    runspec = json.loads(
+        (run_dir / run_store.RUNSPEC_FILENAME).read_text(encoding="utf-8")
+    )
+    events = [
+        {
+            "seq": event.seq,
+            "from_state": event.from_state,
+            "to_state": event.to_state,
+            "completed": event.completed,
+            "reason": event.reason,
+            "ts": event.ts,
+        }
+        for event in lifecycle.load_events(
+            run_dir / run_store.LIFECYCLE_FILENAME,
+            expect_spec_id=spec_id,
+            expect_run_id=run_id,
+        )
+    ]
+    ledger_path = run_dir / run_store.TRIALS_FILENAME
+    trials: dict[str, Any] = {"total": 0, "by_status": {}}
+    if ledger_path.exists():
+        ledger = ExperimentLedger(
+            ledger_path, run_id=run_id, spec_id=spec_id
+        )
+        for entry in ledger.iter_entries():
+            trials["total"] += 1
+            trials["by_status"][entry.status] = (
+                trials["by_status"].get(entry.status, 0) + 1
+            )
+    return {
+        "spec_id": spec_id,
+        "run_id": run_id,
+        "state": state,
+        "dataset_id": runspec.get("dataset_id"),
+        "research_domain": runspec.get("research_domain"),
+        "git_commit": runspec.get("git_commit"),
+        "artifacts": [
+            {
+                "artifact_id": record["artifact_id"],
+                "artifact_type": record["artifact_type"],
+            }
+            for record in index.get("artifacts", [])
+        ],
+        "events": events,
+        "trials": trials,
+    }
+
+
+def _artifact_classification(path: Path) -> str:
+    """current/legacy/unknown via the single classification authority
+    (artifact_schemas.classify_schema_version).  Status visibility rule:
+    legacy/unknown must surface AS legacy/unknown in the UI — never as
+    healthy.  Non-JSON artifacts (binaries) are 'binary'."""
+
+    if path.suffix != ".json" or not path.is_file():
+        return "binary"
+    payload = read_json_safe(path)
+    if payload is None or not isinstance(payload, dict):
+        return "unknown"
+    from ashare_model.artifact_schemas import classify_schema_version
+
+    return classify_schema_version(payload)
 
 
 def _stat(path: Path) -> dict:
