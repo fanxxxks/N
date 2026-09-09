@@ -207,17 +207,33 @@ warning-降级在正式模式废除；显式 legacy 审计模式可保留，且�
 **I3（复合身份覆盖面）**：双库复合内容身份必须至少覆盖下列输入域，且每个
 域绑定到唯一权威表/字段：
 
-| 输入域 | 权威来源（main @ `1fb1b16`） | 现状是否进入身份 |
+| 输入域 | 权威来源（main @ `1fb1b16`） | 现状是否进入身份 | 本轮是否纳入 |
+|---|---|---|---|
+| 行情（raw OHLCV） | v2 `daily_bar_raw` | 否 | **纳入** |
+| 复权 | v2 `daily_adj_factor` | 否 | **纳入** |
+| daily_basic | v2 `daily_basic_pit`（`turnover_rate`、`circ_mv`） | 否 | **纳入** |
+| 交易约束 | v2 `daily_price_limit`、`daily_suspension` | 否 | **纳入** |
+| 财务版本 | v2 `income_statement_pit`、`balance_sheet_pit`、`cashflow_statement_pit`（`_family5_asof_frames`） | 仅 count/max 标记 | **纳入** |
+| 行业成员 | v2 `industry_membership_pit`（+ `industry_taxonomy` 代际） | 仅 count/max 标记 | **纳入** |
+| 行业指数 | main `sw_industry_index` | 否 | **纳入** |
+| 交易日历 | main `trade_calendar`（唯一日历权威） | 否 | **纳入** |
+| PIT universe | main `constituents`（区间成员）+ 上市日 `stocks` | 否 | **纳入** |
+
+**本轮明确不纳入的域（captain 裁决 3，2026-09-10）**：下列输入**不在本轮
+A02 复合身份覆盖面内**，且**不得**被读成「这些输入不影响结论」：
+
+| 未纳入项 | 理由（裁决 3 原文） | 处置 |
 |---|---|---|
-| 行情（raw OHLCV） | v2 `daily_bar_raw` | 否 |
-| 复权 | v2 `daily_adj_factor` | 否 |
-| daily_basic | v2 `daily_basic_pit`（`turnover_rate`、`circ_mv`） | 否 |
-| 交易约束 | v2 `daily_price_limit`、`daily_suspension` | 否 |
-| 财务版本 | v2 `income_statement_pit`、`balance_sheet_pit`、`cashflow_statement_pit`（`_family5_asof_frames`） | 仅 count/max 标记 |
-| 行业成员 | v2 `industry_membership_pit`（+ `industry_taxonomy` 代际） | 仅 count/max 标记 |
-| 指数/行业指数 | main `sw_industry_index`；v2 `index_weight_pit` | 否 |
-| 交易日历 | main `trade_calendar`（唯一日历权威） | 否 |
-| PIT universe | main `constituents`（区间成员）+ 上市日 `stocks` | 否 |
+| v2 事件域：`earnings_forecast_pit`、`earnings_express_pit`、`repurchase_event_pit`、`holder_number_pit` | F3（p25）尚未准入，其数据资格由 B01 裁定；现在冻结等于替未来研究预判结论 | 待扩展项（见 I3-EXT） |
+| v2 `index_weight_pit`（**单列为待扩展项，不得只提表名**） | 其正式消费范围与 as-of 规则由 B01 裁定（B01 §3/I5） | 待扩展项（见 I3-EXT） |
+| 主库 legacy 表：`fundamental_pit`、`margin_balance`、`sw_industry_member` | 属 legacy 只读清单（p17 §8.2）；正式输入已切 v2 | 不纳入；其变更不影响正式身份，但必须在报告中标 `legacy` |
+
+**I3-EXT（显式扩展不变量）**：任何后续被**正式准入**的输入域要进入复合身份，
+必须经一份**小型勘误/扩展契约**（可复用 `docs/p26_*.md` 的编号机制）并
+**bump `SNAPSHOT_PUBLICATION_VERSION`**；**禁止**静默加入或静默排除。
+扩展契约至少写明：新域、权威表/字段、纳入理由、对既有 artifact 的拒绝/迁移
+影响、以及扩展后的 `SNAPSHOT_PUBLICATION_VERSION` 新值。未走该流程的域一律
+视为「未纳入」，并在分域报告中显式标注。
 
 > 说明：`stocks` / `constituents` / `trade_calendar` / `fundamental_pit` /
 > `margin_balance` / `sw_industry_member` 属主库 `partition_spec`
@@ -336,13 +352,13 @@ tests/test_searcher_bench.py:4:SEARCHER_BENCH_VERSION 4):
 
 | 版本所有者 | 旧值 | 新值 | bump / 不 bump 理由 |
 |---|---|---|---|
-| `ashare_data/manifest.py` `MANIFEST_VERSION` | `"1"` | **`"2"`（建议 bump；实现阶段确认）** | 复合快照身份 + 发布清单改变了 manifest 的**语义与记录结构**（新增发布代际、确认状态、成员库标识）。旧 v1 行仍可读（`from_dict` 兼容），但「v1 manifest = 单库最近保存」与「v2 = 内容确认的双库发布代际」不可混用。若实现证明可在不新增字段的前提下完成，bump 决定须在实现 commit 的版本影响表中重新举证（AGENTS §3.2「不确定时默认 bump 或停下说明理由」）。 |
-| **新增** `ashare_data/manifest.py` `SNAPSHOT_PUBLICATION_VERSION`（拟定名） | （无） | **`"1"`** | 新增 artifact-facing 版本，标识发布协议的代际。**必须接入既有兼容性分类权威**：登记进 `runspec.py:_VERSION_IMPORTS`（或等价的 owner 索引）并进入 `RunSpec` 的版本集合，使「同一 spec 语义不同发布协议」可被 artifact 分类识别。不接入即违反 AGENTS §3.2 末段。 |
+| `ashare_data/manifest.py` `MANIFEST_VERSION` | `"1"` | **`"2"`（captain 裁决 2，2026-09-10：bump）** | 复合快照身份 + 发布清单改变了 manifest 的**语义与记录结构**（新增发布代际、确认状态、成员库标识）。旧 v1 行仍可读（`from_dict` 兼容），但「v1 manifest = 单库最近保存」与「v2 = 内容确认的双库发布代际」不可混用。裁决理由：p17 §9 的先例只覆盖「dataset_id 随内容重算」，**不覆盖「记录结构与确认语义改变」**；故 MANIFEST_VERSION 标记记录/语义代际，与新增的 `SNAPSHOT_PUBLICATION_VERSION` 并存。 |
+| **新增** `ashare_data/manifest.py` `SNAPSHOT_PUBLICATION_VERSION`（拟定名） | （无） | **`"1"`（captain 裁决 2，2026-09-10：新增）** | 新增 artifact-facing 版本，承载**发布协议身份**（发布清单代际、成员库标识、确认状态语义）。**必须接入既有兼容性分类权威**：登记进 `runspec.py:_VERSION_IMPORTS`（或等价的 owner 索引）并进入 `RunSpec` 的版本集合，使「同一 spec 语义不同发布协议」可被 artifact 分类识别。不接入即违反 AGENTS §3.2 末段。 |
 | `ashare_data/tushare_store.py` `TUSHARE_STORE_SCHEMA_VERSION` | `"1"` | **不变** | A02 只**只读消费** v2 schema 版本作为复合身份的输入之一（p17 §9 已把它定义为 artifact-facing 版本并接入 manifest）；本契约不改变 v2 表结构。若实现需要新增 v2 表/列，则该变化属 p17 修订，须另行预注册。 |
-| `ashare_model/runspec.py` `RUNSPEC_SCHEMA_VERSION` | `1` | **视字段决定** | 若数据身份字段**重命名/新增**（例如 `dataset_id` → 复合 `snapshot_id`，或新增 `snapshot_publication_version`），按 `artifact_schemas.py:41-44` 的既有约定 bump（顶层字段增删改即 bump）并同步 `LEGACY_SCHEMA_VERSIONS` 分类；若仅**改变同一字段的取值来源**（语义收紧、字段名与类型不变），不 bump schema，但**必须**在契约与测量日志中显式声明「`dataset_id` 的语义已收紧」，并由 §5 的拒绝策略承载旧值。实现阶段二者择一并举证。 |
+| `ashare_model/runspec.py` `RUNSPEC_SCHEMA_VERSION` | `1` | **`2`（captain 裁决 1，2026-09-10：bump）** | **路线已裁决 = 字段改名**：`RunSpec.dataset_id` 升级为复合 `snapshot_id`，即**字段名与取值来源同时变化**。按 `artifact_schemas.py:41-44` 的既有约定（顶层字段增删改即 bump）bump 到 2，并同步 `LEGACY_SCHEMA_VERSIONS` 与兼容性分类入口。裁决理由：§4.3 fail-closed 要求 dataset/版本不一致时**拒绝而非 warning 继续**；「仅收紧同一字段取值来源」的隐式路线会让旧 artifact 静默沿用旧身份，不可接受。实现阶段须逐项举证（字段改名 + 迁移/拒绝 + 分类矩阵）。 |
 | `ashare_model/factor_cache.py` `FACTOR_CACHE_VERSION` | `1` | **`2`（建议 bump）** | 缓存键的 `dataset_id` 语义由「主库最近保存 id」变为「双库复合内容确认身份」，即**同一键字符串的语义改变**。不 bump 会让旧缓存条目与新身份在概念上同层；bump 使旧条目自然失效（`factor_cache.py` 的 identity 校验会把不匹配文件判为 miss，不会错误复用）。具体形式（bump 常量 vs. 在 identity payload 内新增版本字段）在实现 commit 中固定，但**必须**使旧条目不可能被新语义命中。 |
 | `ashare_model/semantic_cache.py` `SEMANTIC_CACHE_VERSION` | `1` | **视实现决定（倾向 bump）** | 语义缓存键含 `dataset_id`（`semantic_cache.py:71/122/162`）；身份语义收紧后，旧条目同样不可复用。若实现把缓存键改为消费复合身份，则按同一理由 bump；若实现选择在读取时用身份校验判 miss，须在实现 commit 举证「旧条目不可能被错误命中」。 |
-| `ashare_model/artifact_schemas.py` `ARTIFACT_SCHEMA_VERSION` | `2` | **视字段决定** | 只有当正式 artifact 的顶层字段集合变化（例如新增 `snapshot_publication_version`）才 bump；纯身份取值语义收紧不 bump。新增字段必须同时更新 `LEGACY_SCHEMA_VERSIONS` 分类与读写矩阵（§4.1 说明的兼容性权威）。 |
+| `ashare_model/artifact_schemas.py` `ARTIFACT_SCHEMA_VERSION` | `2` | **`3`（captain 裁决 1，2026-09-10：bump）** | 裁决 1 走**字段改名**路线：`RunSpec.dataset_id` → 复合 `snapshot_id`（并可能新增 `snapshot_publication_version`），正式 artifact 的顶层身份字段集合因此变化。按 `artifact_schemas.py:41-44`「顶层字段增删改即 bump」的约定 2→3，并同步 `LEGACY_SCHEMA_VERSIONS`（加入 2）与读写矩阵。v2 artifact 相对新 schema 归类 legacy（只读、不得冒充 current），正式消费者走 `require_current_schema`。 |
 | `ashare_model/versions.py` `PROTOCOL_VERSION` | `"27"` | **不变** | 评价协议（fold、指标、统计校正）零改动；数据身份不是协议的一部分。 |
 | `ashare_model/data_tier.py` `DATA_TIER_VERSION` | `2` | **不变** | 分层规则零改动；A02 不改变任何 tier 判定。 |
 | `ashare_model/research_domain.py` `RESEARCH_DOMAIN_VERSION` | `5` | **不变** | 域划分零改动。 |
@@ -388,6 +404,12 @@ tests/test_searcher_bench.py:4:SEARCHER_BENCH_VERSION 4):
 6. **回滚**：新协议的实现必须可整体回滚（新增表/新增常量/新增 API；不删除
    既有 API 的只读语义），回滚后系统回到「v1 单库最近保存」的旧行为，且
    **不得**因回滚丢失已发布的代际记录。
+7. **覆盖面扩展的迁移路径（§3/I3-EXT）**：新增输入域进入身份**不得**直接改
+   实现。必须先起草小型勘误/扩展契约（编号可复用 `docs/p26_*.md` 机制），
+   写明新域、权威表/字段、纳入理由、对既有 artifact 的拒绝/迁移影响，并
+   bump `SNAPSHOT_PUBLICATION_VERSION`；随后按新代际发布。扩展前已发布的
+   artifact 按旧 `SNAPSHOT_PUBLICATION_VERSION` 归类 legacy（只读），
+   需要继续时以新 run ID 重跑（AGENTS §4.3）。
 
 ## 6. 预期 RED 测试清单（先失败、再实现；AGENTS §2.2 第 3 步）
 
@@ -410,6 +432,8 @@ tests/test_searcher_bench.py:4:SEARCHER_BENCH_VERSION 4):
 | R12 | **新鲜度不进身份**：同一历史窗口、不同「今天」 | 复合身份相同（可复现性不受日期推进影响） | I10 |
 | R13 | **失败可归因**：故意移除某覆盖表 | 错误信息必须指出库、表、域与解除条件 | I12 |
 | R14 | **单一实现**：静态检查 | 不存在第二套复合身份派生/第二套 manifest 哈希实现 | I11、AGENTS §9 |
+| R15 | **静默扩展被拒（captain 裁决 3）**：直接把未纳入域（如事件域或 `index_weight_pit`）加进身份实现 | 必须失败：未走 I3-EXT 扩展契约并 bump `SNAPSHOT_PUBLICATION_VERSION` 的域不得进入身份；反之，未纳入域也**不得**被静默排除出「待扩展项」清单 | I3-EXT |
+| R16 | **扩展契约的迁移影响**：扩展后读取旧代际 artifact | 旧 `SNAPSHOT_PUBLICATION_VERSION` 的 artifact 按 legacy 只读；不得静默沿用 | I3-EXT、§5.7 |
 
 **既有测试的处置（AGENTS §10.1 白名单第 2 条「需求确实变更」）**：
 `tests/test_manifest.py:186`、`:250`、`:286`、`:313-316`、
@@ -448,6 +472,10 @@ tests/test_searcher_bench.py:4:SEARCHER_BENCH_VERSION 4):
 3. **`full` 全库校验**：属**离线/发布期**操作，不进入正式运行热路径。单次
    全库 `full` 上限 ≤ **60min**（两库合计），峰值 RSS ≤ **8GB**（留出 16GB
    机器余量）；超出即 `failed` + 报告，**禁止**降级为 `fast` 冒充通过。
+   **（captain 裁决 4，2026-09-10）** 60min/8GB 是**待标定目标而非冻结阈值**：
+   若实现阶段实测超限，走「报告实测数值 + 提出新的资源上限建议」路径交 captain
+   裁决，**不得自行调高上限**，也不得因此放宽校验强度。fail-closed 处置
+   （超限即 `failed`，禁止降级为 `fast` 冒充）保持不放宽。
 4. **发布操作**：一次发布只写新增代际记录（append-only），写放大 ≤ 单条
    manifest 记录量级；**禁止**全表重写、VACUUM 或任何可能使并发只读失败的
    操作（DuckDB 单写多读约束）。
@@ -468,8 +496,11 @@ tests/test_searcher_bench.py:4:SEARCHER_BENCH_VERSION 4):
 4. **门禁归属**：本契约不改变 G1–G8（`ashare_data/gates.py`）与 G1–G7
    （`ashare_model/promotion.py`）的判定；身份确认失败是**入口拒绝**，不是
    新增门禁编号。若实现认为需要新增门禁，须先修订契约。
-5. **版本争议**：§4.2 中标注「视实现决定」的项，由实现 commit 的版本影响表
-   裁决并逐项举证；起草人不预先决定。
+5. **版本争议**：§4.2 已由 captain 裁决 1/2 固定 `RUNSPEC_SCHEMA_VERSION` 1→2、
+   `ARTIFACT_SCHEMA_VERSION` 2→3、`MANIFEST_VERSION` 1→2 与新增
+   `SNAPSHOT_PUBLICATION_VERSION="1"`；其余标注「视实现决定」的项（如
+   `SEMANTIC_CACHE_VERSION`、`FACTOR_CACHE_VERSION` 的具体形式）由实现 commit
+   的版本影响表裁决并逐项举证；起草人不预先决定。
 6. **既有测试争议**：测试与实现冲突时回到契约仲裁（AGENTS §10.1）；认为
    测试有误的一方承担举证责任。
 7. **审核**：本契约的批准与实现必须分别经独立审核（合规 + 技术/验证），
@@ -504,14 +535,33 @@ tests/test_searcher_bench.py:4:SEARCHER_BENCH_VERSION 4):
 | 编号 | 需批准的条款 | 冻结的语义 | 若被否决的后果 |
 |---|---|---|---|
 | A02-A1 | §3/I1 + I2：拆分「查询最新」与「内容确认」，正式入口只走后者，废除正式模式的静默 `None` 降级 | 正式运行的数据身份来源 | 身份缺口保留；A03/B01/B04 的入口资格无从建立 |
-| A02-A2 | §3/I3：双库复合身份的**覆盖面清单**（9 个输入域） | 哪些输入进入研究身份 | 覆盖面缩水即等于默认「部分输入不影响结论」，须另立契约 |
+| A02-A2 | §3/I3：双库复合身份的**覆盖面清单**（9 个纳入域 + 3 类明确未纳入项）——**captain 裁决 3 已裁：本轮不纳入事件域与 `index_weight_pit`** | 哪些输入进入研究身份 | 覆盖面缩水即等于默认「部分输入不影响结论」，须另立契约 |
 | A02-A3 | §3/I7 + §5.4：发布协议与「中间态不对研究开放」；先出差异报告再发布新代际 | 数据更新的发布边界 | 采集中断的中间态可能进入研究 |
 | A02-A4 | §3/I8：`fast` 的能力声明边界与三条替代路径 | 内容确认的证明强度 | 「fast 即完整身份」的错误表述可能被固化 |
 | A02-A5 | §3/I6：缓存键与 RunSpec 引用同一权威（含 `semantic_cache`、`regime`） | 缓存复用与研究身份的等价性 | 缓存键与研究身份可能再次漂移（F08 复发） |
-| A02-A6 | §4.2 中 `MANIFEST_VERSION` 1→2、新增 `SNAPSHOT_PUBLICATION_VERSION`、`FACTOR_CACHE_VERSION` 1→2 的 bump 方向 | artifact 兼容性分类 | 新旧身份在 artifact 层不可区分 |
+| A02-A6 | §4.2：`MANIFEST_VERSION` 1→2、新增 `SNAPSHOT_PUBLICATION_VERSION="1"`、`RUNSPEC_SCHEMA_VERSION` 1→2、`ARTIFACT_SCHEMA_VERSION` 2→3、`FACTOR_CACHE_VERSION` 1→2——**captain 裁决 1/2 已裁** | artifact 兼容性分类 | 新旧身份在 artifact 层不可区分 |
 | A02-A7 | §5.2/§5.3：拒绝策略与 legacy 显式化（含既有测试的白名单处置） | 旧产物的可用边界 | legacy 产物可能被误当 current |
-| A02-A8 | §8：资源上限数值（60s/2GB 热路径；60min/8GB full） | 工程预算 | 无上限即无法判定「超限即停」 |
+| A02-A8 | §8：资源上限数值（60s/2GB 热路径；60min/8GB full 为**待标定目标**）——**captain 裁决 4 已裁：超限走「实测报告 + 新上限建议」路径，不得自行调高** | 工程预算 | 无上限即无法判定「超限即停」 |
 | A02-A9 | §10 停止条件（尤其「不得重写旧 dataset_id」） | 证据完整性红线 | 停止条件不可作为失败裁决依据 |
+| A02-A10 | §3/I3-EXT：**显式扩展机制**——新域进入身份须走小型勘误/扩展契约并 bump `SNAPSHOT_PUBLICATION_VERSION`，禁止静默加入或静默排除（**captain 裁决 3 要求新增**） | 身份覆盖面的演进方式 | 后续域可能被静默纳入/排除 |
+
+## 11bis. captain 裁决记录（2026-09-10，依用户转授，`reports/alphagpt-ab/00_authority_exception_record.md`）
+
+本节如实登记 captain 对本文四处的裁决**原文要点与落点**，供 t6 批准决策记录
+引用。**本文件状态仍为 DRAFT**：按团队分工，DRAFT→APPROVED 的状态变更与批准
+记录由 captain 在 t6 执行；起草人只记录裁决内容，**不自行改状态**（AGENTS §3.2、
+p18 §3.2）。
+
+| 裁决 | 内容（captain 原文要点） | 落点 |
+|---|---|---|
+| 裁决 1 | `RUNSPEC_SCHEMA_VERSION` 与 `ARTIFACT_SCHEMA_VERSION` 走**字段改名**路线，两者都 bump：`RunSpec.dataset_id` → 复合 `snapshot_id`，字段语义与取值来源同时变化；§4.3 fail-closed 要求拒绝而非 warning 继续；必须同步 `LEGACY_SCHEMA_VERSIONS` 与兼容性分类入口 | §4.2 `RUNSPEC_SCHEMA_VERSION` 1→2、`ARTIFACT_SCHEMA_VERSION` 2→3；§9.5；§11 A02-A6 |
+| 裁决 2 | `MANIFEST_VERSION` 1→2 **照主张 bump**，同时新增 `SNAPSHOT_PUBLICATION_VERSION="1"`；p17 §9 先例只覆盖「dataset_id 随内容重算」，不覆盖「记录结构与确认语义改变」；两者并存并接入既有兼容性权威 | §4.2 前两行；§11 A02-A6 |
+| 裁决 3 | 本轮**不**把事件域（forecast/express/repurchase/holder_number）与 `index_weight_pit` 完整内容纳入身份（F3 未准入、数据资格由 B01 裁定；现在冻结等于替未来研究预判结论）；但必须新增**显式扩展不变量**（扩展须走小型勘误/扩展契约 + bump `SNAPSHOT_PUBLICATION_VERSION`，禁止静默加入/排除）；必须写明「本轮未纳入哪些域」；`index_weight_pit` 单列为待扩展项 | §3/I3 表格「本轮是否纳入」列 + 「本轮明确不纳入的域」表 + **I3-EXT**；§11 A02-A2/A02-A10 |
+| 裁决 4 | `full` 全库校验保持 fail-closed、不放宽；实测超限标 `failed`，禁止降级为 fast 冒充；60min/8GB 是**待标定目标而非冻结阈值**，超限走「报告实测 + 提出新上限建议」交 captain 裁决，不得自行调高 | §8.3；§11 A02-A8 |
+
+**裁决未涵盖、仍待 captain/用户在 t6 决定的项**：`SEMANTIC_CACHE_VERSION` 与
+`FACTOR_CACHE_VERSION` 的具体 bump 形式（§4.2 仍标「视实现决定」）、以及
+`SNAPSHOT_PUBLICATION_VERSION` 的最终常量名（拟定名，需实现时定稿）。
 
 ## 12. 附：本草案的边界核对（落盘时的事实）
 
@@ -520,7 +570,15 @@ tests/test_searcher_bench.py:4:SEARCHER_BENCH_VERSION 4):
 - **未**修改任何源码、测试、配置、数据库或 artifact；**未**运行任何训练、
   搜索、评估、回测、模拟、数据同步或回填；**未** push / 建 PR / 合并。
 - **未**修改 `AlphaGPT-factor` 工作树的未提交工作（未读写其工作树文件）。
-- **未**自我批准：本文件状态为 DRAFT，正文不含 `APPROVED` 状态行，也不含
-  任何批准记录行；批准权属用户（或按转授记录由 captain 代行），起草人无权
-  批准或追认（AGENTS §3.2、`docs/p18_captain_authority_clause.md` §3.2）。
+- **未**自我批准：本文件状态为 **DRAFT**，正文不含 `APPROVED` 状态行，也不含
+  批准记录行；批准权属用户（或按转授记录由 captain 代行），起草人无权批准或
+  追认（AGENTS §3.2、`docs/p18_captain_authority_clause.md` §3.2）。§11bis
+  只登记 captain 的**裁决内容**（起草后的修订依据），**不构成**状态变更。
 - **未**预写任何「实际发生」的测量结果（AGENTS §11.1）；§7 仅为测量方案。
+
+## 13. 修订记录
+
+| 版本 | 日期 | 修订内容 | 依据 |
+|---|---|---|---|
+| 初稿 | 2026-09-10 | 首次起草（勘察基线 main @ `1fb1b16`） | t2/T01 任务指派 |
+| 修订 1 | 2026-09-10 | 落实 captain 四条裁决：①`RUNSPEC_SCHEMA_VERSION` 1→2 + `ARTIFACT_SCHEMA_VERSION` 2→3（字段改名路线）；②`MANIFEST_VERSION` 1→2 + 新增 `SNAPSHOT_PUBLICATION_VERSION="1"`；③I3 覆盖面加「本轮是否纳入」列 + 「明确不纳入」表 + 新增 I3-EXT 显式扩展不变量、`index_weight_pit` 单列；④§8.3 `full` 上限标为待标定目标（fail-closed 不放宽）。新增 §11bis 裁决记录、§11 A02-A10 | captain 裁决 1–4（2026-09-10，依 `reports/alphagpt-ab/00_authority_exception_record.md` 转授） |
