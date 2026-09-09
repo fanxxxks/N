@@ -9,7 +9,11 @@ import numpy as np
 from ashare_portfolio.rebalance import RebalancePolicy
 
 
-TARGET_CONTRACT_VERSION = 1
+# p19 §5: bumped 1 -> 2 — the label price basis switched to the adjusted
+# continuous series (raw × adj_factor, window-first-day anchor); callers
+# now pass the loader's adjusted open.  The function's causality
+# semantics are unchanged.
+TARGET_CONTRACT_VERSION = 2
 
 
 def causal_target_returns(

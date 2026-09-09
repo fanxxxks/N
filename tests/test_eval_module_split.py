@@ -319,7 +319,7 @@ def test_protocol_version_single_home_is_versions_module():
     keep working unchanged."""
     evaluation = importlib.import_module("ashare_model.evaluation")
     versions = importlib.import_module("ashare_model.versions")
-    assert versions.PROTOCOL_VERSION == "25"
+    assert versions.PROTOCOL_VERSION == "26"
     assert evaluation.PROTOCOL_VERSION is versions.PROTOCOL_VERSION
 
 

@@ -172,14 +172,16 @@ def epoch_slice(
     raw = {k: v[:, s0:s1].numpy() for k, v in loader.raw_data_cache.items()}
     universe_mask = loader.universe_mask[:, s0:s1]
     rebalance_mask = fold.policy.rebalance_mask(loader.dates)[s0:s1]
+    # Label basis = adjusted open (p19 §2.3); the raw slice carries the
+    # p19 price-semantics keys for the engine (execution stays raw).
     target = causal_target_returns(
-        raw["open"],
+        raw["adjusted_open"],
         loader.dates[s0:s1],
         fold.policy,
         rebalance_mask=rebalance_mask,
     )
     target = loader.mask_by_universe(target, start=s0)
-    realized_ret = open_to_open_returns(raw["open"])
+    realized_ret = open_to_open_returns(raw["adjusted_open"])
     return FoldData(
         factors=factors,
         raw=raw,

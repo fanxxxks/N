@@ -32,6 +32,7 @@ def _write_sim_db(
     bars,
     memberships: list[dict] | None = None,
     stocks: list[dict] | None = None,
+    v2_kwargs: dict | None = None,
 ):
     data_config.data_dir.mkdir(parents=True, exist_ok=True)
     with AshareDB(data_config.duckdb_path) as db:
@@ -69,6 +70,13 @@ def _write_sim_db(
             data_config,
         )
         save_manifest(db, data_config, build_dataset_manifest(db, data_config))
+    # p19: the simulation's formal price source is the v2 database (the
+    # loader reads daily_bar_raw/daily_adj_factor/daily_price_limit/
+    # daily_suspension/daily_basic_pit from there).
+    from tests.conftest import populate_v2_price_tables
+
+    v2_path = data_config.duckdb_path.parent / "ashare_v2.duckdb"
+    populate_v2_price_tables(v2_path, dates, ts_codes, bars, **(v2_kwargs or {}))
 
 
 def _make_runner(
@@ -84,6 +92,7 @@ def _make_runner(
     today: str | None = None,
     single_weight_cap: float = 0.5,
     backtest_overrides: dict | None = None,
+    v2_kwargs: dict | None = None,
 ) -> tuple[SimulationRunner, list[str]]:
     """A runner over ``n_dates`` synthetic bars with all paths under tmp_path."""
 
@@ -106,6 +115,7 @@ def _make_runner(
         bars if bars is not None else default_bars,
         memberships=memberships,
         stocks=stocks,
+        v2_kwargs=v2_kwargs,
     )
     model_config = ModelConfig(max_formula_len=6)
     loader = AshareDataLoader(data_config, model_config)
@@ -630,6 +640,13 @@ def test_sim_limit_down_blocks_exit_sell_and_keeps_position(tmp_path: Path):
     tail = (bars["ts_code"] == exiter) & (bars["trade_date"] >= dates[exit_day])
     bars.loc[tail, "high"] = bars.loc[tail, "open"]
     bars.loc[tail, "low"] = bars.loc[tail, "open"]
+    # Exact constraint rows (p19 §2.4): the published down_limit equals the
+    # one-word open on every tail day, so the sell can never fill.
+    opens_tail = [last * 0.90**k for k in range(1, n_dates - exit_day + 1)]
+    limit_overrides = {
+        (exiter, date): (open_ * 1.1, open_)
+        for date, open_ in zip(dates[exit_day:], opens_tail)
+    }
     memberships = [
         {
             "index_code": "000300.SH",
@@ -644,6 +661,7 @@ def test_sim_limit_down_blocks_exit_sell_and_keeps_position(tmp_path: Path):
         ts_codes=codes, bars=bars, memberships=memberships,
         # Non-binding cap: this test exercises the limit-down exit path.
         single_weight_cap=1.0,
+        v2_kwargs={"limit_overrides": limit_overrides},
     )
     runner.run()
 
@@ -710,21 +728,27 @@ def test_current_st_stock_stays_in_union_and_trades_on_board_rates(
     assert runner.portfolio.positions[st_code].name == "*ST 星源"
 
 
-def test_sim_uses_current_st_snapshot_only_on_same_day(tmp_path: Path):
-    # The current is_st snapshot applies the 5% band only when the
-    # execution date equals today: on that day a +5.2% one-word open
-    # blocks the buy, while the identical historical replay fills it.
+def test_sim_execution_uses_exact_limit_rows_not_current_st_snapshot(
+    tmp_path: Path,
+):
+    # The current is_st snapshot has NO execution role under p19 §2.4: the
+    # dated daily_price_limit rows carry whatever band was in force each
+    # day.  A 5%-band row (up_limit at the +5% price) blocks the one-word
+    # +5.2% buy; a full-band row lets the identical open fill — same-day
+    # execution or historical replay alike.  Display names never rewrite
+    # the past.
     codes = ["000001.SZ", "600000.SH"]
     st_code = "600000.SH"
     n_dates = 8
     dates, _, default_bars = make_bars(n_dates, codes)
-    today = dates[6]
-    opens = [10.0] * 5 + [10.52] + [10.52 * 1.052] + [10.52 * 1.052]
+    # The close jump lands on day 5 so the RET_1 signal is observed at
+    # t=5 and the buy executes at dates[6] (next-open execution).
+    opens = [10.0] * 5 + [10.52, 10.52 * 1.02, 10.52 * 1.02]
     bars = _replace_stock_bars(default_bars, st_code, opens)
-    # One-word +5.2% open on the today execution day.
-    tail = (bars["ts_code"] == st_code) & (bars["trade_date"] == today)
-    bars.loc[tail, "high"] = 10.52 * 1.052
-    bars.loc[tail, "low"] = 10.52 * 1.052
+    # One-word +5.2% open on the execution day.
+    tail = (bars["ts_code"] == st_code) & (bars["trade_date"] == dates[6])
+    bars.loc[tail, "high"] = 10.52 * 1.02
+    bars.loc[tail, "low"] = 10.52 * 1.02
     stocks = [
         {
             "ts_code": code,
@@ -736,36 +760,32 @@ def test_sim_uses_current_st_snapshot_only_on_same_day(tmp_path: Path):
         for code in codes
     ]
 
-    same_day_runner, run_dates = _make_runner(
-        tmp_path / "same_day", n_dates=n_dates, top_n=1, max_positions=1,
-        ts_codes=codes, bars=bars, stocks=stocks, today=today,
+    # A dated 5%-band row blocks the buy (up_limit 10.50 < open 10.73).
+    blocked_runner, _ = _make_runner(
+        tmp_path / "blocked", n_dates=n_dates, top_n=1, max_positions=1,
+        ts_codes=codes, bars=bars, stocks=stocks,
+        v2_kwargs={
+            "limit_overrides": {(st_code, dates[6]): (10.50, 9.50)}
+        },
     )
-    same_day_runner.run()
-    # The 5% band applies exactly on the today execution day: the ST stock
-    # is excluded from that day's candidates.
+    blocked_runner.run()
     assert all(
-        o["ts_code"] != st_code for o in _orders_for(same_day_runner, today)
-    )
-    # The very next execution day is historical again: board rates resume
-    # and the same signal buys the ST stock.
-    next_exec = run_dates[run_dates.index(today) + 1]
-    assert any(
-        o["ts_code"] == st_code and o["side"] == "buy" and o["status"] == "filled"
-        for o in _orders_for(same_day_runner, next_exec)
+        o["ts_code"] != st_code or o["status"] != "filled"
+        for o in _orders_for(blocked_runner, dates[6])
     )
 
+    # With the full-band row the identical open fills (display name only).
     control_runner, _ = _make_runner(
         tmp_path / "control", n_dates=n_dates, top_n=1, max_positions=1,
         ts_codes=codes, bars=bars, stocks=stocks,
     )
     control_runner.run()
-    # Historical replay: board band applies, the buy fills — the current
-    # ST name must never rewrite the past.
-    day_orders = _orders_for(control_runner, today)
+    day_orders = _orders_for(control_runner, dates[6])
     assert any(
         o["ts_code"] == st_code and o["side"] == "buy" and o["status"] == "filled"
         for o in day_orders
     )
+    assert control_runner.portfolio.positions[st_code].name == "*ST 星源"
 
 
 def test_sim_top_n_matches_backtest_engine_per_signal_date(tmp_path: Path):

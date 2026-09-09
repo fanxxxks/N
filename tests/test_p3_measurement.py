@@ -11,7 +11,7 @@ from ashare_model.p3_measurement import (
 
 
 def test_p3_measurement_schema_version_is_pinned():
-    assert P3_MEASUREMENT_VERSION == 3
+    assert P3_MEASUREMENT_VERSION == 4
 
 
 def test_build_p3_measurement_covers_acceptance_metrics(

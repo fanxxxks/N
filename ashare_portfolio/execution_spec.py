@@ -19,7 +19,11 @@ from .constructor import (
 from .rebalance import RebalancePolicy
 
 
-EXECUTION_SPEC_VERSION = 2
+# p19 §5: bumped 2 -> 3 — execution semantics switched to raw nominal
+# prices (whole lots, cash, commission floor, min trade amount, dollar
+# volume) with the exact daily_price_limit/daily_suspension constraint
+# tables replacing the approximate board-rate inference.
+EXECUTION_SPEC_VERSION = 3
 
 _PORTFOLIO_CONFIG_FIELDS = (
     "rebalance_frequency",

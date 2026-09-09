@@ -12,6 +12,10 @@ no version bump (AGENTS.md §3.2 version-impact table).
 Constants with a single natural owner (reward, grammar, model, …) stay in
 their owner modules; the artifact-facing owner index lives in
 ``ashare_model.runspec._VERSION_IMPORTS``.
+
+p19 (``docs/p19_market_price_semantics_contract.md`` §5): "25" -> "26" —
+the evaluation protocol's inputs changed (label price basis switched to
+the adjusted series and tradability to the exact constraint tables).
 """
 
-PROTOCOL_VERSION = "25"
+PROTOCOL_VERSION = "26"

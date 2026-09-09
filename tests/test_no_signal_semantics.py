@@ -23,6 +23,7 @@ import pytest
 
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_data.processor import has_cross_sectional_dispersion, open_to_open_returns
+from tests.conftest import with_price_semantics
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.candidates import CandidateScorer, CandidateSpec
 from ashare_model.reward import simulate_basket_daily_returns, simulate_basket_daily_returns_batch
@@ -49,13 +50,13 @@ def _market(n_stocks=5, n_dates=8):
     codes = [f"{i:06d}.SZ" for i in range(n_stocks)]
     dates = [f"202401{i:02d}" for i in range(n_dates)]
     open_ = np.full((n_stocks, n_dates), 10.0)
-    raw = {
+    raw = with_price_semantics({
         "open": open_,
         "high": open_ * 1.02,
         "low": open_ * 0.98,
         "pre_close": open_.copy(),
         "volume": np.full((n_stocks, n_dates), 1_000_000.0),
-    }
+    })
     signal = np.tile(
         np.arange(n_stocks, 0, -1, dtype=float)[:, None], (1, n_dates)
     )
@@ -162,8 +163,10 @@ def test_engine_force_hold_never_renormalizes_above_cap():
     low = raw["low"].copy()
     pre_close = raw["pre_close"].copy()
     high[0, 3] = low[0, 3] = open_[0, 3] = pre_close[0, 3] * 0.9  # limit-down open
-    raw = {"open": open_, "high": high, "low": low, "pre_close": pre_close,
-           "volume": raw["volume"]}
+    raw = with_price_semantics({"open": open_, "high": high, "low": low,
+           "pre_close": pre_close, "volume": raw["volume"]})
+    # The exit-day limit-down is table-driven under p19 (exact rule).
+    raw["down_limit"][0, 3] = open_[0, 3]
     result = AshareBacktestEngine(cfg).run(
         signal, raw, codes, dates, universe_mask=mask
     )
@@ -190,8 +193,8 @@ def test_engine_permutation_invariance():
             np.random.default_rng(seed),
         )
         p_signal, p_open, p_high, p_low, p_pre, p_vol, p_codes = permuted
-        p_raw = {"open": p_open, "high": p_high, "low": p_low,
-                 "pre_close": p_pre, "volume": p_vol}
+        p_raw = with_price_semantics({"open": p_open, "high": p_high, "low": p_low,
+                 "pre_close": p_pre, "volume": p_vol})
         other = AshareBacktestEngine(cfg).run(
             p_signal, p_raw, list(p_codes), dates,
             universe_mask=np.ones(p_signal.shape, dtype=bool),

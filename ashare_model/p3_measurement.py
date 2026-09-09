@@ -34,7 +34,7 @@ from ashare_data.config import (
 )
 from ashare_data.gates import ProductionGateRunner
 from ashare_data.io_utils import atomic_write_json
-from ashare_data.processor import open_to_open_returns
+from ashare_data.processor import exact_tradability_matrix, open_to_open_returns
 from ashare_data.universe import UniverseMask
 from ashare_logging import export_log_txt, setup_run_logging
 from ashare_portfolio.execution_spec import execution_provenance
@@ -47,7 +47,9 @@ from .reward import simulate_basket_daily_returns
 from .vocab import FEATURE_NAMES
 
 
-P3_MEASUREMENT_VERSION = 3
+# p19 §5: bumped 3 -> 4 — measurement semantics follow the price basis
+# (raw execution / adjusted labels) and the exact constraint source.
+P3_MEASUREMENT_VERSION = 4
 DEFAULT_FACTOR = "REVERSAL_5"
 DEFAULT_SEED = 20260829
 DEFAULT_STOCKS = 60
@@ -104,7 +106,8 @@ def _measurement_view(
     date_slice = slice(date_start, None)
     factor_index = FEATURE_NAMES.index(factor_name)
     signal = _as_numpy(loader.factor_tensor[factor_index, :, date_slice])
-    open_ = _as_numpy(loader.raw_data_cache["open"][:, date_slice])
+    # Label-basis validity uses the adjusted open (p19 §2.3).
+    open_ = _as_numpy(loader.raw_data_cache["adjusted_open"][:, date_slice])
     mask = np.asarray(loader.universe_mask[:, date_slice], dtype=bool)
     valid = mask & np.isfinite(signal) & np.isfinite(open_) & (open_ > 0.0)
     coverage = np.mean(valid, axis=1)
@@ -135,6 +138,10 @@ def _measurement_view(
     view.raw_data_cache = {
         key: value[selected_list, date_slice]
         for key, value in loader.raw_data_cache.items()
+    }
+    view.adjusted_data_cache = {
+        key: value[selected_list, date_slice]
+        for key, value in loader.adjusted_data_cache.items()
     }
     view.universe = UniverseMask(
         eligible=np.asarray(loader.universe_mask[selected, date_slice], dtype=bool),
@@ -174,8 +181,10 @@ def _raw_numpy(loader: AshareDataLoader) -> dict[str, np.ndarray]:
         for key, value in loader.raw_data_cache.items()
     }
     # Match AshareBacktestEngine's exact missing-bar normalization before the
-    # same arrays feed the reward parity path.
-    for key in ("open", "high", "low", "pre_close", "volume"):
+    # same arrays feed the reward parity path.  The constraint matrices are
+    # NOT 0-filled: a missing limit record (NaN) must stay fail-closed
+    # blocked under the exact rule (p19 §2.4).
+    for key in ("open", "high", "low", "pre_close", "volume", "adjusted_open"):
         raw[key] = np.nan_to_num(
             raw[key], nan=0.0, posinf=0.0, neginf=0.0
         )
@@ -183,34 +192,16 @@ def _raw_numpy(loader: AshareDataLoader) -> dict[str, np.ndarray]:
 
 
 def _blocked_matrices(
-    engine: AshareBacktestEngine,
     raw: dict[str, np.ndarray],
-    codes: list[str],
 ) -> tuple[np.ndarray, np.ndarray]:
-    n_stocks, n_dates = raw["open"].shape
-    buy = np.zeros((n_stocks, n_dates), dtype=bool)
-    sell = np.zeros((n_stocks, n_dates), dtype=bool)
-    for day in range(n_dates):
-        buy[:, day] = engine._blocked_mask(  # noqa: SLF001 - parity probe
-            day,
-            raw["open"],
-            raw["high"],
-            raw["low"],
-            raw["pre_close"],
-            raw["volume"],
-            codes,
-            side="buy",
-        )
-        sell[:, day] = engine._blocked_mask(  # noqa: SLF001 - parity probe
-            day,
-            raw["open"],
-            raw["high"],
-            raw["low"],
-            raw["pre_close"],
-            raw["volume"],
-            codes,
-            side="sell",
-        )
+    """Exact constraint matrices via the single p19 §2.4 processor rule."""
+
+    buy, _ = exact_tradability_matrix(
+        raw["open"], raw["up_limit"], raw["down_limit"], raw["suspended"], "buy"
+    )
+    sell, _ = exact_tradability_matrix(
+        raw["open"], raw["up_limit"], raw["down_limit"], raw["suspended"], "sell"
+    )
     return buy, sell
 
 
@@ -482,10 +473,9 @@ def build_p3_measurement(
         universe_mask=universe_mask,
         rebalance_mask=rebalance_mask,
     )
-    blocked_buy, blocked_sell = _blocked_matrices(
-        engine, raw, view.ts_codes
-    )
-    target_returns = open_to_open_returns(raw["open"])
+    blocked_buy, blocked_sell = _blocked_matrices(raw)
+    # Label basis = adjusted open (p19 §2.3); adv stays raw (nominal).
+    target_returns = open_to_open_returns(raw["adjusted_open"])
     reward = simulate_basket_daily_returns(
         signal,
         target_returns,

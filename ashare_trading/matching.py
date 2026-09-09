@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ashare_data.processor import blocked_components
+from ashare_data.processor import exact_blocked_components
 from ashare_data.schemas import SimOrder, SimTrade
 from ashare_execution import ExecutionCostModel
 
@@ -13,6 +13,8 @@ from .portfolio import SimulationPortfolio
 
 
 class SimBroker:
+    _CONSTRAINT_COLUMNS = ("up_limit", "down_limit", "suspended")
+
     def execute_orders(
         self,
         orders: list[SimOrder],
@@ -22,16 +24,19 @@ class SimBroker:
         stock_names: dict[str, str],
         backtest_config,
         *,
-        st_codes: set[str] | None = None,
         lot_size: int = 100,
     ) -> list[SimTrade]:
         """Execute orders for one trading day at the day's open price.
 
         ``stock_names`` is display-only (persisted as the position name).
-        Limit detection is the shared processor rule with board rates plus
-        ``st_codes`` — the stocks whose current ``stocks.is_st`` snapshot
-        is valid as of ``date``, i.e. same-day execution only; historical
-        replay passes None so current names never rewrite the past.
+        Fill gating consumes the exact constraint columns the loader joins
+        onto the bar frame (p19 §2.4): ``up_limit`` / ``down_limit`` from
+        ``daily_price_limit`` and the ``suspended`` flag from
+        ``daily_suspension`` — buy blocked ⟺ open >= up_limit, sell
+        blocked ⟺ open <= down_limit, a suspension record or a missing
+        limit record blocks the order (skip reasons ``suspended`` /
+        ``constraint_missing``).  There is no approximate board-rate
+        fallback and no use of current stock names.
 
         ``lot_size`` is the whole-lot size in shares.  ``lot_size <= 0``
         switches to the golden-spec continuous-share mode (T3-02): shares
@@ -46,6 +51,18 @@ class SimBroker:
 
         if not orders:
             return []
+        missing = [
+            column
+            for column in self._CONSTRAINT_COLUMNS
+            if column not in bars.columns
+        ]
+        if missing:
+            raise ValueError(
+                "bars frame is missing the p19 exact-constraint columns "
+                f"{missing}: the matcher gates fills on the "
+                "daily_price_limit/daily_suspension tables (p19 §2.4); "
+                "build the frame from AshareDataLoader.bars"
+            )
         day_bars = bars[bars["trade_date"] == date]
         if day_bars.empty:
             return []
@@ -61,36 +78,26 @@ class SimBroker:
             )
             for name in ("open", "high", "low", "pre_close", "volume")
         }
-        st_mask = (
-            np.asarray([code in st_codes for code in codes], dtype=bool)
-            if st_codes is not None
-            else None
+        suspended_flags = np.asarray(
+            [bool(getattr(row, "suspended")) for row in rows], dtype=bool
         )
-        suspended, limit_buy = blocked_components(
-            columns["open"],
-            columns["high"],
-            columns["low"],
-            columns["pre_close"],
-            columns["volume"],
-            codes,
-            "buy",
-            st_mask=st_mask,
+        up_limits = np.asarray(
+            [float(getattr(row, "up_limit")) for row in rows], dtype=np.float64
         )
-        _, limit_sell = blocked_components(
-            columns["open"],
-            columns["high"],
-            columns["low"],
-            columns["pre_close"],
-            columns["volume"],
-            codes,
-            "sell",
-            st_mask=st_mask,
+        down_limits = np.asarray(
+            [float(getattr(row, "down_limit")) for row in rows], dtype=np.float64
+        )
+        blocked_buy, missing_buy = exact_blocked_components(
+            columns["open"], up_limits, down_limits, suspended_flags, "buy"
+        )
+        blocked_sell, missing_sell = exact_blocked_components(
+            columns["open"], up_limits, down_limits, suspended_flags, "sell"
         )
         blocked = {
             code: (
-                bool(suspended[i]),
-                bool(limit_buy[i]),
-                bool(limit_sell[i]),
+                bool(blocked_buy[i]),
+                bool(blocked_sell[i]),
+                bool(missing_buy[i] or missing_sell[i]),
             )
             for i, code in enumerate(codes)
         }
@@ -107,10 +114,17 @@ class SimBroker:
                 order.status = "skipped"
                 order.reason = "missing_bar"
                 continue
-            is_suspended_flag, limit_up_flag, limit_down_flag = blocked[
+            is_buy_blocked, is_sell_blocked, constraint_missing = blocked[
                 order.ts_code
             ]
-            if is_suspended_flag:
+            if constraint_missing:
+                # Fail-closed: no exact limit record for that stock/day
+                # (p19 §2.4 — degraded, never an approximate fallback).
+                order.status = "skipped"
+                order.reason = "constraint_missing"
+                continue
+            if is_buy_blocked and is_sell_blocked:
+                # A suspension record blocks both sides.
                 order.status = "skipped"
                 order.reason = "suspended"
                 continue
@@ -118,7 +132,7 @@ class SimBroker:
             name = stock_names.get(order.ts_code, order.ts_code)
             price = float(bar.open)
             if order.side == "buy":
-                if limit_up_flag:
+                if is_buy_blocked:
                     order.status = "skipped"
                     order.reason = "limit_up"
                     continue
@@ -157,7 +171,7 @@ class SimBroker:
                     order.status = "skipped"
                     order.reason = "no_position"
                     continue
-                if limit_down_flag:
+                if is_sell_blocked:
                     order.status = "skipped"
                     order.reason = "limit_down"
                     continue

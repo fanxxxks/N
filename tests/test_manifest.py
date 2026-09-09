@@ -256,6 +256,22 @@ def test_sync_records_dataset_id(tmp_path):
     from ashare_data.config import ModelConfig
     from ashare_data.universe import UniverseDevelopmentFallbackWarning
 
+    # p19: the loader's formal price source is the v2 database; mirror the
+    # synced bars into it (sync itself remains the legacy pipeline).
+    from tests.conftest import populate_v2_for_config
+
+    with AshareDB(cfg.duckdb_path, read_only=True) as db:
+        synced_bars = db.query(
+            "SELECT ts_code, trade_date, open, high, low, close, pre_close, "
+            "volume, amount FROM daily_bar"
+        )
+    populate_v2_for_config(
+        cfg,
+        sorted(synced_bars["trade_date"].astype(str).unique().tolist()),
+        sorted(synced_bars["ts_code"].unique().tolist()),
+        synced_bars,
+    )
+
     # The offline sync writes only snapshot constituents, so the loader
     # must use the explicit development universe fallback (strict mode
     # requires historical PIT intervals).

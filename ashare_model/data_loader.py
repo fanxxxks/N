@@ -1,4 +1,26 @@
-"""Load A-share data from DuckDB into model-ready tensors."""
+"""Load A-share data from DuckDB into model-ready tensors.
+
+Price semantics (p19, ``docs/p19_market_price_semantics_contract.md`` §2):
+the loader owns the **single** derivation of the dual price basis —
+
+* ``raw_data_cache`` carries the **raw execution prices** (v2
+  ``daily_bar_raw``, unadjusted OHLCV + pre_close, nominal yuan), the raw
+  ``adj_factor`` column and the exact execution-constraint matrices
+  (``up_limit`` / ``down_limit`` from ``daily_price_limit``, ``suspended``
+  from ``daily_suspension``);
+* ``adjusted_data_cache`` carries the **adjusted factor/label prices**
+  (``raw × adj_factor(t) / adj_factor_base``, window-first-day anchor,
+  OHLC scaled uniformly) derived by
+  :func:`ashare_data.processor.adjusted_price_scale` — the one
+  implementation; no ``ffill().bfill()`` continuity is ever fabricated;
+* ``target_ret`` and the factor tensor consume the adjusted basis;
+  execution (whole lots, cash, commission floor, limit/suspension masks)
+  consumes the raw basis and the exact constraint tables (p19 §2.2/§2.4).
+
+The formal price source is the v2 Tushare/PIT database (p17); the legacy
+qfq ``daily_bar`` table is a legacy-audit source only and is never read
+here.  A missing or schema-incompatible v2 source fails closed.
+"""
 
 from __future__ import annotations
 
@@ -16,13 +38,16 @@ from ashare_data.db import AshareDB, sql_quoted_list
 from ashare_data.fundamentals import build_pit_frames
 from ashare_data.manifest import resolve_dataset_id
 from ashare_data.processor import (
+    adjusted_price_scale,
+    apply_adjusted_scale,
     encode_industry_frame,
     is_valid_a_share_code,
     normalize_daily_bars,
     open_to_open_returns,
     pivot_wide,
-    tradability_blocked_matrix,
+    exact_tradability_matrix,
 )
+from ashare_data.tushare_store import V2_TABLES
 from ashare_data.universe import (
     ResolvedUniverse,
     UniverseContractError,
@@ -35,6 +60,42 @@ from ashare_data.universe import (
 )
 
 from .factors import compute_factor_tensor
+
+
+class V2PriceSourceError(RuntimeError):
+    """The v2 price source is missing or unusable (fail-closed, p19 §2.1)."""
+
+
+# Cache keys the execution consumers (engine, golden harness, matcher,
+# reward path) require — p19 §2.1/§2.4.  Missing keys fail closed.
+EXECUTION_CACHE_KEYS = (
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "volume",
+    "adjusted_open",
+    "up_limit",
+    "down_limit",
+    "suspended",
+)
+
+# 0-filled wide columns (missing bar -> 0, the historical cache convention).
+_ZERO_FILLED_COLUMNS = (
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "volume",
+    "amount",
+    "turnover_rate",
+    "adj_factor",
+)
+
+
+def _v2_table(table: str) -> str:
+    return V2_TABLES[table].name
 
 
 class AshareDataLoader:
@@ -62,6 +123,8 @@ class AshareDataLoader:
         self.factor_tensor: torch.Tensor | None = None
         self.industry_codes: torch.Tensor | None = None
         self.raw_data_cache: dict[str, torch.Tensor] = {}
+        self.adjusted_data_cache: dict[str, torch.Tensor] = {}
+        self.price_degraded: dict[str, str] = {}
         self.target_ret: torch.Tensor | None = None
         self.stock_names: dict[str, str] = {}
         self.stock_list_dates: dict[str, object] = {}
@@ -178,6 +241,96 @@ class AshareDataLoader:
             policy,
         )
 
+    def _v2_path(self) -> Path:
+        """The v2 price source path (relative -> next to the legacy DB)."""
+
+        path = Path(self.config.v2_duckdb_path)
+        if not path.is_absolute():
+            path = Path(self.config.duckdb_path).parent / path
+        return path
+
+    def _load_v2_bars(
+        self,
+        requested_codes: list[str],
+        requested_dates: list[str] | None,
+    ) -> pd.DataFrame:
+        """Read the v2 price source into one raw long frame (p19 §2.1).
+
+        Single formal price input: ``daily_bar_raw`` (unadjusted OHLCV,
+        ``vol`` renamed to the pipeline's ``volume``), ``daily_adj_factor``
+        (raw values, never filled), ``daily_price_limit`` (exact
+        up/down limits), ``daily_suspension`` (presence -> suspended) and
+        ``daily_basic_pit`` (``turnover_rate``).  A missing source file,
+        missing table or missing column fails closed.
+        """
+
+        path = self._v2_path()
+        if not path.exists():
+            raise V2PriceSourceError(
+                "v2 price source not found: "
+                f"{path} (p19 §2.1: the formal loader reads the v2 "
+                "Tushare/PIT tables; the legacy qfq daily table is a "
+                "legacy-audit source and is never used as a fallback)"
+            )
+        code_list = sql_quoted_list(requested_codes)
+        where_dates = (
+            "AND trade_date IN (" + sql_quoted_list(requested_dates) + ")"
+            if requested_dates
+            else ""
+        )
+
+        def _query(db: AshareDB, table: str, columns: str) -> pd.DataFrame:
+            try:
+                return db.query(
+                    f"SELECT {columns} FROM {_v2_table(table)} "
+                    f"WHERE ts_code IN ({code_list}) {where_dates} "
+                    f"ORDER BY trade_date"
+                )
+            except duckdb.CatalogException as exc:
+                raise V2PriceSourceError(
+                    f"v2 price source {path} is missing table "
+                    f"{_v2_table(table)!r} (p17 §5 schema required): {exc}"
+                ) from exc
+
+        with AshareDB(path, read_only=True) as v2:
+            bars = _query(
+                v2,
+                "daily_bar_raw",
+                "ts_code, trade_date, open, high, low, close, pre_close, "
+                "vol, amount",
+            )
+            adj = _query(
+                v2, "daily_adj_factor", "ts_code, trade_date, adj_factor"
+            )
+            limits = _query(
+                v2,
+                "daily_price_limit",
+                "ts_code, trade_date, up_limit, down_limit",
+            )
+            suspensions = _query(
+                v2, "daily_suspension", "ts_code, trade_date, suspend_type"
+            )
+            basics = _query(
+                v2, "daily_basic_pit", "ts_code, trade_date, turnover_rate"
+            )
+
+        if bars.empty:
+            return pd.DataFrame()
+        bars = bars.rename(columns={"vol": "volume"})
+        df = bars.merge(adj, on=["ts_code", "trade_date"], how="left")
+        df = df.merge(limits, on=["ts_code", "trade_date"], how="left")
+        df = df.merge(basics, on=["ts_code", "trade_date"], how="left")
+        suspended_codes_dates = set(
+            zip(suspensions["ts_code"], suspensions["trade_date"])
+        ) if not suspensions.empty else set()
+        # p17 §6.1: a daily_suspension record is available in that day's
+        # session; presence of the record means the stock did not trade.
+        df["suspended"] = [
+            (code, date) in suspended_codes_dates
+            for code, date in zip(df["ts_code"], df["trade_date"])
+        ]
+        return df
+
     def load_data(
         self,
         ts_codes: list[str] | None = None,
@@ -211,27 +364,23 @@ class AshareDataLoader:
                     + ", ".join(non_sessions[:5])
                 )
 
-        with AshareDB(self.config.duckdb_path, read_only=True) as db:
-            if requested_dates:
-                where_dates = (
-                    "AND trade_date IN (" + sql_quoted_list(requested_dates) + ")"
-                )
-            else:
-                where_dates = ""
-            code_list = sql_quoted_list(requested_codes)
-            df = db.query(
-                f"""
-                SELECT ts_code, trade_date, open, high, low, close, pre_close,
-                       volume, amount, turnover_rate, adj_factor
-                FROM {self.config.daily_table}
-                WHERE ts_code IN ({code_list}) {where_dates}
-                ORDER BY trade_date
-                """
-            )
+        # Formal price source: the v2 Tushare/PIT tables (p19 §2.1).  The
+        # legacy qfq daily table is never read here (legacy-audit only).
+        df_raw = self._load_v2_bars(requested_codes, requested_dates)
+        if df_raw.empty:
+            raise ValueError("No daily bars found")
 
-        df = normalize_daily_bars(df)
+        # Adjusted-basis derivation consumes RAW adj_factor values and must
+        # run before normalize_daily_bars (whose legacy ffill().bfill() is
+        # pre-registered as abolished for this path, p19 §2.1).
+        scale, adj_degraded = adjusted_price_scale(df_raw)
+
+        df = normalize_daily_bars(df_raw)
         if df.empty:
             raise ValueError("No daily bars found")
+        scale = pd.Series(scale, index=df_raw.index).loc[df.index]
+        df_adj = apply_adjusted_scale(df, scale)
+
         self.bars = df
         self.ts_codes = requested_codes
         if requested_dates is not None:
@@ -248,24 +397,77 @@ class AshareDataLoader:
             )
         self._build_universe(contract, df)
 
+        # Degraded provenance: adjusted-basis anomalies and missing exact
+        # constraint records are recorded, never swallowed (p19 §2.1/§2.4).
+        self.price_degraded = {}
+        for code in adj_degraded:
+            self.price_degraded[code] = (
+                "adj_factor missing/non-positive on a bar row; adjusted "
+                "series fail-closed (p19 §2.1)"
+            )
+        up_wide = pivot_wide(df, self.ts_codes, self.dates, "up_limit")
+        down_wide = pivot_wide(df, self.ts_codes, self.dates, "down_limit")
+        missing_limit = ~(np.isfinite(up_wide.to_numpy(dtype=float))
+                          & np.isfinite(down_wide.to_numpy(dtype=float)))
+        for row, code in enumerate(self.ts_codes):
+            if missing_limit[row].any() and code not in self.price_degraded:
+                self.price_degraded[code] = (
+                    "daily_price_limit record missing for at least one "
+                    "loaded session; exact constraint fail-closed (p19 §2.4)"
+                )
+        if self.price_degraded:
+            for code, reason in sorted(self.price_degraded.items()):
+                logger.warning(
+                    "price semantics degraded for {}: {}", code, reason
+                )
+
         tensor_map: dict[str, torch.Tensor] = {}
-        for column in (
-            "open",
-            "high",
-            "low",
-            "close",
-            "pre_close",
-            "volume",
-            "amount",
-            "turnover_rate",
-            "adj_factor",
-        ):
+        for column in _ZERO_FILLED_COLUMNS:
             wide = pivot_wide(df, self.ts_codes, self.dates, column)
             tensor_map[column] = torch.tensor(
                 np.nan_to_num(wide.values, nan=0.0, posinf=0.0, neginf=0.0),
                 dtype=torch.float32,
             )
+        # Adjusted open for the label basis (0-filled like the raw open).
+        adj_open_wide = pivot_wide(df_adj, self.ts_codes, self.dates, "open")
+        tensor_map["adjusted_open"] = torch.tensor(
+            np.nan_to_num(
+                adj_open_wide.values, nan=0.0, posinf=0.0, neginf=0.0
+            ),
+            dtype=torch.float32,
+        )
+        # Exact constraint matrices: limit prices keep NaN (missing record
+        # must stay distinguishable from a 0 limit — fail-closed blocked);
+        # suspension is the 0/1 table-driven flag (p19 §2.4).
+        tensor_map["up_limit"] = torch.tensor(
+            up_wide.to_numpy(dtype=np.float32), dtype=torch.float32
+        )
+        tensor_map["down_limit"] = torch.tensor(
+            down_wide.to_numpy(dtype=np.float32), dtype=torch.float32
+        )
+        suspended_wide = pivot_wide(
+            df.assign(suspended=df["suspended"].astype(float)),
+            self.ts_codes,
+            self.dates,
+            "suspended",
+        )
+        tensor_map["suspended"] = torch.tensor(
+            np.nan_to_num(suspended_wide.to_numpy(dtype=np.float32), nan=0.0),
+            dtype=torch.float32,
+        )
         self.raw_data_cache = tensor_map
+
+        adjusted_map: dict[str, torch.Tensor] = {}
+        for column in ("open", "high", "low", "close", "pre_close"):
+            wide = pivot_wide(df_adj, self.ts_codes, self.dates, column)
+            # NaN stays NaN: the adjusted cache is the fail-closed view of
+            # the adjusted basis — missing is never turned into 0 (p19
+            # §2.1); consumers that need the 0-filled dead-bar convention
+            # apply it explicitly (raw_data_cache["adjusted_open"]).
+            adjusted_map[column] = torch.tensor(
+                wide.to_numpy(dtype=np.float32), dtype=torch.float32
+            )
+        self.adjusted_data_cache = adjusted_map
 
         # Announce-date-aligned point-in-time fundamentals and capital-flow
         # frames; any failure (e.g. the tables do not exist yet) degrades
@@ -277,8 +479,10 @@ class AshareDataLoader:
             self.config, self.ts_codes, self.dates
         )
 
+        # Factors consume the ADJUSTED continuous basis (p19 §2.3); volume,
+        # amount and turnover_rate stay raw (nominal shares / yuan).
         factors = compute_factor_tensor(
-            df,
+            df_adj,
             self.ts_codes,
             self.dates,
             pit_fundamentals=pit,
@@ -293,14 +497,25 @@ class AshareDataLoader:
             encode_industry_frame(industry_frame), dtype=torch.float32
         )
 
-        # Legacy daily/horizon=1 adjacent-open field retained for callers
-        # outside the P3 research path.  P3 training/search/evaluation must
-        # build its sparse causal target from RebalancePolicy on the complete
-        # date axis; this dense field is never a multi-period target.
-        # Missing-data masking still prevents suspended / unlisted days from
-        # fabricating huge fake returns.
-        open_tensor = self.raw_data_cache["open"]
+        # Labels (target_ret) consume the ADJUSTED open-to-open series
+        # (p19 §2.3): a corporate action between the entry and exit open is
+        # an economic return, not a price gap.  Legacy daily/horizon=1
+        # adjacent-open field retained for callers outside the P3 research
+        # path.  Missing-data masking still prevents suspended / unlisted
+        # days from fabricating huge fake returns.
+        open_tensor = self.raw_data_cache["adjusted_open"]
         target = self.mask_by_universe(open_to_open_returns(open_tensor.numpy()))
+        # Fail-closed adjusted series keep NaN labels (missing never
+        # becomes 0 — p19 §2.1); the stock is also untradeable for new
+        # entries via tradability_masks().
+        if adj_degraded:
+            degraded_rows = [
+                self.ts_codes.index(code)
+                for code in adj_degraded
+                if code in self.ts_codes
+            ]
+            if degraded_rows:
+                target[degraded_rows, :] = np.nan
         self.target_ret = torch.tensor(target, dtype=torch.float32)
         # Bind this load to the immutable dataset manifest (None when the
         # database predates T1-01 manifests; artifact consumers treat None
@@ -339,12 +554,16 @@ class AshareDataLoader:
     def tradability_masks(self) -> tuple[np.ndarray, np.ndarray]:
         """``(blocked_buy, blocked_sell)`` ``[stock x date]`` bool matrices.
 
-        Built once from the raw OHLCV cache with the exact rule the backtest
-        engine applies per execution day (0-filled missing cells mark
-        suspension, one-word limit-up opens block buys, one-word limit-down
-        opens block sells).  The reward path consumes these masks so the
-        training basket can never trade what the engine could not have
-        traded; callers slice them to the same date window as the signals.
+        The exact p19 §2.4 rule over the ``daily_price_limit`` /
+        ``daily_suspension`` tables: buy blocked ⟺ open >= up_limit, sell
+        blocked ⟺ open <= down_limit, a suspension record blocks both
+        sides, and a missing limit record blocks both sides (fail-closed,
+        degraded record in :attr:`price_degraded`).  Stocks whose adjusted
+        series is fail-closed (adj_factor anomaly) cannot be newly bought
+        — their factor/label basis is invalid.  The reward path consumes
+        these masks so the training basket can never trade what the engine
+        could not have traded; callers slice them to the same date window
+        as the signals.
         """
 
         cached = self._tradability_cache
@@ -353,22 +572,18 @@ class AshareDataLoader:
         if not self.raw_data_cache:
             raise ValueError("tradability masks require loaded raw bars")
         raw = self.raw_data_cache
-        blocked_buy = tradability_blocked_matrix(
+        blocked_buy, _ = exact_tradability_matrix(
             raw["open"].numpy(),
-            raw["high"].numpy(),
-            raw["low"].numpy(),
-            raw["pre_close"].numpy(),
-            raw["volume"].numpy(),
-            self.ts_codes,
+            raw["up_limit"].numpy(),
+            raw["down_limit"].numpy(),
+            raw["suspended"].numpy(),
             "buy",
         )
-        blocked_sell = tradability_blocked_matrix(
+        blocked_sell, _ = exact_tradability_matrix(
             raw["open"].numpy(),
-            raw["high"].numpy(),
-            raw["low"].numpy(),
-            raw["pre_close"].numpy(),
-            raw["volume"].numpy(),
-            self.ts_codes,
+            raw["up_limit"].numpy(),
+            raw["down_limit"].numpy(),
+            raw["suspended"].numpy(),
             "sell",
         )
         if self.universe_mask is None:
@@ -376,6 +591,11 @@ class AshareDataLoader:
         # Ineligible stocks cannot be newly bought.  Sell eligibility remains
         # market-driven so an index exit never traps an existing position.
         blocked_buy |= ~self.universe_mask
+        # Fail-closed adjusted series: no valid label/factor basis -> no
+        # new entries (exits stay market-driven, mirroring the mask rule).
+        for code, reason in self.price_degraded.items():
+            if "adj_factor" in reason and code in self.ts_codes:
+                blocked_buy[self.ts_codes.index(code)] = True
         self._tradability_cache = (blocked_buy, blocked_sell)
         return self._tradability_cache
 
@@ -385,7 +605,7 @@ class AshareDataLoader:
         The capacity audit (T1-04) consumes this as the ``adv`` argument:
         a position's value divided by its execution-day dollar volume is
         its capacity utilization.  Zero-volume cells (suspensions) carry
-        zero and are skipped by the audit.
+        zero and are skipped by the audit.  Raw nominal prices (p19 §2.2).
         """
 
         if not self.raw_data_cache:

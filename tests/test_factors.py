@@ -1008,7 +1008,8 @@ def test_industry_demean_reference_is_eligible_only():
 def test_p9_factor_compute_version_pinned():
     from ashare_model.factors import FACTOR_COMPUTE_VERSION
 
-    assert FACTOR_COMPUTE_VERSION == 1
+    # p19 (D4): bumped 1 -> 2 for the adjusted price basis.
+    assert FACTOR_COMPUTE_VERSION == 2
 
 
 def test_p9_new_factors_registered():

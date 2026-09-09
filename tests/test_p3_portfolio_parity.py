@@ -15,6 +15,7 @@ from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.reward import simulate_basket_daily_returns
 from ashare_trading.golden import GoldenParity
 from ashare_portfolio.rebalance import RebalancePolicy
+from tests.conftest import with_price_semantics
 
 
 def _market(n_stocks: int = 35, n_dates: int = 18):
@@ -25,13 +26,13 @@ def _market(n_stocks: int = 35, n_dates: int = 18):
         0.001 + np.arange(n_stocks, dtype=np.float64)[:, None] * 0.00001
     )
     open_ = base * drift
-    raw = {
+    raw = with_price_semantics({
         "open": open_,
         "high": open_ * 1.01,
         "low": open_ * 0.99,
         "pre_close": np.column_stack([open_[:, 0], open_[:, :-1]]),
         "volume": np.full_like(open_, 1_000_000.0),
-    }
+    })
     signal = np.empty((n_stocks, n_dates), dtype=np.float64)
     for t in range(n_dates):
         # Rotate the ranking deterministically without exact ties.

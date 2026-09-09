@@ -251,8 +251,9 @@ def factor_report(
     price_end = contract.train_label_end
     window = tensor[:, :, :signal_end].numpy().copy()
     eligibility = loader.universe_mask[:, :signal_end]
+    # Label basis = adjusted open (p19 §2.3).
     target = causal_target_returns(
-        loader.raw_data_cache["open"][:, :price_end].numpy(),
+        loader.raw_data_cache["adjusted_open"][:, :price_end].numpy(),
         dates[:price_end],
         policy,
         rebalance_mask=policy.rebalance_mask(dates)[:price_end],

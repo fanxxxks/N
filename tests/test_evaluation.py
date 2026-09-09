@@ -363,6 +363,20 @@ def _blocked_stock_loader(tmp_path) -> tuple[AshareDataLoader, list[str], list[i
             ],
             data_config,
         )
+    # p19 §2.4: the engineered one-word limit-up entries are table-driven —
+    # the exact daily_price_limit row publishes up_limit == open on those
+    # days (everything else stays unconstrained).
+    from tests.conftest import populate_v2_for_config
+
+    populate_v2_for_config(
+        data_config,
+        dates,
+        codes,
+        bars,
+        limit_overrides={
+            ("600001.SH", dates[e]): (11.0, 5.5) for e in (10, 12, 14)
+        },
+    )
     loader = AshareDataLoader(data_config, ModelConfig()).load_data()
     return loader, codes, [9, 11, 13]
 
@@ -457,6 +471,9 @@ def _future_member_loader(tmp_path, join_day: int = 10) -> AshareDataLoader:
             ],
             data_config,
         )
+    from tests.conftest import populate_v2_for_config
+
+    populate_v2_for_config(data_config, dates, codes, bars)
     return AshareDataLoader(data_config, ModelConfig()).load_data()
 
 

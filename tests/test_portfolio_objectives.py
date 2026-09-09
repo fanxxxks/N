@@ -38,6 +38,7 @@ from ashare_model.reward import (
     formula_reward,
     simulate_basket_daily_returns,
 )
+from tests.conftest import with_price_semantics
 
 
 def _cfg(**kwargs) -> BacktestConfig:
@@ -80,14 +81,14 @@ def _market(n_stocks=6, n_dates=12, seed=17):
     ) * 10.0
     pre_close = np.roll(open_, 1, axis=1)
     pre_close[:, 0] = open_[:, 0]
-    raw = {
+    raw = with_price_semantics({
         "open": open_,
         "high": open_ * 1.02,
         "low": open_ * 0.98,
         "pre_close": pre_close,
         "volume": np.full((n_stocks, n_dates), 1_000_000.0),
         "close": open_ * 1.005,
-    }
+    })
     target = open_to_open_returns(open_)
     signal = target + rng.normal(0, 0.001, size=target.shape)
     return codes, dates, raw, signal, target

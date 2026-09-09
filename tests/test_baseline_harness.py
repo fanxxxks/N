@@ -30,6 +30,7 @@ from ashare_model.baseline_harness import (
 )
 from ashare_model.candidates import CandidateScorer, CandidateSpec
 from ashare_model.reward import simulate_basket_daily_returns
+from tests.conftest import with_price_semantics
 
 
 def _cfg(**kwargs) -> BacktestConfig:
@@ -367,13 +368,13 @@ def _raw_market(rng, n_stocks, n_dates):
     open_ = np.cumprod(
         1.0 + rng.normal(0.0005, 0.005, (n_stocks, n_dates)), axis=1
     ) * 10.0
-    return {
+    return with_price_semantics({
         "open": open_,
         "high": open_ * 1.02,
         "low": open_ * 0.98,
         "pre_close": np.roll(open_, 1, axis=1),
         "volume": np.full((n_stocks, n_dates), 1_000_000.0),
-    }
+    })
 
 
 # --- completion gate: reward <-> OOS active IR ------------------------------
@@ -395,13 +396,13 @@ def test_completion_gate_reward_correlates_with_oos_active_ir():
     train_end = 40
     drift = rng.normal(0.001, 0.01, size=(n_stocks, n_dates))
     open_ = np.cumprod(1.0 + drift, axis=1) * 10.0
-    raw = {
+    raw = with_price_semantics({
         "open": open_,
         "high": open_ * 1.02,
         "low": open_ * 0.98,
         "pre_close": np.roll(open_, 1, axis=1),
         "volume": np.full((n_stocks, n_dates), 1_000_000.0),
-    }
+    })
     from ashare_data.processor import open_to_open_returns
 
     target = open_to_open_returns(open_)

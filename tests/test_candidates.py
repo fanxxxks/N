@@ -16,6 +16,7 @@ from ashare_model.candidates import (
     score_chunk_size,
 )
 from ashare_model.vocab import FORMULA_VOCAB
+from tests.conftest import with_price_semantics
 
 
 def test_score_chunk_size_bounds():
@@ -329,13 +330,13 @@ def test_direction_mirror_invariance_in_scoring_and_backtest():
     for t in range(n_dates - 2):
         open_[:, t + 2] = open_[:, t + 1] * (1.0 + target[:, t])
     assert open_to_open_returns(open_)[:, :10] == pytest.approx(target[:, :10])
-    raw = {
+    raw = with_price_semantics({
         "open": open_,
         "high": open_ * 1.02,
         "low": open_ * 0.98,
         "pre_close": np.roll(open_, 1, axis=1),
         "volume": np.full_like(open_, 1_000_000.0),
-    }
+    })
     raw["pre_close"][:, 0] = open_[:, 0]
     dates = [f"202401{i + 1:02d}" for i in range(n_dates)]
     codes = [f"{i:06d}.SZ" for i in range(n_stocks)]

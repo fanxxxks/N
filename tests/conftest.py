@@ -5,12 +5,31 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from ashare_data.config import BacktestConfig, DataConfig
 from ashare_data.db import AshareDB
 from ashare_data.manifest import build_dataset_manifest, save_manifest
+
+
+def with_price_semantics(raw: dict[str, "np.ndarray"]) -> dict[str, "np.ndarray"]:
+    """Attach the p19 §2 cache keys to a synthetic execution-price dict.
+
+    The adjusted label basis mirrors the raw prices (no corporate actions
+    in the synthetic data) and the exact constraint tables default to
+    unconstrained; scenario tests override the specific cells they target.
+    """
+
+    open_ = np.asarray(raw["open"], dtype=np.float64)
+    out = dict(raw)
+    out.setdefault("adjusted_open", open_.copy())
+    n, t = open_.shape
+    out.setdefault("up_limit", np.full((n, t), 1e12))
+    out.setdefault("down_limit", np.full((n, t), 1e-9))
+    out.setdefault("suspended", np.zeros((n, t)))
+    return out
 from ashare_logging import (
     export_log_txt,
     guard_process_exit,
@@ -20,6 +39,179 @@ from ashare_logging import (
 
 
 DEFAULT_CODES = ["000001.SZ", "600000.SH", "300001.SZ"]
+
+# Loader-facing column subset of the p17 §5 v2 price tables (DDL authority:
+# ashare_data.tushare_store / test_tushare_store; the loader reads exactly
+# these named columns, so the synthetic source carries exactly these).
+_V2_PRICE_DDL = {
+    "daily_bar_raw": """
+        CREATE TABLE IF NOT EXISTS daily_bar_raw (
+            ts_code VARCHAR, trade_date VARCHAR,
+            open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE,
+            pre_close DOUBLE, vol DOUBLE, amount DOUBLE
+        )""",
+    "daily_adj_factor": """
+        CREATE TABLE IF NOT EXISTS daily_adj_factor (
+            ts_code VARCHAR, trade_date VARCHAR, adj_factor DOUBLE
+        )""",
+    "daily_price_limit": """
+        CREATE TABLE IF NOT EXISTS daily_price_limit (
+            ts_code VARCHAR, trade_date VARCHAR,
+            pre_close DOUBLE, up_limit DOUBLE, down_limit DOUBLE
+        )""",
+    "daily_suspension": """
+        CREATE TABLE IF NOT EXISTS daily_suspension (
+            ts_code VARCHAR, trade_date VARCHAR, suspend_type VARCHAR
+        )""",
+    "daily_basic_pit": """
+        CREATE TABLE IF NOT EXISTS daily_basic_pit (
+            ts_code VARCHAR, trade_date VARCHAR, turnover_rate DOUBLE
+        )""",
+}
+
+
+def populate_v2_for_config(
+    data_config: DataConfig,
+    dates: list[str],
+    ts_codes: list[str],
+    bars: pd.DataFrame,
+    **kwargs,
+) -> Path:
+    """Resolve the config's v2 price source path and populate it.
+
+    Single resolution rule for tests (mirrors the loader): a relative
+    ``v2_duckdb_path`` sits next to ``duckdb_path``.
+    """
+
+    v2_path = Path(data_config.v2_duckdb_path)
+    if not v2_path.is_absolute():
+        v2_path = data_config.duckdb_path.parent / v2_path
+    return populate_v2_price_tables(v2_path, dates, ts_codes, bars, **kwargs)
+
+
+def populate_v2_price_tables(
+    v2_path: Path,
+    dates: list[str],
+    ts_codes: list[str],
+    bars: pd.DataFrame,
+    *,
+    adj_factor: float | dict[tuple[str, str], float] = 1.0,
+    limit_band: tuple[float, float] = (2.0, 0.5),
+    limit_overrides: dict[tuple[str, str], tuple[float, float]] | None = None,
+    drop_limit_for: set[tuple[str, str]] | None = None,
+    drop_adj_for: set[tuple[str, str]] | None = None,
+    suspensions: list[dict] | None = None,
+    turnover_rate: float | dict[tuple[str, str], float] = 1.0,
+) -> Path:
+    """Populate the v2 price source (p19 §2 formal loader input) in tmp DuckDB.
+
+    ``bars`` is the shared synthetic long frame (``make_bars``); every table
+    is written for every (code, date) cell unless explicitly dropped via
+    ``drop_limit_for`` / ``drop_adj_for`` (fail-closed scenarios).  Default
+    limit bands are deliberately wide (never blocks) so only tests that
+    target the exact constraint rule observe blocking.
+    """
+
+    v2_path = Path(v2_path)
+    v2_path.parent.mkdir(parents=True, exist_ok=True)
+    required_bar_columns = (
+        "ts_code",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "volume",
+        "amount",
+    )
+    if bars is None or bars.empty:
+        bars = pd.DataFrame(columns=list(required_bar_columns))
+    close_of = {
+        (row.ts_code, str(row.trade_date)): float(row.close)
+        for row in bars.itertuples(index=False)
+    }
+    limit_overrides = limit_overrides or {}
+    drop_limit_for = drop_limit_for or set()
+    drop_adj_for = drop_adj_for or set()
+    bar_rows: list[dict] = []
+    adj_rows: list[dict] = []
+    limit_rows: list[dict] = []
+    basic_rows: list[dict] = []
+    for code in ts_codes:
+        for date in dates:
+            source = bars[(bars["ts_code"] == code) & (bars["trade_date"] == date)]
+            if source.empty:
+                continue
+            row = source.iloc[0]
+            bar_rows.append(
+                {
+                    "ts_code": code,
+                    "trade_date": date,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "pre_close": float(row["pre_close"]),
+                    "vol": float(row["volume"]),
+                    "amount": float(row["amount"]),
+                }
+            )
+            if (code, date) not in drop_adj_for:
+                value = (
+                    adj_factor.get((code, date), 1.0)
+                    if isinstance(adj_factor, dict)
+                    else adj_factor
+                )
+                adj_rows.append(
+                    {"ts_code": code, "trade_date": date, "adj_factor": value}
+                )
+            if (code, date) not in drop_limit_for:
+                up, down = limit_overrides.get(
+                    (code, date),
+                    (
+                        close_of[(code, date)] * limit_band[0],
+                        close_of[(code, date)] * limit_band[1],
+                    ),
+                )
+                limit_rows.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": date,
+                        "pre_close": close_of[(code, date)],
+                        "up_limit": float(up),
+                        "down_limit": float(down),
+                    }
+                )
+            value = (
+                turnover_rate.get((code, date), 1.0)
+                if isinstance(turnover_rate, dict)
+                else turnover_rate
+            )
+            basic_rows.append(
+                {"ts_code": code, "trade_date": date, "turnover_rate": value}
+            )
+    with AshareDB(v2_path) as db:
+        for ddl in _V2_PRICE_DDL.values():
+            db.execute(ddl)
+        db.execute("DELETE FROM daily_bar_raw")
+        db.execute("DELETE FROM daily_adj_factor")
+        db.execute("DELETE FROM daily_price_limit")
+        db.execute("DELETE FROM daily_suspension")
+        db.execute("DELETE FROM daily_basic_pit")
+        for table, rows in (
+            ("daily_bar_raw", bar_rows),
+            ("daily_adj_factor", adj_rows),
+            ("daily_price_limit", limit_rows),
+            ("daily_suspension", list(suspensions or [])),
+            ("daily_basic_pit", basic_rows),
+        ):
+            if rows:
+                db.register(f"_{table}_rows", pd.DataFrame(rows))
+                db.execute(
+                    f"INSERT INTO {table} SELECT * FROM _{table}_rows"
+                )
+    return v2_path
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -126,13 +318,22 @@ def _populate_db(
     bars,
     *,
     persist_manifest: bool,
+    prelisted_open_sessions: list[str] | None = None,
 ) -> DataConfig:
     """Populate the shared synthetic database (single implementation).
 
     ``persist_manifest`` controls whether the content-addressed dataset
     manifest is saved: formal artifact flows (P8-05) require a resolved
     dataset identity, while manifest-machinery tests need a database
-    without one.
+    without one.  ``prelisted_open_sessions`` extends the trade calendar
+    with future open sessions (no bars) so the pre-listed horizon covers
+    the G8 evaluation day; the rows land before ``save_manifest`` so the
+    manifest stays authoritative for the full table.
+
+    The v2 price source (p19 §2: the loader's formal price input) is
+    populated next to the legacy database with neutral defaults
+    (adj_factor=1.0, wide limit bands, no suspensions) so scenario tests
+    re-populate it via :func:`populate_v2_price_tables`.
     """
 
     data_config.data_dir.mkdir(parents=True, exist_ok=True)
@@ -153,10 +354,12 @@ def _populate_db(
             ],
             data_config,
         )
-        db.upsert_calendar(
-            [{"trade_date": d, "is_open": True} for d in dates],
-            data_config,
+        calendar_rows = [{"trade_date": d, "is_open": True} for d in dates]
+        calendar_rows.extend(
+            {"trade_date": d, "is_open": True}
+            for d in prelisted_open_sessions or []
         )
+        db.upsert_calendar(calendar_rows, data_config)
         db.upsert_constituents(
             [
                 {
@@ -175,6 +378,10 @@ def _populate_db(
             save_manifest(
                 db, data_config, build_dataset_manifest(db, data_config)
             )
+    v2_path = Path(data_config.v2_duckdb_path)
+    if not v2_path.is_absolute():
+        v2_path = data_config.duckdb_path.parent / v2_path
+    populate_v2_price_tables(v2_path, dates, ts_codes, bars)
     return data_config
 
 
@@ -187,8 +394,9 @@ def populated_db(data_config: DataConfig, bars_data) -> DataConfig:
 @pytest.fixture
 def fresh_data_config(tmp_path: Path) -> DataConfig:
     """Today-relative data window (t23): ``end_date`` is the real clock's
-    date so the pre-listed calendar horizon satisfies the G8 freshness
-    gate (p16 contract, t13) for CLI smoke fixtures."""
+    date so the bar axis tracks the clock.  The G8 pre-listed horizon is
+    kept ahead of the clock by :func:`_future_prelisted_sessions` in
+    ``fresh_populated_db`` (weekend-safe; p16 contract, t13)."""
 
     end = pd.Timestamp.today().normalize()
     start = end - pd.Timedelta(days=90)
@@ -207,9 +415,40 @@ def fresh_data_config(tmp_path: Path) -> DataConfig:
 @pytest.fixture
 def fresh_bars_data():
     """Bars whose last session is today (or the last business day before
-    it) — G8-fresh by construction, never rotting with the clock."""
+    it) — G8-fresh by construction together with the pre-listed calendar
+    horizon of ``fresh_populated_db`` (weekend-safe)."""
 
     return make_bars(end=pd.Timestamp.today().normalize().strftime("%Y-%m-%d"))
+
+
+def _future_prelisted_sessions(last_session: str, days: int = 7) -> list[str]:
+    """Business days strictly after ``last_session`` through
+    ``today + days``, in the bars-axis ``%Y%m%d`` format — the
+    pre-listed open-session horizon G8 requires.
+
+    G8 (p16) fails closed when the calendar's pre-listed horizon no
+    longer covers the evaluation day.  The fresh fixtures end their bar
+    axis at the last business day, so on a weekend the horizon stops at
+    Friday while ``today`` is Saturday/Sunday and the gate refuses
+    (t43-era full-suite rot: 4 CLI-subprocess tests failed identically
+    on every branch).  Pre-listing future open sessions — exactly what a
+    real trading calendar does — keeps the horizon ahead of the clock on
+    every day of the week.  The sessions carry no bars: G8's lag counts
+    only open sessions strictly before the evaluation day.  The
+    ``%Y%m%d`` format matches ``make_bars``' axis: the gate compares
+    dates as strings, and mixed formats would sort the extension rows
+    below the ``%Y%m%d`` horizon (defeating the extension).
+    """
+
+    last = pd.Timestamp(last_session)
+    horizon = pd.Timestamp.today().normalize() + pd.Timedelta(days=days)
+    sessions: list[str] = []
+    day = last + pd.Timedelta(days=1)
+    while day <= horizon:
+        if day.dayofweek < 5:  # Monday-Friday only
+            sessions.append(day.strftime("%Y%m%d"))
+        day += pd.Timedelta(days=1)
+    return sessions
 
 
 @pytest.fixture
@@ -220,11 +459,18 @@ def fresh_populated_db(
     config plus the session axis so tests can derive fold dates from the
     same positions the historical 2024-01-01 axis used.  Used by tests
     whose formal entry runs in a SUBPROCESS (monkeypatch cannot cross the
-    process boundary)."""
+    process boundary).  The trade calendar is pre-listed beyond the bar
+    axis (see :func:`_future_prelisted_sessions`) so the G8 horizon never
+    exhausts behind the clock."""
 
     dates, ts_codes, bars = fresh_bars_data
     cfg = _populate_db(
-        fresh_data_config, dates, ts_codes, bars, persist_manifest=True
+        fresh_data_config,
+        dates,
+        ts_codes,
+        bars,
+        persist_manifest=True,
+        prelisted_open_sessions=_future_prelisted_sessions(dates[-1]),
     )
     return cfg, dates
 
