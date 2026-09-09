@@ -45,6 +45,16 @@ class AshareDB:
             return self._conn.execute(sql).fetchdf()
         return self._conn.execute(sql, list(params)).fetchdf()
 
+    def register(self, name: str, df) -> None:
+        """Register a DataFrame as a queryable view on this connection.
+
+        Public entry for the same mechanism the ``upsert_*`` helpers use
+        internally (single DuckDB wrapper authority); used by the Tushare
+        v2 store to stage batch rows for set-based inserts.
+        """
+
+        self._conn.register(name, df)
+
     def create_schema(self, config) -> None:
         self.execute(
             f"""
