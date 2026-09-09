@@ -1428,3 +1428,22 @@ def test_rank_ic_series_matches_per_day_reference_semantics():
                     assert np.isnan(out[b, day]), (trial, b, day)
                 else:
                     assert out[b, day] == ref, (trial, b, day)
+
+
+def test_basket_layer_facade_reexports_are_the_single_implementation():
+    """t79 mechanical split: the basket simulation layer moved to
+    `reward_baskets.py`; `reward.py` keeps the metrics/reward assembly
+    and re-exports — facade names must BE the implementation objects
+    (identity, not copies)."""
+    from ashare_model import reward, reward_baskets
+
+    moved_names = (
+        'BasketSimulation',
+        'BatchBasketSimulation',
+        'simulate_basket_daily_returns',
+        'simulate_basket_daily_returns_batch',
+    )
+    for name in moved_names:
+        assert getattr(reward, name) is getattr(reward_baskets, name), name
+    # The version owner stays in reward.py.
+    assert reward.REWARD_VERSION == '15'

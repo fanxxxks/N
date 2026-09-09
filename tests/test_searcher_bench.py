@@ -410,3 +410,33 @@ def test_p14_constants_match_the_preregistered_split():
     assert P14_RESEARCH_BUDGET + P14_PROMOTION_BUDGET == 2000
     assert P14_TRACKS == ("research", "promotion_tier_a")
     assert LENGTH_PRIOR_PROFILE == "p14-uniform-2-11-v1"
+
+
+def test_campaign_layer_facade_reexports_are_the_single_implementation():
+    """t79 mechanical split: the campaign layer moved to
+    `searcher_campaign.py`; `searcher_bench.py` keeps re-exports —
+    every facade name must BE the implementation object (identity, not a
+    copy), so no second implementation path can drift (AGENTS §9.1)."""
+    from ashare_model import searcher_bench, searcher_campaign
+
+    moved_names = (
+        'benchmark_campaign',
+        'benchmark_searchers',
+        '_run_row',
+        '_campaign_identity',
+        '_atomic_write_json',
+        'benchmark_searchers',
+        'rl_split',
+        'measure_peak_rss',
+        'SEARCHER_BENCH_VERSION',
+        'SEARCHERS',
+        'P14_TRACKS',
+        'P14_RESEARCH_BUDGET',
+        'P14_PROMOTION_BUDGET',
+        'P10_COMPARE_SEEDS',
+        'P10_STAGE_A_WALL_CAP_S',
+    )
+    for name in moved_names:
+        assert getattr(searcher_bench, name) is getattr(
+            searcher_campaign, name
+        ), name

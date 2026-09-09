@@ -1206,3 +1206,33 @@ def test_p9_margin_crowd_frame_is_a_capital_flow_feature():
     assert out.iloc[0, :59].isna().all()
     last = out.iloc[0, -1]
     assert last == pytest.approx(float(wide.iloc[0, -1]) / float(np.mean(wide.iloc[0, -60:])))
+
+
+def test_formula_layer_facade_reexports_are_the_single_implementation():
+    """t79 mechanical split: the formula layer (FactorSpec/FactorContext,
+    primitives, the registry) moved to `factor_formulas.py`;
+    `factors.py` keeps the engine and re-exports — facade names must BE
+    the implementation objects (identity, not copies), and the version
+    owner FACTOR_COMPUTE_VERSION stays pinned to ashare_model.factors."""
+    from ashare_model import factor_formulas, factors
+
+    moved_names = (
+        'FACTOR_REGISTRY',
+        'FactorContext',
+        'FactorSpec',
+        'NEUTRAL_FEATURE_NAMES',
+        'SPARSE_EVENT_FEATURES',
+        'FAMILIES',
+        'BAR_COLUMNS',
+        '_make_registry',
+        '_rolling_capm',
+        '_sparse_safe_standardize',
+    )
+    for name in moved_names:
+        assert getattr(factors, name) is getattr(factor_formulas, name), name
+    # The version owner stays in factors.py (the version-owner index pins
+    # ashare_model.factors; factor_formulas must not re-own it).
+    # t87 integration: ==4 carries the t22 semantic fixes on top of the
+    # coordinated D5+D6 bump (3).
+    assert factors.FACTOR_COMPUTE_VERSION == 4
+    assert not hasattr(factor_formulas, 'FACTOR_COMPUTE_VERSION')
