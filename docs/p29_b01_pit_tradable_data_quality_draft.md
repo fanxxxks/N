@@ -49,7 +49,7 @@
 | 假设 | §2.1 |
 | 范围与非目标 | §2.2 / §2.3 |
 | 不变量 | §3（I1–I14） |
-| 版本变化 | §4（含 `git grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"` 全量检索结果） |
+| 版本变化 | §4（§4.0 G1–G8 语义影响评估 + §4.1 `git grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"` 全量检索结果 + §4.2 逐项影响表） |
 | 迁移/拒绝策略 | §5 |
 | 预期 RED 测试 | §6（R1–R16） |
 | 测量方案 | §7 |
@@ -282,6 +282,33 @@ purge、修复）必须单独走用户批准的有状态任务，并遵守 AGENT
 
 ## 4. 版本变化
 
+### 4.0 G1–G8 语义影响评估（captain t5 要求 2 的专项）
+
+**结论：B01 不改变 G1–G8 的判定逻辑与阈值，因此 `ashare_data/gates.py` 本身
+不新增/不 bump 版本常量；但其「资格结论的可消费性」需要 artifact-facing 承载
+（见 §4.2 的 `PRODUCTION_GATE_CONTRACT_VERSION` / `TIER_REPORT_VERSION` 两行）。**
+
+1. **判定逻辑零改动**：G1（成员区间）、G2（上市日）、G3（日历覆盖）、G4（区间
+   结构）、G5（PIT 契约）、G6（eligible 下限）、G7（零 bar 存续）、G8（新鲜度）
+   的判据文本与阈值（§1.9 的 8 个常量）保持原值。B01 只**新增分项报告与缺口
+   清单**，属于 §3.1 工程变更（可观测性/边界），不改研究语义。
+2. **消费方式改变（须记录）**：B01 让 G1–G8 的结论**附带机器可读的分项**
+   （`coverage/lag/revision/quality` + 缺口清单）。这改变的是「结论如何被消费」，
+   不是「结论如何被计算」。因此：
+   - 若实现只增加报告字段、不改变任何 check 的 `ok` 取值 → 不 bump
+     `DATA_TIER_VERSION`，由 `TIER_REPORT_VERSION` 承载报告结构变化；
+   - 若实现**确实改变**了任一 check 的判定（例如把「日期格式未验证」变成新的
+     fail 条件）→ 属判定逻辑变化，必须**停下另立契约**（§2.3 非目标 2、§10.6），
+     不得在本包内悄悄改。
+3. **两个编号空间（AGENTS §5.4，强制重申）**：数据资格门 **G1–G8** 定义在
+   `ashare_data/gates.py`（CLI `scripts/check_production_gates.py`）；晋级门
+   **G1–G7** 定义在 `ashare_model/promotion.py`（`PROMOTION_RULE_VERSION="2"`）。
+   **两者是相互独立的编号空间，禁止混用、禁止互相引用、禁止用一方的结论替代
+   另一方。** B01 的分域报告必须逐条标注结论所属空间（§3/I11）。
+4. **G8 与 p16 的关系**：G8 的机器标准由 `docs/p16_data_freshness_gate_contract.md`
+   唯一定义（评估日、参考会话、lag 口径、容差 `FRESHNESS_TOLERANCE_SESSIONS=3`）；
+   B01 **不**重新定义 G8，只在其报告中复用该口径并输出逐源 lag 分项。
+
 ### 4.1 全量检索基线（AGENTS §3.2 强制动作）
 
 命令（在 main @ `1fb1b16` 上执行）：
@@ -298,7 +325,7 @@ git -C D:\minequant\AlphaGPT grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"
 
 | 版本所有者 | 旧值 | 新值 | bump / 不 bump 理由 |
 |---|---|---|---|
-| `ashare_model/data_tier.py` `DATA_TIER_VERSION` | `2` | **视实现决定（倾向 bump）** | B01 的 I4「源无法还原即保留 Tier 限制」若改变任何族的时间规则或 Tier 映射，即属 tier 语义变化，必须 bump（p2/p17 §9 先例）。若实现证明 Tier 映射零改动（只增加报告与缺口清单），则不 bump——但必须在实现 commit 逐项举证。 |
+| `ashare_model/data_tier.py` `DATA_TIER_VERSION` | `2` | **不变（§4.0 评估后收窄；仅在实现改变 Tier 映射时 bump）** | B01 的 I4「源无法还原即保留 Tier 限制」**不改变**既有 Tier 映射：F2 实测已是 `PIT_CAPITAL`（§1.7），G1–G8 判定零改动（§4.0）。若实现确实改变了任何族的 Tier 映射或时间规则，即属 tier 语义变化，必须 bump（p2/p17 §9 先例）——但该情形须**停下另立契约**（§4.0 第 2 条、§10.6），不得在本包内发生。实现 commit 必须逐项举证「Tier 映射零改动」。 |
 | `ashare_data/tushare_store.py` `TUSHARE_STORE_SCHEMA_VERSION` | `"1"` | **视 schema 决定** | 若 I3 需要新增「采集时间/修订版本」列或新表（例如分域资格报告表），按 p17 §9 的「新 artifact-facing 版本接入既有兼容性权威」处理；若报告是**派生产物**（不入库），则不 bump。 |
 | `ashare_data/gates.py` 无版本常量 | — | **（建议）新增 `PRODUCTION_GATE_CONTRACT_VERSION`** | 若 B01 给 G1–G8 增加分项/缺口清单的机器契约，该契约属 artifact-facing。新增常量必须接入既有兼容性权威（`runspec.py:_VERSION_IMPORTS` 或等价 owner 索引），并在契约中说明；若实现不改判定逻辑、只加报告字段，可由 `TIER_REPORT_VERSION` 承载（见下行）。 |
 | `ashare_model/tier_reports.py` `TIER_REPORT_VERSION` | `1` | **视报告结构决定** | 若分域资格报告复用 `tier_reports` 的既有结构并新增 `coverage/lag/revision/quality` 分项字段，按「顶层字段增删改即 bump」的既有约定处理。 |
