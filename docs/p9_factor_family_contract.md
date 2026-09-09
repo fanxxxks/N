@@ -55,6 +55,10 @@ t2 库存审计在真实数据上测得三个结构性事实，构成本契约�
 
 净效果：词表 62（含 1 deprecated）→ 62-9 deprecated（8 立即 + 1 条件）→ **有效特征 53→54**。RET_1~INTRADAY_RET（0.902）保留双方（隔夜/日内分解是构造性原子，不是窗口变体）。
 
+**【superseded by final ruling — Part A executed：TURNOVER_MA20 deprecated，GRAMMAR 7→8 / FEATURE_REGISTRY 8→9】**（t71 曾短暂入契的 standing exception 段被下述记录取代；原 6995ede 保留作裁决史，append-only。SUSPEND~LIST_AGE ρ=−1.000 降级簇伪影标注继续适用：修复后复检结论 = 该对已从 ≥0.9 列表消失。）
+
+**Part A 弃用执行记录（t71 修订，2026-09-06 captain 最终裁决 = Option A）**：TURNOVER_MA20 按 Part A 机械规则**弃用**（弱代表），保留 TURNOVER（日频水平原子）+ TURNOVER_STD20（波动/异质代表），家族构成变更一次落地。事实与理由：(a) ρ(MA20, STD20) 在四轮审计（t2/v4/t18/t22，跨 legacy/v2 两代底座与 t22 修复边界）恒定 0.914–0.919，与本节起草时的 t2 矩阵（0.914）同值——阈值边缘的结构性共线（同源 turnover_rate 20 日窗统计），非新事故；(b) STD20 的 ICIR 四轮恒强（−0.343/−0.348/−0.317 vs MA20 −0.285/−0.287/−0.269）——Part A tiebreaker（弃弱者）指向无歧义；(c) t69 的有条件豁免（"若未来重测持续 ≥0.9 且出现增量证据再触发族内裁决"）条件已被四轮证据满足并触发本裁决——再次豁免将使 ≥0.9 规则对该对沦为死条；(d) 语义代价有界：水平维度仍由 TURNOVER 日频原子覆盖，拥挤/波动维度由 STD20 覆盖，MA20 为书内已有信息的平滑近重复（与 STD20 ρ=0.914）；(e) 内在一致性：F1-F4 新因子须过 |corr|<0.9，书内自持 0.914 对而对新来者要求 <0.9 不自洽。**裁决时序**：t69 有条件豁免 → t71 中间措辞（Option B standing exception）→ captain 撤回并采纳 Option A（2026-09-06："我的 B 正是'看完四轮数据后追认例外'，违背预注册纪律"——撤回理由逐字留档），Option B 措辞作废。**t71 对齐通知更正（2026-09-07 captain 仲裁终局）**：我致 factor-engineer 的 t71 对齐通知（消息）中"选项 A 执行路径作废"的声明系消息交叉产物（该通知发出于 captain A 反转处理交叉窗口），**已被本终裁取代**——captain 仲裁确认：t71 执行无过错（按当时 task description 机械执行）、终裁维持 Option A、factor-engineer 已解冻按现状推进（GRAMMAR 7 / REGISTRY 8 / TURNOVER_MA20 deprecated；p20 REGISTRY 8→9 随后）。治理记录为准，消息冲突史以本段为归档。**实施**：factor-engineer 在 codex/factor-semantic-fixes 按 P9 Part A 全套机制执行（DEPRECATION_REASONS +1、GRAMMAR 7→8、FEATURE_REGISTRY 8→9、deprecated 保留计算/退出采样/禁止晋级（d6a034d 先例）、docs/feature_registry.md 同 commit 再生、RED 先行：deprecated 退出采样断言 + 旧公式按名可解析 parity）；执行顺序（captain 指令）：p20 实施（FEATURE_REGISTRY 7→8）先行，本 Part A（GRAMMAR 7→8 + REGISTRY 8→9）后行，版本单调。**实际执行披露（t69 义务闭环同期，2026-09-07）**：实施时点 F1 尚未批准 → 版本表按当时现值重算落地 **GRAMMAR 6→7（generation 7 注册进 remap 分派，token 布局与 6 相同——弃用不移 id）、FEATURE_REGISTRY 7→8**（596550a 实施 + 31d079d 勘误转 EXECUTED + fcc83b1 附带受影响面：research_doctor 探针常量 13 deprecated/64 samplable、fingerprint 2217cb8d4902、fairness baseline 刷新、searcher_bench tier-A 可采样 41→40、TPE skip-tell 测试按精确 tell 分类重写——哨兵 worst_reward 直测替代，守卫更强）；p20 的 FEATURE_REGISTRY bump 相应顺延为 **8→9**（其实施时落地）；F1 批准时再顺延。版本单调保持。全量串行 1,686 passed / 1 skipped / 0 failed（fcc83b1）。关联标注（不变）：SUSPEND~LIST_AGE ρ=−1.000 为降级簇伪影（t69 附录 B；t18/t22 判读一致；修复后数据上该对已从 ≥0.9 列表消失，复检结论 = 消失），历史标注留档。
+
 ### 4.2 版本影响与迁移/拒绝策略
 
 - `GRAMMAR_VERSION` 3→4（v4：采样 mask 排除 deprecated 特征）；`FEATURE_REGISTRY_VERSION` 3→4（新 deprecation 原因 + 新特征元数据）。
@@ -165,3 +169,67 @@ t2 库存审计在真实数据上测得三个结构性事实，构成本契约�
 
 - **修订 A1（2026-09-01，captain 批准）**：§5.3 稀疏安全标准化的必要后果——`train.py` best-so-far 非有限值防御。§5.3 按设计使部分验证奖励为合法 NaN（无事件日 IC 为 NaN），而 best-so-far 记录 `max(-inf, nan)` 保持 -inf，canonical identity 层（`CanonicalJSONError`）fail-closed 拒绝该路径的 artifact 写出。修复：NaN/±inf 奖励不得更新 best（`math.isfinite` 守卫）；曲线必须仍从 consumed budget 1 开始（搜索结果不变量）且非递减，故非有限 best 以 reward 下限 `bad_reward`（有限）起底。无版本 bump：该路径在修复前必然失败，不存在任何含 -inf best-so-far 的合法 artifact，无兼容面。
 - **A1 的 RED/GREEN 证据**：RED = `tests/test_train.py::test_train_nan_val_reward_keeps_best_so_far_finite` 在还原 train.py 修复后失败（monkeypatch candidate_scorer 注入 val_reward=NaN，`save_artifacts=True` 触发 identity 路径）；GREEN = 修复在位后同测试通过（曲线有限、从 budget 1 开始、非递减），`test_train.py` 与 `test_core.py` 全量保持绿。
+
+## 附录 B：勘误记录（t69，2026-09-04，captain 代行批准——p18 §4 回写义务模式）
+
+- **触发与实证（t18 首次真实数据重测）**：零信号因子 INDUSTRY_MOMENTUM
+  （coverage=0）获得 **ΔIC_OOS = +0.0357**——IS 拟合权重 w_b=−0.000391、
+  w_f≈0，使复合 `comp = w_b·B + w_f·z ≈ w_b·B` 与基准 B **反向**；rank IC
+  对负缩放不改幅值只反序 → ic_C ≈ −ic_B，ΔIC = ic_C − ic_B ≈
+  −2×(−0.0179) = **+0.0357**。OOS 基线 −0.0179 被翻成 +0.0179。零信号因子
+  获得正增量直接违反 §7.2"方向对齐基准"的预注册语义。
+- **实现落点与归属（按代码实际位置）**：`scripts/factor_inventory_audit.py:624-654`
+  （X = [1, B, z] IS 最小二乘 → w_b/w_f → comp → ic_C → delta）——因子域
+  审计工具，**修复归属 factor-engineer**（非 evaluation/ir 域：grep 证实
+  ΔIC 逻辑仅存在于此脚本）。
+- **修正语义（裁决：|w_b| 方向保持规范化，属"方向感知对齐（或等效规范化）"
+  的等效规范化支）**：复合构造改为 `comp = |w_b|·B + w_f·z`——基线分量恒与
+  基准同向（"方向对齐基准"的字面语义，预注册锚点 = t18 任务书"方向对齐
+  基准"）；w_b 的符号噪声不再参与方向判定。**选择理由（vs 负 w_b 即作废
+  的方向感知对齐）**：(1) 保持复合构造单一代数形式，实现改动最小且确定；
+  (2) 零信号因子（w_f≈0）→ comp ≈ |w_b|·B → ΔIC ≈ 0（诚实：无增量），
+  不再制造正 ΔIC，也无需把整条增量腿作废（过杀）；(3) 原始 w_b 照实留档
+  （is_coef_baseline 字段不删），审计透明度不降。补充守卫：coverage=0 因子
+  的 ΔIC 腿记 not-evaluable 计数，族门 ≥+0.005 判定不受 ≈0 值影响。
+- **影响评估**：本缺陷影响 t18 全部 IS/OOS 增量结论中 **w_b<0 行**的有效性
+  （w_b≥0 行不受影响）——受影响结论（含族门判定）**需在修复后以修正基线
+  重算**，重算结果写入测量日志新章节；factor-engineer 被通知（其行业族
+  重测与裁决矩阵的 ΔIC 腿需重算）。
+  **【义务闭环（2026-09-06）】**：重算完成（codex/factor-semantic-fixes
+  @ `1ad7b73` 修正 + `327f102` 重算证据；t22 日志新章节 §8；同口径
+  dataset `157e0cf5`，墙钟 20,276.3s）——受影响集实测 = **{BETA_60,
+  RSQ_60} 仅两项**（CAPM 族；BETA_60 ΔIC −0.0001→−0.0017、RSQ_60
+  +0.0492→+0.0428，翻号通胀移除），均不在四类裁决集合、无族门资格 →
+  **t22 裁决矩阵零变化**（20 个家族成员 w_b 全 >0，修正前后 ΔIC 逐位
+  相同，§4 族门结论全部维持）；not-evaluable 计数 = NORTHBOUND_CHG
+  （中性占位）1 项；两条日志裁决同步落盘（TURNOVER 豁免复测同值；
+  SUSPEND~LIST_AGE 伪影证实——修复后数据上该对已从 ≥0.9 列表消失）。
+  本勘误义务全部 discharge。
+- **测量日志勘误（两条裁决，日志文件本体由 factor-engineer 分支合并时
+  落实，本节为契约侧裁决记录）**：
+  1. **TURNOVER_MA20~STD20 ρ=0.919 与显式 keep-list 冲突 → 豁免**：p9
+     §4.1 保留裁决已明确两者语义异质（MA20=换手水平慢代表、STD20=换手
+     波动代表，t2 基线实测 0.914 并留"STD20 异质语义"理由）；0.919 与
+     0.914 同量级，跨 0.9 阈值属样本噪声；豁免登记，若未来重测持续 ≥0.9
+     且出现增量证据再触发族内裁决（p9 §7.2 相关性规则不变）。
+     **【2026-09-06 captain 最终裁决收口（t71 修订，最终 = Option A）】**：上句的
+     条件豁免条件（持续 ≥0.9 + 增量证据）已被四轮证据满足并触发族内
+     裁决。裁决时序：t71 曾以中间措辞记 Option B（standing exception
+     入契），captain 撤回并采纳 **Option A：弃 TURNOVER_MA20（弱代表），
+     Part A 机械执行**（撤回理由逐字："我的 B 正是'看完四轮数据后追认
+     例外'，违背预注册纪律"）——本条的"再触发族内裁决"条件由该最终
+     裁决兑现为弃用执行；执行细节、版本序列（GRAMMAR 7→8 + REGISTRY
+     8→9 后行于 p20 的 REGISTRY 7→8）与实施归属见 §4.1 Part A 弃用
+     执行记录。本勘误记录保留原条件豁免文本作为裁决史。
+  2. **SUSPEND~LIST_AGE ρ=−1.000 → 降级簇伪影标注（非真实镜像）**：完全
+     镜像相关指向数据管线性伪影（降级簇内 LIST_AGE 与停牌计数的构造性
+     互补），不构成镜像对淘汰依据；**D3 adj_factor/runner 修复后复检**，
+     复检前该 ρ 不得用于任何 deprecated 裁决。
+- **代行批准声明（逐字，本勘误的批准证据）**："批准修正 ΔIC 方向对齐
+  基线的符号翻转缺陷——零信号因子（coverage=0）在 w_b<0 时获得正 ΔIC
+  违反'方向对齐'的预注册语义；修正为方向感知对齐（或等效规范化），并以
+  t18 任务书'方向对齐基准'为预注册锚点。同时裁决测量日志相关清单冲突。
+  依据：用户 2026-09-04 授权扩展记录（89dd121 附录 C）。"
+- **执行清单（本 commit 实际改动）**：新增本附录 B（勘误记录全节）。§7
+  正文与附录 A 零改动（勘误以追加段承载，原文不动）；p17/p19 零改动
+  （两者无 ΔIC 引用，grep 证实——落点评估结论：单点修订于 p9）。
