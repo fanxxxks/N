@@ -41,6 +41,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_fundamental_scope.py",
         "test_fundamentals.py",
         "test_io_utils.py",
+        "test_load_cache.py",
         "test_lock_files.py",
         "test_logging.py",
         "test_logging_parallel.py",

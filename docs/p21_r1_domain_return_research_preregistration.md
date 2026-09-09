@@ -44,7 +44,7 @@ P6 已把研究域按预测周期拆分（short/medium/slow，`RESEARCH_DOMAIN_V
 
 - 前置任务已完成：t22（因子语义修复裁决）、t19（D7 资格门可用）、t20（E2 缓存可用）。
 - 数据状态：v2 store dataset_id `157e0cf5…`（t68 收口后），legacy 生产库（universe/calendar/gates 源）daily 止 2026-09-01。
-- E2 因子缓存已在本分支可用但**不接入**协议运行路径（协议每行新建 trainer，tensor 由 loader 单次构建；缓存消费留待工程任务接线）——如实披露，不宣称使用。
+- E2 因子缓存接线（**2026-09-08 修订**，captain 批准的 OOM 恢复方案 (a)）：接线已落地——`AshareDataLoader.load_data` 经 `ashare_model.load_cache` 派生八元身份（dataset_id / 窗口 / 宇宙 hash / FACTOR_COMPUTE / FEATURE_REGISTRY / 行业与财报源代际标记 / source_ingest_runs 全量 ingest_id），命中还原与 miss 计算逐字节同值（float32 转换确定性）；身份不可派生时缓存禁用、路径与接线前逐字节一致。接线动机与实测证据（两次 OOM、系统 commit 91%）见 §11 与测量日志；缓存不改变任何因子值/判据/预算语义。
 - 机器：6C/12T CPU、16GB RAM，串行运行；与 t62（P14 测量）并发时的墙钟按含竞争的保守投影解读（§5）。
 
 ## 4. 五个预注册配置

@@ -70,6 +70,7 @@ from ashare_data.universe import (
 )
 
 from .factors import compute_factor_tensor
+from .load_cache import factor_cache_for, loader_factor_cache_identity
 
 
 class V2PriceSourceError(RuntimeError):
@@ -131,6 +132,10 @@ class AshareDataLoader:
         self.dates: list[str] = []
         self.dataset_id: str | None = None
         self.factor_tensor: torch.Tensor | None = None
+        # p21 §3: how the E2 factor-tensor cache fared on the last load —
+        # "miss" (computed + stored), "hit" (restored), "disabled"
+        # (identity underivable; pre-wiring path) or None (not loaded).
+        self.factor_cache_outcome: str | None = None
         self.industry_codes: torch.Tensor | None = None
         self.raw_data_cache: dict[str, torch.Tensor] = {}
         self.adjusted_data_cache: dict[str, torch.Tensor] = {}
@@ -505,24 +510,58 @@ class AshareDataLoader:
                 "industry source degraded: {}", self.industry_source_degraded
             )
 
-        # Factors consume the ADJUSTED continuous basis (p19 §2.3); volume,
-        # amount and turnover_rate stay raw (nominal shares / yuan).  The
-        # exact-limit event family additionally reads the raw nominal
-        # prices (close_raw/high_raw/low_raw) and the daily_price_limit
-        # columns already merged into df_adj — p17 §5.2 table 5, t22
-        # in-place fix.
-        factors = compute_factor_tensor(
-            df_adj.assign(
-                close_raw=df["close"], high_raw=df["high"], low_raw=df["low"],
-            ),
-            self.ts_codes,
+        # p21 §3 (amended 2026-09-08, captain-approved): the E2
+        # content-addressed factor-tensor cache.  The identity is derived
+        # fail-closed from the store state (``load_cache``); a disabled
+        # identity leaves this path byte-identical to pre-wiring
+        # behavior, and a hit returns the exact float32 tensor the miss
+        # path would have computed (the cast is deterministic).
+        self.dataset_id = None
+        try:
+            with AshareDB(self.config.duckdb_path, read_only=True) as db:
+                self.dataset_id = resolve_dataset_id(db, self.config)
+        except duckdb.Error as exc:
+            logger.warning(
+                f"dataset manifest unavailable (legacy database?): {exc}"
+            )
+            self.dataset_id = None
+        cache = factor_cache_for(self.config.data_dir)
+        identity = loader_factor_cache_identity(
+            resolve_v2_duckdb_path(self.config),
+            self.dataset_id,
             self.dates,
-            pit_fundamentals=pit,
-            extra_frames=capital,
-            industry_frame=industry_frame,
-            universe_mask=self.universe_mask,
+            self.ts_codes,
         )
-        self.factor_tensor = torch.tensor(factors, dtype=torch.float32)
+        cached = cache.get(identity) if identity is not None else None
+        self.factor_cache_outcome = (
+            "disabled" if identity is None else "miss"
+        )
+        if cached is None:
+            # Factors consume the ADJUSTED continuous basis (p19 §2.3);
+            # volume, amount and turnover_rate stay raw (nominal shares /
+            # yuan).  The exact-limit event family additionally reads the
+            # raw nominal prices (close_raw/high_raw/low_raw) and the
+            # daily_price_limit columns already merged into df_adj —
+            # p17 §5.2 table 5, t22 in-place fix.
+            factors = compute_factor_tensor(
+                df_adj.assign(
+                    close_raw=df["close"], high_raw=df["high"], low_raw=df["low"],
+                ),
+                self.ts_codes,
+                self.dates,
+                pit_fundamentals=pit,
+                extra_frames=capital,
+                industry_frame=industry_frame,
+                universe_mask=self.universe_mask,
+            )
+            self.factor_tensor = torch.tensor(factors, dtype=torch.float32)
+            if identity is not None:
+                cache.put(
+                    identity, np.asarray(factors, dtype=np.float32)
+                )
+        else:
+            self.factor_tensor = torch.tensor(cached, dtype=torch.float32)
+            self.factor_cache_outcome = "hit"
         # Dense industry group ids for the VM's CS_NEUTRALIZE operator
         # (unmapped stocks stay NaN so no group is fabricated for them).
         self.industry_codes = torch.tensor(
@@ -549,19 +588,9 @@ class AshareDataLoader:
             if degraded_rows:
                 target[degraded_rows, :] = np.nan
         self.target_ret = torch.tensor(target, dtype=torch.float32)
-        # Bind this load to the immutable dataset manifest (None when the
-        # database predates T1-01 manifests; artifact consumers treat None
-        # as legacy, never as a match for any id).  Only the expected
-        # storage failure (missing manifest tables / unusable DB) is
-        # swallowed; resolver programming errors propagate (IP-05).
-        try:
-            with AshareDB(self.config.duckdb_path, read_only=True) as db:
-                self.dataset_id = resolve_dataset_id(db, self.config)
-        except duckdb.Error as exc:
-            logger.warning(
-                f"dataset manifest unavailable (legacy database?): {exc}"
-            )
-            self.dataset_id = None
+        # The dataset-manifest binding (and its fail-closed resolution)
+        # happens before the factor-cache identity is derived; the tail
+        # of load_data only assembles the remaining public tensors.
         return self
 
     def mask_by_universe(
