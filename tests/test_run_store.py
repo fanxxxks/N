@@ -11,6 +11,7 @@ ledger lines keep their exact historical byte behavior and stay read-only.
 """
 
 from __future__ import annotations
+import pathlib
 
 import hashlib
 import json
@@ -480,18 +481,42 @@ def test_lifecycle_edge_graph_matches_contract_code_block():
             assert dst.strip() in lifecycle.LEGAL_EDGES[src.strip()]
 
 
-def test_lifecycle_activated_edge_set_is_exactly_p8_06():
+def test_lifecycle_activated_edges_cover_full_contract_graph():
+    """§4 staged activation: E1b (t21) executed the P8-07/08/09 rows, so
+    the activated set now covers the full contract §4 graph (whitelist
+    §10.1-2 — the previous P8-06 pin described the pre-activation state;
+    coverage is extended, not weakened)."""
     from ashare_model import lifecycle
 
     legal = lifecycle.legal_edge_pairs()
-    expected = {("IDEA", "SPEC_LOCKED"), ("SPEC_LOCKED", "DATA_QUALIFIED")}
-    expected |= {pair for pair in legal if pair[1] in ("FAILED", "RETIRED")}
-    assert lifecycle.ACTIVATED_EDGES == expected
-    future = legal - lifecycle.ACTIVATED_EDGES
-    assert ("DATA_QUALIFIED", "FACTOR_SET_QUALIFIED") in future
-    assert ("SPEC_LOCKED", "REJECTED") in future
-    assert ("OOS_QUALIFIED", "PAPER_OBSERVING") in future
-    assert ("PROMOTED", "RETIRED") not in future  # management edge, active
+    assert lifecycle.ACTIVATED_EDGES == legal
+    assert ("DATA_QUALIFIED", "FACTOR_SET_QUALIFIED") in lifecycle.ACTIVATED_EDGES
+    assert ("SEARCH_PLAN_ADMITTED", "OOS_QUALIFIED") in lifecycle.ACTIVATED_EDGES
+    assert ("OOS_QUALIFIED", "PAPER_OBSERVING") in lifecycle.ACTIVATED_EDGES
+    assert ("PAPER_OBSERVING", "PROMOTED") in lifecycle.ACTIVATED_EDGES
+    assert ("SPEC_LOCKED", "REJECTED") in lifecycle.ACTIVATED_EDGES
+    assert ("PROMOTED", "RETIRED") in lifecycle.ACTIVATED_EDGES
+
+
+def test_lifecycle_non_contract_edges_and_bare_rejected_fail_closed(tmp_path):
+    """Non-contract edges stay fail-closed, and the §4 REJECTED machine
+    discriminator is enforced: a REJECTED transition requires
+    completed=True plus the gate's full evidence artifact."""
+    from ashare_model import lifecycle
+
+    store = RunStore(tmp_path)
+    spec = _spec()
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    # IDEA has no research gate: REJECTED is not even a contract edge.
+    with pytest.raises(lifecycle.IllegalTransitionError):
+        writer.transition("REJECTED", evidence={"artifact_id": "x", "artifact_type": "t"}, completed=True)
+    writer.lock_spec()
+    # SPEC_LOCKED -> REJECTED is a contract edge, but the discriminator
+    # refuses it without a completed failing-gate evidence artifact.
+    with pytest.raises(lifecycle.LifecycleError):
+        writer.transition("REJECTED", reason="no evidence", completed=True)
+    assert writer.current_state == "SPEC_LOCKED"
 
 
 def test_lifecycle_replay_only_state_and_status_json_ignored(tmp_path):
@@ -554,19 +579,390 @@ def test_lifecycle_skip_level_transitions_rejected(tmp_path):
 
 
 def test_lifecycle_future_stage_edges_fail_closed(tmp_path):
+    """REPLACED (whitelist §10.1-2): the contract §4 staged-activation
+    rows P8-07/08/09 are executed by E1b (t21), so the former
+    "future-stage edges stay fail-closed" assertions described a stage
+    that has now landed.  Coverage is replaced by the E1b suite below —
+    evidence-validated transitions for every formerly-future edge plus
+    the machine discriminators — which is strictly stronger: every
+    activation now requires its §5.2/§5.3/§6/§7 evidence."""
     from ashare_model import lifecycle
 
-    store = RunStore(tmp_path)
+    assert lifecycle.ACTIVATED_EDGES == lifecycle.legal_edge_pairs()
+
+
+# --- E1b (t21): P8-07/08/09 activation — evidence-validated transitions ------
+#
+# Contract §5.2/§5.3/§6/§7: the FACTOR_SET_QUALIFIED transition consumes
+# the D7 per-formula-dependency data eligibility gate
+# (ashare_model.data_eligibility) plus the seven FactorQualification
+# checks; SEARCH_PLAN_ADMITTED consumes the paired-seed admission
+# evidence; OOS_QUALIFIED refuses tainted protected-OOS windows;
+# PAPER_OBSERVING binds the account and observation lineage; PROMOTED
+# requires the complete lineage-bound paper window.
+
+
+def test_p8_07_factor_set_qualification_consumes_d7_gate(tmp_path):
+    from ashare_model import lifecycle
+    from ashare_model.data_eligibility import (
+        check_runspec_data_eligibility,
+    )
+    from test_gates import D7_EVALUATION_DAY, D7_UNIVERSE, _d7_config, _d7_world
+
+    config, _v2_path = _d7_world(tmp_path)
     spec = _spec()
+    handle, writer = _lifecycle_writer(store := RunStore(tmp_path / "store"), spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    writer.qualify_data(_clean_data_report(spec))
+    assert writer.current_state == "DATA_QUALIFIED"
+
+    # The §5.2 report embeds the D7 verdict computed for the factor set.
+    verdict = check_runspec_data_eligibility(
+        spec, ["RET_1"], list(D7_UNIVERSE), config,
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    assert verdict.ok
+    report = lifecycle.build_factor_qualification_report(
+        spec,
+        feature_names=["RET_1"],
+        universe_codes=list(D7_UNIVERSE),
+        config=config,
+        coverage_by_feature={"RET_1": 0.95},
+        baseline_evidence={
+            "completed": True,
+            "result_hash": content_hash("baseline", {"seed": 7}),
+        },
+        ablation_evidence={
+            "completed": True,
+            "result_hash": content_hash("ablation", {"seed": 7}),
+        },
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    assert report["data_eligibility"]["ok"] is True
+    writer.qualify_factor_set(report)
+    assert writer.current_state == "FACTOR_SET_QUALIFIED"
+    assert lifecycle.replay_run(
+        store.root if hasattr(store, "root") else tmp_path / "store",
+        spec.spec_id,
+        handle.run_id,
+    ) == "FACTOR_SET_QUALIFIED"
+
+    # The promotion-permission and domain checks are registry-derived:
+    # a feature outside the RunSpec's research domain refuses.
+    broken = lifecycle.build_factor_qualification_report(
+        spec,
+        feature_names=["RET_5"],  # a P9 non-promotable mirror feature
+        universe_codes=list(D7_UNIVERSE),
+        config=config,
+        coverage_by_feature={"CASHFLOW_QUALITY": 0.95},
+        baseline_evidence={"completed": True, "result_hash": "h"},
+        ablation_evidence={"completed": True, "result_hash": "h"},
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    with pytest.raises(lifecycle.FactorQualificationError):
+        writer.qualify_factor_set(broken)
+    assert writer.current_state == "FACTOR_SET_QUALIFIED"  # evidence preserved
+
+
+def test_p8_07_factor_set_rejected_by_d7_gate_failure_keeps_state(tmp_path):
+    from ashare_model import lifecycle
+    from test_gates import D7_EVALUATION_DAY, D7_UNIVERSE, _d7_config, _d7_world
+
+    # A store whose v2 source is missing: the D7 gate cannot qualify the
+    # factor set's data dependencies (一切源 来源不可计算一律 fail).
+    config, _v2_path = _d7_world(
+        tmp_path, margin_through_index=0, save_manifest=False
+    )
+    spec = _spec()
+    store = RunStore(tmp_path / "store")
     handle, writer = _lifecycle_writer(store, spec)
     writer.record_idea(LIFECYCLE_IDEA)
     writer.lock_spec()
-    with pytest.raises(lifecycle.StageNotActivatedError):
-        writer.transition("REJECTED", reason="not before P8-08")
     writer.qualify_data(_clean_data_report(spec))
-    with pytest.raises(lifecycle.StageNotActivatedError):
-        writer.transition("FACTOR_SET_QUALIFIED")
+    report = lifecycle.build_factor_qualification_report(
+        spec,
+        feature_names=["MARGIN_BALANCE_CHG"],
+        universe_codes=list(D7_UNIVERSE),
+        config=config,
+        coverage_by_feature={"MARGIN_BALANCE_CHG": 0.95},
+        baseline_evidence={"completed": True, "result_hash": "h"},
+        ablation_evidence={"completed": True, "result_hash": "h"},
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    assert report["data_eligibility"]["ok"] is False
+    with pytest.raises(lifecycle.FactorQualificationError):
+        writer.qualify_factor_set(report)
     assert writer.current_state == "DATA_QUALIFIED"
+    # The refused report is preserved as a registered artifact.
+    assert any(
+        entry["artifact_type"] == "factor_qualification_report"
+        for entry in handle.load_index()["artifacts"]
+    )
+
+
+def test_p8_07_search_plan_admission_and_drift_refused(tmp_path):
+    from ashare_model import lifecycle
+    from test_gates import D7_EVALUATION_DAY, D7_UNIVERSE, _d7_config, _d7_world
+
+    config, _v2_path = _d7_world(tmp_path)
+    spec = _spec()
+    store = RunStore(tmp_path / "store")
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    writer.qualify_data(_clean_data_report(spec))
+    report = lifecycle.build_factor_qualification_report(
+        spec,
+        feature_names=["RET_1"],
+        universe_codes=list(D7_UNIVERSE),
+        config=config,
+        coverage_by_feature={"RET_1": 0.95},
+        baseline_evidence={"completed": True, "result_hash": "h"},
+        ablation_evidence={"completed": True, "result_hash": "h"},
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    writer.qualify_factor_set(report)
+
+    evidence = lifecycle.build_search_admission_evidence(spec)
+    writer.admit_search_plan(evidence)
+    assert writer.current_state == "SEARCH_PLAN_ADMITTED"
+
+    # Seed drift is refused: the paired seed plan is preregistered.
+    writer_b_store = RunStore(tmp_path / "store-b")
+    spec_b = _spec()
+    handle_b, writer_b = _lifecycle_writer(writer_b_store, spec_b)
+    writer_b.record_idea(LIFECYCLE_IDEA)
+    writer_b.lock_spec()
+    writer_b.qualify_data(_clean_data_report(spec_b))
+    writer_b.qualify_factor_set(report)
+    drifted = lifecycle.build_search_admission_evidence(spec_b)
+    drifted["seeds"] = [int(seed) + 1 for seed in spec_b.seeds]
+    with pytest.raises(lifecycle.SearchAdmissionError):
+        writer_b.admit_search_plan(drifted)
+
+    # RL without the encapsulated admission verdict is refused.
+    from tests.conftest import make_test_spec
+    spec_rl = make_test_spec(searcher="rl")
+    writer_rl_store = RunStore(tmp_path / "store-rl")
+    handle_rl, writer_rl = _lifecycle_writer(writer_rl_store, spec_rl)
+    writer_rl.record_idea(LIFECYCLE_IDEA)
+    writer_rl.lock_spec()
+    data_report = _clean_data_report(spec_rl)
+    data_report["min_eligible"] = float(
+        spec_rl.resolved_thresholds["min_eligible"]
+    )
+    writer_rl.qualify_data(data_report)
+    rl_report = lifecycle.build_factor_qualification_report(
+        spec_rl,
+        feature_names=["RET_1"],
+        universe_codes=list(D7_UNIVERSE),
+        config=config,
+        coverage_by_feature={"RET_1": 0.95},
+        baseline_evidence={"completed": True, "result_hash": "h"},
+        ablation_evidence={"completed": True, "result_hash": "h"},
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    writer_rl.qualify_factor_set(rl_report)
+    rl_evidence = lifecycle.build_search_admission_evidence(spec_rl)
+    with pytest.raises(lifecycle.SearchAdmissionError):
+        writer_rl.admit_search_plan(rl_evidence)  # no RL verdict
+
+
+def test_p8_08_rejected_requires_completed_evidence_and_oos_taint(tmp_path):
+    from ashare_model import lifecycle
+    from test_gates import D7_EVALUATION_DAY, D7_UNIVERSE, _d7_config, _d7_world
+
+    config, _v2_path = _d7_world(tmp_path)
+    spec = _spec()
+    store = RunStore(tmp_path / "store")
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    writer.qualify_data(_clean_data_report(spec))
+    report = lifecycle.build_factor_qualification_report(
+        spec,
+        feature_names=["RET_1"],
+        universe_codes=list(D7_UNIVERSE),
+        config=config,
+        coverage_by_feature={"RET_1": 0.95},
+        baseline_evidence={"completed": True, "result_hash": "h"},
+        ablation_evidence={"completed": True, "result_hash": "h"},
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    writer.qualify_factor_set(report)
+    writer.admit_search_plan(lifecycle.build_search_admission_evidence(spec))
+
+    # §4 discriminator: REJECTED requires completed=True plus the gate's
+    # full evidence artifact.
+    evidence = {"artifact_id": "a" * 64, "artifact_type": "x"}
+    with pytest.raises(lifecycle.LifecycleError):
+        writer.transition(
+            "REJECTED", evidence=evidence, completed=False, reason="r"
+        )
+    with pytest.raises(lifecycle.LifecycleError):
+        writer.transition("REJECTED", completed=True)
+
+    # A completed failing gate enters REJECTED with its evidence.
+    failing_evidence = writer._write_evidence(
+        "gate_fail_verdict",
+        {"gate": "search_admission", "completed": True, "ok": False},
+    )
+    writer.reject(failing_evidence)
+    assert writer.current_state == "REJECTED"
+    with pytest.raises(lifecycle.IllegalTransitionError):
+        writer.retire(reason="terminal")  # terminal states have no out-edges
+
+    # §6: a tainted protected-OOS window permanently refuses OOS_QUALIFIED.
+    store_b = RunStore(tmp_path / "store-b")
+    spec_b = _spec()
+    handle_b, writer_b = _lifecycle_writer(store_b, spec_b)
+    writer_b.record_idea(LIFECYCLE_IDEA)
+    writer_b.lock_spec()
+    writer_b.qualify_data(_clean_data_report(spec_b))
+    report_b = lifecycle.build_factor_qualification_report(
+        spec_b,
+        feature_names=["RET_1"],
+        universe_codes=list(D7_UNIVERSE),
+        config=config,
+        coverage_by_feature={"RET_1": 0.95},
+        baseline_evidence={"completed": True, "result_hash": "h"},
+        ablation_evidence={"completed": True, "result_hash": "h"},
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    writer_b.qualify_factor_set(report_b)
+    writer_b.admit_search_plan(
+        lifecycle.build_search_admission_evidence(spec_b)
+    )
+    tainted = lifecycle.build_oos_qualification_evidence(spec_b, tainted=True)
+    with pytest.raises(lifecycle.OOSQualificationError):
+        writer_b.qualify_oos(tainted)
+    assert writer_b.current_state == "SEARCH_PLAN_ADMITTED"
+    clean = lifecycle.build_oos_qualification_evidence(spec_b)
+    writer_b.qualify_oos(clean)
+    assert writer_b.current_state == "OOS_QUALIFIED"
+
+
+def test_p8_09_paper_binding_lineage_and_promotion_edge(tmp_path):
+    from ashare_model import lifecycle
+    from ashare_model.observation_lineage import (
+        ObservationLineageError,
+        ObservationLineageWriter,
+        load_lineage,
+    )
+    from test_gates import D7_EVALUATION_DAY, D7_UNIVERSE, _d7_config, _d7_world
+
+    config, _v2_path = _d7_world(tmp_path)
+    spec = _spec()
+    store = RunStore(tmp_path / "store")
+    handle, writer = _lifecycle_writer(store, spec)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    writer.qualify_data(_clean_data_report(spec))
+    report = lifecycle.build_factor_qualification_report(
+        spec,
+        feature_names=["RET_1"],
+        universe_codes=list(D7_UNIVERSE),
+        config=config,
+        coverage_by_feature={"RET_1": 0.95},
+        baseline_evidence={"completed": True, "result_hash": "h"},
+        ablation_evidence={"completed": True, "result_hash": "h"},
+        evaluation_day=D7_EVALUATION_DAY,
+    )
+    writer.qualify_factor_set(report)
+    writer.admit_search_plan(lifecycle.build_search_admission_evidence(spec))
+    writer.qualify_oos(lifecycle.build_oos_qualification_evidence(spec))
+
+    # §7 observation lineage: the machine monotonic proof runs before an
+    # append is accepted — sessions must be calendar open sessions, the
+    # window must extend contiguously, and rewrites are rejected.
+    lineage_path = handle.run_dir / "observation_lineage.jsonl"
+    lineage = ObservationLineageWriter(lineage_path)
+    first = lineage.append(
+        dataset_id=spec.dataset_id,
+        sessions=["20240101", "20240102"],
+        manifest_hash="manifest-1",
+        config=config,
+    )
+    with pytest.raises(ObservationLineageError):
+        lineage.append(  # a gap in the open-session tail
+            dataset_id=spec.dataset_id,
+            sessions=["20240110", "20240112"],
+            manifest_hash="manifest-1",
+            config=config,
+        )
+    with pytest.raises(ObservationLineageError):
+        lineage.append(  # a history rewrite (starts at/before the horizon)
+            dataset_id=spec.dataset_id,
+            sessions=["20240101"],
+            manifest_hash="manifest-1",
+            config=config,
+        )
+    second = lineage.append(
+        dataset_id=spec.dataset_id,
+        sessions=["20240108", "20240109", "20240110", "20240111", "20240112"],
+        manifest_hash="manifest-2",
+        config=config,
+    )
+    reloaded = load_lineage(lineage_path)
+    assert [e.entry_hash for e in reloaded] == [first.entry_hash, second.entry_hash]
+
+    binding = lifecycle.build_paper_account_binding(
+        spec,
+        handle.run_id,
+        account_id="acc-0001",
+        candidate_id="cand-0001",
+        observation_lineage_hash=second.entry_hash,
+    )
+    writer.start_paper_observation(binding)
+    assert writer.current_state == "PAPER_OBSERVING"
+
+    # Promotion requires the complete, lineage-bound paper window.
+    with pytest.raises(lifecycle.PromotionEvidenceError):
+        writer.promote(
+            lifecycle.build_promotion_evidence(
+                spec,
+                promotion_verdict_hash="v" * 64,
+                paper_window_start="20240101",
+                paper_window_end="20240112",
+                observation_lineage_hash=second.entry_hash,
+            ) | {"paper_window_complete": False}
+        )
+    writer.promote(
+        lifecycle.build_promotion_evidence(
+            spec,
+            promotion_verdict_hash="v" * 64,
+            paper_window_start="20240101",
+            paper_window_end="20240112",
+            observation_lineage_hash=second.entry_hash,
+        )
+    )
+    assert writer.current_state == "PROMOTED"
+    # PROMOTED's only out-edge is RETIRED.
+    writer.retire(reason="superseded by a newer spec")
+    assert writer.current_state == "RETIRED"
+
+
+def test_protected_oos_access_and_paper_account_read_only_guards():
+    from ashare_model import lifecycle
+
+    # §6: the protected OOS window is evaluable only by research/promotion
+    # runs at or after SEARCH_PLAN_ADMITTED — never by engineering runs or
+    # pre-admission states (it can never enter PR development feedback).
+    lifecycle.assert_protected_oos_access("SEARCH_PLAN_ADMITTED", "research")
+    lifecycle.assert_protected_oos_access("OOS_QUALIFIED", "promotion")
+    for state in (None, "IDEA", "SPEC_LOCKED", "DATA_QUALIFIED",
+                  "FACTOR_SET_QUALIFIED"):
+        with pytest.raises(lifecycle.LifecycleError):
+            lifecycle.assert_protected_oos_access(state, "research")
+    with pytest.raises(lifecycle.LifecycleError):
+        lifecycle.assert_protected_oos_access("SEARCH_PLAN_ADMITTED", "engineering")
+
+    # §8: v1/v0/legacy paper accounts are read-only by default.
+    lifecycle.assert_paper_account_writable("current")
+    for kind in ("v1", "v0", "legacy"):
+        with pytest.raises(lifecycle.LifecycleError):
+            lifecycle.assert_paper_account_writable(kind)
 
 
 def test_lifecycle_identity_mismatch_rejected_at_replay(tmp_path):
@@ -943,3 +1339,89 @@ def test_lifecycle_cli_start_show_state_and_retire(tmp_path, capsys):
     assert state == 0
     shown = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert shown["state"] == "RETIRED"
+
+
+# --- P8-15 no-bypass wiring tests (t61) ---------------------------------------
+
+import numpy as np
+
+
+def test_p8_15_lifecycle_no_bypass_assert_formal_run_lifecycle():
+    """P8-15①: the no-bypass gate function exists and enforces the
+    entry-type → minimum-state mapping.  Pre-activation runs (no
+    lifecycle events) pass through with None."""
+    import tempfile
+    from pathlib import Path
+
+    from ashare_model.lifecycle import (
+        LifecycleError,
+        assert_formal_run_lifecycle,
+    )
+
+    data_dir = Path(tempfile.mkdtemp())
+    # Pre-activation (no spec_id/run_id): passes through with None.
+    assert assert_formal_run_lifecycle("train", data_dir) is None
+    assert assert_formal_run_lifecycle("evaluation", data_dir) is None
+    assert assert_formal_run_lifecycle("paper_sim", data_dir) is None
+    # Unknown entry type: fail-closed.
+    with pytest.raises(LifecycleError, match="unknown formal entry type"):
+        assert_formal_run_lifecycle("unknown", data_dir)
+
+
+def test_p8_15_paper_account_writable_wired():
+    """P8-15①: assert_paper_account_writable is callable and enforces
+    the current-account rule (contract §8)."""
+    from ashare_model.lifecycle import (
+        LifecycleError,
+        assert_paper_account_writable,
+    )
+
+    assert_paper_account_writable("current")  # no raise
+    with pytest.raises(LifecycleError, match="read-only"):
+        assert_paper_account_writable("v1")
+
+
+def test_p8_15_research_doctor_lifecycle_section():
+    """P8-15②: research_doctor's gather_lifecycle_checks returns
+    lifecycle/paper check results (calls lifecycle.py, zero duplication)."""
+    import tempfile
+    from pathlib import Path
+
+    from ashare_model.research_doctor import gather_lifecycle_checks
+
+    data_dir = Path(tempfile.mkdtemp())
+    result = gather_lifecycle_checks(data_dir, data_dir)
+    assert "checks" in result
+    assert "lifecycle_available" in result
+    check_names = [c["name"] for c in result["checks"]]
+    assert "lifecycle_edges_activated" in check_names
+    assert "paper_account_writable" in check_names
+
+    # build_report's OUTPUT must carry the lifecycle section (not just the
+    # direct function call): the report schema includes it when provided.
+    from ashare_model.research_doctor import build_report
+
+    report = build_report(
+        code={"commit": "test"},
+        data={"dataset_id": "test"},
+        gates={"checks": []},
+        artifacts=[],
+        dependencies={},
+        model_searcher="test",
+        runtime_estimates_={},
+        lifecycle_checks=result,
+    )
+    assert "lifecycle_checks" in report, (
+        "build_report output must include the lifecycle_checks section"
+    )
+    assert report["lifecycle_checks"]["lifecycle_available"] is True
+    assert report["lifecycle_checks"]["checks"] == result["checks"]
+
+
+def test_p8_15_agents_md_marker_flipped():
+    """P8-15③: the AGENTS.md §4.6 marker is flipped from "待 lifecycle v1
+    激活" to "强制" (P8-15 activation)."""
+    agents_path = pathlib.Path(__file__).resolve().parents[1] / "AGENTS.md"
+    agents = agents_path.read_text(encoding="utf-8")
+    assert "待 lifecycle v1 激活" not in agents
+    assert "P8-15 已激活" in agents or "强制" in agents

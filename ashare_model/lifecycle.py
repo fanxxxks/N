@@ -81,7 +81,20 @@ __all__ = [
     "STATUSES",
     "StageNotActivatedError",
     "TERMINAL_STATUSES",
+    "DataQualificationError",
+    "FactorQualificationError",
+    "SearchAdmissionError",
+    "OOSQualificationError",
+    "PaperBindingError",
+    "PromotionEvidenceError",
+    "assert_paper_account_writable",
+    "assert_protected_oos_access",
     "build_data_qualification_report",
+    "build_factor_qualification_report",
+    "build_oos_qualification_evidence",
+    "build_paper_account_binding",
+    "build_promotion_evidence",
+    "build_search_admission_evidence",
     "legal_edge_pairs",
     "load_events",
     "main",
@@ -92,7 +105,6 @@ __all__ = [
 # -- contract constants (docs/p8_research_lifecycle_contract.md §3/§4/§10) ---
 
 LIFECYCLE_CONTRACT_VERSION = 1
-
 #: Canonical status set, contract §3 (order verbatim).
 STATUSES: tuple[str, ...] = (
     "IDEA",
@@ -165,17 +177,15 @@ def legal_edge_pairs() -> frozenset[tuple[str, str]]:
     )
 
 
-#: Contract §4 staged activation, P8-06 row: ``IDEA -> SPEC_LOCKED``,
-#: ``SPEC_LOCKED -> DATA_QUALIFIED``, every legal ``-> FAILED`` edge and
-#: every legal ``-> RETIRED`` edge.  Later-stage edges stay in the graph but
-#: are fail-closed at append time until their stage activates them.
-ACTIVATED_EDGES: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("IDEA", "SPEC_LOCKED"),
-        ("SPEC_LOCKED", "DATA_QUALIFIED"),
-    }
-    | {pair for pair in legal_edge_pairs() if pair[1] in ("FAILED", "RETIRED")}
-)
+#: Contract §4 staged activation.  E1b (t21) executed the P8-07, P8-08 and
+#: P8-09 rows on top of the P8-06 set, so the activated set is now the full
+#: contract §4 graph: every legal edge is activatable **with its stage's
+#: evidence validation** (the per-edge evidence gates live in
+#: :class:`LifecycleWriter` methods and the §5 validators).  A global
+#: "all sources fresh" gate stays a preregistered non-goal; the formal-entry
+#: no-bypass activation (contract §9 激活点 = P8-15) is tracked in the
+#: activation matrix of the delivery report.
+ACTIVATED_EDGES: frozenset[tuple[str, str]] = legal_edge_pairs()
 
 
 # -- event schema -------------------------------------------------------------
@@ -185,8 +195,14 @@ _GENESIS_PREV_HASH = "0" * 64
 _RECORD_TYPE_IDEA = "idea_record"
 _RECORD_TYPE_SPEC_LOCK = "spec_lock"
 _RECORD_TYPE_DATA_REPORT = "data_qualification_report"
+_RECORD_TYPE_FACTOR_REPORT = "factor_qualification_report"
+_RECORD_TYPE_SEARCH_ADMISSION = "search_admission_evidence"
+_RECORD_TYPE_OOS = "oos_qualification_evidence"
+_RECORD_TYPE_PAPER_BINDING = "paper_account_binding"
+_RECORD_TYPE_PROMOTION = "promotion_evidence"
 _IDEA_FIELDS = ("hypothesis", "scope", "economic_mechanism", "non_goals")
 _LOADER_FRAME_SOURCE_UNTYPED = "untyped_in_current_data_layer"
+_ADAPTER_FEATURE_DOMAIN_SOURCE = "ashare_domain.domain_of_feature"
 
 
 class LifecycleError(Exception):
@@ -200,7 +216,7 @@ class IllegalTransitionError(LifecycleError):
 
 class StageNotActivatedError(LifecycleError):
     """The edge is legal but its activation stage has not landed yet
-    (contract §4 staged activation; P8-06 set only in this version)."""
+    (contract §4 staged activation; enforced via ACTIVATED_EDGES)."""
 
 
 class IdentityMismatchError(LifecycleError):
@@ -218,6 +234,29 @@ class EvidenceError(LifecycleError):
 
 class DataQualificationError(LifecycleError):
     """The DataQualificationReport does not satisfy the §5.1 verdict rules."""
+
+
+class FactorQualificationError(LifecycleError):
+    """The FactorQualificationReport does not satisfy the §5.2 verdict
+    rules (any of the seven checks failing refuses the transition)."""
+
+
+class SearchAdmissionError(LifecycleError):
+    """The SearchAdmissionEvidence does not satisfy the §5.3 rules."""
+
+
+class OOSQualificationError(LifecycleError):
+    """The OOSQualificationEvidence does not satisfy the §6 rules (a
+    tainted protected OOS window permanently refuses the transition)."""
+
+
+class PaperBindingError(LifecycleError):
+    """The paper account binding does not satisfy the §7 rules."""
+
+
+class PromotionEvidenceError(LifecycleError):
+    """The promotion evidence does not satisfy the §3/§7 rules (the paper
+    window must be complete and lineage-bound)."""
 
 
 @dataclass(frozen=True)
@@ -595,6 +634,544 @@ def _validate_data_report(report: dict[str, Any], spec: RunSpec) -> None:
         )
 
 
+# -- §5.2/§5.3/§6/§7 evidence builders and validators (E1b, t21) --------------
+
+
+_FACTOR_REPORT_SCHEMA_VERSION = 1
+_SEARCH_ADMISSION_SCHEMA_VERSION = 1
+_OOS_EVIDENCE_SCHEMA_VERSION = 1
+_PAPER_BINDING_SCHEMA_VERSION = 1
+_PROMOTION_EVIDENCE_SCHEMA_VERSION = 1
+_UNIFIED_DOMAIN_ID = "unified"
+
+
+def build_factor_qualification_report(
+    spec: RunSpec,
+    *,
+    feature_names: Iterable[str],
+    universe_codes: list[str],
+    config,
+    coverage_by_feature: dict[str, float],
+    baseline_evidence: dict[str, Any],
+    ablation_evidence: dict[str, Any],
+    evaluation_day: str | None = None,
+) -> dict[str, Any]:
+    """Build the §5.2 ``FactorQualificationReport``.
+
+    Consumes the D7 per-formula-dependency data eligibility gate
+    (:func:`ashare_model.data_eligibility.check_runspec_data_eligibility`
+    — the §12 source checks for the factor set's data dependencies) and
+    derives the registry-level checks from the single authorities
+    (``feature_registry`` pit levels, ``feature_metadata.FEATURE_METADATA``
+    promotion permissions, ``research_domain.domain_of_feature``).  The
+    baseline/ablation evidence blocks are caller-produced
+    (``baseline_harness.run_matched_baseline`` results, hash-stamped); the
+    validator enforces their presence and completeness.
+    """
+
+    from ashare_model.data_eligibility import (
+        check_runspec_data_eligibility,
+    )
+    from ashare_model.feature_metadata import FEATURE_METADATA
+    from ashare_model.feature_registry import family_of, pit_level_of
+    from ashare_model.research_domain import domain_of_feature
+    from ashare_model.data_tier import tier_of_pit_level
+
+    names = list(feature_names)
+    eligibility = check_runspec_data_eligibility(
+        spec, names, universe_codes, config, evaluation_day=evaluation_day
+    )
+    threshold = spec.resolved_thresholds.get("factor_min_coverage")
+    features: list[dict[str, Any]] = []
+    for name in names:
+        meta = FEATURE_METADATA[name]
+        pit_level = pit_level_of(name)
+        domain = domain_of_feature(name)
+        domain_consistent = (
+            spec.research_domain == _UNIFIED_DOMAIN_ID
+            or domain.id == spec.research_domain
+        )
+        tier = tier_of_pit_level(pit_level)
+        features.append(
+            {
+                "name": name,
+                "family": family_of(name),
+                "pit_level": pit_level.value,
+                "data_tier": tier.value,
+                "promotion_allowed": bool(meta.promotion_allowed),
+                "domain_id": domain.id,
+                "domain_consistent": domain_consistent,
+                "in_domain_execution": (
+                    spec.research_domain == _UNIFIED_DOMAIN_ID
+                    or (
+                        spec.frequency in domain.frequencies
+                        and int(spec.horizon) in domain.horizon_range
+                    )
+                ),
+                "coverage": (
+                    float(coverage_by_feature[name])
+                    if name in coverage_by_feature
+                    else None
+                ),
+            }
+        )
+    domain_execution_legal = all(
+        feature["domain_consistent"] and feature["in_domain_execution"]
+        for feature in features
+    )
+    weakest_tier = (
+        max((feature["data_tier"] for feature in features), default="A")
+    )
+    return {
+        "report_schema_version": _FACTOR_REPORT_SCHEMA_VERSION,
+        "spec_id": spec.spec_id,
+        "research_domain": spec.research_domain,
+        "frequency": spec.frequency,
+        "horizon": int(spec.horizon),
+        "feature_count": len(features),
+        "features": features,
+        "domain_execution_legal": bool(domain_execution_legal),
+        "weakest_data_tier": weakest_tier,
+        # p17/D5: industry-family features stay Tier C (the tier record is
+        # a fact; the promotion-path C restriction is data_tier.py's
+        # promotion-gate rule, unchanged here).
+        "promotion_input_eligible": weakest_tier != "C",
+        "data_eligibility": {
+            "ok": bool(eligibility.ok),
+            "reasons": list(eligibility.reasons),
+            "checks": {
+                source: {"ok": check.ok, "required": check.required}
+                for source, check in eligibility.checks.items()
+            },
+        },
+        "baseline_evidence": dict(baseline_evidence),
+        "ablation_evidence": dict(ablation_evidence),
+        "completed": True,
+    }
+
+
+def _validate_factor_report(report: dict[str, Any], spec: RunSpec) -> None:
+    """Machine verdict rules of contract §5.2 (any failure refuses the
+    FACTOR_SET_QUALIFIED transition; the evidence artifact is preserved)."""
+
+    if report.get("report_schema_version") != _FACTOR_REPORT_SCHEMA_VERSION:
+        raise FactorQualificationError("report_schema_version must be 1")
+    if report.get("spec_id") != spec.spec_id:
+        raise FactorQualificationError("report spec_id does not match the run")
+    if report.get("research_domain") != spec.research_domain:
+        raise FactorQualificationError(
+            "report research_domain does not match the spec"
+        )
+    features = report.get("features")
+    if not isinstance(features, list) or not features:
+        raise FactorQualificationError("features must be a non-empty list")
+    for feature in features:
+        if feature.get("promotion_allowed") is not True:
+            raise FactorQualificationError(
+                f"feature {feature.get('name')!r} is not promotion_allowed "
+                "(§5.2 check 3: the factor set cannot enter the promotion "
+                "path)"
+            )
+        if feature.get("domain_consistent") is not True:
+            raise FactorQualificationError(
+                f"feature {feature.get('name')!r} does not belong to the "
+                "RunSpec research domain (§5.2 check 4)"
+            )
+        if feature.get("in_domain_execution") is not True:
+            raise FactorQualificationError(
+                f"feature {feature.get('name')!r}: the spec's "
+                "frequency/horizon is not a legal execution point of its "
+                "research domain (§5.2 check 4)"
+            )
+        threshold = spec.resolved_thresholds.get("factor_min_coverage")
+        if threshold is not None:
+            coverage = feature.get("coverage")
+            if coverage is None or float(coverage) < float(threshold):
+                raise FactorQualificationError(
+                    f"feature {feature.get('name')!r} coverage "
+                    f"{coverage!r} < resolved threshold {threshold!r} "
+                    "(§5.2 check 5)"
+                )
+    if report.get("domain_execution_legal") is not True:
+        raise FactorQualificationError(
+            "domain execution legality failed (§5.2 check 4)"
+        )
+    eligibility = report.get("data_eligibility")
+    if not isinstance(eligibility, dict) or eligibility.get("ok") is not True:
+        reasons = eligibility.get("reasons") if isinstance(eligibility, dict) else None
+        raise FactorQualificationError(
+            "the D7 data eligibility gate failed for the factor set's "
+            f"sources: {reasons!r}"
+        )
+    for block, what in (
+        ("baseline_evidence", "simple baseline"),
+        ("ablation_evidence", "leave-family-out ablation"),
+    ):
+        evidence = report.get(block)
+        if not isinstance(evidence, dict) or evidence.get("completed") is not True:
+            raise FactorQualificationError(
+                f"§5.2 check 6: the {what} evidence is missing or incomplete"
+            )
+        if not str(evidence.get("result_hash", "")).strip():
+            raise FactorQualificationError(
+                f"§5.2 check 6: the {what} evidence carries no result hash"
+            )
+    if report.get("completed") is not True:
+        raise FactorQualificationError("report is not completed")
+
+
+def build_search_admission_evidence(
+    spec: RunSpec, *, budget_tier: str = "standard"
+) -> dict[str, Any]:
+    """Build the §5.3 ``SearchAdmissionEvidence`` from the frozen RunSpec
+    (searcher, contract versions, domain, budget, paired seeds — all
+    re-read from the spec, never re-derived)."""
+
+    return {
+        "evidence_schema_version": _SEARCH_ADMISSION_SCHEMA_VERSION,
+        "spec_id": spec.spec_id,
+        "searcher": spec.searcher,
+        "search_contract_version": int(spec.search_contract_version),
+        "grammar_version": int(spec.grammar_version),
+        "research_domain": spec.research_domain,
+        "requested_budget": int(spec.requested_budget),
+        "budget_accounting": str(spec.budget_accounting),
+        "max_formula_len": int(spec.max_formula_len),
+        "seeds": [int(seed) for seed in spec.seeds],
+        "paired_seed_plan_hash": content_hash(
+            "seed_plan", {"seeds": [int(seed) for seed in spec.seeds]}
+        ),
+        "budget_tier": str(budget_tier),
+        # §5.3 check 5: semantic legality is not configurable — the
+        # evidence structurally asserts the absence of any switch.
+        "semantic_legality_configurable": False,
+        "rl_admission": None,
+        "completed": True,
+    }
+
+
+def _validate_search_admission(
+    evidence: dict[str, Any], spec: RunSpec
+) -> None:
+    """Machine verdict rules of contract §5.3."""
+
+    if evidence.get("evidence_schema_version") != _SEARCH_ADMISSION_SCHEMA_VERSION:
+        raise SearchAdmissionError("evidence_schema_version must be 1")
+    if evidence.get("spec_id") != spec.spec_id:
+        raise SearchAdmissionError("evidence spec_id does not match the run")
+    if evidence.get("searcher") != spec.searcher:
+        raise SearchAdmissionError("evidence searcher does not match the spec")
+    if evidence.get("search_contract_version") != int(
+        spec.search_contract_version
+    ):
+        raise SearchAdmissionError("search_contract_version drift")
+    if evidence.get("grammar_version") != int(spec.grammar_version):
+        raise SearchAdmissionError("grammar_version drift")
+    if evidence.get("research_domain") != spec.research_domain:
+        raise SearchAdmissionError("research_domain drift")
+    if evidence.get("requested_budget") != int(spec.requested_budget):
+        raise SearchAdmissionError("requested_budget drift")
+    if evidence.get("max_formula_len") != int(spec.max_formula_len):
+        raise SearchAdmissionError(
+            "max_formula_len drift (the EOS-inclusive length口径 must be "
+            "shared by every backend)"
+        )
+    if evidence.get("seeds") != [int(seed) for seed in spec.seeds]:
+        raise SearchAdmissionError(
+            "seed drift: the paired seed plan is preregistered and locked"
+        )
+    expected_plan_hash = content_hash(
+        "seed_plan", {"seeds": [int(seed) for seed in spec.seeds]}
+    )
+    if evidence.get("paired_seed_plan_hash") != expected_plan_hash:
+        raise SearchAdmissionError("paired_seed_plan_hash does not match")
+    if evidence.get("semantic_legality_configurable") is not False:
+        raise SearchAdmissionError(
+            "§5.3 check 5: semantic legality must not be configurable"
+        )
+    if spec.searcher == "rl":
+        verdict = evidence.get("rl_admission")
+        if not isinstance(verdict, dict) or not verdict.get("completed"):
+            raise SearchAdmissionError(
+                "§5.3 check 6: RL admission requires the encapsulated "
+                "decide_p4_admission verdict"
+            )
+        if verdict.get("promotion_blockers"):
+            raise SearchAdmissionError(
+                "§5.3 check 6: the RL admission verdict carries "
+                f"promotion_blockers {verdict.get('promotion_blockers')!r}"
+            )
+    if evidence.get("completed") is not True:
+        raise SearchAdmissionError("evidence is not completed")
+
+
+def build_oos_qualification_evidence(
+    spec: RunSpec, *, tainted: bool = False
+) -> dict[str, Any]:
+    """Build the §6 ``OOSQualificationEvidence``: the write-once locked
+    OOS window (the RunSpec holdout window) with its lock hash and the
+    taint flag."""
+
+    if spec.holdout_window is None:
+        raise OOSQualificationError(
+            "the RunSpec has no locked holdout window; OOS cannot qualify"
+        )
+    window = {
+        "start": spec.holdout_window.start,
+        "end": spec.holdout_window.end,
+    }
+    return {
+        "evidence_schema_version": _OOS_EVIDENCE_SCHEMA_VERSION,
+        "spec_id": spec.spec_id,
+        "oos_window": window,
+        "lock_hash": content_hash(
+            "oos_lock", {"spec_id": spec.spec_id, **window}
+        ),
+        "tainted": bool(tainted),
+        "resolved_thresholds": dict(spec.resolved_thresholds),
+        "completed": True,
+    }
+
+
+def _validate_oos_evidence(evidence: dict[str, Any], spec: RunSpec) -> None:
+    """Machine verdict rules of contract §6 (a tainted protected OOS
+    window permanently refuses OOS_QUALIFIED)."""
+
+    if evidence.get("evidence_schema_version") != _OOS_EVIDENCE_SCHEMA_VERSION:
+        raise OOSQualificationError("evidence_schema_version must be 1")
+    if evidence.get("spec_id") != spec.spec_id:
+        raise OOSQualificationError("evidence spec_id does not match the run")
+    holdout = spec.holdout_window
+    window = evidence.get("oos_window")
+    if holdout is None:
+        raise OOSQualificationError(
+            "the RunSpec has no locked holdout window"
+        )
+    expected_window = {"start": holdout.start, "end": holdout.end}
+    if window != expected_window:
+        raise OOSQualificationError(
+            f"oos_window {window!r} does not match the locked RunSpec "
+            f"window {expected_window!r} (write-once)"
+        )
+    expected_lock = content_hash(
+        "oos_lock", {"spec_id": spec.spec_id, **expected_window}
+    )
+    if evidence.get("lock_hash") != expected_lock:
+        raise OOSQualificationError("lock_hash does not match the window")
+    if evidence.get("tainted") is not False:
+        raise OOSQualificationError(
+            "the protected OOS window is tainted: OOS_QUALIFIED is "
+            "permanently refused (contract §6)"
+        )
+    if evidence.get("completed") is not True:
+        raise OOSQualificationError("evidence is not completed")
+
+
+def build_paper_account_binding(
+    spec: RunSpec,
+    run_id: str,
+    *,
+    account_id: str,
+    candidate_id: str,
+    observation_lineage_hash: str,
+) -> dict[str, Any]:
+    """Build the §7 paper account binding (spec/candidate/account/dataset
+    identity + the initialized observation lineage hash)."""
+
+    return {
+        "binding_schema_version": _PAPER_BINDING_SCHEMA_VERSION,
+        "spec_id": spec.spec_id,
+        "run_id": str(run_id),
+        "account_id": str(account_id),
+        "candidate_id": str(candidate_id),
+        "dataset_id": spec.dataset_id,
+        "observation_lineage_hash": str(observation_lineage_hash),
+        "completed": True,
+    }
+
+
+def _validate_paper_binding(
+    evidence: dict[str, Any], spec: RunSpec, run_id: str
+) -> None:
+    """Machine rules of contract §7 (paper events reference the account
+    and lineage; the binding fixes the identity set)."""
+
+    if evidence.get("binding_schema_version") != _PAPER_BINDING_SCHEMA_VERSION:
+        raise PaperBindingError("binding_schema_version must be 1")
+    if evidence.get("spec_id") != spec.spec_id:
+        raise PaperBindingError("binding spec_id does not match the run")
+    if evidence.get("run_id") != run_id:
+        raise PaperBindingError("binding run_id does not match the run")
+    if evidence.get("dataset_id") != spec.dataset_id:
+        raise PaperBindingError("binding dataset_id does not match the spec")
+    for field in ("account_id", "candidate_id", "observation_lineage_hash"):
+        if not str(evidence.get(field, "")).strip():
+            raise PaperBindingError(
+                f"binding {field} must be a non-empty string"
+            )
+    if evidence.get("completed") is not True:
+        raise PaperBindingError("binding is not completed")
+
+
+def build_promotion_evidence(
+    spec: RunSpec,
+    *,
+    promotion_verdict_hash: str,
+    paper_window_start: str,
+    paper_window_end: str,
+    observation_lineage_hash: str,
+) -> dict[str, Any]:
+    """Build the §3/§7 ``PROMOTED`` evidence: the complete paper window
+    bound to the observation lineage plus the promotion gate verdict
+    hash (``promotion.evaluate_challenger`` remains the gate authority)."""
+
+    return {
+        "evidence_schema_version": _PROMOTION_EVIDENCE_SCHEMA_VERSION,
+        "spec_id": spec.spec_id,
+        "promotion_verdict_hash": str(promotion_verdict_hash),
+        "paper_window": {
+            "start": str(paper_window_start),
+            "end": str(paper_window_end),
+        },
+        "observation_lineage_hash": str(observation_lineage_hash),
+        "paper_window_complete": True,
+        "completed": True,
+    }
+
+
+def _validate_promotion_evidence(
+    evidence: dict[str, Any], spec: RunSpec
+) -> None:
+    """Machine rules for ``PAPER_OBSERVING -> PROMOTED``: the promotion
+    verdict hash and the complete, lineage-bound paper window."""
+
+    if evidence.get("evidence_schema_version") != _PROMOTION_EVIDENCE_SCHEMA_VERSION:
+        raise PromotionEvidenceError("evidence_schema_version must be 1")
+    if evidence.get("spec_id") != spec.spec_id:
+        raise PromotionEvidenceError("evidence spec_id does not match the run")
+    if not str(evidence.get("promotion_verdict_hash", "")).strip():
+        raise PromotionEvidenceError(
+            "the promotion gate verdict hash is required (promotion.py "
+            "G1–G7 remains the gate authority)"
+        )
+    window = evidence.get("paper_window")
+    if not isinstance(window, dict) or not str(window.get("start", "")).strip() \
+            or not str(window.get("end", "")).strip():
+        raise PromotionEvidenceError("the paper window must be recorded")
+    if evidence.get("paper_window_complete") is not True:
+        raise PromotionEvidenceError(
+            "the paper window is incomplete: promotion evidence cannot be "
+            "generated before the window completes (contract §7)"
+        )
+    if not str(evidence.get("observation_lineage_hash", "")).strip():
+        raise PromotionEvidenceError(
+            "the paper window must be bound to the observation lineage"
+        )
+    if evidence.get("completed") is not True:
+        raise PromotionEvidenceError("evidence is not completed")
+
+
+def assert_protected_oos_access(state: str | None, run_type: str) -> None:
+    """Contract §6 isolation rule: evaluating the protected OOS window
+    requires a lifecycle state at or after ``SEARCH_PLAN_ADMITTED`` and a
+    run type of ``research`` or ``promotion``.  Engineering runs and
+    pre-admission states are refused (the OOS never enters PR development
+    feedback)."""
+
+    if run_type not in ("research", "promotion"):
+        raise LifecycleError(
+            f"protected OOS access refused for run type {run_type!r}; "
+            "only research/promotion runs may evaluate the locked OOS "
+            "window (contract §6)"
+        )
+    allowed = {"SEARCH_PLAN_ADMITTED", "OOS_QUALIFIED", "PAPER_OBSERVING",
+               "PROMOTED"}
+    if state not in allowed:
+        raise LifecycleError(
+            f"protected OOS access refused for lifecycle state {state!r}; "
+            "the run must be at least SEARCH_PLAN_ADMITTED (contract §6)"
+        )
+
+
+def assert_formal_run_lifecycle(
+    entry_type: str,
+    data_dir: Path,
+    spec_id: str | None = None,
+    run_id: str | None = None,
+) -> str | None:
+    """P8-15 no-bypass gate for formal entry points (train/evaluation/
+    paper simulation).
+
+    Returns the replayed lifecycle state, or ``None`` when no lifecycle
+    events exist for the run (pre-activation legacy: the run proceeds but
+    its artifacts are marked legacy by the classification authority).
+
+    Raises :class:`LifecycleError` when lifecycle events exist and the
+    state does not allow the requested entry type (fail-closed no-bypass:
+    a formal run cannot skip the lifecycle state machine).
+
+    Entry-type → minimum-state mapping (contract §4 graph):
+
+    * ``train`` → at least ``DATA_QUALIFIED``
+    * ``evaluation`` → at least ``SEARCH_PLAN_ADMITTED``
+    * ``paper_sim`` → exactly ``PAPER_OBSERVING``
+    """
+
+    if entry_type not in ("train", "evaluation", "paper_sim"):
+        raise LifecycleError(f"unknown formal entry type {entry_type!r}")
+    if run_id is None or spec_id is None:
+        return None  # no lifecycle identity → pre-activation legacy run
+    try:
+        state = replay_run(data_dir, spec_id, run_id)
+    except (FileNotFoundError, KeyError):
+        return None  # no lifecycle events file → pre-activation legacy
+    if state is None:
+        return None  # empty event log → pre-activation legacy
+
+    minimum = {
+        "train": "DATA_QUALIFIED",
+        "evaluation": "SEARCH_PLAN_ADMITTED",
+        "paper_sim": "PAPER_OBSERVING",
+    }
+    required = minimum[entry_type]
+    stage_order = [
+        "IDEA", "SPEC_LOCKED", "DATA_QUALIFIED", "FACTOR_SET_QUALIFIED",
+        "SEARCH_PLAN_ADMITTED", "OOS_QUALIFIED", "PAPER_OBSERVING",
+        "PROMOTED",
+    ]
+    if entry_type == "paper_sim":
+        if state != required:
+            raise LifecycleError(
+                f"paper simulation requires lifecycle state "
+                f"{required!r}; got {state!r} (contract §6: paper "
+                "observation starts only from OOS_QUALIFIED)"
+            )
+    else:
+        current_idx = stage_order.index(state) if state in stage_order else -1
+        required_idx = stage_order.index(required)
+        if current_idx < required_idx:
+            raise LifecycleError(
+                f"{entry_type} entry requires lifecycle state at least "
+                f"{required!r}; got {state!r} (contract §4: the run has "
+                "not completed the prerequisite stages)"
+            )
+    return state
+
+
+def assert_paper_account_writable(account_kind: str) -> None:
+    """Contract §8: v1/v0 paper accounts are read-only by default —
+    writes (resume/append/promotion) are refused; only current
+    lifecycle-bound accounts are writable.  The explicit retire/precise
+    reconstruction paths are administrative actions outside this guard."""
+
+    if str(account_kind) != "current":
+        raise LifecycleError(
+            f"paper account kind {account_kind!r} is read-only by default "
+            "(contract §8: v1/v0 accounts are never migrated implicitly; "
+            "retire or an explicit precise-reconstruction migration only)"
+        )
+
+
 # -- writer / reader ----------------------------------------------------------
 
 
@@ -737,6 +1314,66 @@ class LifecycleWriter:
         _validate_data_report(report, self._handle.spec)
         return self.transition("DATA_QUALIFIED", evidence=evidence)
 
+    def qualify_factor_set(self, report: dict[str, Any]) -> LifecycleEvent:
+        """``DATA_QUALIFIED -> FACTOR_SET_QUALIFIED`` under the §5.2
+        verdict rules, consuming the D7 per-formula-dependency data
+        eligibility gate (the report embeds its verdict).  Evidence first,
+        machine verdict second; a refused report keeps the run in
+        ``DATA_QUALIFIED`` with its evidence on file."""
+
+        evidence = self._write_evidence(_RECORD_TYPE_FACTOR_REPORT, report)
+        _validate_factor_report(report, self._handle.spec)
+        return self.transition("FACTOR_SET_QUALIFIED", evidence=evidence)
+
+    def admit_search_plan(self, evidence_payload: dict[str, Any]) -> LifecycleEvent:
+        """``FACTOR_SET_QUALIFIED -> SEARCH_PLAN_ADMITTED`` under the §5.3
+        rules (searcher legality, contract/version/domain/budget match,
+        locked paired seeds, RL verdict encapsulation)."""
+
+        evidence = self._write_evidence(_RECORD_TYPE_SEARCH_ADMISSION, evidence_payload)
+        _validate_search_admission(evidence_payload, self._handle.spec)
+        return self.transition("SEARCH_PLAN_ADMITTED", evidence=evidence)
+
+    def qualify_oos(self, evidence_payload: dict[str, Any]) -> LifecycleEvent:
+        """``SEARCH_PLAN_ADMITTED -> OOS_QUALIFIED`` under the §6 rules
+        (write-once locked window, untainted)."""
+
+        evidence = self._write_evidence(_RECORD_TYPE_OOS, evidence_payload)
+        _validate_oos_evidence(evidence_payload, self._handle.spec)
+        return self.transition("OOS_QUALIFIED", evidence=evidence)
+
+    def start_paper_observation(
+        self, evidence_payload: dict[str, Any]
+    ) -> LifecycleEvent:
+        """``OOS_QUALIFIED -> PAPER_OBSERVING``: bind the paper account
+        (spec/candidate/account/dataset + observation lineage hash)."""
+
+        evidence = self._write_evidence(_RECORD_TYPE_PAPER_BINDING, evidence_payload)
+        _validate_paper_binding(
+            evidence_payload, self._handle.spec, self._handle.run_id
+        )
+        return self.transition("PAPER_OBSERVING", evidence=evidence)
+
+    def promote(self, evidence_payload: dict[str, Any]) -> LifecycleEvent:
+        """``PAPER_OBSERVING -> PROMOTED``: the complete, lineage-bound
+        paper window plus the promotion gate verdict hash."""
+
+        evidence = self._write_evidence(_RECORD_TYPE_PROMOTION, evidence_payload)
+        _validate_promotion_evidence(evidence_payload, self._handle.spec)
+        return self.transition("PROMOTED", evidence=evidence)
+
+    def reject(
+        self, evidence: dict[str, str], *, completed: bool = True
+    ) -> LifecycleEvent:
+        """A gate state ``-> REJECTED`` (contract §4 machine
+        discriminator: the stage's qualification gate COMPLETED with a
+        failing verdict; its full evidence is registered and carried by
+        the event)."""
+
+        return self.transition(
+            "REJECTED", evidence=evidence, completed=completed
+        )
+
     def transition(
         self,
         to_state: str,
@@ -762,6 +1399,24 @@ class LifecycleWriter:
                 f"edge {current!r} -> {to_state!r} is legal but its "
                 "activation stage has not landed (contract §4 分期)"
             )
+        if to_state == "REJECTED":
+            # Contract §4 machine discriminator: a REJECTED transition is
+            # only legal when the stage's qualification gate COMPLETED with
+            # a failing verdict — its full evidence artifact must be
+            # registered and the event carries completed=True.  An
+            # evaluation that did not complete is a FAILED, never a
+            # REJECTED (the meanings are not interchangeable).
+            if completed is not True:
+                raise LifecycleError(
+                    "REJECTED requires completed=True (the qualification "
+                    "gate finished with a failing verdict); an evaluation "
+                    "that did not complete is a FAILED"
+                )
+            if evidence is None:
+                raise LifecycleError(
+                    "REJECTED requires the stage's complete gate-evidence "
+                    "artifact (fail verdict with all check results)"
+                )
         if to_state in ("FAILED", "RETIRED") and not str(reason).strip():
             raise LifecycleError(
                 f"{to_state} requires a non-empty reason (machine "

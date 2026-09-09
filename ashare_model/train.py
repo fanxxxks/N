@@ -39,6 +39,7 @@ from ashare_data.config import (
 from ashare_data.gates import ProductionGateRunner
 
 from .alphagpt import AlphaGPTModel
+from .lifecycle import assert_formal_run_lifecycle
 from .candidates import (
     CandidateScore,
     CandidateScorer,
@@ -88,6 +89,9 @@ class AshareTrainer(
         feature_ids: list[int] | None = None,
     ):
         self.data_config = data_config
+        # P8-15 no-bypass: formal training entry passes the lifecycle gate
+        # (no-op when no lifecycle identity exists — pre-activation runs).
+        assert_formal_run_lifecycle("train", data_config.data_dir)
         self.model_config = model_config
         self.backtest_config = backtest_config
         self.reward_config = reward_config or RewardConfig()

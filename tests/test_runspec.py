@@ -303,9 +303,9 @@ def test_p9_factor_compute_version_wired_into_the_version_registry():
     # p17/D5+D6: FACTOR_COMPUTE 2→3 covers both input-basis switches
     # (D5 industry membership PIT + D6 financial version tables) — the
     # single coordinated bump recorded in 84ec210/6085ff1 (t16 F1 +
-    # t17 observation â).  Pinned so the version-owner index stays
-    # exhaustive; the factor line additionally carries the t22 semantic
-    # fixes (3 → 4) on top of the coordinated bump.
+    # t17 observation ②).  The d6 line's copy of the bump missed this
+    # pin (the d5 twin repaired it in aefb71d, t58-reviewed); pinned
+    # here so the version-owner index stays exhaustive.
     assert FACTOR_COMPUTE_VERSION == 4
     assert "factor_compute_version" in RunSpec.model_fields
     assert RunSpec.model_fields["factor_compute_version"].default is None

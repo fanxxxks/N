@@ -283,6 +283,7 @@ from .research_domain import (
 )
 from .reward import REWARD_VERSION
 from .search_contract import SearchResult
+from .lifecycle import assert_formal_run_lifecycle
 from .versions import PROTOCOL_VERSION
 from .vocab import FEATURE_NAMES
 
@@ -705,6 +706,12 @@ def main(argv=None) -> int:
                 "(dataset manifest); migrate the database with "
                 "`python -m ashare_data.manifest` before evaluation"
             )
+        # P8-15 no-bypass: formal evaluation runs must pass the
+        # lifecycle gate (contract §4: the run must be at least
+        # SEARCH_PLAN_ADMITTED).
+        assert_formal_run_lifecycle(
+            "evaluation", data_config.data_dir
+        )
         extra_trials = load_trial_rows(args.trials, loader.dataset_id)
         ledger = ExperimentLedger(root / args.ledger)
         regime = RegimeRegistry(root / args.regime)
