@@ -516,7 +516,7 @@ Universe reason code 定义在 [ashare_data/universe.py](../ashare_data/universe
 | 诊断 | [diagnostics.py](../ashare_model/diagnostics.py) | 因子覆盖率、rank-IC、相关性报告 |
 | 实验 | [experiment_tracking.py](../ashare_model/experiment_tracking.py) | 可选 MLflow；无 URI/无包时结构化 no-op |
 | 版本 | [artifact_versions.py](../ashare_model/artifact_versions.py) | MODEL/REWARD/PROTOCOL/DATA_TIER/TIER_REPORT 等版本常量唯一来源（P0 新增） |
-| 研究域 | [research_domain.py](../ashare_model/research_domain.py) | RESEARCH_DOMAIN_VERSION=3；按预测周期拆分研究域（short/medium/slow 三域；特征划分与各域参数以 research_domain.py 为准，废弃特征不归属任何域）、每域目标周期/执行周期/Reward 参数/换手约束、域限制张量与采样 token 集（P6 新增；v3 纳入 P13 第⑤族基本面特征） |
+| 研究域 | [research_domain.py](../ashare_model/research_domain.py) | RESEARCH_DOMAIN_VERSION=5；按预测周期拆分研究域（short/medium/slow 三域；特征划分与各域参数以 research_domain.py 为准，废弃特征不归属任何域）、每域目标周期/执行周期/Reward 参数/换手约束、域限制张量与采样 token 集（P6 新增；v3 纳入 P13 第⑤族基本面特征） |
 | 数据分层 | [data_tier.py](../ashare_model/data_tier.py) | DATA_TIER_VERSION=1；PitLevel→DataTier 映射、各档可用时间规则、<code>formula_data_tier_report</code> 公式追溯 API（P2 新增） |
 | 分层报告 | [tier_reports.py](../ashare_model/tier_reports.py) | TIER_REPORT_VERSION=1；A/A+B/all 分层诊断与消融报告（P2 新增） |
 | 测量 | [cost_matrix.py](../ashare_model/cost_matrix.py) | FEE_MATRIX_VERSION=1；资金×持仓数×换手率费用矩阵（P1 新增） |
