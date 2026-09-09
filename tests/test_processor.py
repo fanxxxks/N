@@ -61,6 +61,23 @@ def test_normalize_daily_bars_keeps_provided_turnover():
     assert out["turnover_rate"].tolist() == pytest.approx([1.2, 1.3])
 
 
+def test_normalize_daily_bars_preserves_adj_factor_gaps():
+    """p19 §2.1 (t13 observation B): the adj_factor column is never
+    forward/back-filled — a missing factor stays NaN (the fail-closed
+    value), never a fabricated continuity."""
+
+    from ashare_data.processor import normalize_daily_bars
+
+    df = pd.DataFrame(
+        [
+            {"ts_code": "000001.SZ", "trade_date": "20240101", "open": 10.0, "high": 10.2, "low": 9.9, "close": 10.1, "volume": 100.0, "amount": 1010.0, "adj_factor": 1.0},
+            {"ts_code": "000001.SZ", "trade_date": "20240102", "open": 10.1, "high": 10.3, "low": 10.0, "close": 10.2, "volume": 110.0, "amount": 1122.0, "adj_factor": None},
+        ]
+    )
+    out = normalize_daily_bars(df)
+    assert pd.isna(out["adj_factor"].iloc[1])
+
+
 def test_normalize_daily_bars_drops_invalid_and_deduplicates():
     df = _bars()
     df.loc[1, "close"] = np.nan

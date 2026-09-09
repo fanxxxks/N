@@ -46,8 +46,17 @@ NEUTRAL_FEATURE_NAMES = {
 # table to the adjusted continuous series derived from v2 daily_bar_raw ×
 # daily_adj_factor (window-first-day anchor); every factor value is
 # recomputed wholesale on the new basis, with no historical migration.
+# v3 (p17/D5+D6, t16 F1): a single bump covering TWO input basis changes
+# — (D5) the industry feature family (IND_REL_* + INDUSTRY_MOMENTUM)
+# switched from the current-snapshot sw_industry_member table to the v2
+# industry_membership_pit intervals (half-open [in_date, out_date),
+# available_date PIT visibility); (D6) the family-⑤ fundamental features
+# (CASHFLOW_QUALITY / ACCRUALS / ASSET_GROWTH / EARNINGS_ACCEL) switched
+# from the legacy fundamental_pit table to the three v2 financial version
+# tables via asof_winner_intervals (p17 §6.2 as-of).  Both change factor
+# values for affected stocks — no historical migration.
 # Recorded in run artifacts via the runspec version registry.
-FACTOR_COMPUTE_VERSION = 2
+FACTOR_COMPUTE_VERSION = 3
 
 # Sparse event features standardize on the sparse-safe path: the 1%/99%
 # winsorize quantiles flatten any day whose event incidence is below the

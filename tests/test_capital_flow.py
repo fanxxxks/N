@@ -98,7 +98,35 @@ def test_build_capital_frames_margin_and_industry(tmp_path: Path):
             for i, d in enumerate(dates)
         ]
         db.upsert_sw_index(index_rows, cfg)
-        db.replace_sw_members("801010", ["000001.SZ", "000505.SZ"], cfg)
+    # D5: membership comes from the v2 PIT intervals (in_date before the
+    # window, so the whole window is visible).
+    from tests.conftest import populate_v2_industry_tables
+
+    populate_v2_industry_tables(
+        cfg.duckdb_path.parent / "ashare_v2.duckdb",
+        membership_rows=[
+            {
+                "ts_code": code,
+                "index_code": "801010",
+                "level": 1,
+                "in_date": "20200101",
+                "out_date": None,
+                "is_new": "0",
+                "industry_name": "农业",
+                "available_date": "20200102",
+            }
+            for code in ("000001.SZ", "000505.SZ")
+        ],
+        taxonomy_rows=[
+            {
+                "index_code": "801010",
+                "industry_name": "农业",
+                "level": "L1",
+                "industry_code": "SW2020-110000",
+                "src": "sw2020",
+            }
+        ],
+    )
 
     frames = build_capital_frames(cfg, codes, dates)
     assert set(frames) == set(EXTERNAL_FACTOR_NAMES)
@@ -126,13 +154,32 @@ def test_build_capital_frames_degrades_without_tables(tmp_path: Path):
     assert frames["MARGIN_BALANCE_CHG"].isna().all().all()
 
 
-def test_build_industry_member_frame_maps_members_only(tmp_path: Path):
+def test_build_industry_member_frame_maps_pit_members_only(tmp_path: Path):
+    # D5 (p17, 勘误 #2): the frame reads the v2 membership intervals, not
+    # the legacy snapshot.  The interval/PIT-visibility/uniqueness
+    # contracts live in tests/test_industry_pit.py; here the mapping-only
+    # behavior is re-anchored on the PIT source (AGENTS §10.1 case 2).
+    from tests.conftest import populate_v2_industry_tables
+
     cfg = _data_config(tmp_path)
     dates = _dates(5)
     codes = ["000001.SZ", "600000.SH", "000505.SZ"]
-    with AshareDB(cfg.duckdb_path) as db:
-        db.create_schema(cfg)
-        db.replace_sw_members("801010", ["000001.SZ", "000505.SZ"], cfg)
+    populate_v2_industry_tables(
+        cfg.duckdb_path.parent / "ashare_v2.duckdb",
+        membership_rows=[
+            {
+                "ts_code": code,
+                "index_code": "801010",
+                "level": 1,
+                "in_date": "20200101",
+                "out_date": None,
+                "is_new": "0",
+                "industry_name": "农业",
+                "available_date": "20200102",
+            }
+            for code in ("000001.SZ", "000505.SZ")
+        ],
+    )
     frame = build_industry_member_frame(cfg, codes, dates)
     assert frame.shape == (len(codes), len(dates))
     # Members carry their industry code on every date; unmapped stocks and

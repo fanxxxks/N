@@ -374,6 +374,20 @@ class SimConfig:
     progress_path: Path = Path("data/sim_progress.json")
 
 
+def resolve_v2_duckdb_path(config) -> Path:
+    """Single resolution rule for the v2 Tushare/PIT price source (p19 §2.1):
+    a relative ``v2_duckdb_path`` sits next to ``duckdb_path`` (the shared
+    data directory); absolute values pass through unchanged.  Every v2
+    consumer (loader, industry membership) resolves through this function —
+    no second resolution rule.
+    """
+
+    path = Path(config.v2_duckdb_path)
+    if not path.is_absolute():
+        path = Path(config.duckdb_path).parent / path
+    return path
+
+
 def _resolve_paths(
     data: dict[str, Any], base: Path
 ) -> dict[str, Any]:

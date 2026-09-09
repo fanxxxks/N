@@ -32,8 +32,18 @@ import numpy as np
 import torch
 from loguru import logger
 
-from ashare_data.capital_flow import build_capital_frames, build_industry_member_frame
-from ashare_data.config import DataConfig, ModelConfig, make_data_config
+from ashare_data.capital_flow import (
+    build_capital_frames,
+    build_industry_member_frame,
+    industry_index_freshness,
+)
+from ashare_data.gates import FRESHNESS_TOLERANCE_SESSIONS
+from ashare_data.config import (
+    DataConfig,
+    ModelConfig,
+    make_data_config,
+    resolve_v2_duckdb_path,
+)
 from ashare_data.db import AshareDB, sql_quoted_list
 from ashare_data.fundamentals import build_pit_frames
 from ashare_data.manifest import resolve_dataset_id
@@ -125,6 +135,8 @@ class AshareDataLoader:
         self.raw_data_cache: dict[str, torch.Tensor] = {}
         self.adjusted_data_cache: dict[str, torch.Tensor] = {}
         self.price_degraded: dict[str, str] = {}
+        self.industry_index_lag: int | None = None
+        self.industry_source_degraded: str | None = None
         self.target_ret: torch.Tensor | None = None
         self.stock_names: dict[str, str] = {}
         self.stock_list_dates: dict[str, object] = {}
@@ -242,12 +254,9 @@ class AshareDataLoader:
         )
 
     def _v2_path(self) -> Path:
-        """The v2 price source path (relative -> next to the legacy DB)."""
+        """The v2 price source path (single resolution rule, p19 §2.1)."""
 
-        path = Path(self.config.v2_duckdb_path)
-        if not path.is_absolute():
-            path = Path(self.config.duckdb_path).parent / path
-        return path
+        return resolve_v2_duckdb_path(self.config)
 
     def _load_v2_bars(
         self,
@@ -478,6 +487,23 @@ class AshareDataLoader:
         industry_frame = build_industry_member_frame(
             self.config, self.ts_codes, self.dates
         )
+        # p17 §12 qualification input for the D7 per-formula gate: the
+        # Shenwan index close source may lag at most 3 open sessions; a
+        # stale source is recorded as degraded (never silently healthy).
+        self.industry_index_lag = industry_index_freshness(
+            self.config, self.dates
+        )
+        if (
+            self.industry_index_lag is not None
+            and self.industry_index_lag > FRESHNESS_TOLERANCE_SESSIONS
+        ):
+            self.industry_source_degraded = (
+                f"shenwan index close lag {self.industry_index_lag} open "
+                "sessions > tolerance (p17 §12)"
+            )
+            logger.warning(
+                "industry source degraded: {}", self.industry_source_degraded
+            )
 
         # Factors consume the ADJUSTED continuous basis (p19 §2.3); volume,
         # amount and turnover_rate stay raw (nominal shares / yuan).
