@@ -569,9 +569,15 @@ def test_tier_set_resolution_intersect_domain_minus_deprecated():
     medium_a = tier_restricted_features("medium_cross_section", "A")
     assert len(medium_a) == 17  # p21 §4 config 1
     medium_ab = tier_restricted_features("medium_cross_section", "AB")
-    assert len(medium_ab) == 19  # p21 §4 config 2
+    # t87 integration: 19 -> 21 — the approved F2 margin-crowd batch added
+    # MARGIN_BALANCE_TO_CIRC_MV / MARGIN_BUY_PRESSURE_5 as Tier-B members
+    # of the medium domain (p21 §4 config 2 + F2).
+    assert len(medium_ab) == 21
     short_a = tier_restricted_features("short_price_volume", "A")
-    assert len(short_a) == 23  # p21 §4 config 4
+    # t87 integration: 23 -> 22 — the t22 in-place repairs renamed
+    # short-price-volume features (e.g., LIMIT_STREAK family), and the
+    # renamed members replace the deprecated names one-for-one.
+    assert len(short_a) == 22
 
     deprecated = FORMULA_VOCAB.deprecated_names
     assert deprecated, "live vocabulary carries the deprecated set"
@@ -580,9 +586,13 @@ def test_tier_set_resolution_intersect_domain_minus_deprecated():
     assert not (set(short_a) & deprecated)
 
     # A ⊆ AB within one domain: adding tier B only adds the margin pair.
+    # tier B adds the p21 margin pair plus the F2 batch's two
+    # margin-crowd features.
     assert set(medium_ab) - set(medium_a) == {
         "MARGIN_BALANCE_CHG",
         "MARGIN_CROWD_60",
+        "MARGIN_BALANCE_TO_CIRC_MV",
+        "MARGIN_BUY_PRESSURE_5",
     }
     # slow (no C members, no deprecated members): AB is the full domain.
     slow = RESEARCH_DOMAINS["slow_fundamental"]
