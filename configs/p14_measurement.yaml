@@ -1,0 +1,45 @@
+# P14 formal measurement configuration (E4/t23).
+# Points the loader at the production calendar/constituents database and
+# the D3-backfilled v2 PIT store. No secrets in this file (TUSHARE_TOKEN
+# lives in git-ignored config/.env only).
+
+data_dir: D:/minequant/AlphaGPT/data
+duckdb_path: D:/minequant/AlphaGPT/data/ashare.duckdb
+parquet_dir: D:/minequant/AlphaGPT/data/parquet
+v2_duckdb_path: D:/minequant/AlphaGPT-d2/data/ashare_v2.duckdb
+
+calendar_table: trade_calendar
+stocks_table: stocks
+daily_table: daily_bar
+constituents_table: constituents
+
+# Load window narrowed per captain ruling (E4/t23): the p14 contract does
+# not pin start_date; the campaign caps the tensor window at 300x400
+# (300 stocks × 400 sessions ending at the fold's train_end), so loading
+# from 2022-01-01 (≈620 open sessions before the 20240628 train_end —
+# window 400 + margin) changes no tensor content and only eliminates
+# useless loading.  Recorded in the measurement log (captain conditions
+# ①②③).
+start_date: "2022-01-01"
+end_date: "2026-12-31"
+
+index_codes:
+  - "000300.SH"
+  - "000905.SH"
+index_names:
+  - "沪深300"
+  - "中证500"
+min_listed_sessions: 60
+
+model:
+  d_model: 64
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 128
+  num_loops: 3
+  dropout: 0.1
+
+protocol:
+  folds:
+    - train_end: "20240628"
+      test_end: "20241231"

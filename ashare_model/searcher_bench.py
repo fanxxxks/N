@@ -168,6 +168,22 @@ def main(argv=None) -> int:
         help="requested unique semantic evaluations per row "
         "(default: 1000 legacy bench / P10_COMPARE_BUDGET campaign)",
     )
+    parser.add_argument(
+        "--research-budget",
+        type=int,
+        default=None,
+        help="campaign mode: research-track budget (default: "
+        "P14_RESEARCH_BUDGET; must sum with --promotion-budget to "
+        "--budget — p14 §7.3)",
+    )
+    parser.add_argument(
+        "--promotion-budget",
+        type=int,
+        default=None,
+        help="campaign mode: promotion_tier_a-track budget (default: "
+        "P14_PROMOTION_BUDGET; must sum with --research-budget to "
+        "--budget — p14 §7.3)",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--run-dir",
@@ -258,6 +274,9 @@ def main(argv=None) -> int:
                 budget=args.budget or P10_COMPARE_BUDGET,
                 train_end_date=train_end_date,
                 window_cap=window_cap,
+                run_dir=root / args.run_dir,
+                research_budget=args.research_budget,
+                promotion_budget=args.promotion_budget,
                 fold_index=fold_index,
                 rl_steps=args.rl_steps or P10_RL_STEPS,
                 device=None,
@@ -266,7 +285,6 @@ def main(argv=None) -> int:
                     if args.wall_cap_hours is not None
                     else P10_STAGE_A_WALL_CAP_S
                 ),
-                run_dir=root / args.run_dir,
                 config_hash=_config_hash(args.config, root),
                 searchers=searchers,
             )
