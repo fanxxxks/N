@@ -89,3 +89,107 @@ def timeline_to_intervals(
     if start is not None:
         intervals.append((start, "99991231"))
     return intervals
+
+
+# --- D6 (p17 §6.2): the single financial-statement as-of read ------------------
+
+from .config import resolve_v2_duckdb_path  # noqa: E402
+from .db import AshareDB, sql_quoted_list  # noqa: E402
+
+_FINANCIAL_STATEMENTS = {
+    "income": "income_statement_pit",
+    "balance": "balance_sheet_pit",
+    "cashflow": "cashflow_statement_pit",
+}
+
+_FINANCIAL_VALUE_COLUMNS = {
+    "income": [
+        "total_revenue", "revenue", "oper_cost", "total_profit",
+        "n_income", "n_income_attr_p",
+    ],
+    "balance": [
+        "total_assets", "total_liab", "total_hldr_eqy_exc_min_int",
+        "total_hldr_eqy_inc_min_int",
+    ],
+    "cashflow": [
+        "n_cashflow_act", "n_cashflow_inv_act", "n_cash_flows_fnc_act",
+        "c_cash_equ_end_period",
+    ],
+}
+
+_ASOF_OPEN_END = "99991231"
+
+
+def asof_winner_intervals(
+    config,
+    statement: str,
+    ts_codes: list[str],
+    *,
+    report_type: str = "1",
+    comp_type: str = "1",
+) -> pd.DataFrame:
+    """The single as-of read over one financial version table (p17 §6.2).
+
+    For every business key ``K = (ts_code, end_date, report_type,
+    comp_type)`` the *candidate* rows are those with
+    ``available_date <= s`` and the *winner* at ``s`` is the maximum by
+    ``(f_ann_date, ann_date, available_date, ingest_id)`` — a NULL
+    ``f_ann_date`` falls back to ``ann_date`` (which is NOT NULL).  This
+    function resolves that per-session winner into per-version winner
+    intervals: one row per visible segment, with ``winner_from`` /
+    ``winner_to`` (half-open; the trailing segment ends at the open
+    sentinel).  ``update_flag`` is never filtered (调整前 rows stay
+    auditable), null values stay NULL (never 0), and the three statements
+    are read independently — callers must never merge their visibility.
+
+    The reader is the ONLY as-of implementation for the version tables;
+    consumers call it, never re-derive (p17 §6.2 rule 5).
+    """
+
+    if statement not in _FINANCIAL_STATEMENTS:
+        raise ValueError(f"unknown financial statement {statement!r}")
+    table = _FINANCIAL_STATEMENTS[statement]
+    value_cols = ", ".join(_FINANCIAL_VALUE_COLUMNS[statement])
+    v2_path = resolve_v2_duckdb_path(config)
+    quoted = sql_quoted_list(ts_codes) if ts_codes else "NULL"
+    with AshareDB(v2_path, read_only=True) as db:
+        rows = db.query(
+            f"SELECT ts_code, end_date, ann_date, f_ann_date, available_date, "
+            f"report_type, comp_type, update_flag, ingest_id, {value_cols} "
+            f"FROM {table} "
+            f"WHERE ts_code IN ({quoted}) AND report_type = '{report_type}' "
+            f"AND comp_type = '{comp_type}'"
+        )
+    empty = rows.iloc[0:0].copy()
+    empty["winner_from"] = pd.Series(dtype=object)
+    empty["winner_to"] = pd.Series(dtype=object)
+    if rows.empty:
+        return empty
+
+    rows = rows.copy()
+    # NULL f_ann_date falls back to ann_date for the ranking (ann_date is
+    # NOT NULL by schema); the emitted columns keep the source values.
+    rows["rank_f_ann"] = rows["f_ann_date"].fillna(rows["ann_date"]).astype(str)
+    rows = rows.sort_values(
+        ["ts_code", "end_date", "rank_f_ann", "ann_date", "available_date",
+         "ingest_id"],
+        ascending=[True, True, False, False, False, False],
+    )
+    rows = rows.drop(columns=["rank_f_ann"])
+
+    segments: list[pd.DataFrame] = []
+    for _key, group in rows.groupby(["ts_code", "end_date"], sort=False):
+        boundary: str | None = None
+        for row in group.itertuples(index=False):
+            available = str(row.available_date)
+            if boundary is not None and available >= boundary:
+                continue  # a higher-ranked version already covers this day
+            winner_to = boundary if boundary is not None else _ASOF_OPEN_END
+            segment = pd.DataFrame([row]).copy()
+            segment["winner_from"] = available
+            segment["winner_to"] = winner_to
+            segments.append(segment)
+            boundary = available
+    if not segments:
+        return empty
+    return pd.concat(segments, ignore_index=True)

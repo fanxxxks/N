@@ -34,7 +34,11 @@ from .ir import decode, feature_names as ir_feature_names
 from .vocab import FEATURE_NAMES, GRAMMAR_V5_VOCAB
 
 # Bump when the tier schema, the mapping or the time rules change.
-DATA_TIER_VERSION = 1
+# v2 (p17 §9, D6): the fundamentals B-rule switches to revision-tracking
+# semantics (the v2 version tables serve point-in-time revised statements);
+# the industry-membership B-rule records the D5 gate state.  The PitLevel →
+# DataTier mapping mechanism itself is unchanged.
+DATA_TIER_VERSION = 2
 
 # Human-readable usable-time rules, keyed by tier value.  Recorded verbatim
 # in every tier-annotated artifact (P2-02).
@@ -44,9 +48,10 @@ TIER_TIME_RULES: dict[str, str] = {
         "（上市日近似）起可用；PIT 成员资格自 in_date 起、按数据窗口封顶。"
     ),
     "B": (
-        "基本面自法定披露季末日起可见（Q1->04-30、H1->08-31、Q3->10-31、"
-        "年报->次年 04-30），前向填充、不追踪重述；两融余额自 feed 交易日"
-        "起（保守取次日）可用。"
+        "基本面按公告日次一开市会话起可见、修订追踪（财报版本表 as-of："
+        "修订公告后才返回修订版本，调整前报表可审计）；两融余额自 feed "
+        "交易日（保守取次日）可用；行业成员为区间 [in_date, out_date) "
+        "PIT 表（D5 验证门未全过前维持 C 级）。"
     ),
     "C": (
         "当前行业快照仅自同步日（当日事实）有效，禁止投射历史；ST 快照"

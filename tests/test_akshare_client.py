@@ -14,7 +14,9 @@ from ashare_data.akshare_client import (
     _symbol_from_ts_code,
     normalize_listing_date,
     normalize_stock_metadata,
+    sync_sw_index_source,
 )
+from ashare_data.capital_flow import industry_index_freshness
 
 
 def test_symbol_from_ts_code():
@@ -391,3 +393,60 @@ def test_stock_list_filters_invalid_codes(tmp_path: Path):
     client = AkShareClient(cfg, offline=True, fixture_dir=fx)
     stocks = client.get_stock_list()
     assert stocks["ts_code"].tolist() == ["000001.SZ"]
+
+
+# --- t81: sw_index source routing (erratum #5 continuation) -------------------------
+
+
+class TestSwIndexSourceRouting:
+    """sync_sw_index_source populates the v2 sw_industry_index table
+    (production history + _akshare_sw_index_daily overlay) so the D7
+    industry_index_freshness gate reads current data from v2."""
+
+    @pytest.fixture()
+    def two_dbs(self, tmp_path):
+        import duckdb
+
+        prod = duckdb.connect(str(tmp_path / "prod.duckdb"))
+        prod.execute(
+            "CREATE TABLE sw_industry_index ("
+            "index_code VARCHAR, industry_name VARCHAR, "
+            "trade_date VARCHAR, close DOUBLE)")
+        prod.execute(
+            "INSERT INTO sw_industry_index VALUES "
+            "('801010', '农林牧渔', '20260810', 2000.0),"
+            "('801010', '农林牧渔', '20260814', 2010.0)")
+        v2 = duckdb.connect(str(tmp_path / "v2.duckdb"))
+        v2.execute(
+            "CREATE TABLE _akshare_sw_index_daily ("
+            "index_code VARCHAR, industry_name VARCHAR, "
+            "trade_date VARCHAR, close DOUBLE, source VARCHAR)")
+        v2.execute(
+            "INSERT INTO _akshare_sw_index_daily VALUES "
+            "('801010', '农林牧渔', '20260817', 2020.0, 'akshare'),"
+            "('801010', '农林牧渔', '20260818', 2025.0, 'akshare')")
+        prod.close()
+        v2.close()  # release before sync_sw_index_source reopens
+        yield str(tmp_path / "v2.duckdb"), str(tmp_path / "prod.duckdb")
+
+    def test_sync_overlays_akshare_onto_history(self, two_dbs):
+        import duckdb
+
+        v2_path, prod_path = two_dbs
+        latest = sync_sw_index_source(v2_path, prod_path)
+        assert latest == "20260818"  # AkShare overlay extends beyond history
+        conn = duckdb.connect(v2_path, read_only=True)
+        n = conn.execute(
+            "SELECT COUNT(*) FROM sw_industry_index").fetchone()[0]
+        assert n == 4  # 2 history + 2 overlay rows
+        conn.close()
+
+    def test_gate_reads_synced_v2_table(self, two_dbs):
+        v2_path, prod_path = two_dbs
+        sync_sw_index_source(v2_path, prod_path)
+        config = data_config_module.DataConfig(
+            start_date="2026-08-01", end_date="2026-08-31",
+            duckdb_path=v2_path)
+        dates = ["20260817", "20260818"]  # evaluation window
+        lag = industry_index_freshness(config, dates)
+        assert lag == 0  # fresh through 20260818

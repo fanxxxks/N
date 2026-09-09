@@ -148,6 +148,76 @@ def populate_v2_industry_tables(
     return v2_path
 
 
+V2_STATEMENT_COLUMNS = {
+    "income_statement_pit": [
+        "ts_code", "end_date", "ann_date", "f_ann_date", "available_date",
+        "report_type", "comp_type", "update_flag", "end_type",
+        "total_revenue", "revenue", "oper_cost", "total_profit",
+        "n_income", "n_income_attr_p", "ingest_id",
+    ],
+    "balance_sheet_pit": [
+        "ts_code", "end_date", "ann_date", "f_ann_date", "available_date",
+        "report_type", "comp_type", "update_flag", "end_type",
+        "total_assets", "total_liab", "total_hldr_eqy_exc_min_int",
+        "total_hldr_eqy_inc_min_int", "ingest_id",
+    ],
+    "cashflow_statement_pit": [
+        "ts_code", "end_date", "ann_date", "f_ann_date", "available_date",
+        "report_type", "comp_type", "update_flag", "end_type",
+        "n_cashflow_act", "n_cashflow_inv_act", "n_cash_flows_fnc_act",
+        "c_cash_equ_end_period", "ingest_id",
+    ],
+}
+
+V2_STATEMENT_TABLES = {
+    "income": "income_statement_pit",
+    "balance": "balance_sheet_pit",
+    "cashflow": "cashflow_statement_pit",
+}
+
+
+def populate_v2_statement_tables(
+    v2_path: Path,
+    income_rows: list[dict] | None = None,
+    balance_rows: list[dict] | None = None,
+    cashflow_rows: list[dict] | None = None,
+) -> Path:
+    """Populate the three v2 financial version tables (p17 §5.3, loader-facing
+    column subset) with explicit contract rows (APPEND semantics: the helper
+    deletes and re-inserts for scenario isolation)."""
+
+    v2_path = Path(v2_path)
+    v2_path.parent.mkdir(parents=True, exist_ok=True)
+    ddl = {
+        table: (
+            f"CREATE TABLE IF NOT EXISTS {table} ("
+            + ", ".join(f"{col} DOUBLE" if col not in (
+                "ts_code", "end_date", "ann_date", "f_ann_date",
+                "available_date", "report_type", "comp_type", "update_flag",
+                "end_type", "ingest_id",
+            ) else f"{col} VARCHAR" for col in V2_STATEMENT_COLUMNS[table])
+            + ")"
+        )
+        for table in V2_STATEMENT_TABLES.values()
+    }
+    by_table = {
+        "income_statement_pit": list(income_rows or []),
+        "balance_sheet_pit": list(balance_rows or []),
+        "cashflow_statement_pit": list(cashflow_rows or []),
+    }
+    with AshareDB(v2_path) as db:
+        for statement in ddl.values():
+            db.execute(statement)
+        for table, cols in V2_STATEMENT_COLUMNS.items():
+            db.execute(f"DELETE FROM {table}")
+            rows = by_table[table]
+            if rows:
+                frame = pd.DataFrame(rows).reindex(columns=cols)
+                db.register(f"_{table}_rows", frame)
+                db.execute(f"INSERT INTO {table} SELECT * FROM _{table}_rows")
+    return v2_path
+
+
 def populate_v2_price_tables(
     v2_path: Path,
     dates: list[str],

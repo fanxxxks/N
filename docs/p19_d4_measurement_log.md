@@ -161,3 +161,14 @@ test_tushare_store.py / d3 日志）零冲突、零双方修改文件。
   （消息交叉），完成时 t53 数据收口已在库上（dataset_id `43ef1e4c…`）；
   升级审计（上附录）在过门禁的数据上执行 PASS——硬前置的实质条件已满足，
   时序例外如实记录（上附录）。
+
+
+## 附录三：后置任务登记（t15/D6 收口，captain 代行，p18 §4 回写义务）
+
+- **其余 11 特征切源至 v2 as-of**（captain 收口指令 2026-09-05）：v2 三表
+  （income/balance/cashflow）补齐股份/派息/指标列后，PE_TTM、PB、PS_TTM、
+  ROE、ROA、GROSS_MARGIN、NET_MARGIN、REVENUE_YOY、PROFIT_YOY、
+  DEBT_RATIO、DIVIDEND_YIELD 从 legacy fundamental_pit 切源至 v2
+  as-of（经 pit_import.asof_winner_intervals 单一实现）。完成判据 =
+  列覆盖审计（逐特征列出所需列与 v2 可用性核对）。与 G6 as-of、
+  Tier C→B 外部对账源、G8 成员退出语义并列进入 captain 未来池。

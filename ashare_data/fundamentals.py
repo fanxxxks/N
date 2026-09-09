@@ -39,6 +39,7 @@ import pandas as pd
 from loguru import logger
 
 from .db import AshareDB, sql_quoted_list
+from .pit_import import asof_winner_intervals
 from .processor import is_valid_a_share_code
 
 # Feature names produced by the point-in-time pipeline (MARKET_CAP is a
@@ -307,6 +308,312 @@ def _fetch_fundamental_rows(
     )
 
 
+_FAMILY5_NAMES = ("CASHFLOW_QUALITY", "ACCRUALS", "ASSET_GROWTH", "EARNINGS_ACCEL")
+
+
+def _piecewise_lookup(
+    timeline: list[tuple[str, str, float]], session: str
+) -> float | None:
+    """The value whose ``[from, to)`` segment contains ``session``."""
+
+    for start, end, value in timeline:
+        if start <= session < end:
+            return value
+    return None
+
+
+def _merge_timelines(
+    timelines: list[list[tuple[str, str, float]]],
+    combine: Callable[[list[float | None]], float | None],
+) -> list[tuple[str, str, float]]:
+    """Merge piecewise timelines into one, evaluating ``combine`` per
+    segment.  A segment boundary from any input splits the output; the
+    combine callback receives every input's value at the segment start
+    (``None`` where that input has no covering version) and returns the
+    merged value or ``None`` (invisible — missing input stays NaN)."""
+
+    boundaries: set[str] = set()
+    for timeline in timelines:
+        for start, _end, _value in timeline:
+            boundaries.add(start)
+    ordered = sorted(boundaries)
+    out: list[tuple[str, str, float]] = []
+    for position, start in enumerate(ordered):
+        end = (
+            ordered[position + 1]
+            if position + 1 < len(ordered)
+            else _ASOF_OPEN_END_FUNDAMENTALS
+        )
+        values = [_piecewise_lookup(timeline, start) for timeline in timelines]
+        value = combine(values)
+        if value is None or not np.isfinite(value):
+            continue
+        if out and out[-1][1] == start and out[-1][2] == value:
+            out[-1] = (out[-1][0], end, value)  # merge equal neighbours
+            continue
+        out.append((start, end, value))
+    return out
+
+
+_ASOF_OPEN_END_FUNDAMENTALS = "99991231"
+
+
+def _family5_asof_frames(
+    config,
+    ts_codes: list[str],
+    dates: list[str],
+) -> dict[str, pd.DataFrame] | None:
+    """The four family-⑤ features from the v2 financial version tables
+    (p17 §6.2 as-of; D6 原位切换).  Returns ``None`` when the v2 statements
+    are unavailable (the caller degrades those four to NaN — the legacy
+    ``fundamental_pit`` table is never a fallback)."""
+
+    try:
+        income = asof_winner_intervals(config, "income", ts_codes)
+        balance = asof_winner_intervals(config, "balance", ts_codes)
+        cashflow = asof_winner_intervals(config, "cashflow", ts_codes)
+    except Exception as exc:  # noqa: BLE001 - missing v2 source: expected in
+        # tests / pre-D6 databases; the four features degrade to NaN (Tier B
+        # auxiliary, documented behaviour — never a legacy fallback).
+        logger.debug(f"family-⑤ as-of frames unavailable: {exc}")
+        return None
+
+    frames = {
+        name: pd.DataFrame(np.nan, index=ts_codes, columns=dates)
+        for name in _FAMILY5_NAMES
+    }
+    date_index = {date: position for position, date in enumerate(dates)}
+
+    def _per_stock_intervals(rows: pd.DataFrame, value_col: str):
+        intervals: dict[str, dict[str, list[tuple[str, str, float]]]] = {}
+        for row in rows.itertuples(index=False):
+            value = getattr(row, value_col)
+            timeline = intervals.setdefault(str(row.ts_code), {}).setdefault(
+                str(row.end_date), []
+            )
+            timeline.append(
+                (
+                    str(row.winner_from),
+                    str(row.winner_to),
+                    float(value) if pd.notna(value) else np.nan,
+                )
+            )
+        for stock in intervals.values():
+            for timeline in stock.values():
+                timeline.sort(key=lambda item: item[0])
+        return intervals
+
+    for code in ts_codes:
+        income_stock = income[income["ts_code"] == code] if not income.empty else income
+        balance_stock = (
+            balance[balance["ts_code"] == code] if not balance.empty else balance
+        )
+        cashflow_stock = (
+            cashflow[cashflow["ts_code"] == code] if not cashflow.empty else cashflow
+        )
+        if income_stock.empty:
+            continue
+        stock_row = ts_codes.index(code)
+        if stock_row is None:
+            continue
+
+        income_cum = _per_stock_intervals(income_stock, "n_income_attr_p").get(code, {})
+        cashflow_cum = _per_stock_intervals(cashflow_stock, "n_cashflow_act").get(code, {})
+        assets_level = _per_stock_intervals(balance_stock, "total_assets").get(code, {})
+
+        def _cum_maps(end_date: str, cum: dict[str, list[tuple[str, str, float]]]):
+            return [
+                cum.get(_shift_report_date(end_date, back), [])
+                for back in range(4, -1, -1)
+            ]
+
+        def _profit_ttm(end_date: str) -> list[tuple[str, str, float]]:
+            maps = _cum_maps(end_date, income_cum)
+
+            def combine(values):
+                return _ttm_at(maps, end_date, values and values[-1] and _segment_session(values))
+
+            return _merge_timelines(maps, combine)
+
+        def _segment_session(values):
+            return None
+
+        del _segment_session
+        profit_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
+        _cashflow_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
+
+        def _profit_ttm_timeline(end_date: str) -> list[tuple[str, str, float]]:
+            if end_date in profit_ttm_cache:
+                return profit_ttm_cache[end_date]
+            maps = _cum_maps(end_date, income_cum)
+
+            def combine(values):
+                # values: [cum(E-4), cum(E-3), cum(E-2), cum(E-1), cum(E)]
+                cums = list(values)
+                singles: list[float] = []
+                for position in range(1, 5):
+                    current = cums[position]
+                    previous = cums[position - 1]
+                    quarter_end = _shift_report_date(end_date, 4 - position)
+                    if current is None or not np.isfinite(current):
+                        return None
+                    if quarter_end[4:] == "0331" or previous is None or not np.isfinite(
+                        previous
+                    ):
+                        if quarter_end[4:] != "0331":
+                            return None
+                        singles.append(float(current))
+                    else:
+                        singles.append(float(current) - float(previous))
+                if len(singles) != 4:
+                    return None
+                # The quarter identity comes from exact period arithmetic
+                # (_shift_report_date), so a missing quarter yields None
+                # above and the 265-285-day span check of the legacy path
+                # is satisfied by construction.
+                return float(sum(singles))
+
+            timeline = _merge_timelines(maps, combine)
+            profit_ttm_cache[end_date] = timeline
+            return timeline
+
+        def _cashflow_ttm_timeline(end_date: str) -> list[tuple[str, str, float]]:
+            if end_date in _cashflow_ttm_cache:
+                return _cashflow_ttm_cache[end_date]
+            maps = _cum_maps(end_date, cashflow_cum)
+
+            def combine(values):
+                cums = list(values)
+                singles: list[float] = []
+                for position in range(1, 5):
+                    current = cums[position]
+                    previous = cums[position - 1]
+                    quarter_end = _shift_report_date(end_date, 4 - position)
+                    if current is None or not np.isfinite(current):
+                        return None
+                    if quarter_end[4:] == "0331" or previous is None or not np.isfinite(
+                        previous
+                    ):
+                        if quarter_end[4:] != "0331":
+                            return None
+                        singles.append(float(current))
+                    else:
+                        singles.append(float(current) - float(previous))
+                if len(singles) != 4:
+                    return None
+                return float(sum(singles))
+
+            timeline = _merge_timelines(maps, combine)
+            _cashflow_ttm_cache[end_date] = timeline
+            return timeline
+
+        def _piecewise_fill(frame: pd.DataFrame, timeline: list[tuple[str, str, float]]):
+            date_ints = np.asarray([int(d) for d in dates])
+            for start, end, value in timeline:
+                if not np.isfinite(value):
+                    continue
+                start_idx = int(np.searchsorted(date_ints, int(start), side="left"))
+                end_idx = int(np.searchsorted(date_ints, int(end), side="left"))
+                if end_idx > start_idx:
+                    frame.iloc[stock_row, start_idx:end_idx] = value
+
+        for end_date in sorted(
+            set(income_cum) | set(cashflow_cum) | set(assets_level)
+        ):
+            # Erratum #4: non-quarter-end end_dates (real irregular
+            # reporting periods like 20170131) do not participate in the
+            # quarterly cumulative TTM period arithmetic — they cannot be
+            # interpreted as quarter-end cumulative reports.  Skip them;
+            # the related features stay NaN for those periods.
+            if end_date[4:] not in _QUARTER_ENDS:
+                continue
+            profit_tl = _profit_ttm_timeline(end_date)
+            cashflow_tl = _cashflow_ttm_timeline(end_date)
+            assets_tl = assets_level.get(end_date, [])
+
+            quality = _merge_timelines(
+                [profit_tl, cashflow_tl],
+                combine=lambda values: (
+                    values[1] / values[0]
+                    if values[0] is not None
+                    and np.isfinite(values[0])
+                    and values[0] > 0
+                    and values[1] is not None
+                    and np.isfinite(values[1])
+                    else None
+                ),
+            )
+            _piecewise_fill(frames["CASHFLOW_QUALITY"], quality)
+
+            accrual = _merge_timelines(
+                [profit_tl, cashflow_tl, assets_tl],
+                combine=lambda values: (
+                    (values[0] - values[1]) / values[2]
+                    if values[0] is not None
+                    and np.isfinite(values[0])
+                    and values[1] is not None
+                    and np.isfinite(values[1])
+                    and values[2] is not None
+                    and np.isfinite(values[2])
+                    and values[2] > 0
+                    else None
+                ),
+            )
+            _piecewise_fill(frames["ACCRUALS"], accrual)
+
+            prev_end = _shift_report_date(end_date, 4)
+            assets_prev_tl = assets_level.get(prev_end, [])
+            growth = _merge_timelines(
+                [assets_tl, assets_prev_tl],
+                combine=lambda values: (
+                    values[0] / values[1] - 1
+                    if values[0] is not None
+                    and np.isfinite(values[0])
+                    and values[0] > 0
+                    and values[1] is not None
+                    and np.isfinite(values[1])
+                    and values[1] > 0
+                    else None
+                ),
+            )
+            _piecewise_fill(frames["ASSET_GROWTH"], growth)
+
+            def _profit_growth_ratio(later: str, earlier: str) -> list[tuple[str, str, float]]:
+                return _merge_timelines(
+                    [_profit_ttm_timeline(later), _profit_ttm_timeline(earlier)],
+                    combine=lambda values: (
+                        values[0] / values[1] - 1
+                        if values[0] is not None
+                        and np.isfinite(values[0])
+                        and values[1] is not None
+                        and np.isfinite(values[1])
+                        and values[1] > 0
+                        else None
+                    ),
+                )
+
+            accel = _merge_timelines(
+                [
+                    _profit_growth_ratio(end_date, _shift_report_date(end_date, 4)),
+                    _profit_growth_ratio(
+                        _shift_report_date(end_date, 1),
+                        _shift_report_date(end_date, 5),
+                    ),
+                ],
+                combine=lambda values: (
+                    values[0] - values[1]
+                    if values[0] is not None
+                    and np.isfinite(values[0])
+                    and values[1] is not None
+                    and np.isfinite(values[1])
+                    else None
+                ),
+            )
+            _piecewise_fill(frames["EARNINGS_ACCEL"], accel)
+
+    return frames
+
+
 def build_pit_frames(
     config,
     ts_codes: list[str],
@@ -320,12 +627,25 @@ def build_pit_frames(
     per-share/level fields into price ratios (PE/PB/PS).  Any failure
     (e.g. the table does not exist yet) degrades to an empty mapping so
     the loader keeps working on a bare daily-bar database.
+
+    D6 (p17 §6.2): the four family-⑤ features (CASHFLOW_QUALITY /
+    ACCRUALS / ASSET_GROWTH / EARNINGS_ACCEL) read the three v2 financial
+    version tables through the single as-of implementation
+    (:func:`ashare_data.pit_import.asof_winner_intervals`) — revision
+    timing exact, missing values NaN, the legacy ``fundamental_pit``
+    table never a fallback.  The remaining eleven features keep their
+    legacy source until their v2 columns exist (documented boundary).
     """
 
     frames = {
         name: pd.DataFrame(np.nan, index=ts_codes, columns=dates)
         for name in FUNDAMENTAL_PIT_NAMES
     }
+    # Family-⑤ from the v2 version tables (原位切换, p17 §6.2): missing
+    # source leaves those four NaN — never a legacy fallback.
+    family5 = _family5_asof_frames(config, ts_codes, dates)
+    if family5 is not None:
+        frames.update(family5)
     try:
         with AshareDB(config.duckdb_path, read_only=True) as db:
             rows = _fetch_fundamental_rows(db, config, ts_codes)
@@ -402,110 +722,7 @@ def build_pit_frames(
                 margin_series > 0, pe_row * margin_series, np.nan
             )
 
-        # --- P13 family ⑤ (docs/p13_fundamental_fields_contract.md §5.3) ---
-        # Cash-flow quality, accruals, asset growth and earnings
-        # acceleration.  Every TTM conversion goes through _ttm and every
-        # visibility through _ffill_from_announcements (the single PIT
-        # path); ratios join strictly on the report period (never
-        # misaligned), and a ratio is visible from the announce date of its
-        # latest contributing report.  Missing/incomplete inputs stay NaN
-        # (AGENTS §5.3) -- never a fabricated neutral value.
-        prof_ttm_by_report = dict(zip(prof_reports, prof_ttm))
-        cfo_reports, _, cfo_ttm = _ttm(sub_sorted, "net_operate_cash_flow")
-        cfo_ttm_by_report = dict(zip(cfo_reports, cfo_ttm))
-        ta_by_report = {
-            str(rep): ta
-            for rep, ta in zip(
-                sub_sorted["report_date"],
-                pd.to_numeric(sub_sorted["total_assets"], errors="coerce"),
-            )
-        }
-        announce_by_report = {
-            str(rep): (str(ann) if pd.notna(ann) else None)
-            for rep, ann in zip(sub["report_date"], sub["announce_date"])
-        }
-
-        def _g_of(report: str) -> float | None:
-            """TTM profit growth vs the report four periods earlier."""
-            profit = prof_ttm_by_report.get(report)
-            profit_prev = prof_ttm_by_report.get(_shift_report_date(report, 4))
-            if (
-                profit is None
-                or not np.isfinite(profit)
-                or profit_prev is None
-                or not np.isfinite(profit_prev)
-                or profit_prev <= 0
-            ):
-                return None
-            return profit / profit_prev - 1
-
-        quality_ann, quality_vals = [], []
-        accrual_ann, accrual_vals = [], []
-        growth_ann, growth_vals = [], []
-        accel_ann, accel_vals = [], []
-        for report in prof_reports:
-            announce = announce_by_report.get(report)
-            profit = prof_ttm_by_report.get(report)
-            cfo = cfo_ttm_by_report.get(report)
-            assets = ta_by_report.get(report)
-            if announce is None:
-                continue  # without its master date a row is never visible
-            if (
-                profit is not None
-                and np.isfinite(profit)
-                and profit > 0
-                and cfo is not None
-                and np.isfinite(cfo)
-            ):
-                quality_ann.append(announce)
-                quality_vals.append(cfo / profit)
-            if (
-                profit is not None
-                and np.isfinite(profit)
-                and cfo is not None
-                and np.isfinite(cfo)
-                and assets is not None
-                and np.isfinite(assets)
-                and assets > 0
-            ):
-                accrual_ann.append(announce)
-                accrual_vals.append((profit - cfo) / assets)
-            assets_prev = ta_by_report.get(_shift_report_date(report, 4))
-            announce_prev = announce_by_report.get(_shift_report_date(report, 4))
-            if (
-                announce_prev is not None
-                and assets is not None
-                and np.isfinite(assets)
-                and assets > 0
-                and assets_prev is not None
-                and np.isfinite(assets_prev)
-                and assets_prev > 0
-            ):
-                growth_ann.append(max(announce, announce_prev))
-                growth_vals.append(assets / assets_prev - 1)
-            growth_t = _g_of(report)
-            growth_prev = _g_of(_shift_report_date(report, 1))
-            if (
-                growth_t is not None
-                and growth_prev is not None
-                and np.isfinite(growth_t)
-                and np.isfinite(growth_prev)
-            ):
-                accel_ann.append(announce)
-                accel_vals.append(growth_t - growth_prev)
-
-        frames["CASHFLOW_QUALITY"].iloc[stock_row] = _ffill_from_announcements(
-            dates, quality_ann, quality_vals
-        )
-        frames["ACCRUALS"].iloc[stock_row] = _ffill_from_announcements(
-            dates, accrual_ann, accrual_vals
-        )
-        frames["ASSET_GROWTH"].iloc[stock_row] = _ffill_from_announcements(
-            dates, growth_ann, growth_vals
-        )
-        frames["EARNINGS_ACCEL"].iloc[stock_row] = _ffill_from_announcements(
-            dates, accel_ann, accel_vals
-        )
+        # Family-⑤ features come from the v2 as-of source (see above).
 
     return frames
 

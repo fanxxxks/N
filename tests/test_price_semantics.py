@@ -708,7 +708,8 @@ def test_version_impact_table_bumps_are_in_place():
 
     assert PORTFOLIO_CONSTRUCTOR_VERSION == 1
     assert FEE_MATRIX_VERSION == 1
-    assert DATA_TIER_VERSION == 1
+    # p17 §9 (D6): bumped 1 -> 2 for the revision-tracking B rule.
+    assert DATA_TIER_VERSION == 2
 
 
 def test_legacy_protocol_and_execution_artifacts_classified_legacy():
