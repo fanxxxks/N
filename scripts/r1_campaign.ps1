@@ -38,6 +38,15 @@ function Write-Marker([string]$name, [string]$state, [string]$detail) {
 }
 
 function Invoke-Eval([string]$id, [string]$config, [string]$output, [string]$ledger, [string[]]$extraArgs) {
+    # A01 C5/C6 pre-flight: refuse to start when a required input path is
+    # missing (the resolver is read-only and creates nothing).  Called via
+    # -c so the runpy re-import warning of `-m ashare_data.config` does not
+    # pollute the campaign logs.
+    & $py -c 'import sys; from ashare_data.config import main; sys.exit(main())' --config $config --check
+    if ($LASTEXITCODE -ne 0) {
+        Write-Marker $id "PATHCHECK_FAILED" "required input missing for $config; campaign leg not started"
+        return 2
+    }
     $outLog = "logs\r1_$id.out.log"
     $errLog = "logs\r1_$id.err.log"
     $args = @('-m', 'ashare_model.evaluation', '--config', $config,

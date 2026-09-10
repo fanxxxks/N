@@ -270,8 +270,15 @@ def _webapi_run(tmp_path: Path):
     from ashare_model import lifecycle
     from ashare_model.run_store import RunStore
 
+    # A01 C8: the RunStore root is the config-derived ``data_dir`` (the
+    # same resolver the write side uses), not the repository ROOT.  The
+    # fixture therefore writes a real config baseline and opens the run
+    # under ``<root>/data/runs``.
+    _make_root(tmp_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
     spec = make_test_spec(dataset_id='ds-webapi-0001')
-    store = RunStore(tmp_path)
+    store = RunStore(data_dir)
     handle = store.open_run(spec)
     writer = lifecycle.LifecycleWriter(handle)
     idea = {
@@ -292,7 +299,12 @@ def test_list_runs_reads_runstore_directly(tmp_path, monkeypatch):
     writer.lock_spec()
     monkeypatch.setattr(service, 'ROOT', root)
     result = service.list_runs()
-    assert result['runs_dir'] == str(root / 'runs')
+    # A01 C8 (test updated under AGENTS §10.1 whitelist category 2): the
+    # default root is the config-derived data_dir, not the repository
+    # ROOT — the old assertion encoded defect F05.
+    assert result['runs_dir'] == str(root / 'data' / 'runs')
+    assert result['runs_dir_source'] == 'config'
+    assert result['runs_dir_exists'] is True
     assert len(result['runs']) == 1
     entry = result['runs'][0]
     assert entry['spec_id'] == spec.spec_id
@@ -342,3 +354,60 @@ def test_artifact_classification_delegates_to_authority(tmp_path):
     binary = tmp_path / 'model.pt'
     binary.write_bytes(b'x')
     assert _artifact_classification(binary) == 'binary'
+
+
+# --- A01: one RunStore root for readers and writers (F05) -------------------
+
+
+def test_a01_default_run_root_is_config_data_dir(tmp_path, monkeypatch):
+    """A01 C8: the default list_runs root equals the write-side root."""
+
+    from ashare_model.run_store import RunStore
+    from webapi import service
+
+    root = _make_root(tmp_path)
+    monkeypatch.setattr(service, 'ROOT', root)
+    result = service.list_runs()
+    assert Path(result['runs_dir']) == RunStore(root / 'data').runs_dir
+    assert result['runs_dir_source'] == 'config'
+    assert result['runs_dir_exists'] is False
+    assert result['runs'] == []
+
+
+def test_a01_list_runs_reports_missing_root_not_silently_empty(tmp_path):
+    """A01 C9: an unresolvable/explicit root must be visible, not silently
+    indistinguishable from 'no runs'."""
+
+    from webapi import service
+
+    result = service.list_runs(tmp_path)
+    assert result['runs'] == []
+    assert result['runs_dir_source'] == 'explicit'
+    assert result['runs_dir_exists'] is False
+
+
+def test_a01_run_under_config_data_dir_visible_via_api(tmp_path, monkeypatch):
+    """A01 C8: a run written under the configured data_dir is visible
+    through the default (config-resolved) list and detail paths."""
+
+    from ashare_model.run_store import RunStore
+    from tests.conftest import make_test_spec
+    from webapi import service
+
+    root = _make_root(tmp_path)
+    data_dir = root / 'data'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    store = RunStore(data_dir)
+    spec = make_test_spec(dataset_id='ds-a01-roundtrip')
+    handle = store.open_run(spec)
+    monkeypatch.setattr(service, 'ROOT', root)
+
+    listed = service.list_runs()
+    assert listed['runs_dir'] == str(data_dir / 'runs')
+    assert [entry['run_id'] for entry in listed['runs']] == [handle.run_id]
+    assert listed['runs'][0]['dataset_id'] == 'ds-a01-roundtrip'
+
+    detail = service.get_run_detail(None, spec.spec_id, handle.run_id)
+    assert detail['spec_id'] == spec.spec_id
+    assert detail['run_id'] == handle.run_id
+    assert detail['dataset_id'] == 'ds-a01-roundtrip'

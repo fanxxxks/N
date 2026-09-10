@@ -334,3 +334,183 @@ def test_ashare_data_package_has_no_reverse_model_imports():
         "ashare_data must not depend on ashare_model (AGENTS §9, IP-12): "
         + "; ".join(offenders)
     )
+
+
+# --- A01: single runtime path resolver + input existence ---------------------
+
+
+def _write_baseline(root: Path, payload: dict) -> Path:
+    cfg = root / "config" / "ashare_config.yaml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    return cfg
+
+
+def test_a01_resolve_runtime_paths_rejects_missing_v2_input(tmp_path: Path):
+    """A01 C5/C6: a missing required input is rejected before any database
+    is opened, and no empty database/directory is created."""
+
+    from ashare_data.config import InputPathMissing, resolve_runtime_paths
+
+    root = tmp_path / "proj"
+    (root / "data").mkdir(parents=True)
+    (root / "data" / "ashare.duckdb").write_bytes(b"")
+    cfg = _write_baseline(
+        root,
+        {
+            "data_dir": "data",
+            "duckdb_path": "data/ashare.duckdb",
+            "v2_duckdb_path": "missing_v2.duckdb",
+            "parquet_dir": "data/parquet",
+        },
+    )
+    with pytest.raises(InputPathMissing) as exc_info:
+        resolve_runtime_paths(cfg, project_root=root, mode="formal")
+    assert "missing_v2.duckdb" in str(exc_info.value)
+    assert not (root / "data" / "missing_v2.duckdb").exists()
+    assert not (root / "data" / "runs").exists()
+
+
+def test_a01_resolve_runtime_paths_reports_sources_and_effective(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A01 C7: the effective config reports each path's winning layer."""
+
+    from ashare_data.config import resolve_runtime_paths
+
+    root = tmp_path / "proj"
+    (root / "data").mkdir(parents=True)
+    (root / "data" / "ashare.duckdb").write_bytes(b"")
+    (root / "data" / "ashare_v2.duckdb").write_bytes(b"")
+    cfg = _write_baseline(
+        root,
+        {
+            "data_dir": "data",
+            "duckdb_path": "data/ashare.duckdb",
+            "v2_duckdb_path": "ashare_v2.duckdb",
+            "parquet_dir": "data/parquet",
+        },
+    )
+    resolved = resolve_runtime_paths(cfg, project_root=root, mode="formal")
+    assert resolved.data_dir == root / "data"
+    assert resolved.v2_duckdb_path == root / "data" / "ashare_v2.duckdb"
+    assert resolved.sources["data_dir"] == "config:ashare_config.yaml"
+    assert resolved.sources["v2_duckdb_path"] == "config:ashare_config.yaml"
+    effective = resolved.effective()
+    assert effective["duckdb_path"]["exists"] is True
+    assert effective["duckdb_path"]["source"] == "config:ashare_config.yaml"
+
+    # A machine-local override layer wins and is reported as such.
+    (root / "data" / "other.duckdb").write_bytes(b"")
+    (cfg.parent / "runtime_overrides.yaml").write_text(
+        yaml.safe_dump({"duckdb_path": "data/other.duckdb"}), encoding="utf-8"
+    )
+    overridden = resolve_runtime_paths(cfg, project_root=root, mode="formal")
+    assert overridden.duckdb_path == root / "data" / "other.duckdb"
+    assert (
+        overridden.sources["duckdb_path"]
+        == "runtime_overrides:runtime_overrides.yaml"
+    )
+
+    # Process environment wins over every file layer.
+    monkeypatch.setenv("ASHARE_DATA_DIR", str(root / "env-data"))
+    env_resolved = resolve_runtime_paths(cfg, project_root=root, mode="audit")
+    assert env_resolved.data_dir == root / "env-data"
+    assert env_resolved.sources["data_dir"] == "env:ASHARE_DATA_DIR"
+
+
+def test_a01_relative_paths_resolve_against_config_root_not_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A01 C2: resolution must not depend on the process cwd."""
+
+    from ashare_data.config import resolve_v2_duckdb_path
+
+    proj = tmp_path / "proj"
+    (proj / "configs").mkdir(parents=True)
+    cfg = proj / "configs" / "r1_probe.yaml"
+    cfg.write_text(
+        yaml.safe_dump(
+            {
+                "data_dir": "data/r1/probe",
+                "duckdb_path": "data/ashare.duckdb",
+                "v2_duckdb_path": "ashare_v2.duckdb",
+            }
+        ),
+        encoding="utf-8",
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    raw = load_config(cfg, project_root=None)
+    dc = make_data_config(raw, proj)
+    assert Path(dc.data_dir) == proj / "data" / "r1" / "probe"
+    assert Path(dc.duckdb_path) == proj / "data" / "ashare.duckdb"
+    assert resolve_v2_duckdb_path(dc) == proj / "data" / "ashare_v2.duckdb"
+
+
+def test_a01_v2_relative_form_is_bare_filename_or_absolute(tmp_path: Path):
+    """A01 C4: a relative ``v2_duckdb_path`` is a bare filename resolved
+    against the data dir; a separator-bearing relative value is refused
+    instead of silently double-joined."""
+
+    from ashare_data.config import ConfigPathError, resolve_v2_duckdb_path
+
+    proj = tmp_path / "proj with spaces"
+    (proj / "data").mkdir(parents=True)
+    (proj / "data" / "ashare_v2.duckdb").write_bytes(b"")
+
+    good = DataConfig(
+        data_dir=proj / "data",
+        duckdb_path=proj / "data" / "ashare.duckdb",
+        v2_duckdb_path=Path("ashare_v2.duckdb"),
+    )
+    assert resolve_v2_duckdb_path(good) == proj / "data" / "ashare_v2.duckdb"
+
+    bad = DataConfig(
+        data_dir=proj / "data",
+        duckdb_path=proj / "data" / "ashare.duckdb",
+        v2_duckdb_path=Path("data/ashare_v2.duckdb"),
+    )
+    with pytest.raises(ConfigPathError, match="v2_duckdb_path"):
+        resolve_v2_duckdb_path(bad)
+
+
+def test_a01_default_config_paths_parity():
+    """A01 C10: the repo default config resolves to the same three paths
+    as before the change (no accidental production-path drift)."""
+
+    from ashare_data.config import resolve_v2_duckdb_path
+
+    root = Path(__file__).resolve().parents[1]
+    raw = load_config(None, project_root=root)
+    dc = make_data_config(raw, root)
+    assert Path(dc.data_dir) == root / "data"
+    assert Path(dc.duckdb_path) == root / "data" / "ashare.duckdb"
+    assert resolve_v2_duckdb_path(dc) == root / "data" / "ashare_v2.duckdb"
+
+
+def test_a01_repo_configs_are_portable_to_a_temp_root(tmp_path: Path):
+    """A01 C3/C11: every shared config resolves inside a fresh temp root
+    (no machine-absolute AlphaGPT-d2 / AlphaGPT-r1 dependency)."""
+
+    from ashare_data.config import resolve_runtime_paths
+
+    repo = Path(__file__).resolve().parents[1]
+    temp = tmp_path / "temp root"
+    (temp / "configs").mkdir(parents=True)
+    (temp / "data").mkdir()
+    (temp / "data" / "ashare.duckdb").write_bytes(b"")
+    (temp / "data" / "ashare_v2.duckdb").write_bytes(b"")
+
+    configs = sorted((repo / "configs").glob("*.yaml"))
+    assert configs, "no configs/*.yaml found"
+    for source in configs:
+        target = temp / "configs" / source.name
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        resolved = resolve_runtime_paths(target, project_root=temp, mode="formal")
+        assert resolved.duckdb_path.exists(), source.name
+        assert resolved.v2_duckdb_path.exists(), source.name
+        assert "AlphaGPT-d2" not in str(resolved.v2_duckdb_path), source.name
+        assert "AlphaGPT-r1" not in str(resolved.data_dir), source.name

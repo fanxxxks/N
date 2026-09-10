@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,85 @@ def _as_path(value: Any, base: Path | None = None) -> Path:
     if not path.is_absolute() and base is not None:
         path = base / path
     return path
+
+
+class ConfigPathError(ValueError):
+    """A configured path cannot be resolved unambiguously."""
+
+
+class InputPathMissing(ConfigPathError):
+    """A required input path does not exist (fail-closed before any run)."""
+
+
+#: Path keys of :class:`DataConfig` that form the runtime path surface.
+PATH_KEYS: tuple[str, ...] = (
+    "data_dir",
+    "duckdb_path",
+    "v2_duckdb_path",
+    "parquet_dir",
+)
+
+#: Required inputs: a formal run must refuse to start when one is absent.
+REQUIRED_INPUT_KEYS: tuple[str, ...] = ("duckdb_path", "v2_duckdb_path")
+
+_ENV_PATH_KEYS: dict[str, str] = {
+    "data_dir": "ASHARE_DATA_DIR",
+    "duckdb_path": "ASHARE_DUCKDB_PATH",
+    "parquet_dir": "ASHARE_PARQUET_DIR",
+    "v2_duckdb_path": "ASHARE_V2_DUCKDB_PATH",
+}
+
+_PROJECT_MARKERS: tuple[str, ...] = (".git", "AGENTS.md")
+
+
+def infer_project_root(config_path: str | Path) -> Path:
+    """Deterministic project root of a config file (A01 C2, cwd-independent).
+
+    Resolution order:
+
+    1. the nearest ancestor directory holding ``.git`` or ``AGENTS.md``;
+    2. the parent of a ``config`` / ``configs`` directory;
+    3. the config file's own directory.
+
+    The result never depends on ``Path.cwd()``, so a relative path inside a
+    shared config resolves identically from any working directory.
+    """
+
+    path = Path(config_path).resolve()
+    for candidate in (path.parent, *path.parent.parents):
+        if any((candidate / marker).exists() for marker in _PROJECT_MARKERS):
+            return candidate
+    if path.parent.name in ("config", "configs"):
+        return path.parent.parent
+    return path.parent
+
+
+@dataclass(frozen=True)
+class ResolvedPaths:
+    """The single resolved runtime-path surface (A01 C1/C5/C7).
+
+    ``sources`` records the winning layer of every key so the effective
+    configuration is auditable instead of a merged mystery.
+    """
+
+    data_dir: Path
+    duckdb_path: Path
+    v2_duckdb_path: Path
+    parquet_dir: Path
+    sources: dict[str, str]
+    missing_inputs: tuple[str, ...] = ()
+
+    def effective(self) -> dict[str, dict[str, Any]]:
+        """Effective config block: value + winning layer + existence."""
+
+        return {
+            key: {
+                "path": str(getattr(self, key)),
+                "source": self.sources.get(key, "default"),
+                "exists": Path(getattr(self, key)).exists(),
+            }
+            for key in PATH_KEYS
+        }
 
 
 @dataclass
@@ -384,16 +465,28 @@ class SimConfig:
 
 def resolve_v2_duckdb_path(config) -> Path:
     """Single resolution rule for the v2 Tushare/PIT price source (p19 §2.1):
-    a relative ``v2_duckdb_path`` sits next to ``duckdb_path`` (the shared
-    data directory); absolute values pass through unchanged.  Every v2
-    consumer (loader, industry membership) resolves through this function —
-    no second resolution rule.
+    an absolute value passes through unchanged; a relative value must be a
+    bare filename (no directory separator) and sits next to ``duckdb_path``
+    (the shared data directory).  Every v2 consumer (loader, industry
+    membership) resolves through this function — no second resolution rule.
+
+    A01 C4: a separator-bearing relative value (``data/ashare_v2.duckdb``)
+    used to be silently double-joined to ``<data_dir>/data/...``; it is now
+    refused, so the two legal forms (absolute path, bare filename) are the
+    only accepted ones.
     """
 
     path = Path(config.v2_duckdb_path)
-    if not path.is_absolute():
-        path = Path(config.duckdb_path).parent / path
-    return path
+    if path.is_absolute():
+        return path
+    if path.parent != Path(".") or path.name in ("", "."):
+        raise ConfigPathError(
+            "v2_duckdb_path must be an absolute path or a bare filename "
+            f"relative to the data directory; got {str(config.v2_duckdb_path)!r} "
+            f"(it would resolve to "
+            f"{Path(config.duckdb_path).parent / path})"
+        )
+    return Path(config.duckdb_path).parent / path
 
 
 def _resolve_paths(
@@ -430,6 +523,8 @@ def load_config(
     path: str | Path | None = None,
     project_root: str | Path | None = None,
     overrides_path: str | Path | None = None,
+    *,
+    path_sources: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Load YAML config, merge the global runtime overrides file, then
     optional .env overrides.
@@ -440,16 +535,21 @@ def load_config(
     on top of the YAML baseline for every entry point (run_sim, backtest,
     train), so the effective configuration is identical everywhere.
 
-    Paths are resolved relative to the directory containing the YAML file.
+    Paths are resolved relative to the project root.  A01 C2/C7: when
+    ``project_root`` is omitted it is inferred from the config file path
+    (never from the process cwd), and ``path_sources`` — when provided —
+    receives the winning layer of every path key (``default`` /
+    ``config:<file>`` / ``runtime_overrides:<file>`` / ``env:<VAR>``).
     """
 
-    if project_root is None:
-        project_root = Path.cwd()
-    project_root = Path(project_root)
-
     if path is None:
-        path = project_root / "config" / "ashare_config.yaml"
+        base = Path(project_root) if project_root is not None else Path.cwd()
+        path = base / "config" / "ashare_config.yaml"
+
     config_path = Path(path)
+    if project_root is None:
+        project_root = infer_project_root(config_path)
+    project_root = Path(project_root)
     if not config_path.is_absolute():
         config_path = project_root / config_path
 
@@ -459,7 +559,17 @@ def load_config(
         # defensive wrapper (web API).
         raise FileNotFoundError(f"config file not found: {config_path}")
 
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    sources = {key: "default" for key in PATH_KEYS}
+
+    baseline = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(baseline, dict):
+        raise ConfigPathError(
+            f"config file must contain a mapping: {config_path}"
+        )
+    for key in PATH_KEYS:
+        if key in baseline:
+            sources[key] = f"config:{config_path.name}"
+    raw = baseline
 
     if overrides_path is None:
         overrides_path = config_path.parent / RUNTIME_OVERRIDES_FILENAME
@@ -467,6 +577,9 @@ def load_config(
     if overrides_path.exists():
         overrides_raw = yaml.safe_load(overrides_path.read_text(encoding="utf-8")) or {}
         if isinstance(overrides_raw, dict):
+            for key in PATH_KEYS:
+                if key in overrides_raw:
+                    sources[key] = f"runtime_overrides:{overrides_path.name}"
             raw = _deep_merge(raw, overrides_raw)
 
     raw = _resolve_paths(raw, project_root)
@@ -475,14 +588,14 @@ def load_config(
     if env_path.exists():
         load_dotenv(env_path, override=False)
 
-    env_map = {
-        "data_dir": os.getenv("ASHARE_DATA_DIR"),
-        "duckdb_path": os.getenv("ASHARE_DUCKDB_PATH"),
-        "parquet_dir": os.getenv("ASHARE_PARQUET_DIR"),
-    }
-    for key, value in env_map.items():
+    for key, env_name in _ENV_PATH_KEYS.items():
+        value = os.getenv(env_name)
         if value:
             raw[key] = str(_as_path(value, project_root))
+            sources[key] = f"env:{env_name}"
+
+    if path_sources is not None:
+        path_sources.update(sources)
 
     return raw
 
@@ -496,6 +609,131 @@ def make_data_config(raw: dict[str, Any], project_root: Path) -> DataConfig:
     for key in ("data_dir", "duckdb_path", "parquet_dir"):
         data[key] = _as_path(data[key], project_root)
     return DataConfig(**data)
+
+
+def resolve_runtime_paths(
+    config_path: str | Path | None = None,
+    project_root: str | Path | None = None,
+    *,
+    mode: str = "formal",
+    overrides_path: str | Path | None = None,
+) -> ResolvedPaths:
+    """The single A01 runtime-path resolver: load, resolve, validate.
+
+    ``mode="formal"`` refuses a run whose required input is absent — the
+    failure happens before any database is opened and nothing is created
+    (A01 C5/C6).  ``mode="audit"`` reports the same facts without raising,
+    for diagnostics/effective-config output (A01 C7).
+
+    Inputs are ``duckdb_path`` and ``v2_duckdb_path``
+    (:data:`REQUIRED_INPUT_KEYS`); ``data_dir`` / ``parquet_dir`` are
+    outputs and may legitimately not exist yet.
+    """
+
+    if mode not in ("formal", "audit"):
+        raise ValueError(f"unknown mode {mode!r}; expected 'formal' or 'audit'")
+
+    if config_path is None:
+        project_root = Path(project_root) if project_root is not None else Path.cwd()
+    else:
+        config_path = Path(config_path)
+        if project_root is None:
+            project_root = infer_project_root(config_path)
+        project_root = Path(project_root)
+        if not config_path.is_absolute():
+            config_path = project_root / config_path
+
+    sources: dict[str, str] = {}
+    raw = load_config(
+        config_path,
+        project_root=project_root,
+        overrides_path=overrides_path,
+        path_sources=sources,
+    )
+    data_config = make_data_config(raw, project_root)
+    v2_path = resolve_v2_duckdb_path(data_config)
+    resolved_by_key = {
+        "data_dir": Path(data_config.data_dir),
+        "duckdb_path": Path(data_config.duckdb_path),
+        "v2_duckdb_path": v2_path,
+        "parquet_dir": Path(data_config.parquet_dir),
+    }
+
+    missing = tuple(
+        key for key in REQUIRED_INPUT_KEYS if not resolved_by_key[key].exists()
+    )
+    resolved = ResolvedPaths(
+        data_dir=resolved_by_key["data_dir"],
+        duckdb_path=resolved_by_key["duckdb_path"],
+        v2_duckdb_path=resolved_by_key["v2_duckdb_path"],
+        parquet_dir=resolved_by_key["parquet_dir"],
+        sources=dict(sources),
+        missing_inputs=missing,
+    )
+    if mode == "formal" and missing:
+        detail = ", ".join(f"{key}={resolved_by_key[key]}" for key in missing)
+        raise InputPathMissing(
+            f"required input path(s) missing: {detail} "
+            f"(config: {config_path}; a formal run refuses to start and "
+            "creates neither a database nor a directory)"
+        )
+    return resolved
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI: resolve and validate a config's runtime paths (read-only).
+
+        python -m ashare_data.config --config configs/r1_medium_a.yaml --check
+        python -m ashare_data.config --config configs/r1_medium_a.yaml --json
+
+    ``--check`` exits 2 when a required input is missing; ``--json`` prints
+    the effective config with per-path provenance.
+    """
+
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="resolve/validate the runtime paths of a config (read-only)"
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="YAML config path (default: <project root>/config/ashare_config.yaml)",
+    )
+    parser.add_argument("--project-root", default=None)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="exit 2 when a required input path is missing",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print the effective config as JSON"
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        resolved = resolve_runtime_paths(
+            args.config,
+            args.project_root,
+            mode="formal" if args.check else "audit",
+        )
+    except (ConfigPathError, FileNotFoundError) as exc:
+        print(f"path resolution failed: {exc}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(resolved.effective(), ensure_ascii=False, indent=2))
+    else:
+        for key, info in resolved.effective().items():
+            print(
+                f"{key:16s} {info['path']}  [{info['source']}] "
+                f"exists={info['exists']}"
+            )
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
+    raise SystemExit(main())
 
 
 def make_model_config(raw: dict[str, Any]) -> ModelConfig:

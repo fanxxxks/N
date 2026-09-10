@@ -169,7 +169,9 @@ def run_detail(spec_id: str, run_id: str) -> dict:
     """One run's RunStore view: lifecycle state, event trail, typed
     artifacts, ledger trial summary."""
     try:
-        return service.get_run_detail(service.ROOT, spec_id, run_id)
+        # A01 C8: the detail view resolves the same config-derived store
+        # root as the list view (no separate ROOT authority).
+        return service.get_run_detail(None, spec_id, run_id)
     except RunStoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except LifecycleError as exc:

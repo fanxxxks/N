@@ -7,10 +7,12 @@
 # D3-backfilled v2 PIT store (read-only).  No secrets here (TUSHARE_TOKEN
 # lives in git-ignored config/.env only).
 
-data_dir: D:/minequant/AlphaGPT-r1/data
-duckdb_path: D:/minequant/AlphaGPT/data/ashare.duckdb
-parquet_dir: D:/minequant/AlphaGPT-r1/data/parquet
-v2_duckdb_path: D:/minequant/AlphaGPT-d2/data/ashare_v2.duckdb
+# A01: portable paths - relative to the repository root; the v2 database is
+# a bare filename resolved next to duckdb_path (no machine-absolute paths).
+data_dir: data/r1/medium_a
+duckdb_path: data/ashare.duckdb
+parquet_dir: data/r1/medium_a/parquet
+v2_duckdb_path: ashare_v2.duckdb
 
 calendar_table: trade_calendar
 stocks_table: stocks

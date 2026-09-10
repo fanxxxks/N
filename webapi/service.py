@@ -17,11 +17,13 @@ from pydantic import BaseModel, Field
 
 from ashare_data.config import (
     RUNTIME_OVERRIDES_FILENAME,
+    ConfigPathError,
     make_backtest_config,
     make_data_config,
     make_model_config,
     make_sim_config,
     load_config,
+    resolve_runtime_paths,
 )
 from ashare_execution import execution_config_mismatches, validate_execution_config
 from ashare_data.db import AshareDB
@@ -53,6 +55,30 @@ def _get_configs() -> tuple:
         return _load_configs()
     except Exception:  # noqa: BLE001 - dashboard must survive bad config.
         return None, None, None, None
+
+
+def _resolved_paths(root: Path | None = None):
+    """A01 C1: the single runtime-path resolver every service consumer
+    uses — the same one the CLI entry points use, never a second rule."""
+
+    return resolve_runtime_paths(
+        None,
+        project_root=Path(root) if root is not None else ROOT,
+        mode="audit",
+    )
+
+
+def _run_store_root(root: Path | None = None) -> tuple[Path, str]:
+    """``(store_root, source)`` — the one RunStore-root authority (A01 C8).
+
+    ``root=None`` resolves the write-side ``data_dir`` through the shared
+    resolver; an explicit ``root`` keeps its historical meaning (a
+    RunStore root) for tests and administrative callers.
+    """
+
+    if root is not None:
+        return Path(root), "explicit"
+    return _resolved_paths().data_dir, "config"
 
 
 def _read_json(path: Path) -> dict | list | None:
@@ -301,7 +327,18 @@ def get_data_status() -> dict:
             "benchmark": getattr(backtest_config, "benchmark", None),
         },
     }
-    return {"db": db_info, "artifacts": artifacts, "config": config_summary}
+    try:
+        paths_info: dict = _resolved_paths().effective()
+    except (ConfigPathError, FileNotFoundError, OSError) as exc:
+        # A01 C7/C9: an unresolvable path surface is reported, never
+        # silently presented as a healthy empty configuration.
+        paths_info = {"error": f"path resolution failed: {exc}"}
+    return {
+        "db": db_info,
+        "artifacts": artifacts,
+        "config": config_summary,
+        "paths": paths_info,
+    }
 
 
 def list_runs(root: Path | None = None) -> dict:
@@ -310,15 +347,35 @@ def list_runs(root: Path | None = None) -> dict:
     manifest/dataset identity from the frozen runspec, and the artifact
     count — read directly from the RunStore, never stitched from
     convenience JSONs.  Runs whose replay fails surface with
-    ``error`` set (fail-closed visibility, never silently dropped)."""
+    ``error`` set (fail-closed visibility, never silently dropped).
+
+    A01 C8/C9: with ``root=None`` the store root is the config-derived
+    ``data_dir`` (the same root the write side uses); the response always
+    reports ``runs_dir_source`` and ``runs_dir_exists`` so a wrong or
+    unresolvable root cannot masquerade as "no runs"."""
 
     from ashare_model import lifecycle
     from ashare_model.run_store import RunStore
 
-    resolved = Path(root) if root is not None else ROOT
-    store = RunStore(resolved)
+    try:
+        store_root, source = _run_store_root(root)
+    except (ConfigPathError, FileNotFoundError, OSError) as exc:
+        return {
+            "runs": [],
+            "runs_dir": None,
+            "runs_dir_source": "unresolved",
+            "runs_dir_exists": False,
+            "error": f"run root unresolved: {exc}",
+        }
+    store = RunStore(store_root)
     if not store.runs_dir.is_dir():
-        return {"runs": [], "runs_dir": str(store.runs_dir)}
+        return {
+            "runs": [],
+            "runs_dir": str(store.runs_dir),
+            "runs_dir_source": source,
+            "runs_dir_exists": False,
+            "error": None,
+        }
     runs: list[dict] = []
     for run_dir in sorted(store.runs_dir.glob("*/*")):
         if not run_dir.is_dir():
@@ -333,7 +390,7 @@ def list_runs(root: Path | None = None) -> dict:
             "error": None,
         }
         try:
-            entry["state"] = lifecycle.replay_run(resolved, spec_id, run_id)
+            entry["state"] = lifecycle.replay_run(store_root, spec_id, run_id)
             index = store.load_index(spec_id, run_id)
             entry["artifact_count"] = len(index.get("artifacts", []))
             runspec = json.loads(
@@ -345,23 +402,33 @@ def list_runs(root: Path | None = None) -> dict:
         except (lifecycle.LifecycleError, RunStoreError) as exc:
             entry["error"] = str(exc)
         runs.append(entry)
-    return {"runs": runs, "runs_dir": str(store.runs_dir)}
+    return {
+        "runs": runs,
+        "runs_dir": str(store.runs_dir),
+        "runs_dir_source": source,
+        "runs_dir_exists": True,
+        "error": None,
+    }
 
 
 def get_run_detail(root: Path | None, spec_id: str, run_id: str) -> dict:
     """One run's RunStore view: replayed lifecycle state, the event
     trail, the typed artifact index, the runspec identity block, and the
-    ledger trial summary — the single source for the run detail page."""
+    ledger trial summary — the single source for the run detail page.
+
+    ``root=None`` resolves the same config-derived store root as
+    :func:`list_runs` (A01 C8)."""
 
     from ashare_model import lifecycle
     from ashare_model.ledger import ExperimentLedger
     from ashare_model.run_store import RunStore
 
-    store = RunStore(root)
+    store_root, _source = _run_store_root(root)
+    store = RunStore(store_root)
     run_dir = store.runs_dir / spec_id / run_id
     if not run_dir.is_dir():
         raise RunStoreError(f"run {spec_id}/{run_id} does not exist")
-    state = lifecycle.replay_run(root, spec_id, run_id)
+    state = lifecycle.replay_run(store_root, spec_id, run_id)
     index = store.load_index(spec_id, run_id)
     runspec = json.loads(
         (run_dir / run_store.RUNSPEC_FILENAME).read_text(encoding="utf-8")
