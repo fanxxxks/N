@@ -34,7 +34,7 @@ from ashare_data.manifest import (
     schema_digest,
     verify_dataset,
 )
-from tests.conftest import make_bars
+from tests.conftest import make_bars, publish_manifest
 
 # Every data table created by create_schema must be fingerprinted.
 EXPECTED_MANIFEST_TABLES = {
@@ -278,6 +278,13 @@ def test_sync_records_dataset_id(tmp_path):
         sorted(synced_bars["ts_code"].unique().tolist()),
         synced_bars,
     )
+    # A02 (p26 I2/I7): the sync left a primary-only generation (an
+    # intermediate state, not research open); the composite generation is
+    # published after the v2 mirror is populated, and the formal load then
+    # binds the composite identity.  (Whitelist §10.1-2: the old assertion
+    # compared the loader's binding against the sync's primary-only
+    # dataset_id — it pinned the pre-composite semantics.)
+    composite_id = publish_manifest(cfg)
 
     # The offline sync writes only snapshot constituents, so the loader
     # must use the explicit development universe fallback (strict mode
@@ -290,7 +297,7 @@ def test_sync_records_dataset_id(tmp_path):
     # development universe (fail-closed discipline, AGENTS 5.3).
     with pytest.warns(UniverseDevelopmentFallbackWarning):
         loader.load_data()
-    assert loader.dataset_id == dataset_id
+    assert loader.dataset_id == composite_id
 
 
 def test_loader_exposes_dataset_id_when_absent(populated_db_without_manifest):
@@ -743,7 +750,7 @@ def test_a02_composite_generation_publish_and_confirm_round_trip(populated_db):
     assert confirmed.composite_id != confirmed.v2.dataset_id
 
 
-def test_a02_incomplete_group_is_not_research_open(populated_db):
+def test_a02_incomplete_group_is_not_research_open(tmp_path):
     """R6 (p26 §6, I7): a publication carrying only SOME members is an
     intermediate state — the composite confirmation must refuse it and NAME
     the missing member (I12), never fall back to "each library's own
@@ -751,19 +758,34 @@ def test_a02_incomplete_group_is_not_research_open(populated_db):
 
     from ashare_model.runspec import confirm_composite_snapshot
     from ashare_data.manifest import publish_snapshot
+    from tests.conftest import ensure_v2_publication_schema
 
-    v2_path = _composite_v2_path(populated_db)
-    with AshareDB(populated_db.duckdb_path) as db:
-        # Exactly what a primary-only sync publishes: one member, no group.
-        publish_snapshot(db, populated_db)
-    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
-        v2_path, read_only=True
+    cfg = DataConfig(
+        data_dir=tmp_path / "data",
+        duckdb_path=tmp_path / "data" / "ashare.duckdb",
+        parquet_dir=tmp_path / "data" / "parquet",
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        index_codes=["000300.SH"],
+        min_listed_sessions=1,
+    )
+    ensure_v2_publication_schema(tmp_path / "data" / "ashare_v2.duckdb")
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        db.upsert_calendar(
+            [{"trade_date": "20240102", "is_open": True}], cfg
+        )
+        # Exactly what a primary-only sync publishes: one member, no group —
+        # and no earlier complete group exists to fall back to.
+        publish_snapshot(db, cfg)
+    with AshareDB(cfg.duckdb_path, read_only=True) as primary, AshareDB(
+        tmp_path / "data" / "ashare_v2.duckdb", read_only=True
     ) as v2:
         with pytest.raises(DatasetIdMismatch) as exc_info:
-            confirm_composite_snapshot(primary, populated_db, v2)
+            confirm_composite_snapshot(primary, cfg, v2)
     message = str(exc_info.value)
     assert "tushare_v2" in message
-    assert "not all in place" in message or "incomplete" in message
+    assert "not all in place" in message
 
 
 def test_a02_composite_confirm_refuses_v2_only_change(populated_db):
@@ -794,6 +816,71 @@ def test_a02_composite_confirm_refuses_v2_only_change(populated_db):
     message = str(exc_info.value)
     assert "tushare_v2" in message
     assert "daily_adj_factor" in message
+
+
+def test_a02_composite_confirm_refuses_industry_mapping_value_change(populated_db):
+    """R4 (p26 §6, I3/I5): a value-level change to the v2 industry mapping
+    that preserves (count, max) must still change the composite identity —
+    the count/max generation markers the pre-A02 cache key used are not a
+    content identity."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(v2_path) as v2:
+        v2.execute(
+            "INSERT INTO industry_membership_pit VALUES "
+            "('000001.SZ', '801010', 1, '20200101', NULL, '0', '旧一代', "
+            "'20200102')"
+        )
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+    # In-place value mutation preserving count and max(available_date).
+    with AshareDB(v2_path) as v2:
+        v2.execute(
+            "UPDATE industry_membership_pit SET index_code = '801030' "
+            "WHERE ts_code = '000001.SZ'"
+        )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch, match="industry_membership_pit"):
+            confirm_composite_snapshot(primary, populated_db, v2)
+
+
+def test_a02_single_composite_derivation_no_second_hash_path():
+    """R14 (p26 §6, I11, AGENTS §9): the composite identity derivation
+    exists exactly once (``ashare_model.runspec.composite_snapshot_id``)
+    with exactly one kind tag — no second hashing path anywhere in the
+    package sources."""
+
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    derivation_sources: list[str] = []
+    kind_tag_sources: list[str] = []
+    for package in ("ashare_model", "ashare_data"):
+        for path in (root / package).glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    if node.name == "composite_snapshot_id":
+                        derivation_sources.append(path.name)
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if (
+                            isinstance(target, ast.Name)
+                            and target.id == "_COMPOSITE_SNAPSHOT_KIND"
+                        ):
+                            kind_tag_sources.append(path.name)
+    assert derivation_sources == ["runspec.py"]
+    assert kind_tag_sources == ["runspec.py"]
 
 
 def test_a02_composite_confirm_refuses_primary_change_between_queries(populated_db):

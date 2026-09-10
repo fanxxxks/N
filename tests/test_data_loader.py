@@ -11,7 +11,7 @@ import torch
 from ashare_data import gates
 from ashare_data.config import DataConfig, ModelConfig
 from ashare_data.db import AshareDB
-from ashare_data.manifest import DatasetIdMismatch, latest_manifest
+from ashare_data.manifest import DatasetIdMismatch
 from ashare_data.universe import (
     ResolvedUniverse,
     UniverseContractError,
@@ -122,9 +122,6 @@ def _seed_loader_db(
         )
         db.upsert_calendar(calendar, config)
         db.upsert_constituents(memberships, config)
-    # A02: formal loads confirm the content identity, so the seeded database
-    # must carry a matching published manifest.
-    publish_manifest(config)
     # p19: the loader's formal price source is the v2 database; seed it
     # with the same bars (neutral adj_factor/limits, no suspensions).
     from tests.conftest import populate_v2_price_tables
@@ -138,6 +135,10 @@ def _seed_loader_db(
         codes,
         bars if bars is not None and not bars.empty else pd.DataFrame(),
     )
+    # A02 (p26 I2/I7): formal loads confirm the COMPOSITE identity, so the
+    # composite generation is published only after both sides are seeded
+    # (the group binds the content the formal load will read).
+    publish_manifest(config)
 
 
 def test_load_universe_and_data(populated_db: DataConfig):
@@ -208,15 +209,101 @@ def test_formal_load_refuses_drifted_content(populated_db):
         AshareDataLoader(populated_db, ModelConfig()).load_data()
 
 
+def test_formal_load_refuses_v2_only_drift(populated_db):
+    """A02 R3 (p26 §6, I3/I5/I6): a change in the v2 database ALONE is a
+    different composite input — the formal load must refuse the stale
+    generation with the v2 side named, never fall back to the primary's
+    own latest identity."""
+
+    v2_path = populated_db.duckdb_path.parent / "ashare_v2.duckdb"
+    with AshareDB(v2_path) as v2:
+        v2.execute(
+            "INSERT INTO daily_adj_factor VALUES "
+            "('000001.SZ', '20240105', 1.5)"
+        )
+    with pytest.raises(DatasetIdMismatch, match="tushare_v2"):
+        AshareDataLoader(populated_db, ModelConfig()).load_data()
+
+
+def test_formal_load_refuses_incomplete_generation(data_config):
+    """A02 R6 (p26 §6, I7): a publication carrying only the primary member
+    (the post-sync intermediate state) is not research open — the formal
+    load must refuse with the missing member named."""
+
+    from ashare_data.manifest import publish_snapshot
+    from tests.conftest import populate_v2_price_tables
+
+    dates, ts_codes, bars = make_bars(5)
+    with AshareDB(data_config.duckdb_path) as db:
+        db.create_schema(data_config)
+        db.upsert_daily(bars.to_dict("records"), data_config)
+        db.upsert_stocks(
+            [
+                {
+                    "ts_code": code,
+                    "name": code,
+                    "industry": None,
+                    "list_date": "20200101",
+                    "is_st": False,
+                }
+                for code in ts_codes
+            ],
+            data_config,
+        )
+        db.upsert_calendar(
+            [{"trade_date": date, "is_open": True} for date in dates],
+            data_config,
+        )
+        db.upsert_constituents(
+            [
+                {
+                    "index_code": "000300.SH",
+                    "ts_code": code,
+                    "in_date": f"2020010{i + 1}",
+                    "out_date": "99991231",
+                }
+                for i, code in enumerate(ts_codes)
+            ],
+            data_config,
+        )
+        # Exactly the state a sync leaves behind: a primary-only
+        # publication (one member, no composite group).
+        publish_snapshot(db, data_config)
+    v2_path = Path(data_config.v2_duckdb_path)
+    if not v2_path.is_absolute():
+        v2_path = data_config.duckdb_path.parent / v2_path
+    populate_v2_price_tables(v2_path, dates, ts_codes, bars)
+    with pytest.raises(DatasetIdMismatch, match="tushare_v2"):
+        AshareDataLoader(data_config, ModelConfig()).load_data()
+
+
 def test_formal_load_binds_the_confirmed_identity(populated_db):
-    """A02 (p26 I2, acceptance 1): a formal load binds the *confirmed*
-    identity (not merely "the latest saved id") and records the machine
-    status of that binding."""
+    """A02 (p26 I2/I6, acceptance 1 + 8): a formal load binds the
+    *content-confirmed composite* identity — the one string derived by the
+    single composite authority that RunSpec, the semantic cache and the
+    factor cache consume — and records the machine status of the binding.
+
+    A02 contract change (whitelist §10.1-2, p26 §4.2 captain ruling 1):
+    the old assertion compared ``loader.dataset_id`` against
+    ``latest_manifest(...).dataset_id`` (the primary-only id).  That pinned
+    the pre-composite semantics; RUNSPEC_SCHEMA_VERSION 2 defines the
+    formal identity as the dual-database composite, so the binding is now
+    asserted against the composite derivation itself — the assertion is
+    strictly stronger (it additionally fails if the loader binds the
+    primary-only id)."""
+
+    from ashare_model.runspec import confirm_composite_snapshot
 
     loaded = AshareDataLoader(populated_db, ModelConfig()).load_data()
     assert loaded.dataset_identity_status == "confirmed"
-    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
-        assert loaded.dataset_id == latest_manifest(db, populated_db).dataset_id
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db, AshareDB(
+        populated_db.duckdb_path.parent / "ashare_v2.duckdb", read_only=True
+    ) as v2:
+        confirmed = confirm_composite_snapshot(db, populated_db, v2)
+    assert loaded.dataset_id == confirmed.composite_id
+    # The composite — never the primary-only id (I6: one authority string).
+    assert loaded.dataset_id != confirmed.primary.dataset_id
+    assert loaded.dataset_id != confirmed.v2.dataset_id
 
 
 def test_unknown_identity_mode_is_rejected(populated_db):
@@ -232,17 +319,25 @@ def test_unknown_identity_mode_is_rejected(populated_db):
 def test_dataset_id_narrowed_except_lets_programming_errors_propagate(
     populated_db, monkeypatch
 ):
-    """IP-05 side item (retargeted to the A02 confirmation path): the
-    identity guard must only swallow the expected storage failure; a
+    """IP-05 side item (retargeted to the A02 composite confirmation path):
+    the identity guard must only swallow the expected storage failure; a
     programming error in the confirmation resolver must surface instead of
-    silently binding dataset_id=None."""
+    silently binding dataset_id=None.
+
+    A02 contract change (whitelist §10.1-2): the guarded resolver moved
+    from the single-DB ``confirm_dataset_identity`` to the composite
+    ``confirm_composite_snapshot`` (the formal path's resolver per p26
+    I2/I6); the old patch target is no longer on the formal path.  The
+    guarded intent — expected storage failures swallowed, programming
+    errors propagated — is unchanged."""
+
     from ashare_model import data_loader as data_loader_module
 
-    def broken(db, config, **kwargs):
+    def broken(primary_db, primary_config, v2_db, **kwargs):
         raise TypeError("resolver signature bug")
 
     monkeypatch.setattr(
-        data_loader_module, "confirm_dataset_identity", broken
+        data_loader_module, "confirm_composite_snapshot", broken
     )
     with pytest.raises(TypeError, match="resolver signature bug"):
         AshareDataLoader(populated_db, ModelConfig()).load_data()
@@ -300,6 +395,10 @@ def test_load_data_feeds_industry_relative_factors(populated_db: DataConfig):
             },
         ],
     )
+    # A02 (p26 I2/I7): the v2 membership seeding moved the v2 content on
+    # from the fixture's published generation — republish before the formal
+    # load (drift is refused, never silently absorbed).
+    publish_manifest(populated_db)
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     tensor = loader.factor_tensor.numpy()
@@ -336,6 +435,9 @@ def test_load_data_exposes_industry_codes_for_vm(populated_db: DataConfig):
             for code in ("000001.SZ", "600000.SH")
         ],
     )
+    # A02 (p26 I2/I7): the v2 seeding moved the content on from the
+    # fixture's published generation — republish before the formal load.
+    publish_manifest(populated_db)
     loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     codes = loader.industry_codes

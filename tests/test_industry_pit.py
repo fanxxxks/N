@@ -55,7 +55,7 @@ from ashare_data.capital_flow import (
 from ashare_data.config import DataConfig
 from ashare_data.db import AshareDB
 from ashare_model.feature_registry import PitLevel, pit_level_of
-from tests.conftest import populate_v2_industry_tables
+from tests.conftest import populate_v2_industry_tables, publish_manifest
 
 DATES = [f"2024010{d}" for d in range(1, 9)]  # 8 open sessions
 
@@ -647,23 +647,19 @@ def test_loader_exposes_industry_index_freshness(populated_db):
             "SELECT index_code, industry_name, trade_date, close "
             "FROM _sw_index_rows"
         )
-    # A02 (p26 I2) — OPEN OBSERVATION, not a workaround:
-    # this test fabricates a stale Shenwan index by rewriting the
-    # manifest-covered `sw_industry_index` table after the fixture published
-    # its manifest.  Republishing first does NOT make the database
-    # confirmable here: an uncached build on a read-write connection
-    # (``publish_manifest``) and the confirmation path's build on a read-only
-    # connection disagree about that table's fingerprint, even though the
-    # publish is self-consistent (a fresh read-write rebuild returns the same
-    # id).  Observed: published 89b554d99df2… vs confirmed 16bbb9b9beec…,
-    # drifted: sw_industry_index, on an unmodified-in-between database.
-    # The loader's freshness/degradation exposure is independent of identity,
-    # so it is exercised here through the explicit, machine-marked legacy
-    # audit mode; the formal refusal for this database shape is covered by
-    # tests/test_data_loader.py.  Registered as an A02 follow-up finding.
-    loader = AshareDataLoader(
-        populated_db, ModelConfig(), dataset_identity_mode="query"
-    )
+    # A02 OB-1 (CLOSED): this test fabricates a stale Shenwan index by
+    # rewriting the manifest-covered `sw_industry_index` table after the
+    # fixture published its composite generation.  Before the OB-1 fix,
+    # republishing could not make the database confirmable (a same-second
+    # stale manifest row won the `created_at DESC, dataset_id DESC`
+    # tiebreak, and `ON CONFLICT DO NOTHING` made the wrong selection
+    # permanent).  Publication generations fixed that ordering, so the
+    # formal (default) mode is restored here: republish the composite
+    # generation over the rewritten content and confirm it (see
+    # tests/test_manifest.py::test_a02_republishing_restores_confirmability
+    # for the OB-1 regression itself).
+    publish_manifest(populated_db)
+    loader = AshareDataLoader(populated_db, ModelConfig())
     loader.load_data()
     assert loader.industry_index_lag == 5
     assert loader.industry_source_degraded is not None

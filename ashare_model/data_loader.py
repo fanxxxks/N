@@ -48,9 +48,9 @@ from ashare_data.db import AshareDB, sql_quoted_list
 from ashare_data.fundamentals import build_pit_frames
 from ashare_data.manifest import (
     DatasetIdMismatch,
-    confirm_dataset_identity,
     resolve_dataset_id,
 )
+from ashare_model.runspec import confirm_composite_snapshot
 from ashare_data.processor import (
     adjusted_price_scale,
     apply_adjusted_scale,
@@ -572,18 +572,29 @@ class AshareDataLoader:
         # identity leaves this path byte-identical to pre-wiring
         # behavior, and a hit returns the exact float32 tensor the miss
         # path would have computed (the cast is deterministic).
-        # A02 (p26 I2, acceptance 1): the FORMAL path consumes the
-        # content-confirmed snapshot identity.  Unconfirmed, unconfirmable or
-        # drifted content is refused here — never downgraded to ``None`` and
-        # continued.  The pre-A02 query + downgrade behavior survives only
-        # under the explicitly requested legacy audit mode, and there it
-        # leaves the machine-readable ``legacy``/``degraded`` marker.
+        # A02 (p26 I2/I6, acceptance 1 + 8): the FORMAL path consumes the
+        # *content-confirmed composite snapshot identity* — one string
+        # derived through the single composite authority
+        # (``runspec.confirm_composite_snapshot``) that the RunSpec
+        # factory, the semantic cache and the regime locks consume too.
+        # Unconfirmed, unconfirmable, drifted or incomplete-generation
+        # (one member published, the other not) states are refused here —
+        # never downgraded to ``None`` and continued.  The pre-A02 query +
+        # downgrade behavior survives only under the explicitly requested
+        # legacy audit mode, and there it leaves the machine-readable
+        # ``legacy``/``degraded`` marker.
         self.dataset_id = None
         self.dataset_identity_status = "unresolved"
         if self.dataset_identity_mode == "confirm":
             try:
-                with AshareDB(self.config.duckdb_path, read_only=True) as db:
-                    self.dataset_id = confirm_dataset_identity(db, self.config)
+                with AshareDB(
+                    self.config.duckdb_path, read_only=True
+                ) as db, AshareDB(
+                    resolve_v2_duckdb_path(self.config), read_only=True
+                ) as v2db:
+                    snapshot = confirm_composite_snapshot(
+                        db, self.config, v2db
+                    )
             except DatasetIdMismatch:
                 raise
             except (duckdb.Error, ValueError) as exc:
@@ -594,10 +605,12 @@ class AshareDataLoader:
                 # original exception is chained, so the cause stays
                 # diagnosable; unexpected error classes still propagate.
                 raise DatasetIdMismatch(
-                    "cannot confirm the dataset identity for a formal load: "
-                    f"{exc}; a formal run requires a published manifest whose "
-                    "content still matches the database (A02 I2)"
+                    "cannot confirm the composite snapshot identity for a "
+                    f"formal load: {exc}; a formal run requires a published "
+                    "composite generation (primary + tushare_v2) whose "
+                    "content still matches both databases (A02 I2/I7)"
                 ) from exc
+            self.dataset_id = snapshot.composite_id
             self.dataset_identity_status = "confirmed"
         else:
             try:
