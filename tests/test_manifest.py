@@ -974,6 +974,30 @@ def test_a02_composite_paths_refuse_read_write_v2_connection(populated_db):
             confirm_composite_snapshot(primary, populated_db, v2_rw)
 
 
+def test_a02_single_db_confirm_gates_older_protocol_publication(populated_db):
+    """Review follow-up: the audit-level single-DB confirmation applies the
+    same R16 protocol gate — a publication made under an older publication
+    protocol is legacy, never silently re-identified."""
+
+    from ashare_data import manifest as manifest_mod
+    from ashare_data.manifest import (
+        confirm_dataset_identity,
+        publish_snapshot,
+    )
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        publish_snapshot(db, populated_db)
+
+    original = manifest_mod.SNAPSHOT_PUBLICATION_VERSION
+    manifest_mod.SNAPSHOT_PUBLICATION_VERSION = "2-extended"
+    try:
+        with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+            with pytest.raises(DatasetIdMismatch, match="legacy"):
+                confirm_dataset_identity(db, populated_db)
+    finally:
+        manifest_mod.SNAPSHOT_PUBLICATION_VERSION = original
+
+
 def test_a02_composite_confirm_refuses_primary_change_between_queries(populated_db):
     """R7 (p26 §6, I2/I7): an identity confirmed before a content change
     must not survive the change — re-confirmation detects the drift and
