@@ -597,6 +597,84 @@ def resolve_dataset_id(db: AshareDB, config) -> str | None:
     return manifest.dataset_id if manifest is not None else None
 
 
+#: Publication-protocol identity (A02, p26 §4.2 captain ruling 2).  This is a
+#: new artifact-facing version: it must stay wired into the owner index
+#: (``ashare_model.runspec:_VERSION_IMPORTS``) so artifact classification can
+#: see which publication protocol produced an identity.
+SNAPSHOT_PUBLICATION_VERSION = "1"
+
+#: Kind tag of the composite snapshot identity in the single hash authority
+#: (``ashare_model.identity.content_hash``) — no second hashing path.
+_COMPOSITE_SNAPSHOT_KIND = "snapshot"
+
+#: Input domains that ARE part of the composite identity this round
+#: (p26 §3/I3).  The list is data, not a second implementation: it documents
+#: what the composite covers and feeds ``composite_snapshot_domains()``.
+COMPOSITE_DOMAINS: tuple[str, ...] = (
+    "primary:daily_bar",  # 行情
+    "primary:trade_calendar",  # 交易日历
+    "primary:constituents",  # PIT universe / 成分
+    "primary:stocks",  # 证券主数据（上市/退市）
+    "primary:fundamental_pit",  # 财务（含版本代际）
+    "primary:margin_balance",  # 两融
+    "primary:sw_industry_index",  # 行业指数
+    "primary:sw_industry_member",  # 行业成员
+    "v2:all_partitioned_tables",  # 复权/daily_basic/交易约束/价格等 v2 全域
+)
+
+#: Domains explicitly NOT included this round (captain ruling 3): they must
+#: not enter the identity silently, and must not be dropped from this list
+#: silently either (p26 I3-EXT / R15).
+NOT_INCLUDED_DOMAINS: tuple[str, ...] = (
+    "v2:earnings_forecast_pit",
+    "v2:earnings_express_pit",
+    "v2:repurchase_event_pit",
+    "v2:holder_number_pit",
+    "v2:index_weight_pit(content)",
+    "primary:legacy_unpartitioned_tables",
+)
+
+
+def composite_snapshot_domains() -> dict[str, tuple[str, ...]]:
+    """The coverage statement of the composite identity (A02 I3/I3-EXT)."""
+
+    return {
+        "included": COMPOSITE_DOMAINS,
+        "not_included": NOT_INCLUDED_DOMAINS,
+        "publication_version": (SNAPSHOT_PUBLICATION_VERSION,),
+    }
+
+
+def composite_snapshot_id(
+    primary_manifest: DatasetManifest,
+    v2_manifest: DatasetManifest | None,
+    *,
+    publication_version: str = SNAPSHOT_PUBLICATION_VERSION,
+) -> str:
+    """Composite identity over both databases (A02 I3, p26 §4.2).
+
+    Composed strictly from the two existing content-addressed manifest ids
+    plus the publication-protocol version, through the single hash authority
+    (``ashare_model.identity.content_hash``) — no second hashing path and no
+    re-derivation of either side's content.  Adding a domain to the identity
+    requires going through the I3-EXT extension contract and bumping
+    ``SNAPSHOT_PUBLICATION_VERSION`` (R15/R16).
+    """
+
+    from ashare_model.identity import content_hash
+
+    payload = {
+        "primary": primary_manifest.dataset_id,
+        "primary_manifest_version": primary_manifest.manifest_version,
+        "v2": v2_manifest.dataset_id if v2_manifest is not None else None,
+        "v2_manifest_version": (
+            v2_manifest.manifest_version if v2_manifest is not None else None
+        ),
+        "publication_version": publication_version,
+    }
+    return content_hash(_COMPOSITE_SNAPSHOT_KIND, payload)
+
+
 #: Machine-readable capability statement of the verification modes (A02 I8).
 _VERIFY_CAPABILITIES: dict[str, dict[str, object]] = {
     "fast": {

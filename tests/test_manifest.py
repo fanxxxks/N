@@ -414,3 +414,54 @@ def test_a02_fast_capability_is_declared_not_implied(populated_db):
     declared = capability("fast")
     assert declared["content_confirmation"] is False
     assert capability("full")["content_confirmation"] is True
+
+
+def test_a02_composite_identity_covers_both_databases(populated_db):
+    """A02 acceptance 2 (p26 I3, R3/R5): the composite identity is composed
+    from BOTH databases' content ids through the single hash authority."""
+
+    from ashare_data import manifest as manifest_mod
+    from dataclasses import replace
+
+    builder = getattr(manifest_mod, "composite_snapshot_id", None)
+    assert builder is not None, "A02 requires manifest.composite_snapshot_id"
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        primary = _manifest(db, populated_db)
+    v2 = replace(primary, dataset_id="v2-" + primary.dataset_id)
+
+    composite = builder(primary, v2)
+    assert composite and composite != primary.dataset_id
+    assert builder(primary, v2) == composite  # deterministic (I4)
+    # Changing ONLY the v2 side must change the composite identity (R3/R5).
+    assert builder(primary, replace(v2, dataset_id="v2-changed")) != composite
+    # A missing v2 side is representable and distinct (no silent fabrication).
+    assert builder(primary, None) != composite
+
+
+def test_a02_composite_domain_coverage_is_explicit(populated_db):
+    """A02 acceptance 2 (p26 I3/I3-EXT, R15): included and explicitly
+    NOT-included input domains must be machine-readable, so no domain can be
+    added or dropped silently."""
+
+    from ashare_data import manifest as manifest_mod
+
+    coverage = getattr(manifest_mod, "composite_snapshot_domains", None)
+    assert coverage is not None, (
+        "A02 requires manifest.composite_snapshot_domains() (I3-EXT)"
+    )
+    declared = coverage()
+    included = set(declared["included"])
+    not_included = set(declared["not_included"])
+    assert included and not_included
+    assert included.isdisjoint(not_included)
+    for domain in (
+        "v2:earnings_forecast_pit",
+        "v2:earnings_express_pit",
+        "v2:repurchase_event_pit",
+        "v2:holder_number_pit",
+        "v2:index_weight_pit(content)",
+    ):
+        assert domain in not_included, domain
+    assert declared["publication_version"] == (
+        manifest_mod.SNAPSHOT_PUBLICATION_VERSION,
+    )
