@@ -184,13 +184,23 @@
 | 8 | `docs/p25_f3_expectation_event_draft.md`（±2） | 状态行由 DRAFT 改为 **APPROVED & IMPLEMENTED**（用户原文「批准」+ captain 代行签署，引 89dd121 授权扩展） | **无冲突**：p25 的批准状态与 A04 无关；**不得**据此推定 A04 可自行改状态（A04 的 DRAFT 状态由本团队 t6 走批准流程）。 |
 | — | `ashare_data/events.py`（未跟踪，新建） | F3 四因子的帧构建；全部读经 `ashare_data.pit_import` 的单一 as-of 机制；公告日当天不可见（`available_date` 键控） | **可复用（B01 相关）**：其「公告日+1 可见」语义与 B01 §3/I3 的四时间语义一致；但 A04 不消费它。 |
 
-**判定结论**：A04 与 F3 WIP **无文件级冲突**（F3 只新增，未触及 `MARGIN_*`）；但存在
-**三处版本起点分叉**（`FEATURE_REGISTRY_VERSION` 14→15、`RESEARCH_DOMAIN_VERSION`
-5→6、`GRAMMAR_VERSION` 9→10）与**一处计数位移**（槽位 83→87）。因此 A04 的实现
-commit **必须**：重新运行 §4.1 的全量检索、重新测量 §1.9 的计数、并在版本影响表
-中重述每一处偏离的理由（AGENTS §3.2、§11.3）。**合并顺序**：若 F3 先合并，A04 从
-新的 main 起点重做本表；若 A04 先合并，F3 必须在其版本表中承接 14→15 的既有
-bump（不得回退）。两者都不得依赖对方未提交的工作树状态（AGENTS §12）。
+**判定结论**：A04 与 F3 WIP **无文件级冲突**（F3 只新增，未触及 `MARGIN_*`）；F3 WIP
+侧存在三处版本推进（`FEATURE_REGISTRY_VERSION` 14→15、`RESEARCH_DOMAIN_VERSION`
+5→6、`GRAMMAR_VERSION` 9→10）与一处计数位移（槽位 83→87）。
+
+**captain 裁决 8（2026-09-10）：A04 按当前主仓 owner 常量实现，不预判 F3 合并。**
+- `FEATURE_REGISTRY_VERSION` **14 → 15（必须 bump）**；
+- `RESEARCH_DOMAIN_VERSION` **维持 5**；
+- `GRAMMAR_VERSION` **维持 9**；
+- 槽位/可采样/算子计数**按当前 83 实测**（§1.9）；
+- F3（p25）尚未准入，且事件域已裁决不纳入 A02 身份，故**不得**把 F3 的版本起点
+  当作 A04 的实现前提。
+- **合并时对账**：若 F3 先合并，A04 的 bump 目标与三项计数**在合并时重新对账**
+  （从新的 main 起点重测并重述 §4.2）；若 A04 先合并，F3 必须在其版本表中承接
+  14→15 的既有 bump（不得回退）。两者都不得依赖对方未提交的工作树状态（AGENTS §12）。
+
+因此 A04 的实现 commit **必须**：重新运行 §4.1 的全量检索、重新测量 §1.9 的计数、
+并在版本影响表中重述每一处偏离的理由（AGENTS §3.2、§11.3）。
 5. **`_FUNDAMENTAL_TTM` 等可用性模板文本是**描述性**声明**，不是机器判据；
    A04 的目标是让声明与真实来源一致，并让清单可核对。
 6. 机器 6C/12T、16GB RAM、串行；A04 的测量不需要重跑搜索，只需构造合法
@@ -318,13 +328,13 @@ git -C D:\minequant\AlphaGPT grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"
 
 | 版本所有者 | 旧值 | 新值 | bump / 不 bump 理由 |
 |---|---|---|---|
-| `ashare_model/feature_registry.py` `FEATURE_REGISTRY_VERSION` | `14` | **`15`（必须 bump）** | 语义类型与可用性规则是注册表记录的语义字段；F2 的类型/可见性/依赖口径变化改变了「注册表描述的特征语义」。方案 §四 A04 版本节原文：「类型变化会改变可搜索表达式，必须评估 grammar/feature registry/semantic cache 及旧公式兼容性。」bump 后由 `RunSpec` 版本集合与 artifact 分类承载代际区分。 |
-| `ashare_model/vocab.py` `GRAMMAR_VERSION` | `9` | **不变（建议）** | 本次不新增/删除 token、不改变词表顺序与长度、不改变规范化规则（I7）。**但**：若批准人裁决「特征的语义类型是 grammar 语义的一部分」，则须 bump——该二选一在 §11 A04-A4 中交由批准人裁决；实现 commit 必须记录裁决结果。 |
+| `ashare_model/feature_registry.py` `FEATURE_REGISTRY_VERSION` | `14` | **`15`（必须 bump；captain 裁决 8，2026-09-10：14→15 确认）** | 语义类型与可用性规则是注册表记录的语义字段；F2 的类型/可见性/依赖口径变化改变了「注册表描述的特征语义」。方案 §四 A04 版本节原文：「类型变化会改变可搜索表达式，必须评估 grammar/feature registry/semantic cache 及旧公式兼容性。」bump 后由 `RunSpec` 版本集合与 artifact 分类承载代际区分。裁决 8 确认本项按当前主仓 owner 常量 14→15 执行，**不预判 F3**。 |
+| `ashare_model/vocab.py` `GRAMMAR_VERSION` | `9` | **维持 `9`（captain 裁决 8，2026-09-10：已裁决，不再是待决项）** | 本次不新增/删除 token、不改变词表顺序与长度（83 槽位）、不改变规范化规则（I7），故词表语义未变。**裁决 8 明确**：A04 按当前主仓 owner 常量实现，`GRAMMAR_VERSION` 维持 9；「特征的语义类型是否构成 grammar 语义」不再作为 bump 依据（原 A04-A4 的待裁决二选一已由裁决 8 关闭）。若实现意外改动了词表顺序/长度或规范化，按 §10.6 停下另立契约。 |
 | `ashare_model/factors.py` `FACTOR_COMPUTE_VERSION` | `4` | **不变** | 数值计算零改动（I9）。若实现意外改变数值 → 停下重新分类（AGENTS §3.1）。 |
 | `ashare_model/semantic_cache.py` `SEMANTIC_CACHE_VERSION` | `1` | **视实现决定（倾向 bump）** | 语义缓存的键含 `dataset_id`、reward/protocol 版本与窗口（`semantic_cache.py:11/71/162`）；类型/注册表版本变化会改变「同一公式是否语义等价」的判定基础。若实现把 `FEATURE_REGISTRY_VERSION` 纳入键或校验，则按同一理由 bump；否则须在实现 commit 举证「旧条目不可能被错误命中」。 |
 | `ashare_model/factor_cache.py` `FACTOR_CACHE_VERSION` | `1` | **不变** | 缓存键已含 `feature_registry_version`（`load_cache.py:127`），因此 `FEATURE_REGISTRY_VERSION` bump 会自动使旧张量条目失配（identity 校验判 miss）。除非 A02 一并改变键语义，否则本包不 bump。 |
 | `ashare_model/data_tier.py` `DATA_TIER_VERSION` | `2` | **不变** | `tier_of_pit_level` 的映射机制零改动；F2 的 PIT level 实测已是 `PIT_CAPITAL`（§1.7），纠偏不改变 tier。若实现改变了任何特征的 tier，必须停下重新分类并在此表登记。 |
-| `ashare_model/research_domain.py` `RESEARCH_DOMAIN_VERSION` | `5` | **不变（建议）** | F2 的域归属（`ashare_domain.py:166`）不在本次纠偏范围；若 FO-01 清单核对发现域归属与真实语义冲突，须**另立契约**修订，不在本包内顺手改。 |
+| `ashare_model/research_domain.py` `RESEARCH_DOMAIN_VERSION` | `5` | **维持 `5`（captain 裁决 8，2026-09-10：维持 5）** | F2 的域归属（`ashare_domain.py:166`）不在本次纠偏范围；裁决 8 确认维持 5。若 FO-01 清单核对发现域归属与真实语义冲突，须**另立契约**修订，不在本包内顺手改。 |
 | `ashare_model/artifact_schemas.py` `ARTIFACT_SCHEMA_VERSION` | `2` | **视字段决定** | 若为 I6 新增结构化「单位/NaN」字段并写入 artifact 顶层，则按 `artifact_schemas.py:41-44` 约定 bump 并同步 `LEGACY_SCHEMA_VERSIONS`；若只存在于注册表/生成文档，则不 bump。 |
 | `ashare_model/runspec.py` `RUNSPEC_SCHEMA_VERSION` | `1` | **不变（建议）** | RunSpec 已通过 `feature_registry_version` 间接承载注册表代际；除非新增顶层字段（如显式 `feature_metadata_version`），否则不 bump。 |
 | `ashare_model/versions.py` `PROTOCOL_VERSION` | `"27"` | **不变** | 评价协议（fold、指标、统计校正）零改动。 |
@@ -337,12 +347,15 @@ git -C D:\minequant\AlphaGPT grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"
 **版本影响表使用约束**：本表是**草案的预期**，不是实现授权。实现 commit 必须
 重新运行 §4.1 检索、逐项复核本表，并对每一处偏离给出理由（AGENTS §3.2）。
 
-**已知版本起点分叉（§2.1.4）**：`AlphaGPT-factor` WIP（`codex/factor-semantic-fixes`
-@ `0a2ecee`）已把 `FEATURE_REGISTRY_VERSION` 14→15、`RESEARCH_DOMAIN_VERSION` 5→6、
-`GRAMMAR_VERSION` 9→10。本表的「旧值」列是 **main @ `1fb1b16`** 的值；若该 WIP 先
-合并，A04 的 bump 目标分别为 **15→16 / 6→7**（`GRAMMAR_VERSION` 由 §11 A04-A4 裁决），
-且 §1.9 的计数（83 槽位 / 70 可采样）须重测为 87 / 74 之类的新值。实现 commit 必须
-以**重测结果**为准，不得照抄本表数字。
+**已知版本起点与 F3 的关系（captain 裁决 8，2026-09-10）**：`AlphaGPT-factor` WIP
+（`codex/factor-semantic-fixes` @ `0a2ecee`）已把 `FEATURE_REGISTRY_VERSION` 14→15、
+`RESEARCH_DOMAIN_VERSION` 5→6、`GRAMMAR_VERSION` 9→10。本表的「旧值」列是
+**main @ `1fb1b16`** 的值。**裁决 8：A04 按当前主仓 owner 常量实现，不预判 F3 合并**
+——即 `FEATURE_REGISTRY_VERSION` 14→15、`RESEARCH_DOMAIN_VERSION` 维持 5、
+`GRAMMAR_VERSION` 维持 9、计数按当前 83 槽位 / 70 可采样实测（§1.9）。**若 F3 先合并，
+A04 的 bump 目标与三项计数在合并时重新对账**（从新的 main 起点重测，并重述本表与
+§2.1.4）；届时 `FEATURE_REGISTRY_VERSION` 的自增目标相应上移，但**不得**照抄本表
+数字。实现 commit 必须以**重测结果**为准。
 
 ## 5. 迁移/拒绝策略
 
@@ -478,13 +491,30 @@ git -C D:\minequant\AlphaGPT grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"
 | A04-A1 | §3/I2：F2 两因子的联合可见性表达（margin T+1 + daily_basic 当日） | 可用时间 | F04 的可见性错配保留 |
 | A04-A2 | §3/I3：语义类型判定规则与 F2 的最终类型（`CROSS_SECTIONAL_SIGNAL` vs `VOLUME_LIKE`） | 特征语义类型 → 搜索空间 | 类型错配保留；`CS_NEUTRALIZE` 可用性裁决悬空 |
 | A04-A3 | §3/I4：`depends_on` 口径统一（表名 vs 表.字段） | 依赖声明口径 | 清单无法核对；生成文档口径漂移 |
-| A04-A4 | §4.2：`FEATURE_REGISTRY_VERSION` 14→15 与 `GRAMMAR_VERSION` 是否 bump | artifact/grammar 兼容性 | 新旧注册表代际不可区分 |
+| A04-A4 | §4.2：`FEATURE_REGISTRY_VERSION` 14→15 与 `GRAMMAR_VERSION` 是否 bump——**captain 裁决 8 已关闭**：14→15 执行、`RESEARCH_DOMAIN_VERSION` 维持 5、`GRAMMAR_VERSION` 维持 9 | artifact/grammar 兼容性 | 已裁决，不再悬空；实现须按裁决 8 执行 |
 | A04-A5 | §3/I5 + I6：FO-01 清单的交付形态与新增「单位/NaN」结构化字段 | 存量契约清单的权威形态 | 只能继续手工核对 |
 | A04-A6 | §5.2：旧公式在新型下的拒绝策略 | 旧产物可用边界 | 旧公式可能被静默修正重用 |
 | A04-A7 | §2.3 非目标 4：不修改 D7 资格门 | 资格门范围 | 可能被「顺手修」引入第二套映射 |
 | A04-A8 | §7.3：合法动作集合前后对照的测量口径 | 搜索空间影响的证明方式 | 无法证明类型变更的实际影响 |
 | A04-A9 | §8：资源上限数值（60s/512MB 清单；10min/4GB 对照） | 工程预算 | 无上限即无法判定「超限即停」 |
 | A04-A10 | §10 停止条件（尤其「源语义无法确认即暂停」与「不得放宽类型」） | 证据完整性红线 | 停止条件不可作为失败裁决依据 |
+
+## 11bis. captain 裁决记录（2026-09-10，依用户转授，`reports/alphagpt-ab/00_authority_exception_record.md`）
+
+本节如实登记 captain 对本文相关处的裁决**原文要点与落点**，供 t6 批准决策记录
+引用。**本文件状态仍为 DRAFT**：按团队分工，DRAFT→APPROVED 的状态变更与批准
+记录由 captain 在 t6 执行；起草人只记录裁决内容，**不自行改状态**（AGENTS §3.2、
+p18 §3.2）。
+
+| 裁决 | 内容（captain 原文要点） | 落点 |
+|---|---|---|
+| 裁决 8 | **A04 与 F3 WIP 的版本起点分叉**：A04 按**当前主仓 owner 常量**实现——`FEATURE_REGISTRY_VERSION` 14→15、`RESEARCH_DOMAIN_VERSION` **维持 5**、`GRAMMAR_VERSION` **维持 9**、槽位按**当前 83 实测**；**不预判 F3 合并**；若 F3 先合并，A04 的 bump 目标与计数在合并时重新对账。理由：F3（p25）尚未准入，且事件域已裁决不纳入 A02 身份 | §2.1.4 判定结论段；§4.2 `FEATURE_REGISTRY_VERSION` / `RESEARCH_DOMAIN_VERSION` / `GRAMMAR_VERSION` 三行；§4.2「已知版本起点与 F3 的关系」段；§11 A04-A4（已关闭） |
+| （相关）F3 WIP 同模式问题登记为 FO-02 输入 | 四个 F3 因子复用同一季度 TTM 模板，而真实来源是公告日驱动的事件表；**A04 不得顺手改** | §2.1.4 第 3 行判定（「需注意（非冲突但同模式）」）；§2.3 非目标 5；§10.6 |
+
+**裁决未涵盖、仍待 captain/用户在 t6 决定的项**：`SEMANTIC_CACHE_VERSION` 与
+`FACTOR_CACHE_VERSION` 的具体 bump 形式（§4.2 仍标「视实现决定」）、以及
+**A04-A2 的 F2 语义类型二选一**（`CROSS_SECTIONAL_SIGNAL` vs `VOLUME_LIKE`，
+裁决 8 未涉及，仍属研究语义待批准项）。
 
 ## 12. 附：本草案的边界核对（落盘时的事实）
 
@@ -496,3 +526,10 @@ git -C D:\minequant\AlphaGPT grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"
   评审其 F3 WIP，结论见 §2.1 假设 4）。
 - **未**自我批准：状态为 DRAFT，正文不含 `APPROVED` 状态行，也不含批准记录行。
 - **未**预写任何「实际发生」的测量结果（AGENTS §11.1）；§7 仅为测量方案。
+
+## 13. 修订记录
+
+| 版本 | 日期 | 修订内容 | 依据 |
+|---|---|---|---|
+| 初稿 | 2026-09-10 | 首次起草（勘察基线 main @ `1fb1b16`），含 8 文件 F3 WIP 逐文件判定表 | t4/T03 任务指派 |
+| 修订 1 | 2026-09-10 | 落实 **captain 裁决 8**：§4.2 `FEATURE_REGISTRY_VERSION` 14→15（补裁决标注）、`RESEARCH_DOMAIN_VERSION` 维持 5、`GRAMMAR_VERSION` 维持 9（删除「待批准人裁决」措辞）；§2.1.4 与 §4.2 改为「A04 不预判 F3 合并；F3 若先合并则在合并时重新对账」；§11 A04-A4 标为已裁决；新增 §11bis 裁决记录 | captain 裁决 8（2026-09-10，依 `reports/alphagpt-ab/00_authority_exception_record.md` 转授） |
