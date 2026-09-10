@@ -322,3 +322,95 @@ def test_partition_fingerprint_rejects_unknown_table(populated_db):
             compute_partition_fingerprint(db, populated_db, "no_such_table", "ALL")
         with pytest.raises(ValueError):
             compute_table_fingerprint(db, populated_db, "no_such_table")
+
+
+# --- A02 (t12): content-confirmed identity vs latest-saved id -----------------
+#
+# RED block for the A02 implementation contract
+# (reports/alphagpt-ab/A02_contract_implementation_plan.md §5, p26 §6):
+# the identity a formal run uses must be *content-confirmed*, and the
+# legacy "latest saved manifest" API must never stand in for it.
+
+
+def test_a02_content_confirmation_api_exists_and_is_distinct(populated_db):
+    """A02 acceptance 1 (p26 I1): 'latest saved id' and 'content-confirmed
+    id' are two different, self-describing APIs — the formal entry uses the
+    second one only."""
+
+    from ashare_data import manifest as manifest_mod
+
+    confirmer = getattr(manifest_mod, "confirm_dataset_identity", None)
+    assert confirmer is not None, (
+        "A02 requires a content-confirming identity API "
+        "(manifest.confirm_dataset_identity) distinct from resolve_dataset_id"
+    )
+    assert callable(confirmer)
+    # The legacy query keeps its meaning (latest saved row) so old callers
+    # cannot silently start reporting a confirmed identity.
+    assert callable(manifest_mod.resolve_dataset_id)
+    assert confirmer is not manifest_mod.resolve_dataset_id
+
+
+def test_a02_stale_manifest_is_refused_by_content_confirmation(populated_db):
+    """A02 acceptance 1/6 (p26 I2/I5, R1/R2): after the content moves on,
+    the confirmation API must refuse the previously saved id instead of
+    handing it back as 'the current dataset'."""
+
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        saved = _manifest(db, populated_db)
+    with AshareDB(populated_db.duckdb_path) as db:
+        save_manifest(db, populated_db, saved)
+
+    # Content drifts after the manifest was published (append one session).
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.execute(
+            "INSERT INTO daily_bar VALUES "
+            "('000001.SZ', '20240301', 10, 10, 10, 10, 10, 1, 10, 1, 1)"
+        )
+
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        # The legacy query still reports the saved row…
+        assert resolve_dataset_id(db, populated_db) == saved.dataset_id
+        # …while the formal confirmation path must refuse it.
+        with pytest.raises(Exception) as exc_info:
+            from ashare_data import manifest as manifest_mod
+
+            manifest_mod.confirm_dataset_identity(db, populated_db)
+    assert saved.dataset_id[:12] in str(exc_info.value) or "daily_bar" in str(
+        exc_info.value
+    )
+
+
+def test_a02_composite_identity_is_deterministic(populated_db):
+    """A02 acceptance 2 (p26 I3/I4): the confirmed identity is deterministic
+    for identical content (the composite v2-side coverage cases R3/R4/R5 are
+    driven by the contract plan's fixtures)."""
+
+    from ashare_data import manifest as manifest_mod
+
+    confirmer = getattr(manifest_mod, "confirm_dataset_identity", None)
+    assert confirmer is not None, (
+        "A02 requires manifest.confirm_dataset_identity (composite identity)"
+    )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        first = confirmer(db, populated_db)
+        again = confirmer(db, populated_db)
+    assert first, "composite identity must be a non-empty string"
+    assert first == again, "identical content must reproduce the same identity"
+
+
+def test_a02_fast_capability_is_declared_not_implied(populated_db):
+    """A02 acceptance 4 (p26 I8, R10): the verification modes must expose a
+    machine-readable capability statement so 'fast' can never be presented
+    as complete content confirmation."""
+
+    from ashare_data import manifest as manifest_mod
+
+    capability = getattr(manifest_mod, "verification_capability", None)
+    assert capability is not None, (
+        "A02 requires a machine-readable fast/full capability declaration "
+        "(manifest.verification_capability)"
+    )
+    declared = capability("fast")
+    assert declared["content_confirmation"] is False
+    assert capability("full")["content_confirmation"] is True

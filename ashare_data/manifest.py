@@ -586,10 +586,98 @@ def latest_manifest(db: AshareDB, config) -> DatasetManifest | None:
 
 
 def resolve_dataset_id(db: AshareDB, config) -> str | None:
-    """dataset_id of the latest manifest, or ``None`` when none exists."""
+    """dataset_id of the latest manifest, or ``None`` when none exists.
+
+    This is the **query** side of the A02 split (p26 I1): it reports what was
+    last saved and never claims that the current content still matches it.
+    Formal entries must use :func:`confirm_dataset_identity`.
+    """
 
     manifest = latest_manifest(db, config)
     return manifest.dataset_id if manifest is not None else None
+
+
+#: Machine-readable capability statement of the verification modes (A02 I8).
+_VERIFY_CAPABILITIES: dict[str, dict[str, object]] = {
+    "fast": {
+        "mode": "fast",
+        # Recomputes schema digests and (row_count, max_key) partition keys.
+        "detects": ("append", "delete", "schema_change"),
+        "content_confirmation": False,
+        "detail": (
+            "cheap aggregate keys: detects appends/deletes/schema changes; "
+            "does NOT detect value-only mutations that preserve count and max"
+        ),
+    },
+    "full": {
+        "mode": "full",
+        "detects": ("append", "delete", "schema_change", "value_mutation"),
+        "content_confirmation": True,
+        "detail": "re-hashes every partition; detects value-only mutations",
+    },
+}
+
+
+def verification_capability(verify: str) -> dict[str, object]:
+    """What a verification mode actually proves (A02 I8, p26 §4/A02-A4).
+
+    ``fast`` must never be presented as complete content confirmation: kept
+    as an explicit, machine-readable statement so callers/logs cannot imply
+    more than the mode proves.
+    """
+
+    if verify not in _VERIFY_CAPABILITIES:
+        raise ValueError(
+            f"unknown verify mode {verify!r}; expected 'fast' or 'full'"
+        )
+    return dict(_VERIFY_CAPABILITIES[verify])
+
+
+def confirm_dataset_identity(
+    db: AshareDB,
+    config,
+    *,
+    verify: str = "fast",
+) -> str:
+    """The **confirmation** side of the A02 split (p26 I1/I2/I5).
+
+    Returns the current ``dataset_id`` only when the database content still
+    matches the latest published manifest; otherwise raises
+    :class:`DatasetIdMismatch` naming the drifted tables (I12).  Content is
+    recomputed without touching the manifest cache, so this stays a read-only
+    operation on a read-only connection.
+    """
+
+    if verify not in _VERIFY_CAPABILITIES:
+        raise ValueError(
+            f"unknown verify mode {verify!r}; expected 'fast' or 'full'"
+        )
+    expected = latest_manifest(db, config)
+    if expected is None:
+        raise DatasetIdMismatch(
+            "no dataset manifest exists for the current database: run "
+            "`python -m ashare_data.manifest` to publish one before a formal "
+            "run (no content identity can be confirmed)"
+        )
+    current = build_dataset_manifest(db, config, use_cache=False)
+    if current.dataset_id == expected.dataset_id:
+        return expected.dataset_id
+
+    expected_tables = {table.table: table for table in expected.tables}
+    drifted: list[str] = []
+    for table in current.tables:
+        previous = expected_tables.get(table.table)
+        if previous is None or previous.merkle != table.merkle:
+            drifted.append(table.table)
+    missing = [name for name in expected_tables if name not in {t.table for t in current.tables}]
+    detail = ", ".join(drifted + [f"{name} (missing)" for name in missing])
+    raise DatasetIdMismatch(
+        f"latest manifest {expected.dataset_id[:12]}… (published "
+        f"{expected.created_at}) no longer matches the current content "
+        f"{current.dataset_id[:12]}…; drifted: {detail or 'unknown'}; "
+        "publish a new manifest for the changed content before a formal run "
+        "(the previous generation is kept as legacy)"
+    )
 
 
 @dataclass(frozen=True)
