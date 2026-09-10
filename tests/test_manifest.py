@@ -472,9 +472,20 @@ def test_a02_composite_identity_covers_both_databases(populated_db):
 
 
 def test_a02_composite_domain_coverage_is_explicit(populated_db):
-    """A02 acceptance 2 (p26 I3/I3-EXT, R15): included and explicitly
-    NOT-included input domains must be machine-readable, so no domain can be
-    added or dropped silently."""
+    """A02 acceptance 2 (p26 I3/I3-EXT, R15; composite-coverage erratum):
+    the identity coverage and the pending-admission list are both
+    machine-readable, so neither the covered scope nor an admission status
+    can be added or dropped silently.
+
+    A02 contract change (whitelist §10.1-2, erratum): the old test read
+    ``not_included`` and asserted those domains were OUTSIDE the identity —
+    a declaration the implementation disproves (the composite binds the
+    FULL v2 dataset manifest, so an event-domain change rotates the
+    identity — the compliance review proved it with a holder_number_pit
+    probe).  The corrected statement separates identity COVERAGE (included)
+    from research ADMISSION (pending_admission), which is what the
+    implementation actually does; the assertion is stronger because it
+    additionally pins the renamed list against silent removal."""
 
     from ashare_data import manifest as manifest_mod
 
@@ -484,9 +495,9 @@ def test_a02_composite_domain_coverage_is_explicit(populated_db):
     )
     declared = coverage()
     included = set(declared["included"])
-    not_included = set(declared["not_included"])
-    assert included and not_included
-    assert included.isdisjoint(not_included)
+    pending = set(declared["pending_admission"])
+    assert included and pending
+    assert included.isdisjoint(pending)
     for domain in (
         "v2:earnings_forecast_pit",
         "v2:earnings_express_pit",
@@ -494,7 +505,7 @@ def test_a02_composite_domain_coverage_is_explicit(populated_db):
         "v2:holder_number_pit",
         "v2:index_weight_pit(content)",
     ):
-        assert domain in not_included, domain
+        assert domain in pending, domain
     assert declared["publication_version"] == (
         manifest_mod.SNAPSHOT_PUBLICATION_VERSION,
     )
@@ -972,6 +983,37 @@ def test_a02_composite_paths_refuse_read_write_v2_connection(populated_db):
             publish_composite_snapshot(primary, populated_db, v2_rw)
         with pytest.raises(ValueError, match="read-only"):
             confirm_composite_snapshot(primary, populated_db, v2_rw)
+
+
+def test_a02_pending_admission_domain_is_identity_covered(populated_db):
+    """Composite-coverage erratum: a content change in a PENDING-ADMISSION
+    domain (not research-admitted) still rotates the composite identity —
+    the composite binds the FULL v2 dataset manifest, so identity coverage
+    and research admission are separate statements.  Fail-closed either
+    way: the drifted generation is refused with the table named."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+    with AshareDB(v2_path) as v2:
+        v2.execute(
+            "INSERT INTO holder_number_pit (ts_code, ann_date, end_date, "
+            "holder_num, available_date, ingest_id, source_row_hash) "
+            "VALUES ('000001.SZ', '20240110', '20240101', 1000, "
+            "'20240111', 'erratum-probe', 'erratum-probe-1')"
+        )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch, match="holder_number_pit"):
+            confirm_composite_snapshot(primary, populated_db, v2)
 
 
 def test_a02_single_db_confirm_gates_older_protocol_publication(populated_db):

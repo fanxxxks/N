@@ -993,8 +993,9 @@ def resolve_dataset_id(db: AshareDB, config) -> str | None:
 SNAPSHOT_PUBLICATION_VERSION = "1"
 
 #: Input domains that ARE part of the composite identity this round
-#: (p26 §3/I3).  The list is data, not a second implementation: it documents
-#: what the composite covers and feeds ``composite_snapshot_domains()``.
+#: (p26 §3/I3, as clarified by the A02 composite-coverage erratum).  The
+#: list is data, not a second implementation: it documents what the
+#: composite covers and feeds ``composite_snapshot_domains()``.
 COMPOSITE_DOMAINS: tuple[str, ...] = (
     "primary:daily_bar",  # 行情
     "primary:trade_calendar",  # 交易日历
@@ -1007,10 +1008,20 @@ COMPOSITE_DOMAINS: tuple[str, ...] = (
     "v2:all_partitioned_tables",  # 复权/daily_basic/交易约束/价格等 v2 全域
 )
 
-#: Domains explicitly NOT included this round (captain ruling 3): they must
-#: not enter the identity silently, and must not be dropped from this list
-#: silently either (p26 I3-EXT / R15).
-NOT_INCLUDED_DOMAINS: tuple[str, ...] = (
+#: Domains NOT admitted for research this round (captain ruling 3 + the
+#: A02 composite-coverage erratum).  SEMANTICS (erratum, replacing the
+#: pre-erratum ``NOT_INCLUDED_DOMAINS`` declaration): the composite binds
+#: the FULL v2 dataset manifest, so these domains ARE identity-covered —
+#: any content change in them rotates the composite identity and refuses
+#: formal runs (fail-closed) — but they are NOT research-admitted: F3
+#: (p25) and B01 have not adjudicated their data qualification, so no
+#: factor may consume them yet.  This split is honest about what the
+#: implementation does (identity coverage) versus what the research
+#: process has decided (admission).  R15's silent-extension prohibition is
+#: dispositioned by the erratum: changing the identity's table SCOPE still
+#: requires an I3-EXT extension contract and a
+#: ``SNAPSHOT_PUBLICATION_VERSION`` bump; admission decisions do not.
+PENDING_ADMISSION_DOMAINS: tuple[str, ...] = (
     "v2:earnings_forecast_pit",
     "v2:earnings_express_pit",
     "v2:repurchase_event_pit",
@@ -1021,11 +1032,17 @@ NOT_INCLUDED_DOMAINS: tuple[str, ...] = (
 
 
 def composite_snapshot_domains() -> dict[str, tuple[str, ...]]:
-    """The coverage statement of the composite identity (A02 I3/I3-EXT)."""
+    """The coverage statement of the composite identity (A02 I3/I3-EXT).
+
+    ``included`` is the identity coverage (what a content change in it
+    rotates); ``pending_admission`` lists the v2 domains that are
+    identity-covered through the full v2 dataset manifest but not
+    research-admitted this round (the A02 composite-coverage erratum).
+    """
 
     return {
         "included": COMPOSITE_DOMAINS,
-        "not_included": NOT_INCLUDED_DOMAINS,
+        "pending_admission": PENDING_ADMISSION_DOMAINS,
         "publication_version": (SNAPSHOT_PUBLICATION_VERSION,),
     }
 

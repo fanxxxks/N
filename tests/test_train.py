@@ -1317,8 +1317,12 @@ def _populated_db_n_stocks(tmp_path: Path, n: int = 6) -> DataConfig:
             ],
             data_config,
         )
-        from tests.conftest import populate_v2_for_config
+    from tests.conftest import populate_v2_for_config, publish_manifest
+
     populate_v2_for_config(data_config, dates, ts_codes, bars)
+    # A02 (p26 I2/I7): formal loads confirm the composite identity, so the
+    # composite generation is published after both sides are seeded.
+    publish_manifest(data_config)
     return data_config
 
 

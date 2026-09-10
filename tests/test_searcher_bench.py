@@ -168,9 +168,21 @@ def test_benchmark_payload_is_json_serializable(populated_db: DataConfig):
 def test_benchmark_records_provenance(populated_db: DataConfig):
     payload = _bench(populated_db, budget=16)
     prov = payload["provenance"]
-    with AshareDB(populated_db.duckdb_path) as db:
-        expected_dataset_id = resolve_dataset_id(db, populated_db)
-    assert prov["dataset_id"] == expected_dataset_id
+    # A02 (p26 I2/I6, whitelist §10.1-2): the bench's dataset identity is the
+    # loader's confirmed binding — the COMPOSITE snapshot identity, no
+    # longer the primary-only "latest saved id".  The old assertion
+    # compared against resolve_dataset_id (the query side, single DB) and
+    # pinned the pre-composite semantics; the new one asserts against the
+    # same composite authority the loader binds (strictly stronger: it also
+    # fails if a primary-only id leaks into the provenance).
+    from ashare_model.runspec import confirm_composite_snapshot
+
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db, AshareDB(
+        populated_db.duckdb_path.parent / "ashare_v2.duckdb", read_only=True
+    ) as v2:
+        expected = confirm_composite_snapshot(db, populated_db, v2)
+    assert prov["dataset_id"] == expected.composite_id
+    assert prov["dataset_id"] != expected.primary.dataset_id
     assert prov["train_end_date"] == "2024-02-01"
     assert prov["device"] == "cpu"
     assert prov["searchers"] == list(SEARCHERS)
