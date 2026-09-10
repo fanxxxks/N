@@ -80,14 +80,18 @@ def populate_v2_for_config(
 ) -> Path:
     """Resolve the config's v2 price source path and populate it.
 
-    Single resolution rule for tests (mirrors the loader): a relative
-    ``v2_duckdb_path`` sits next to ``duckdb_path``.
+    A02/O3: this helper used to re-implement the v2 resolution rule locally,
+    which had drifted from the authoritative ``resolve_v2_duckdb_path``
+    (the local copy accepted a separator-bearing relative value that the
+    authority refuses fail-closed).  It now calls the single authority, so
+    tests and production resolve v2 paths through one rule only.
     """
 
-    v2_path = Path(data_config.v2_duckdb_path)
-    if not v2_path.is_absolute():
-        v2_path = data_config.duckdb_path.parent / v2_path
-    return populate_v2_price_tables(v2_path, dates, ts_codes, bars, **kwargs)
+    from ashare_data.config import resolve_v2_duckdb_path
+
+    return populate_v2_price_tables(
+        resolve_v2_duckdb_path(data_config), dates, ts_codes, bars, **kwargs
+    )
 
 
 V2_INDUSTRY_DDL = {
