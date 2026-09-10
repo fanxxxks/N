@@ -14,6 +14,25 @@ from ashare_data.db import AshareDB
 from ashare_data.manifest import build_dataset_manifest, save_manifest
 
 
+def publish_manifest(data_config: DataConfig) -> str:
+    """Publish the content-addressed manifest for a test database (A02).
+
+    A02 (p26 I2): a formal load consumes the *content-confirmed* identity, so
+    a test that seeds its own database must publish a manifest exactly as
+    production does — the pre-A02 "no manifest, carry on with None" path no
+    longer exists on the formal path.  Returns the published ``dataset_id``.
+
+    ``use_cache=False`` is required, not an optimization choice: the
+    confirmation path always recomputes, so a manifest published from cached
+    partition hashes can name content the confirm step then rejects.
+    """
+
+    with AshareDB(data_config.duckdb_path) as db:
+        manifest = build_dataset_manifest(db, data_config, use_cache=False)
+        save_manifest(db, data_config, manifest)
+    return manifest.dataset_id
+
+
 def with_price_semantics(raw: dict[str, "np.ndarray"]) -> dict[str, "np.ndarray"]:
     """Attach the p19 §2 cache keys to a synthetic execution-price dict.
 

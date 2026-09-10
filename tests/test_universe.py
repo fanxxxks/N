@@ -45,7 +45,7 @@ from ashare_model.train import sample_random_formulas
 from ashare_model.vm import StackVM
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 from ashare_portfolio.constructor import PortfolioConstructor
-from tests.conftest import make_bars
+from tests.conftest import make_bars, publish_manifest
 from tests.test_run_sim import _make_runner, _orders_for, _replace_stock_bars, _write_sim_db
 
 
@@ -590,6 +590,9 @@ def test_calendar_open_rows_define_loader_session_axis(data_config: DataConfig):
     from tests.conftest import populate_v2_for_config
 
     populate_v2_for_config(data_config, dates, ["000001.SZ"], bars)
+    # A02 (p26 I2): publish the manifest for the content seeded above so the
+    # formal load can confirm its identity.
+    publish_manifest(data_config)
     loader = AshareDataLoader(data_config, ModelConfig()).load_data()
     assert loader.dates == [dates[0], dates[2]]
     assert loader.raw_data_cache["open"].shape[1] == 2

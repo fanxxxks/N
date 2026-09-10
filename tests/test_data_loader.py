@@ -11,6 +11,7 @@ import torch
 from ashare_data import gates
 from ashare_data.config import DataConfig, ModelConfig
 from ashare_data.db import AshareDB
+from ashare_data.manifest import DatasetIdMismatch, latest_manifest
 from ashare_data.universe import (
     ResolvedUniverse,
     UniverseContractError,
@@ -20,7 +21,7 @@ from ashare_data.universe import (
 )
 from ashare_model.data_loader import AshareDataLoader, build_loader_from_config
 from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
-from tests.conftest import make_bars
+from tests.conftest import make_bars, publish_manifest
 
 
 def _degraded_contract() -> ResolvedUniverse:
@@ -121,6 +122,9 @@ def _seed_loader_db(
         )
         db.upsert_calendar(calendar, config)
         db.upsert_constituents(memberships, config)
+    # A02: formal loads confirm the content identity, so the seeded database
+    # must carry a matching published manifest.
+    publish_manifest(config)
     # p19: the loader's formal price source is the v2 database; seed it
     # with the same bars (neutral adj_factor/limits, no suspensions).
     from tests.conftest import populate_v2_price_tables
@@ -170,27 +174,76 @@ def test_dataset_id_resolved_on_populated_db(populated_db):
 def test_dataset_id_none_on_legacy_db_without_manifest(
     populated_db_without_manifest,
 ):
-    """IP-05 side item: a legacy database without a persisted manifest
-    binds dataset_id None (never a fabricated id) through the narrowed
-    expected-failure path."""
-    legacy = AshareDataLoader(
+    """A02 (p26 I2 + §6-3, acceptance 1): the pre-A02 fail-open binding is
+    abolished on the FORMAL path — a database whose content cannot be
+    confirmed is refused outright, never downgraded to ``dataset_id=None``
+    and continued.  The old query/downgrade behavior survives only under the
+    explicitly requested legacy audit mode, and there it must leave a
+    machine-readable marker."""
+    loader = AshareDataLoader(
         populated_db_without_manifest, ModelConfig()
+    )
+    with pytest.raises(DatasetIdMismatch):
+        loader.load_data()
+    legacy = AshareDataLoader(
+        populated_db_without_manifest,
+        ModelConfig(),
+        dataset_identity_mode="query",
     ).load_data()
     assert legacy.dataset_id is None
+    assert legacy.dataset_identity_status == "degraded"
+
+
+def test_formal_load_refuses_drifted_content(populated_db):
+    """A02 (p26 I2/I5, acceptance 1/6): content that drifted away from the
+    published manifest is refused on the formal path (the pre-A02 warning +
+    ``None`` downgrade is abolished there)."""
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.execute(
+            "INSERT INTO daily_bar VALUES "
+            "('000001.SZ', '20240301', 10, 10, 10, 10, 10, 1, 10, 1, 1)"
+        )
+    with pytest.raises(DatasetIdMismatch, match="daily_bar"):
+        AshareDataLoader(populated_db, ModelConfig()).load_data()
+
+
+def test_formal_load_binds_the_confirmed_identity(populated_db):
+    """A02 (p26 I2, acceptance 1): a formal load binds the *confirmed*
+    identity (not merely "the latest saved id") and records the machine
+    status of that binding."""
+
+    loaded = AshareDataLoader(populated_db, ModelConfig()).load_data()
+    assert loaded.dataset_identity_status == "confirmed"
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        assert loaded.dataset_id == latest_manifest(db, populated_db).dataset_id
+
+
+def test_unknown_identity_mode_is_rejected(populated_db):
+    """A02: the non-formal mode is an explicit, validated choice — a typo
+    must not silently select the fail-open query path."""
+
+    with pytest.raises(ValueError, match="dataset_identity_mode"):
+        AshareDataLoader(
+            populated_db, ModelConfig(), dataset_identity_mode="audit"
+        )
 
 
 def test_dataset_id_narrowed_except_lets_programming_errors_propagate(
     populated_db, monkeypatch
 ):
-    """IP-05 side item: the manifest-binding guard must only swallow the
-    expected storage failure (no manifest tables); a programming error in
-    the resolver must surface instead of silently binding dataset_id=None."""
+    """IP-05 side item (retargeted to the A02 confirmation path): the
+    identity guard must only swallow the expected storage failure; a
+    programming error in the confirmation resolver must surface instead of
+    silently binding dataset_id=None."""
     from ashare_model import data_loader as data_loader_module
 
-    def broken(db, config):
+    def broken(db, config, **kwargs):
         raise TypeError("resolver signature bug")
 
-    monkeypatch.setattr(data_loader_module, "resolve_dataset_id", broken)
+    monkeypatch.setattr(
+        data_loader_module, "confirm_dataset_identity", broken
+    )
     with pytest.raises(TypeError, match="resolver signature bug"):
         AshareDataLoader(populated_db, ModelConfig()).load_data()
 
@@ -304,7 +357,16 @@ def test_industry_codes_all_nan_without_membership(populated_db: DataConfig):
     # Without any membership table the same factor stays fully neutral.
     with AshareDB(populated_db.duckdb_path) as db:
         db.execute(f"DROP TABLE IF EXISTS {populated_db.sw_member_table}")
-    bare = AshareDataLoader(populated_db, ModelConfig())
+    # A02 (p26 I2): a manifest-covered table that no longer exists leaves the
+    # database *unconfirmable*, so the formal path must refuse it (§4.3
+    # fail-closed) rather than degrade silently.
+    with pytest.raises(DatasetIdMismatch, match=populated_db.sw_member_table):
+        AshareDataLoader(populated_db, ModelConfig()).load_data()
+    # The loader's degradation behavior for a structurally incomplete database
+    # is still pinned — reachable only through the explicit legacy audit mode.
+    bare = AshareDataLoader(
+        populated_db, ModelConfig(), dataset_identity_mode="query"
+    )
     bare.load_data()
     assert np.allclose(
         bare.factor_tensor[FEATURE_NAMES.index("IND_REL_RET_20")].numpy(), 0.0
@@ -393,6 +455,9 @@ def test_target_ret_masks_suspended_days(data_config: DataConfig):
         ts_codes,
         bars,
     )
+    # A02: the database was seeded here (not by the populated_db fixture), so
+    # publish the manifest the formal load will confirm against.
+    publish_manifest(data_config)
     loader = AshareDataLoader(data_config, ModelConfig())
     loader.load_data(ts_codes=ts_codes, dates=dates)
     assert loader.target_ret is not None

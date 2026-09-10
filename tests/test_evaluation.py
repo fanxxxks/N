@@ -50,7 +50,7 @@ from ashare_model.vocab import FEATURE_NAMES, FORMULA_VOCAB
 
 TEST_SPEC_ID = "a" * 64
 TEST_RUN_ID = "b" * 32
-from tests.conftest import make_bars
+from tests.conftest import make_bars, publish_manifest
 
 
 def _loader(populated_db: DataConfig) -> AshareDataLoader:
@@ -377,6 +377,9 @@ def _blocked_stock_loader(tmp_path) -> tuple[AshareDataLoader, list[str], list[i
             ("600001.SH", dates[e]): (11.0, 5.5) for e in (10, 12, 14)
         },
     )
+    # A02 (p26 I2): the database was seeded here, so publish the manifest the
+    # formal load will confirm against.
+    publish_manifest(data_config)
     loader = AshareDataLoader(data_config, ModelConfig()).load_data()
     return loader, codes, [9, 11, 13]
 
@@ -474,6 +477,7 @@ def _future_member_loader(tmp_path, join_day: int = 10) -> AshareDataLoader:
     from tests.conftest import populate_v2_for_config
 
     populate_v2_for_config(data_config, dates, codes, bars)
+    publish_manifest(data_config)
     return AshareDataLoader(data_config, ModelConfig()).load_data()
 
 

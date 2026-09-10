@@ -46,7 +46,11 @@ from ashare_data.config import (
 )
 from ashare_data.db import AshareDB, sql_quoted_list
 from ashare_data.fundamentals import build_pit_frames
-from ashare_data.manifest import resolve_dataset_id
+from ashare_data.manifest import (
+    DatasetIdMismatch,
+    confirm_dataset_identity,
+    resolve_dataset_id,
+)
 from ashare_data.processor import (
     adjusted_price_scale,
     apply_adjusted_scale,
@@ -149,12 +153,23 @@ class AshareDataLoader:
         model_config: ModelConfig | None = None,
         *,
         allow_development_universe_fallback: bool = False,
+        dataset_identity_mode: str = "confirm",
     ):
+        if dataset_identity_mode not in ("confirm", "query"):
+            raise ValueError(
+                "dataset_identity_mode must be 'confirm' (formal, the "
+                "default) or 'query' (explicit legacy audit); got "
+                f"{dataset_identity_mode!r}"
+            )
         self.config = data_config
         self.model_config = model_config or ModelConfig()
         self.allow_development_universe_fallback = bool(
             allow_development_universe_fallback
         )
+        # A02 (p26 I2): formal is the default, and the non-formal
+        # query/downgrade path is reachable only by asking for it explicitly
+        # — never by default and never silently.
+        self.dataset_identity_mode = str(dataset_identity_mode)
         self._reset_loaded_state()
 
     def _reset_loaded_state(self) -> None:
@@ -164,6 +179,10 @@ class AshareDataLoader:
         self.ts_codes: list[str] = []
         self.dates: list[str] = []
         self.dataset_id: str | None = None
+        # A02 (p26 I2/§6-3): machine-readable status of the data-identity
+        # binding — "confirmed" (formal path), "legacy"/"degraded" (explicit
+        # audit mode) or "unresolved" (before a load).
+        self.dataset_identity_status: str | None = None
         self.factor_tensor: torch.Tensor | None = None
         # p21 §3: how the E2 factor-tensor cache fared on the last load —
         # "miss" (computed + stored), "hit" (restored), "disabled"
@@ -553,15 +572,45 @@ class AshareDataLoader:
         # identity leaves this path byte-identical to pre-wiring
         # behavior, and a hit returns the exact float32 tensor the miss
         # path would have computed (the cast is deterministic).
+        # A02 (p26 I2, acceptance 1): the FORMAL path consumes the
+        # content-confirmed snapshot identity.  Unconfirmed, unconfirmable or
+        # drifted content is refused here — never downgraded to ``None`` and
+        # continued.  The pre-A02 query + downgrade behavior survives only
+        # under the explicitly requested legacy audit mode, and there it
+        # leaves the machine-readable ``legacy``/``degraded`` marker.
         self.dataset_id = None
-        try:
-            with AshareDB(self.config.duckdb_path, read_only=True) as db:
-                self.dataset_id = resolve_dataset_id(db, self.config)
-        except duckdb.Error as exc:
-            logger.warning(
-                f"dataset manifest unavailable (legacy database?): {exc}"
+        self.dataset_identity_status = "unresolved"
+        if self.dataset_identity_mode == "confirm":
+            try:
+                with AshareDB(self.config.duckdb_path, read_only=True) as db:
+                    self.dataset_id = confirm_dataset_identity(db, self.config)
+            except DatasetIdMismatch:
+                raise
+            except (duckdb.Error, ValueError) as exc:
+                # "Unconfirmable" is a refusal, not a downgrade: a storage
+                # failure or content that cannot even be fingerprinted (e.g. a
+                # manifest-covered table that no longer exists) leaves no
+                # identity, so a formal run must stop here with a reason.  The
+                # original exception is chained, so the cause stays
+                # diagnosable; unexpected error classes still propagate.
+                raise DatasetIdMismatch(
+                    "cannot confirm the dataset identity for a formal load: "
+                    f"{exc}; a formal run requires a published manifest whose "
+                    "content still matches the database (A02 I2)"
+                ) from exc
+            self.dataset_identity_status = "confirmed"
+        else:
+            try:
+                with AshareDB(self.config.duckdb_path, read_only=True) as db:
+                    self.dataset_id = resolve_dataset_id(db, self.config)
+            except duckdb.Error as exc:
+                logger.warning(
+                    f"dataset manifest unavailable (legacy audit mode): {exc}"
+                )
+                self.dataset_id = None
+            self.dataset_identity_status = (
+                "legacy" if self.dataset_id else "degraded"
             )
-            self.dataset_id = None
         cache = factor_cache_for(self.config.data_dir)
         identity = loader_factor_cache_identity(
             resolve_v2_duckdb_path(self.config),

@@ -39,7 +39,7 @@ import pytest
 from ashare_data.config import BacktestConfig, DataConfig
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.data_loader import AshareDataLoader
-from tests.conftest import _populate_db, populate_v2_price_tables
+from tests.conftest import _populate_db, populate_v2_price_tables, publish_manifest
 
 DATES = [f"2024010{d}" for d in range(1, 9)]  # 8 synthetic sessions
 CODES = ["000001.SZ", "600000.SH", "300001.SZ"]
@@ -145,10 +145,20 @@ def _seed(tmp_path: Path, name: str) -> DataConfig:
 
 
 def _loaded(config: DataConfig, bars: pd.DataFrame) -> AshareDataLoader:
-    loader = AshareDataLoader(config)
+    loader = _formal(config)
     loader.load_data()
     assert loader.bars is not None
     return loader
+
+
+def _formal(config: DataConfig) -> AshareDataLoader:
+    """A02 (p26 I2): a formal load confirms the content identity, so publish
+    the manifest for the database's *current* content immediately before
+    loading (these tests mutate the seeded database themselves, which moves
+    the content on from whatever the fixture published)."""
+
+    publish_manifest(config)
+    return AshareDataLoader(config)
 
 
 def _row(loader: AshareDataLoader, code: str) -> int:
@@ -332,7 +342,7 @@ def test_adj_factor_anomaly_degrades_stock_fail_closed(tmp_path: Path, mode):
         bars,
         **kwargs,
     )
-    loader = AshareDataLoader(config)
+    loader = _formal(config)
     loader.load_data()
     row = _row(loader, CODES[0])
 
@@ -366,7 +376,7 @@ def test_adj_factor_anomaly_blocks_only_that_stock(tmp_path: Path):
         bars,
         drop_adj_for={(CODES[2], DATES[1])},
     )
-    loader = AshareDataLoader(config)
+    loader = _formal(config)
     loader.load_data()
     row = _row(loader, CODES[2])
     blocked_buy, _ = loader.tradability_masks()
@@ -400,7 +410,7 @@ def test_exact_limit_and_suspension_masks(tmp_path: Path):
             {"ts_code": CODES[2], "trade_date": day, "suspend_type": "S"}
         ],
     )
-    loader = AshareDataLoader(config)
+    loader = _formal(config)
     loader.load_data()
     blocked_buy, blocked_sell = loader.tradability_masks()
     j = DATES.index(day)
@@ -430,7 +440,7 @@ def test_missing_limit_row_fails_closed_with_degraded_record(tmp_path: Path):
         bars,
         drop_limit_for={(CODES[1], day)},
     )
-    loader = AshareDataLoader(config)
+    loader = _formal(config)
     loader.load_data()
     blocked_buy, blocked_sell = loader.tradability_masks()
     j = DATES.index(day)
@@ -812,7 +822,7 @@ def test_degraded_adjusted_series_stays_nan_for_labels(tmp_path: Path):
         bars,
         drop_adj_for={(CODES[0], DATES[2])},
     )
-    loader = AshareDataLoader(config)
+    loader = _formal(config)
     loader.load_data()
     target = loader.target_ret.numpy()
     assert np.isnan(target[0]).all()

@@ -296,12 +296,22 @@ def test_sync_records_dataset_id(tmp_path):
 def test_loader_exposes_dataset_id_when_absent(populated_db_without_manifest):
     # P8-05: the shared populated_db fixture now persists a manifest; the
     # "no manifest saved" case uses the manifest-free variant.
+    # A02 (p26 I2 + §6-3, acceptance 1): the pre-A02 binding — "no manifest,
+    # bind None and carry on" — is abolished on the formal path, which must
+    # refuse an unconfirmable identity; it survives only under the explicitly
+    # requested legacy audit mode, and there it leaves a machine marker.
     from ashare_data.config import ModelConfig
     from ashare_model.data_loader import AshareDataLoader
 
-    loader = AshareDataLoader(populated_db_without_manifest, ModelConfig())
-    loader.load_data()
-    assert loader.dataset_id is None  # no manifest saved yet
+    with pytest.raises(DatasetIdMismatch):
+        AshareDataLoader(populated_db_without_manifest, ModelConfig()).load_data()
+    legacy = AshareDataLoader(
+        populated_db_without_manifest,
+        ModelConfig(),
+        dataset_identity_mode="query",
+    ).load_data()
+    assert legacy.dataset_id is None  # no manifest saved yet
+    assert legacy.dataset_identity_status == "degraded"
 
 
 def test_manifest_cli_persists_dataset_id(populated_db, monkeypatch):
