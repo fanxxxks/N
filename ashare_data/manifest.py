@@ -1105,6 +1105,14 @@ def confirm_dataset_identity(
     :class:`DatasetIdMismatch` naming the drifted tables (I12).  Content is
     recomputed without touching the manifest cache, so this stays a read-only
     operation on a read-only connection.
+
+    ``verify`` is validated for signature compatibility but does NOT select
+    a cheaper path: the confirmation is ALWAYS a full uncached re-hash — no
+    fast mode may ever be presented as content confirmation (I8; the
+    capability statements of the verification modes live in
+    :func:`verification_capability` / :func:`verify_dataset`).  This API is
+    audit-level since the formal loader moved to the composite authority
+    (``ashare_model.runspec.confirm_composite_snapshot``).
     """
 
     if verify not in _VERIFY_CAPABILITIES:
