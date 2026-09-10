@@ -341,7 +341,10 @@ def test_stats_shape(base):
 
 
 def test_cache_version_is_pinned():
-    assert SEMANTIC_CACHE_VERSION == 1
+    # A02 (p26 §4.2): 1 -> 2 — the key's dataset element now denotes the
+    # content-confirmed composite snapshot identity, so v1 scores are not
+    # comparable with v2 scores for the same key string.
+    assert SEMANTIC_CACHE_VERSION == 2
 
 
 # --- E2: content-addressed persistent factor tensor cache ---------------------
@@ -538,7 +541,10 @@ def test_factor_cache_concurrent_access(tmp_path: Path):
 
 def test_factor_cache_observability_and_version_pin(tmp_path: Path):
     cache = FactorCache(tmp_path / "factor-cache")
-    assert FACTOR_CACHE_VERSION == 1
+    # A02 (p26 §4.2): 1 -> 2 — the dataset element of the cache identity is
+    # now the content-confirmed composite snapshot identity, so a v1 file
+    # must never be hit under the new semantics.
+    assert FACTOR_CACHE_VERSION == 2
     stats = cache.stats()
     assert stats["factor_cache_version"] == FACTOR_CACHE_VERSION
     assert stats["n_puts"] == 0 and stats["n_hits"] == 0

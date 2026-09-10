@@ -23,6 +23,7 @@ from ashare_model.artifact_schemas import (
     PaperStateArtifact,
     ProtocolResultArtifact,
     StrategyArtifact,
+    LEGACY_SCHEMA_VERSIONS,
     assert_consistent_lineage,
     classify_schema_version,
     require_current_schema,
@@ -214,11 +215,17 @@ ACCOUNT = "0123456789abcdef0123456789abcdef"
 # -- schema version pin and identity derivation -------------------------------
 
 
-def test_schema_version_is_v2():
-    assert ARTIFACT_SCHEMA_VERSION == 2
+def test_schema_version_matrix_is_pinned():
+    # A02 (p26 §4.2, captain ruling 1): 2 -> 3, and generation 2 joins the
+    # legacy set. Deliberate literal pins: a generation bump must stay an
+    # explicit, reviewed act, and the legacy tuple only ever grows (shrinking
+    # it would silently reclassify written artifacts).
+    assert ARTIFACT_SCHEMA_VERSION == 3
+    assert LEGACY_SCHEMA_VERSIONS == (1, 2)
     assert classify_schema_version({"artifact_schema_version": 1}) == "legacy"
-    assert classify_schema_version({"artifact_schema_version": 2}) == "current"
-    assert classify_schema_version({"artifact_schema_version": 3}) == "unknown"
+    assert classify_schema_version({"artifact_schema_version": 2}) == "legacy"
+    assert classify_schema_version({"artifact_schema_version": 3}) == "current"
+    assert classify_schema_version({"artifact_schema_version": 4}) == "unknown"
 
 
 def test_candidate_id_is_deterministic_content_identity():
@@ -260,7 +267,9 @@ def test_round_trip_all_four_types(handle, tmp_path):
             convenience_path=tmp_path / f"{artifact_type}.json",
         )
         stored = handle.read_artifact(record.artifact_id)
-        assert stored["artifact_schema_version"] == 2
+        # A02: bound to the authority — the assertion is "the stored artifact
+        # carries the CURRENT schema", exact equality, no weakening.
+        assert stored["artifact_schema_version"] == ARTIFACT_SCHEMA_VERSION
         assert stored["spec_id"] == spec.spec_id
         assert stored["run_id"] == handle.run_id
         assert stored["candidate_id"] == cid

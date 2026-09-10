@@ -140,7 +140,12 @@ class TestClassifyMatrix:
             == "current"
         )
 
-    @pytest.mark.parametrize("bad", [3, 0, -1, "1", 1.0, True, [1]])
+    # A02 (p26 §4.2, captain ruling 1): the previous parameter ``3`` was the
+    # then-unknown *next* generation; after the 2 -> 3 bump it IS the current
+    # version, so it stopped expressing "unknown". Advanced to 4 — the
+    # intent (a not-yet-written generation must classify ``unknown``) and the
+    # strength (exact equality) are unchanged.
+    @pytest.mark.parametrize("bad", [4, 0, -1, "1", 1.0, True, [1]])
     def test_unknown_versions(self, bad):
         assert (
             classify_schema_version({"artifact_schema_version": bad}) == "unknown"

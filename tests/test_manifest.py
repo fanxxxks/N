@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 import yaml
 
+import ashare_data.manifest as manifest_mod
 import ashare_data.sync as sync
 from ashare_data.config import DataConfig
 from ashare_data.db import AshareDB
@@ -55,7 +56,13 @@ def _manifest(db: AshareDB, config: DataConfig, **kwargs):
 def test_manifest_records_schema_rows_dates_source_and_partitions(populated_db):
     with AshareDB(populated_db.duckdb_path, read_only=True) as db:
         manifest = _manifest(db, populated_db)
-    assert manifest.manifest_version == "1"
+    # Bound to the authority, not a literal (A02, p26 §4.2 / captain ruling
+    # 2): this asserts "the record carries the CURRENT manifest generation",
+    # which stays correct across bumps instead of rotting into a
+    # maintenance-only edit. Strength is unchanged — still exact equality.
+    # The literal pin of the generation itself lives in
+    # ``tests/test_runspec.py::test_a02_version_chain_wired_into_the_version_registry``.
+    assert manifest.manifest_version == manifest_mod.MANIFEST_VERSION
     assert manifest.dataset_id
     assert manifest.merkle_root
     assert manifest.source_versions["test"] == "1"

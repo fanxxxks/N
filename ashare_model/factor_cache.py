@@ -56,7 +56,13 @@ from loguru import logger
 
 from ashare_model.identity import content_hash
 
-FACTOR_CACHE_VERSION = 1
+# A02 (p26 §4.2): 1 -> 2. The ``dataset_id`` element of the cache identity
+# now means the content-confirmed composite snapshot identity rather than
+# "the latest saved id of the primary DB". The same key string therefore
+# denotes a different tensor than before, so entries written under v1 must
+# never be hit: the identity check classifies them as a miss (recompute),
+# never as a reuse.
+FACTOR_CACHE_VERSION = 2
 
 _IDENTITY_STR_FIELDS = (
     "dataset_id",

@@ -12,6 +12,7 @@ from ashare_data.processor import open_to_open_returns
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.evaluation import PROTOCOL_VERSION as EVALUATION_PROTOCOL_VERSION
 from ashare_model.reward import REWARD_VERSION
+from ashare_model.semantic_cache import SEMANTIC_CACHE_VERSION
 from ashare_model.targets import causal_target_returns
 from ashare_model.train import (
     AshareTrainer,
@@ -1014,7 +1015,11 @@ def test_semantic_cache_cap_matches_trainer_bound(
     trainer.train(steps=1, batch_size=1, save_artifacts=False)
     stats = trainer.semantic_cache.stats()
     assert stats["cap"] == AshareTrainer._REWARD_CACHE_CAP
-    assert stats["version"] == 1
+    # A02 (p26 §4.2): bound to the authority — the trainer's cache must report
+    # the CURRENT semantic-cache generation (1 -> 2: the key's dataset element
+    # is now the content-confirmed composite snapshot identity). Same coupling
+    # principle as the protocol_version assertion below. Exact equality.
+    assert stats["version"] == SEMANTIC_CACHE_VERSION
     assert stats["window_id"].startswith("train:")
     # The cache records the measurement protocol version it was built
     # under (bumped 19 -> 20 by T4-01); keep the coupling assertion in

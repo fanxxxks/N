@@ -51,7 +51,13 @@ import duckdb
 
 from .db import AshareDB
 
-MANIFEST_VERSION = "1"
+# A02 (p26 §4.2, captain ruling 2): 1 -> 2. The record's confirmation
+# semantics changed — a manifest may now assert a *content-confirmed*
+# dual-database snapshot identity and carry its publication generation,
+# where v1 only ever meant "the latest saved id of the primary DB". Old v1
+# rows stay readable (``from_dict``) but are never presented as confirmed;
+# the two meanings must not be mixed.
+MANIFEST_VERSION = "2"
 _MANIFEST_TABLE = "dataset_manifest"
 _CACHE_TABLE = "dataset_manifest_cache"
 _NULL_TOKEN = "@@NULL@@"

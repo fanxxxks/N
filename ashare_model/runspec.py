@@ -37,7 +37,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ashare_model.identity import content_hash, sha256_hex
 
-RUNSPEC_SCHEMA_VERSION = 1
+# A02 (p26 §4.2, captain ruling 1): 1 -> 2. The dataset identity carried by
+# a frozen spec changes meaning from "the latest saved id of the primary DB"
+# to the content-confirmed composite snapshot identity (+ its publication
+# generation), so a v1 spec and a v2 spec are not interchangeable evidence.
+# Old specs stay readable for audit but are refused as lineage sources
+# (``require_current_schema`` + exact round-trip), never silently reused.
+RUNSPEC_SCHEMA_VERSION = 2
 
 _SPEC_ID_KIND = "runspec"
 _KNOWN_SEARCHERS = ("gp", "tpe", "random", "rl")
@@ -71,6 +77,16 @@ _VERSION_IMPORTS: dict[str, tuple[str, str]] = {
         "PORTFOLIO_CONSTRUCTOR_VERSION",
     ),
     "rebalance_policy_version": ("ashare_portfolio.rebalance", "REBALANCE_POLICY_VERSION"),
+    # A02 (p26 §4.2, captain ruling 2 + ruling 7): the manifest record
+    # generation and the publication-protocol version are artifact-facing
+    # versions — two specs whose data was published under a different
+    # protocol are different evidence, so both ride the single owner index
+    # instead of being re-derived by each consumer (AGENTS §3.2).
+    "manifest_version": ("ashare_data.manifest", "MANIFEST_VERSION"),
+    "snapshot_publication_version": (
+        "ashare_data.manifest",
+        "SNAPSHOT_PUBLICATION_VERSION",
+    ),
 }
 
 
@@ -256,7 +272,7 @@ class RunSpec(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    runspec_schema_version: Literal[1] = RUNSPEC_SCHEMA_VERSION
+    runspec_schema_version: Literal[2] = RUNSPEC_SCHEMA_VERSION
 
     # data identity
     dataset_id: str = Field(min_length=1)
@@ -279,6 +295,13 @@ class RunSpec(BaseModel):
     # P9 §9 (additive, optional so pre-P9 artifacts stay valid): semantics
     # of the factor tensor construction; the factory always populates it.
     factor_compute_version: int | None = None
+    # A02 §4.2 (additive, optional so pre-A02 specs stay readable for audit):
+    # the manifest record generation and the snapshot publication protocol
+    # the data identity was confirmed under. The factory always populates
+    # both; a spec without them cannot pass ``require_current_schema`` and is
+    # therefore never usable as a lineage source.
+    manifest_version: str | None = None
+    snapshot_publication_version: str | None = None
 
     # research semantics
     research_domain: str = Field(min_length=1)
