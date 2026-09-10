@@ -568,13 +568,17 @@ def main(argv: list[str] | None = None) -> int:
     if profile.get("manifest_source") == "v2":
         v2_path = resolve_v2_duckdb_path(config)
         with AshareDB(v2_path, read_only=True) as v2db:
+            # A02 (review F4): the audit's provenance id must be the TRUE
+            # current content hash — a (count, max)-preserving value
+            # mutation would otherwise be served stale from the partition
+            # cache (the R2 family this package closes).
             dataset_id_current = build_v2_dataset_manifest(
-                v2db, use_cache=True
+                v2db, use_cache=False
             ).dataset_id
     else:
         with AshareDB(config.duckdb_path, read_only=True) as db:
             dataset_id_current = build_dataset_manifest(
-                db, config, use_cache=True
+                db, config, use_cache=False
             ).dataset_id
 
     from ashare_model.alphagpt import MODEL_VERSION

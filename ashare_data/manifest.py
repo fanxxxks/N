@@ -662,13 +662,18 @@ def _append_publication(
     single writer per file, so the MAX+1 read cannot race another writer).
     A failure rolls the generation back entirely — an interrupted
     publication leaves no row, so intermediate states never become visible
-    as generations (p26 §3/I7).
+    as generations (p26 §3/I7).  The rollback is issued only for the
+    transaction THIS frame opened: a caller that is already inside its own
+    transaction gets the error propagated with its transaction untouched
+    (never a silent rollback of the caller's work — review F2).
     """
 
     _ensure_publication_table(db)
     published_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    db.execute("BEGIN TRANSACTION")
+    started = False
     try:
+        db.execute("BEGIN TRANSACTION")
+        started = True
         row = db.query(
             f"SELECT COALESCE(MAX(publication_id), 0) AS m "
             f"FROM {_PUBLICATION_TABLE}"
@@ -688,7 +693,8 @@ def _append_publication(
         )
         db.execute("COMMIT")
     except Exception:
-        db.execute("ROLLBACK")
+        if started:
+            db.execute("ROLLBACK")
         raise
     return SnapshotPublication(
         publication_id=publication_id,
@@ -771,10 +777,15 @@ class PublicationGroup:
     :data:`COMPOSITE_PUBLICATION_MEMBERS` is present — the atomicity unit
     for the cross-database generation (the two DuckDB files cannot commit
     atomically, so "all members in place under one id" is the boundary).
+    ``publication_version`` is the publication-protocol identity the group
+    was published under (R16/I3-EXT: a generation published under an older
+    protocol must be treated as legacy when the protocol moves on, never
+    silently re-identified).
     """
 
     publication_id: int
     published_at: str
+    publication_version: str
     members: dict[str, DatasetManifest]
 
     @property
@@ -798,15 +809,25 @@ def append_publication_group(
     The rows share one transactional generation id: either every member is
     in place or none is — an interrupted composite publication leaves no
     partial group, so intermediate states never become visible as
-    generations (p26 §3/I7).  The composite *identity derivation* itself
-    lives in ``ashare_model.runspec`` (single hash authority, §9 layering);
-    this is only the ledger append.
+    generations (p26 §3/I7).  As with :func:`_append_publication`, the
+    rollback only ever targets the transaction this frame opened (a
+    caller's own open transaction is never rolled back — review F2).
+
+    The composite *identity derivation* itself lives in
+    ``ashare_model.runspec`` (single hash authority, §9 layering); this is
+    only the ledger append.  Completeness is NOT validated here — an
+    incomplete group (one member missing) is a legal ledger record of an
+    intermediate state; ``latest_publication_group`` skips incomplete ids
+    and the confirmation path refuses them (review F8: no silent
+    fabrication).
     """
 
     _ensure_publication_table(db)
     published_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    db.execute("BEGIN TRANSACTION")
+    started = False
     try:
+        db.execute("BEGIN TRANSACTION")
+        started = True
         row = db.query(
             f"SELECT COALESCE(MAX(publication_id), 0) AS m "
             f"FROM {_PUBLICATION_TABLE}"
@@ -829,9 +850,12 @@ def append_publication_group(
             )
         db.execute("COMMIT")
     except Exception:
-        db.execute("ROLLBACK")
+        if started:
+            db.execute("ROLLBACK")
         raise
-    return PublicationGroup(publication_id, published_at, dict(members))
+    return PublicationGroup(
+        publication_id, published_at, SNAPSHOT_PUBLICATION_VERSION, dict(members)
+    )
 
 
 def latest_publication_group(db: AshareDB) -> PublicationGroup | None:
@@ -839,12 +863,17 @@ def latest_publication_group(db: AshareDB) -> PublicationGroup | None:
 
     Incomplete newer groups are skipped — they are intermediate states that
     must not be research-open — but they stay in the ledger (append-only
-    audit trail); completeness is judged per publication id.
+    audit trail); completeness is judged per publication id.  The group's
+    ``publication_version`` is returned as recorded: gating it against the
+    current protocol is the CONFIRMATION path's job (R16 — a group
+    published under an older protocol is legacy, never silently
+    re-identified).
     """
 
     try:
         rows = db.query(
-            f"SELECT publication_id, member_library, published_at, manifest "
+            f"SELECT publication_id, member_library, publication_version, "
+            f"published_at, manifest "
             f"FROM {_PUBLICATION_TABLE} ORDER BY publication_id DESC"
         )
     except duckdb.CatalogException:
@@ -852,16 +881,21 @@ def latest_publication_group(db: AshareDB) -> PublicationGroup | None:
     if rows.empty:
         return None
     groups: dict[int, dict[str, DatasetManifest]] = {}
+    versions: dict[int, str] = {}
     published_at: dict[int, str] = {}
     for _, row in rows.iterrows():
         publication_id = int(row["publication_id"])
         groups.setdefault(publication_id, {})[str(row["member_library"])] = (
             DatasetManifest.from_dict(json.loads(str(row["manifest"])))
         )
+        versions.setdefault(publication_id, str(row["publication_version"]))
         published_at.setdefault(publication_id, str(row["published_at"]))
     for publication_id in sorted(groups, reverse=True):
         group = PublicationGroup(
-            publication_id, published_at[publication_id], groups[publication_id]
+            publication_id,
+            published_at[publication_id],
+            versions[publication_id],
+            groups[publication_id],
         )
         if group.complete:
             return group
@@ -941,7 +975,11 @@ def resolve_dataset_id(db: AshareDB, config) -> str | None:
 
     This is the **query** side of the A02 split (p26 I1): it reports what was
     last saved and never claims that the current content still matches it.
-    Formal entries must use :func:`confirm_dataset_identity`.
+    Formal entries must consume the composite authority
+    (``ashare_model.runspec.confirm_composite_snapshot``); the single-DB
+    :func:`confirm_dataset_identity` below is the audit-level confirmation
+    (its formal caller was superseded by the composite path in the H-1
+    wiring).
     """
 
     manifest = latest_manifest(db, config)
@@ -1062,6 +1100,22 @@ def confirm_dataset_identity(
             "no dataset manifest exists for the current database: run "
             "`python -m ashare_data.manifest` to publish one before a formal "
             "run (no content identity can be confirmed)"
+        )
+    # R16 (p26 §5.7): a generation published under an older publication
+    # protocol is legacy once the protocol moves on — refuse it instead of
+    # silently re-identifying the old content under the new protocol.
+    publication = latest_publication(db, config)
+    if (
+        publication is not None
+        and publication.publication_version != SNAPSHOT_PUBLICATION_VERSION
+    ):
+        raise DatasetIdMismatch(
+            f"the newest publication {publication.publication_id} was "
+            f"published under publication protocol "
+            f"{publication.publication_version}, the current protocol is "
+            f"{SNAPSHOT_PUBLICATION_VERSION}: the old generation is legacy "
+            "(A02 I3-EXT/R16); publish a new generation under the current "
+            "protocol"
         )
     current = build_dataset_manifest(db, config, use_cache=False)
     if current.dataset_id == expected.dataset_id:

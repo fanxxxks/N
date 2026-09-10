@@ -883,6 +883,97 @@ def test_a02_single_composite_derivation_no_second_hash_path():
     assert kind_tag_sources == ["runspec.py"]
 
 
+def test_a02_older_protocol_generation_is_legacy_not_reidentified(populated_db):
+    """R16 (p26 §6/§5.7, I3-EXT): after the publication protocol moves on,
+    a generation published under the OLD protocol must be refused as
+    legacy — never silently re-identified under the new protocol."""
+
+    from ashare_data import manifest as manifest_mod
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+
+    # Simulate the protocol moving on (an I3-EXT extension contract bumps
+    # SNAPSHOT_PUBLICATION_VERSION): the already-published generation is
+    # now legacy and must be refused with attribution.
+    original = manifest_mod.SNAPSHOT_PUBLICATION_VERSION
+    manifest_mod.SNAPSHOT_PUBLICATION_VERSION = "2-extended"
+    try:
+        with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+            v2_path, read_only=True
+        ) as v2:
+            with pytest.raises(DatasetIdMismatch, match="legacy"):
+                confirm_composite_snapshot(primary, populated_db, v2)
+    finally:
+        manifest_mod.SNAPSHOT_PUBLICATION_VERSION = original
+
+
+def test_a02_publication_failure_inside_caller_transaction_propagates(
+    populated_db,
+):
+    """Review F2 regression: a publication attempted inside a caller's open
+    transaction fails loudly — the nested-BEGIN error propagates (never
+    swallowed, never masked by a stray ROLLBACK of this frame), and the
+    connection stays usable for the caller's own ROLLBACK.  (DuckDB
+    aborts the whole transaction on any statement error — including the
+    nested BEGIN — so the caller's uncommitted work is gone by DuckDB's
+    own semantics; what this package guarantees is that OUR code neither
+    hides the failure nor issues a rollback it does not own.)"""
+
+    from ashare_data.manifest import publish_snapshot
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        before = int(
+            db.query(
+                "SELECT COUNT(*) AS n FROM snapshot_publication"
+            ).iloc[0]["n"]
+        )
+        db.execute("BEGIN TRANSACTION")
+        db.execute(
+            "INSERT INTO sw_industry_index VALUES "
+            "('801010', '调用者', '20240101', 100.0)"
+        )
+        # The nested BEGIN inside publish_snapshot must fail and the error
+        # must propagate to the caller.
+        with pytest.raises(Exception, match="transaction"):
+            publish_snapshot(db, populated_db)
+        # The caller can still roll its (DuckDB-aborted) transaction back
+        # and continue on the same connection.
+        db.execute("ROLLBACK")
+        rows = db.query("SELECT COUNT(*) AS n FROM snapshot_publication")
+        # The failed publication appended no generation (the count is
+        # unchanged from before the attempt — the fixture's own
+        # publications are still there, append-only).
+        assert int(rows.iloc[0]["n"]) == before
+
+
+def test_a02_composite_paths_refuse_read_write_v2_connection(populated_db):
+    """Review F3: the composite publication and confirmation never write
+    the v2 database — a read-write v2 connection is rejected outright
+    (the t46 write authorization covers the primary file only)."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path
+    ) as v2_rw:
+        with pytest.raises(ValueError, match="read-only"):
+            publish_composite_snapshot(primary, populated_db, v2_rw)
+        with pytest.raises(ValueError, match="read-only"):
+            confirm_composite_snapshot(primary, populated_db, v2_rw)
+
+
 def test_a02_composite_confirm_refuses_primary_change_between_queries(populated_db):
     """R7 (p26 §6, I2/I7): an identity confirmed before a content change
     must not survive the change — re-confirmation detects the drift and

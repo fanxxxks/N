@@ -175,8 +175,10 @@ def publish_composite_snapshot(
     both member rows to the PRIMARY database's ledger (the two DuckDB
     files cannot commit atomically, so the group row in the primary is
     the atomicity unit: either all members are in place or none is).
-    ``v2_db`` is only read (its own manifest library and ledger are
-    untouched — the v2 member manifest is recorded inside the group).
+    ``v2_db`` must be a READ-ONLY connection: the v2 file is never
+    written by a composite publication (its member manifest is recorded
+    inside the primary's group; review F3 — the t46 write authorization
+    covers the primary file only).
 
     Lives here (not in ``ashare_data.manifest``) because the composite
     identity must be derived through the single hash authority
@@ -190,6 +192,13 @@ def publish_composite_snapshot(
         save_manifest,
     )
 
+    if not getattr(v2_db, "read_only", False):
+        raise ValueError(
+            "v2_db must be a read-only connection: a composite publication "
+            "writes only the primary database (the v2 member manifest is "
+            "recorded inside the primary's publication group — A02 p26 "
+            "§2.2 / t46 inScope)"
+        )
     primary_manifest = build_dataset_manifest(
         primary_db, primary_config,
         source_versions=source_versions, use_cache=False,
@@ -219,14 +228,17 @@ def confirm_composite_snapshot(
     Refuses (``DatasetIdMismatch``, with I12 attribution) when no complete
     composite generation exists — an intermediate state (one member
     published, the other not; e.g. a primary-only sync publication) is
-    never research-open — or when either library's current content no
-    longer matches the group member (full uncached re-hash on both
-    sides, so value mutations preserving count/max are caught).
+    never research-open — when the group was published under an older
+    publication protocol (R16: legacy, never silently re-identified), or
+    when either library's current content no longer matches the group
+    member (full uncached re-hash on both sides, so value mutations
+    preserving count/max are caught).  ``v2_db`` must be read-only (F3).
     """
 
     from ashare_data.manifest import (
         COMPOSITE_PUBLICATION_MEMBERS,
         DatasetIdMismatch,
+        SNAPSHOT_PUBLICATION_VERSION,
         TUSHARE_V2_CONFIG,
         build_dataset_manifest,
         drifted_tables,
@@ -255,6 +267,24 @@ def confirm_composite_snapshot(
             f"(missing: {missing}); an intermediate state is not research "
             "open: publish the composite snapshot generation before a "
             "formal run (A02 p26 I7)"
+        )
+    if group.publication_version != SNAPSHOT_PUBLICATION_VERSION:
+        raise DatasetIdMismatch(
+            f"the newest complete composite generation "
+            f"{group.publication_id} was published under publication "
+            f"protocol {group.publication_version}, the current protocol "
+            f"is {SNAPSHOT_PUBLICATION_VERSION}: the old generation is "
+            "legacy and must not be silently re-identified under the new "
+            "protocol (A02 I3-EXT / R16); publish a new composite "
+            "generation under the current protocol"
+        )
+    # The v2 database is only read from here on — enforce it (review F3:
+    # a read-write connection would refresh the v2 partition cache, i.e.
+    # WRITE the v2 file, which the composite paths must never do).
+    if not getattr(v2_db, "read_only", False):
+        raise ValueError(
+            "v2_db must be a read-only connection: the composite confirmation "
+            "never writes the v2 database (A02 p26 §2.2)"
         )
     current_primary = build_dataset_manifest(
         primary_db, primary_config, use_cache=False
