@@ -11,7 +11,60 @@ import pytest
 
 from ashare_data.config import BacktestConfig, DataConfig
 from ashare_data.db import AshareDB
-from ashare_data.manifest import build_dataset_manifest, save_manifest
+
+
+def publish_manifest(data_config: DataConfig) -> str:
+    """Publish the composite snapshot generation for a test database PAIR
+    (A02 p26 I2/I7).
+
+    A formal load consumes the *content-confirmed composite* identity, so a
+    test that seeds its own databases must publish exactly as production
+    does — one publication id carrying BOTH member manifests (primary +
+    tushare_v2).  Returns the published ``composite_id``.
+
+    The member manifests are built UNCACHED (``use_cache=False`` inside
+    ``publish_composite_snapshot``): the confirmation path always
+    recomputes, so a generation published from cached partition hashes
+    can name content the confirm step then rejects (the OB-1 family).
+    The v2 side is completed to the full 19-table store schema first so
+    the member manifest can fingerprint every domain table.
+    """
+
+    from ashare_data.config import resolve_v2_duckdb_path
+    from ashare_model.runspec import publish_composite_snapshot
+
+    v2_path = ensure_v2_publication_schema(resolve_v2_duckdb_path(data_config))
+    with AshareDB(data_config.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        return publish_composite_snapshot(
+            primary, data_config, v2
+        ).composite_id
+
+
+def ensure_v2_publication_schema(v2_path: Path) -> Path:
+    """Create the COMPLETE 19-table v2 store schema (idempotent).
+
+    The v2 dataset manifest fingerprints every domain table, so a synthetic
+    v2 database used for composite publications / confirmations must carry
+    all of them.  The DDL authority is ``TushareStore.create_schema`` (no
+    second DDL copy here); ``CREATE TABLE IF NOT EXISTS`` leaves tables the
+    scenario helpers already populated untouched.
+    """
+
+    from ashare_data.tushare_store import TushareStore
+
+    v2_path = Path(v2_path)
+    v2_path.parent.mkdir(parents=True, exist_ok=True)
+    with AshareDB(v2_path) as db:
+        TushareStore(
+            db,
+            v2_path.parent,
+            session_resolver=lambda date: date,
+            code_commit="tests",
+            sdk_version="tests",
+        ).create_schema()
+    return v2_path
 
 
 def with_price_semantics(raw: dict[str, "np.ndarray"]) -> dict[str, "np.ndarray"]:
@@ -80,14 +133,18 @@ def populate_v2_for_config(
 ) -> Path:
     """Resolve the config's v2 price source path and populate it.
 
-    Single resolution rule for tests (mirrors the loader): a relative
-    ``v2_duckdb_path`` sits next to ``duckdb_path``.
+    A02/O3: this helper used to re-implement the v2 resolution rule locally,
+    which had drifted from the authoritative ``resolve_v2_duckdb_path``
+    (the local copy accepted a separator-bearing relative value that the
+    authority refuses fail-closed).  It now calls the single authority, so
+    tests and production resolve v2 paths through one rule only.
     """
 
-    v2_path = Path(data_config.v2_duckdb_path)
-    if not v2_path.is_absolute():
-        v2_path = data_config.duckdb_path.parent / v2_path
-    return populate_v2_price_tables(v2_path, dates, ts_codes, bars, **kwargs)
+    from ashare_data.config import resolve_v2_duckdb_path
+
+    return populate_v2_price_tables(
+        resolve_v2_duckdb_path(data_config), dates, ts_codes, bars, **kwargs
+    )
 
 
 V2_INDUSTRY_DDL = {
@@ -502,18 +559,19 @@ def _populate_db(
 ) -> DataConfig:
     """Populate the shared synthetic database (single implementation).
 
-    ``persist_manifest`` controls whether the content-addressed dataset
-    manifest is saved: formal artifact flows (P8-05) require a resolved
-    dataset identity, while manifest-machinery tests need a database
-    without one.  ``prelisted_open_sessions`` extends the trade calendar
-    with future open sessions (no bars) so the pre-listed horizon covers
-    the G8 evaluation day; the rows land before ``save_manifest`` so the
-    manifest stays authoritative for the full table.
+    ``persist_manifest`` controls whether the composite snapshot generation
+    is published: formal artifact flows (P8-05 + A02 p26 I2/I7) require a
+    resolved dataset identity, while manifest-machinery tests need a
+    database without one.  ``prelisted_open_sessions`` extends the trade
+    calendar with future open sessions (no bars) so the pre-listed horizon
+    covers the G8 evaluation day; the rows land before the publication so
+    the generation stays authoritative for the full table.
 
     The v2 price source (p19 §2: the loader's formal price input) is
     populated next to the legacy database with neutral defaults
     (adj_factor=1.0, wide limit bands, no suspensions) so scenario tests
-    re-populate it via :func:`populate_v2_price_tables`.
+    re-populate it via :func:`populate_v2_price_tables`; the composite
+    publication happens only after BOTH sides are populated.
     """
 
     data_config.data_dir.mkdir(parents=True, exist_ok=True)
@@ -552,12 +610,6 @@ def _populate_db(
             ],
             data_config,
         )
-        if persist_manifest:
-            # P8-05: formal artifacts require a resolved dataset identity,
-            # so the shared fixture persists the content-addressed manifest.
-            save_manifest(
-                db, data_config, build_dataset_manifest(db, data_config)
-            )
     v2_path = Path(data_config.v2_duckdb_path)
     if not v2_path.is_absolute():
         v2_path = data_config.duckdb_path.parent / v2_path
@@ -567,6 +619,13 @@ def _populate_db(
     # the same visible behavior as a no-membership database) so scenario
     # tests seed rows via :func:`populate_v2_industry_tables`.
     populate_v2_industry_tables(v2_path)
+    if persist_manifest:
+        # P8-05 + A02 (p26 I2/I7): formal artifacts require a resolved
+        # dataset identity, and the formal path consumes the
+        # content-confirmed COMPOSITE generation.  The publication happens
+        # only after BOTH sides are populated — the group binds the
+        # content a formal load will actually read.
+        publish_manifest(data_config)
     return data_config
 
 

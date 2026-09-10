@@ -114,6 +114,22 @@ def test_identity_none_when_ingest_source_empty(identity_store):
     )
 
 
+def _insert_ingest_row(con, ingest_id: str) -> None:
+    """Insert one ledger row into the REAL source_ingest_runs table (the
+    publication schema creates it with the full p17 §4.1 columns; the
+    identity derivation only reads ingest_id)."""
+
+    con.execute(
+        "INSERT INTO source_ingest_runs (ingest_id, provider, endpoint, "
+        "parameters_json, fields_json, started_at, status, row_count, "
+        "raw_payload_sha256, raw_path, code_commit, sdk_version, "
+        "hit_row_limit) VALUES (?, 'test', 'test', '{}', '{}', "
+        "'2026-01-01 00:00:00', 'succeeded', 0, ?, 'test', 'test', "
+        "'test', false)",
+        [ingest_id, ingest_id],
+    )
+
+
 def test_loader_load_reuses_cached_tensor(populated_db):
     """Integration: with every identity source present in the toy v2
     store, the first load is a miss (tensor computed + stored) and the
@@ -122,10 +138,7 @@ def test_loader_load_reuses_cached_tensor(populated_db):
     cfg = populated_db
     v2_path = str(resolve_v2_duckdb_path(cfg))
     con = duckdb.connect(v2_path)
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS source_ingest_runs (ingest_id VARCHAR)"
-    )
-    con.execute("INSERT INTO source_ingest_runs VALUES ('toy-ing-1')")
+    _insert_ingest_row(con, "toy-ing-1")
 
     def ensure_marker_table(table: str) -> None:
         """Create a minimal marker table only when the fixture's v2 store
@@ -151,6 +164,13 @@ def test_loader_load_reuses_cached_tensor(populated_db):
     ):
         ensure_marker_table(table)
     con.close()
+    # A02 (p26 I2/I7): seeding the v2 identity sources moved the v2 content
+    # on from the fixture's published generation, so the composite
+    # generation is republished before the formal load (production
+    # discipline: drift is refused, never silently absorbed).
+    from tests.conftest import publish_manifest
+
+    publish_manifest(cfg)
 
     first = AshareDataLoader(cfg, ModelConfig()).load_data()
     assert first.factor_cache_outcome == "miss"
@@ -169,6 +189,42 @@ def test_loader_load_reuses_cached_tensor(populated_db):
     assert (
         len(list((cfg.data_dir / "factor_tensor_cache").glob("*.npz"))) == 1
     )
+
+
+def test_a02_cache_key_shares_the_composite_identity_authority(populated_db):
+    """R9 (p26 §6, I6, A02 acceptance 8): the factor-cache identity's
+    dataset element and the RunSpec's dataset identity are the SAME
+    composite string — the loader's confirmed binding, never a second
+    near-identity assembled separately by the cache layer."""
+
+    from ashare_data.db import AshareDB
+    from ashare_model.runspec import confirm_composite_snapshot
+    from tests.conftest import publish_manifest
+
+    cfg = populated_db
+    v2_path = str(resolve_v2_duckdb_path(cfg))
+    con = duckdb.connect(v2_path)
+    _insert_ingest_row(con, "r9-ing-1")
+    con.close()
+    publish_manifest(cfg)
+
+    loaded = AshareDataLoader(cfg, ModelConfig()).load_data()
+    with AshareDB(cfg.duckdb_path, read_only=True) as db, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        confirmed = confirm_composite_snapshot(db, cfg, v2)
+    # The loader's binding IS the composite derivation (one authority).
+    assert loaded.dataset_id == confirmed.composite_id
+    assert loaded.dataset_id != confirmed.primary.dataset_id
+
+    identity = loader_factor_cache_identity(
+        v2_path, loaded.dataset_id, loaded.dates, loaded.ts_codes
+    )
+    assert identity is not None
+    # The cache key's dataset element is that same string — not a
+    # separately-derived primary id or a re-hashed variant.
+    assert identity.dataset_id == loaded.dataset_id
+    assert identity.dataset_id != confirmed.primary.dataset_id
 
 
 def test_loader_cache_disabled_without_identity_sources(populated_db):

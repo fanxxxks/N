@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 import yaml
 
+import ashare_data.manifest as manifest_mod
 import ashare_data.sync as sync
 from ashare_data.config import DataConfig
 from ashare_data.db import AshareDB
@@ -33,7 +34,7 @@ from ashare_data.manifest import (
     schema_digest,
     verify_dataset,
 )
-from tests.conftest import make_bars
+from tests.conftest import make_bars, publish_manifest
 
 # Every data table created by create_schema must be fingerprinted.
 EXPECTED_MANIFEST_TABLES = {
@@ -55,7 +56,13 @@ def _manifest(db: AshareDB, config: DataConfig, **kwargs):
 def test_manifest_records_schema_rows_dates_source_and_partitions(populated_db):
     with AshareDB(populated_db.duckdb_path, read_only=True) as db:
         manifest = _manifest(db, populated_db)
-    assert manifest.manifest_version == "1"
+    # Bound to the authority, not a literal (A02, p26 §4.2 / captain ruling
+    # 2): this asserts "the record carries the CURRENT manifest generation",
+    # which stays correct across bumps instead of rotting into a
+    # maintenance-only edit. Strength is unchanged — still exact equality.
+    # The literal pin of the generation itself lives in
+    # ``tests/test_runspec.py::test_a02_version_chain_wired_into_the_version_registry``.
+    assert manifest.manifest_version == manifest_mod.MANIFEST_VERSION
     assert manifest.dataset_id
     assert manifest.merkle_root
     assert manifest.source_versions["test"] == "1"
@@ -271,6 +278,13 @@ def test_sync_records_dataset_id(tmp_path):
         sorted(synced_bars["ts_code"].unique().tolist()),
         synced_bars,
     )
+    # A02 (p26 I2/I7): the sync left a primary-only generation (an
+    # intermediate state, not research open); the composite generation is
+    # published after the v2 mirror is populated, and the formal load then
+    # binds the composite identity.  (Whitelist §10.1-2: the old assertion
+    # compared the loader's binding against the sync's primary-only
+    # dataset_id — it pinned the pre-composite semantics.)
+    composite_id = publish_manifest(cfg)
 
     # The offline sync writes only snapshot constituents, so the loader
     # must use the explicit development universe fallback (strict mode
@@ -283,18 +297,28 @@ def test_sync_records_dataset_id(tmp_path):
     # development universe (fail-closed discipline, AGENTS 5.3).
     with pytest.warns(UniverseDevelopmentFallbackWarning):
         loader.load_data()
-    assert loader.dataset_id == dataset_id
+    assert loader.dataset_id == composite_id
 
 
 def test_loader_exposes_dataset_id_when_absent(populated_db_without_manifest):
     # P8-05: the shared populated_db fixture now persists a manifest; the
     # "no manifest saved" case uses the manifest-free variant.
+    # A02 (p26 I2 + §6-3, acceptance 1): the pre-A02 binding — "no manifest,
+    # bind None and carry on" — is abolished on the formal path, which must
+    # refuse an unconfirmable identity; it survives only under the explicitly
+    # requested legacy audit mode, and there it leaves a machine marker.
     from ashare_data.config import ModelConfig
     from ashare_model.data_loader import AshareDataLoader
 
-    loader = AshareDataLoader(populated_db_without_manifest, ModelConfig())
-    loader.load_data()
-    assert loader.dataset_id is None  # no manifest saved yet
+    with pytest.raises(DatasetIdMismatch):
+        AshareDataLoader(populated_db_without_manifest, ModelConfig()).load_data()
+    legacy = AshareDataLoader(
+        populated_db_without_manifest,
+        ModelConfig(),
+        dataset_identity_mode="query",
+    ).load_data()
+    assert legacy.dataset_id is None  # no manifest saved yet
+    assert legacy.dataset_identity_status == "degraded"
 
 
 def test_manifest_cli_persists_dataset_id(populated_db, monkeypatch):
@@ -322,3 +346,776 @@ def test_partition_fingerprint_rejects_unknown_table(populated_db):
             compute_partition_fingerprint(db, populated_db, "no_such_table", "ALL")
         with pytest.raises(ValueError):
             compute_table_fingerprint(db, populated_db, "no_such_table")
+
+
+# --- A02 (t12): content-confirmed identity vs latest-saved id -----------------
+#
+# RED block for the A02 implementation contract
+# (reports/alphagpt-ab/A02_contract_implementation_plan.md §5, p26 §6):
+# the identity a formal run uses must be *content-confirmed*, and the
+# legacy "latest saved manifest" API must never stand in for it.
+
+
+def test_a02_content_confirmation_api_exists_and_is_distinct(populated_db):
+    """A02 acceptance 1 (p26 I1): 'latest saved id' and 'content-confirmed
+    id' are two different, self-describing APIs — the formal entry uses the
+    second one only."""
+
+    from ashare_data import manifest as manifest_mod
+
+    confirmer = getattr(manifest_mod, "confirm_dataset_identity", None)
+    assert confirmer is not None, (
+        "A02 requires a content-confirming identity API "
+        "(manifest.confirm_dataset_identity) distinct from resolve_dataset_id"
+    )
+    assert callable(confirmer)
+    # The legacy query keeps its meaning (latest saved row) so old callers
+    # cannot silently start reporting a confirmed identity.
+    assert callable(manifest_mod.resolve_dataset_id)
+    assert confirmer is not manifest_mod.resolve_dataset_id
+
+
+def test_a02_stale_manifest_is_refused_by_content_confirmation(populated_db):
+    """A02 acceptance 1/6 (p26 I2/I5, R1/R2): after the content moves on,
+    the confirmation API must refuse the previously saved id instead of
+    handing it back as 'the current dataset'."""
+
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        saved = _manifest(db, populated_db)
+    with AshareDB(populated_db.duckdb_path) as db:
+        save_manifest(db, populated_db, saved)
+
+    # Content drifts after the manifest was published (append one session).
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.execute(
+            "INSERT INTO daily_bar VALUES "
+            "('000001.SZ', '20240301', 10, 10, 10, 10, 10, 1, 10, 1, 1)"
+        )
+
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        # The legacy query still reports the saved row…
+        assert resolve_dataset_id(db, populated_db) == saved.dataset_id
+        # …while the formal confirmation path must refuse it.
+        with pytest.raises(Exception) as exc_info:
+            from ashare_data import manifest as manifest_mod
+
+            manifest_mod.confirm_dataset_identity(db, populated_db)
+    assert saved.dataset_id[:12] in str(exc_info.value) or "daily_bar" in str(
+        exc_info.value
+    )
+
+
+def test_a02_composite_identity_is_deterministic(populated_db):
+    """A02 acceptance 2 (p26 I3/I4): the confirmed identity is deterministic
+    for identical content (the composite v2-side coverage cases R3/R4/R5 are
+    driven by the contract plan's fixtures)."""
+
+    from ashare_data import manifest as manifest_mod
+
+    confirmer = getattr(manifest_mod, "confirm_dataset_identity", None)
+    assert confirmer is not None, (
+        "A02 requires manifest.confirm_dataset_identity (composite identity)"
+    )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        first = confirmer(db, populated_db)
+        again = confirmer(db, populated_db)
+    assert first, "composite identity must be a non-empty string"
+    assert first == again, "identical content must reproduce the same identity"
+
+
+def test_a02_fast_capability_is_declared_not_implied(populated_db):
+    """A02 acceptance 4 (p26 I8, R10): the verification modes must expose a
+    machine-readable capability statement so 'fast' can never be presented
+    as complete content confirmation."""
+
+    from ashare_data import manifest as manifest_mod
+
+    capability = getattr(manifest_mod, "verification_capability", None)
+    assert capability is not None, (
+        "A02 requires a machine-readable fast/full capability declaration "
+        "(manifest.verification_capability)"
+    )
+    declared = capability("fast")
+    assert declared["content_confirmation"] is False
+    assert capability("full")["content_confirmation"] is True
+
+
+def test_a02_composite_identity_covers_both_databases(populated_db):
+    """A02 acceptance 2 (p26 I3, R3/R5): the composite identity is composed
+    from BOTH databases' content ids through the single hash authority.
+
+    The derivation lives in ``ashare_model.runspec`` (it must call the hash
+    authority and ``ashare_data`` is the bottom §9 layer); the publication
+    version and the coverage lists stay in ``ashare_data.manifest``."""
+
+    from ashare_data import manifest as manifest_mod
+    from ashare_model.runspec import composite_snapshot_id
+    from dataclasses import replace
+
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        primary = _manifest(db, populated_db)
+    v2 = replace(primary, dataset_id="v2-" + primary.dataset_id)
+
+    composite = composite_snapshot_id(primary, v2)
+    assert composite and composite != primary.dataset_id
+    assert composite_snapshot_id(primary, v2) == composite  # deterministic (I4)
+    # Changing ONLY the v2 side must change the composite identity (R3/R5).
+    assert (
+        composite_snapshot_id(primary, replace(v2, dataset_id="v2-changed"))
+        != composite
+    )
+    # A missing v2 side is representable and distinct (no silent fabrication).
+    assert composite_snapshot_id(primary, None) != composite
+    # The publication-protocol version is part of the identity (R15/R16).
+    assert composite_snapshot_id(primary, v2, publication_version="0") != composite
+    assert manifest_mod.SNAPSHOT_PUBLICATION_VERSION == "1"
+
+
+def test_a02_composite_domain_coverage_is_explicit(populated_db):
+    """A02 acceptance 2 (p26 I3/I3-EXT, R15; composite-coverage erratum):
+    the identity coverage and the pending-admission list are both
+    machine-readable, so neither the covered scope nor an admission status
+    can be added or dropped silently.
+
+    A02 contract change (whitelist §10.1-2, erratum): the old test read
+    ``not_included`` and asserted those domains were OUTSIDE the identity —
+    a declaration the implementation disproves (the composite binds the
+    FULL v2 dataset manifest, so an event-domain change rotates the
+    identity — the compliance review proved it with a holder_number_pit
+    probe).  The corrected statement separates identity COVERAGE (included)
+    from research ADMISSION (pending_admission), which is what the
+    implementation actually does; the assertion is stronger because it
+    additionally pins the renamed list against silent removal."""
+
+    from ashare_data import manifest as manifest_mod
+
+    coverage = getattr(manifest_mod, "composite_snapshot_domains", None)
+    assert coverage is not None, (
+        "A02 requires manifest.composite_snapshot_domains() (I3-EXT)"
+    )
+    declared = coverage()
+    included = set(declared["included"])
+    pending = set(declared["pending_admission"])
+    assert included and pending
+    assert included.isdisjoint(pending)
+    for domain in (
+        "v2:earnings_forecast_pit",
+        "v2:earnings_express_pit",
+        "v2:repurchase_event_pit",
+        "v2:holder_number_pit",
+        "v2:index_weight_pit(content)",
+    ):
+        assert domain in pending, domain
+    assert declared["publication_version"] == (
+        manifest_mod.SNAPSHOT_PUBLICATION_VERSION,
+    )
+
+
+# --- A02 publication protocol (OB-1 fix + p26 §3/I7) ---------------------------
+#
+# RED block for the publication generations: the observed OB-1 defect was that
+# ``latest_manifest`` ordered generations by ``created_at DESC, dataset_id
+# DESC`` — a second-granularity timestamp whose tiebreak is content-arbitrary.
+# Two manifests published within the same second could order the WRONG way,
+# and ``ON CONFLICT (dataset_id) DO NOTHING`` made the wrong selection
+# permanent (the database could never be confirmed again).  The publication
+# protocol replaces timestamp ordering with an explicit monotonic generation
+# (p26 §3/I7: one publication = one immutable generation).
+
+
+def test_a02_publication_generation_beats_same_second_hex_tiebreak(populated_db):
+    """OB-1 regression: a same-second stale row with a hex-greater
+    dataset_id must never win over the newest publication generation.
+
+    The fabricated stale row reproduces the exact OB-1 shape observed on
+    the synthetic database in tests/test_industry_pit.py: a manifest row
+    whose created_at equals the newest publication's and whose dataset_id
+    hex-sorts above it.  The legacy ``ORDER BY created_at DESC,
+    dataset_id DESC`` resolves that tie towards the stale row; the
+    publication generation must decide instead (p26 §3/I7, I9)."""
+
+    import json as _json
+
+    from ashare_data.manifest import (
+        confirm_dataset_identity,
+        latest_publication,
+        publish_snapshot,
+    )
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        publication = publish_snapshot(db, populated_db)
+        # The stale same-second hex-greater row: the publication's own
+        # manifest with its identity replaced by a hex-maximal id and saved
+        # under the SAME created_at second (the OB-1 trap).
+        stale_payload = _json.loads(
+            _json.dumps(publication.manifest.to_dict(), sort_keys=True)
+        )
+        stale_payload["dataset_id"] = "f" * 64
+        db.execute(
+            "INSERT INTO dataset_manifest VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (dataset_id) DO NOTHING",
+            [
+                "f" * 64,
+                publication.manifest.manifest_version,
+                publication.manifest.created_at,
+                _json.dumps(stale_payload, ensure_ascii=False, sort_keys=True),
+            ],
+        )
+        latest = latest_manifest(db, populated_db)
+        newest = latest_publication(db, populated_db)
+    assert newest is not None
+    assert newest.publication_id == publication.publication_id
+    # The newest PUBLICATION decides, not the hex-greater legacy row.
+    assert latest is not None
+    assert latest.dataset_id == publication.dataset_id
+    assert latest.dataset_id != "f" * 64
+
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        # And the confirmation path consumes the same winner.
+        assert (
+            confirm_dataset_identity(db, populated_db)
+            == publication.dataset_id
+        )
+
+
+def test_a02_republishing_restores_confirmability(populated_db):
+    """The engineer's OB-1 trap, end to end: rewrite a manifest-covered
+    table AFTER a publication, republish (routinely within the same
+    created_at second), and the database must be confirmable again —
+    republishing is never a dead end (p26 §3/I7)."""
+
+    from ashare_data.manifest import (
+        confirm_dataset_identity,
+        latest_publication,
+        publish_snapshot,
+    )
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.execute(
+            "INSERT INTO sw_industry_index VALUES "
+            "('801010', '新一代', '20240101', 100.0)"
+        )
+        first = publish_snapshot(db, populated_db)
+        # A second generation of the same content lands in the same second:
+        # the manifest library dedups (same dataset_id), the publication
+        # ledger records a new generation (append-only events).
+        second = publish_snapshot(db, populated_db)
+        assert second.publication_id > first.publication_id
+        assert second.dataset_id == first.dataset_id
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        assert (
+            confirm_dataset_identity(db, populated_db) == second.dataset_id
+        )
+        assert (
+            latest_publication(db, populated_db).publication_id
+            == second.publication_id
+        )
+
+
+def test_a02_publication_rehashes_value_mutations_preserving_count_and_max(
+    populated_db,
+):
+    """R2 (p26 §6, I8): a value mutation that preserves (count, max) must
+    change the PUBLISHED identity.  The publication entry may never serve
+    the stale partition hash from ``dataset_manifest_cache`` — publishing
+    must re-hash (that is what makes a published generation
+    content-confirmed)."""
+
+    from ashare_data.manifest import publish_snapshot
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        first = publish_snapshot(db, populated_db)
+        # In-place value mutation: row count and MAX(trade_date) unchanged,
+        # so the partition cache entry stays (count, max)-valid and would be
+        # served to a cached build.
+        db.execute(
+            "UPDATE daily_bar SET close = close + 1.0 "
+            "WHERE ts_code = '000001.SZ' AND trade_date = "
+            "(SELECT MIN(trade_date) FROM daily_bar)"
+        )
+        second = publish_snapshot(db, populated_db)
+    assert second.dataset_id != first.dataset_id
+    assert second.publication_id > first.publication_id
+
+
+def test_a02_publication_history_is_append_only(populated_db):
+    """R11 (p26 §6, I9): publishing new generations never rewrites the
+    existing manifest library rows or publication rows — history is
+    append-only, and old identities stay exactly as they were."""
+
+    from ashare_data.manifest import publish_snapshot
+
+    def library_rows(db):
+        return {
+            str(row["dataset_id"]): (
+                str(row["manifest_version"]),
+                str(row["created_at"]),
+                str(row["manifest"]),
+            )
+            for _, row in db.query(
+                "SELECT dataset_id, manifest_version, created_at, manifest "
+                "FROM dataset_manifest"
+            ).iterrows()
+        }
+
+    def publication_rows(db):
+        return {
+            (int(row["publication_id"]), str(row["member_library"])): (
+                str(row["dataset_id"]),
+                str(row["manifest"]),
+            )
+            for _, row in db.query(
+                "SELECT publication_id, member_library, dataset_id, manifest "
+                "FROM snapshot_publication"
+            ).iterrows()
+        }
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        first = publish_snapshot(db, populated_db)
+        before_library = library_rows(db)
+        before_publications = publication_rows(db)
+        db.execute(
+            "INSERT INTO daily_bar VALUES "
+            "('000001.SZ', '20240301', 10, 10, 10, 10, 10, 1, 10, 1, 1)"
+        )
+        second = publish_snapshot(db, populated_db)
+        after_library = library_rows(db)
+        after_publications = publication_rows(db)
+
+    # Every pre-existing row is byte-identical; new rows only appear.
+    for dataset_id, row in before_library.items():
+        assert after_library[dataset_id] == row
+    assert second.dataset_id in after_library
+    assert second.dataset_id not in before_library or (
+        after_library[second.dataset_id] == before_library[second.dataset_id]
+    )
+    for key, row in before_publications.items():
+        assert after_publications[key] == row
+    assert (
+        second.publication_id,
+        "primary",
+    ) not in before_publications
+    assert len(after_publications) == len(before_publications) + 1
+
+
+def test_a02_publications_expose_the_protocol_generation(populated_db):
+    """The publication record carries the protocol identity (member
+    library, publication version, monotonic id) so a generation is
+    attributable and machine-classifiable (p26 §3/I7, I12)."""
+
+    from ashare_data import manifest as manifest_mod
+    from ashare_data.manifest import publish_snapshot
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        publication = publish_snapshot(db, populated_db)
+        assert publication.member_library == "primary"
+        assert publication.publication_id >= 1
+        assert (
+            publication.publication_version
+            == manifest_mod.SNAPSHOT_PUBLICATION_VERSION
+        )
+        assert publication.manifest_version == manifest_mod.MANIFEST_VERSION
+        assert publication.manifest.dataset_id == publication.dataset_id
+
+
+# --- A02 composite generations (p26 §3/I7: the dual-database boundary) --------
+
+
+def _composite_v2_path(populated_db):
+    from tests.conftest import ensure_v2_publication_schema
+
+    from ashare_data.config import resolve_v2_duckdb_path
+
+    return ensure_v2_publication_schema(resolve_v2_duckdb_path(populated_db))
+
+
+def test_a02_composite_generation_publish_and_confirm_round_trip(populated_db):
+    """A published composite generation (one id, both members in place) is
+    content-confirmable, and the confirmed identity is the SAME composite
+    string the publication derived — one authority, no second derivation
+    (p26 §3/I7 + I11)."""
+
+    from ashare_model.runspec import (
+        composite_snapshot_id,
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        published = publish_composite_snapshot(primary, populated_db, v2)
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        confirmed = confirm_composite_snapshot(primary, populated_db, v2)
+        again = confirm_composite_snapshot(primary, populated_db, v2)
+    assert confirmed.composite_id == published.composite_id
+    assert again.composite_id == confirmed.composite_id  # deterministic (I4)
+    # The identity IS the single composite derivation — never a second one.
+    assert confirmed.composite_id == composite_snapshot_id(
+        confirmed.primary, confirmed.v2
+    )
+    assert confirmed.composite_id != confirmed.primary.dataset_id
+    assert confirmed.composite_id != confirmed.v2.dataset_id
+
+
+def test_a02_incomplete_group_is_not_research_open(tmp_path):
+    """R6 (p26 §6, I7): a publication carrying only SOME members is an
+    intermediate state — the composite confirmation must refuse it and NAME
+    the missing member (I12), never fall back to "each library's own
+    latest"."""
+
+    from ashare_model.runspec import confirm_composite_snapshot
+    from ashare_data.manifest import publish_snapshot
+    from tests.conftest import ensure_v2_publication_schema
+
+    cfg = DataConfig(
+        data_dir=tmp_path / "data",
+        duckdb_path=tmp_path / "data" / "ashare.duckdb",
+        parquet_dir=tmp_path / "data" / "parquet",
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        index_codes=["000300.SH"],
+        min_listed_sessions=1,
+    )
+    ensure_v2_publication_schema(tmp_path / "data" / "ashare_v2.duckdb")
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        db.upsert_calendar(
+            [{"trade_date": "20240102", "is_open": True}], cfg
+        )
+        # Exactly what a primary-only sync publishes: one member, no group —
+        # and no earlier complete group exists to fall back to.
+        publish_snapshot(db, cfg)
+    with AshareDB(cfg.duckdb_path, read_only=True) as primary, AshareDB(
+        tmp_path / "data" / "ashare_v2.duckdb", read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch) as exc_info:
+            confirm_composite_snapshot(primary, cfg, v2)
+    message = str(exc_info.value)
+    assert "tushare_v2" in message
+    assert "not all in place" in message
+
+
+def test_a02_composite_confirm_refuses_v2_only_change(populated_db):
+    """R3/R5 (p26 §6, I3/I5): a change in the v2 database ALONE must change
+    the composite identity — the old generation is refused with the v2
+    library and the drifted table named (I12)."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+    with AshareDB(v2_path) as v2:
+        v2.execute(
+            "INSERT INTO daily_adj_factor VALUES "
+            "('000001.SZ', '20240105', 1.5)"
+        )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch) as exc_info:
+            confirm_composite_snapshot(primary, populated_db, v2)
+    message = str(exc_info.value)
+    assert "tushare_v2" in message
+    assert "daily_adj_factor" in message
+
+
+def test_a02_composite_confirm_refuses_industry_mapping_value_change(populated_db):
+    """R4 (p26 §6, I3/I5): a value-level change to the v2 industry mapping
+    that preserves (count, max) must still change the composite identity —
+    the count/max generation markers the pre-A02 cache key used are not a
+    content identity."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(v2_path) as v2:
+        v2.execute(
+            "INSERT INTO industry_membership_pit VALUES "
+            "('000001.SZ', '801010', 1, '20200101', NULL, '0', '旧一代', "
+            "'20200102')"
+        )
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+    # In-place value mutation preserving count and max(available_date).
+    with AshareDB(v2_path) as v2:
+        v2.execute(
+            "UPDATE industry_membership_pit SET index_code = '801030' "
+            "WHERE ts_code = '000001.SZ'"
+        )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch, match="industry_membership_pit"):
+            confirm_composite_snapshot(primary, populated_db, v2)
+
+
+def test_a02_single_composite_derivation_no_second_hash_path():
+    """R14 (p26 §6, I11, AGENTS §9): the composite identity derivation
+    exists exactly once (``ashare_model.runspec.composite_snapshot_id``)
+    with exactly one kind tag — no second hashing path anywhere in the
+    package sources."""
+
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    derivation_sources: list[str] = []
+    kind_tag_sources: list[str] = []
+    for package in ("ashare_model", "ashare_data"):
+        for path in (root / package).glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    if node.name == "composite_snapshot_id":
+                        derivation_sources.append(path.name)
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if (
+                            isinstance(target, ast.Name)
+                            and target.id == "_COMPOSITE_SNAPSHOT_KIND"
+                        ):
+                            kind_tag_sources.append(path.name)
+    assert derivation_sources == ["runspec.py"]
+    assert kind_tag_sources == ["runspec.py"]
+
+
+def test_a02_older_protocol_generation_is_legacy_not_reidentified(populated_db):
+    """R16 (p26 §6/§5.7, I3-EXT): after the publication protocol moves on,
+    a generation published under the OLD protocol must be refused as
+    legacy — never silently re-identified under the new protocol."""
+
+    from ashare_data import manifest as manifest_mod
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+
+    # Simulate the protocol moving on (an I3-EXT extension contract bumps
+    # SNAPSHOT_PUBLICATION_VERSION): the already-published generation is
+    # now legacy and must be refused with attribution.
+    original = manifest_mod.SNAPSHOT_PUBLICATION_VERSION
+    manifest_mod.SNAPSHOT_PUBLICATION_VERSION = "2-extended"
+    try:
+        with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+            v2_path, read_only=True
+        ) as v2:
+            with pytest.raises(DatasetIdMismatch, match="legacy"):
+                confirm_composite_snapshot(primary, populated_db, v2)
+    finally:
+        manifest_mod.SNAPSHOT_PUBLICATION_VERSION = original
+
+
+def test_a02_publication_failure_inside_caller_transaction_propagates(
+    populated_db,
+):
+    """Review F2 regression: a publication attempted inside a caller's open
+    transaction fails loudly — the nested-BEGIN error propagates (never
+    swallowed, never masked by a stray ROLLBACK of this frame), and the
+    connection stays usable for the caller's own ROLLBACK.  (DuckDB
+    aborts the whole transaction on any statement error — including the
+    nested BEGIN — so the caller's uncommitted work is gone by DuckDB's
+    own semantics; what this package guarantees is that OUR code neither
+    hides the failure nor issues a rollback it does not own.)"""
+
+    from ashare_data.manifest import publish_snapshot
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        before = int(
+            db.query(
+                "SELECT COUNT(*) AS n FROM snapshot_publication"
+            ).iloc[0]["n"]
+        )
+        db.execute("BEGIN TRANSACTION")
+        db.execute(
+            "INSERT INTO sw_industry_index VALUES "
+            "('801010', '调用者', '20240101', 100.0)"
+        )
+        # The nested BEGIN inside publish_snapshot must fail and the error
+        # must propagate to the caller.
+        with pytest.raises(Exception, match="transaction"):
+            publish_snapshot(db, populated_db)
+        # The caller can still roll its (DuckDB-aborted) transaction back
+        # and continue on the same connection.
+        db.execute("ROLLBACK")
+        rows = db.query("SELECT COUNT(*) AS n FROM snapshot_publication")
+        # The failed publication appended no generation (the count is
+        # unchanged from before the attempt — the fixture's own
+        # publications are still there, append-only).
+        assert int(rows.iloc[0]["n"]) == before
+
+
+def test_a02_composite_paths_refuse_read_write_v2_connection(populated_db):
+    """Review F3: the composite publication and confirmation never write
+    the v2 database — a read-write v2 connection is rejected outright
+    (the t46 write authorization covers the primary file only)."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path
+    ) as v2_rw:
+        with pytest.raises(ValueError, match="read-only"):
+            publish_composite_snapshot(primary, populated_db, v2_rw)
+        with pytest.raises(ValueError, match="read-only"):
+            confirm_composite_snapshot(primary, populated_db, v2_rw)
+
+
+def test_a02_pending_admission_domain_is_identity_covered(populated_db):
+    """Composite-coverage erratum: a content change in a PENDING-ADMISSION
+    domain (not research-admitted) still rotates the composite identity —
+    the composite binds the FULL v2 dataset manifest, so identity coverage
+    and research admission are separate statements.  Fail-closed either
+    way: the drifted generation is refused with the table named."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+    with AshareDB(v2_path) as v2:
+        v2.execute(
+            "INSERT INTO holder_number_pit (ts_code, ann_date, end_date, "
+            "holder_num, available_date, ingest_id, source_row_hash) "
+            "VALUES ('000001.SZ', '20240110', '20240101', 1000, "
+            "'20240111', 'erratum-probe', 'erratum-probe-1')"
+        )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch, match="holder_number_pit"):
+            confirm_composite_snapshot(primary, populated_db, v2)
+
+
+def test_a02_single_db_confirm_gates_older_protocol_publication(populated_db):
+    """Review follow-up: the audit-level single-DB confirmation applies the
+    same R16 protocol gate — a publication made under an older publication
+    protocol is legacy, never silently re-identified."""
+
+    from ashare_data import manifest as manifest_mod
+    from ashare_data.manifest import (
+        confirm_dataset_identity,
+        publish_snapshot,
+    )
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        publish_snapshot(db, populated_db)
+
+    original = manifest_mod.SNAPSHOT_PUBLICATION_VERSION
+    manifest_mod.SNAPSHOT_PUBLICATION_VERSION = "2-extended"
+    try:
+        with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+            with pytest.raises(DatasetIdMismatch, match="legacy"):
+                confirm_dataset_identity(db, populated_db)
+    finally:
+        manifest_mod.SNAPSHOT_PUBLICATION_VERSION = original
+
+
+def test_a02_composite_confirm_refuses_primary_change_between_queries(populated_db):
+    """R7 (p26 §6, I2/I7): an identity confirmed before a content change
+    must not survive the change — re-confirmation detects the drift and
+    names the drifted primary table."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        confirm_composite_snapshot(primary, populated_db, v2)
+    # The input moves AFTER the confirmation.
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.execute(
+            "INSERT INTO daily_bar VALUES "
+            "('000001.SZ', '20240301', 10, 10, 10, 10, 10, 1, 10, 1, 1)"
+        )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch) as exc_info:
+            confirm_composite_snapshot(primary, populated_db, v2)
+    message = str(exc_info.value)
+    assert "primary" in message
+    assert "daily_bar" in message
+
+
+def test_a02_sync_publishes_a_primary_generation_only(tmp_path):
+    """I7 at the real sync boundary: the sync entry publishes the primary
+    member as one immutable generation and leaves the composite group
+    INCOMPLETE — the intermediate state is not research open (a formal run
+    is refused until a composite generation is published)."""
+
+    from ashare_model.runspec import confirm_composite_snapshot
+
+    cfg_path = tmp_path / "ashare_config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "data_dir": str(tmp_path / "data"),
+                "duckdb_path": str(tmp_path / "data" / "ashare.duckdb"),
+                "parquet_dir": str(tmp_path / "data" / "parquet"),
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = sync.sync_all(cfg_path, offline=True, limit=3)
+    assert isinstance(result["dataset_id"], str)
+    cfg = DataConfig(
+        data_dir=tmp_path / "data",
+        duckdb_path=tmp_path / "data" / "ashare.duckdb",
+        parquet_dir=tmp_path / "data" / "parquet",
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+    )
+    with AshareDB(cfg.duckdb_path, read_only=True) as db:
+        from ashare_data.manifest import (
+            latest_publication,
+            latest_publication_group,
+        )
+
+        publication = latest_publication(db, cfg)
+        group = latest_publication_group(db)
+        assert publication is not None
+        assert publication.member_library == "primary"
+        assert publication.dataset_id == result["dataset_id"]
+        assert group is None  # incomplete by design: no tushare_v2 member
+        with pytest.raises(DatasetIdMismatch):
+            confirm_composite_snapshot(db, cfg, None)

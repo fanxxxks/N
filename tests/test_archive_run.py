@@ -11,6 +11,7 @@ import yaml
 
 from ashare_data.config import DataConfig
 from ashare_data.db import AshareDB
+from ashare_data.manifest import MANIFEST_VERSION
 
 from conftest import _future_prelisted_sessions
 
@@ -455,7 +456,10 @@ def test_archive_records_dataset_identity(repo):
     archived = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert archived["dataset"] == {
         "dataset_id": manifest.dataset_id,
-        "manifest_version": "1",
+        # A02 (p26 §4.2, captain ruling 2): bound to the authority — the
+        # assertion is "the archived record carries the CURRENT manifest
+        # generation", exact equality, no weakening.
+        "manifest_version": MANIFEST_VERSION,
     }
 
 

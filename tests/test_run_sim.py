@@ -69,7 +69,6 @@ def _write_sim_db(
             ],
             data_config,
         )
-        save_manifest(db, data_config, build_dataset_manifest(db, data_config))
     # p19: the simulation's formal price source is the v2 database (the
     # loader reads daily_bar_raw/daily_adj_factor/daily_price_limit/
     # daily_suspension/daily_basic_pit from there).
@@ -77,6 +76,13 @@ def _write_sim_db(
 
     v2_path = data_config.duckdb_path.parent / "ashare_v2.duckdb"
     populate_v2_price_tables(v2_path, dates, ts_codes, bars, **(v2_kwargs or {}))
+    # A02 (p26 I2/I7): the formal load consumes the content-confirmed
+    # composite generation — published after both sides are populated (the
+    # old in-block save_manifest published a primary-only manifest before
+    # the v2 side existed, which the composite path correctly refuses).
+    from tests.conftest import publish_manifest
+
+    publish_manifest(data_config)
 
 
 def _make_runner(

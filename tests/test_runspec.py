@@ -86,8 +86,12 @@ def _build(**overrides):
 
 
 def test_schema_version_is_pinned():
-    assert RUNSPEC_SCHEMA_VERSION == 1
-    assert _build().runspec_schema_version == 1
+    # A02 (p26 §4.2, captain ruling 1): 1 -> 2 — the dataset identity a frozen
+    # spec carries changed meaning (latest saved id -> content-confirmed
+    # composite snapshot identity). Literal pin by design: the next bump must
+    # be an explicit, reviewed act.
+    assert RUNSPEC_SCHEMA_VERSION == 2
+    assert _build().runspec_schema_version == RUNSPEC_SCHEMA_VERSION
 
 
 def test_spec_id_is_deterministic_and_independent_of_kwarg_order():
@@ -309,3 +313,44 @@ def test_p9_factor_compute_version_wired_into_the_version_registry():
     assert FACTOR_COMPUTE_VERSION == 4
     assert "factor_compute_version" in RunSpec.model_fields
     assert RunSpec.model_fields["factor_compute_version"].default is None
+
+
+def test_a02_version_chain_wired_into_the_version_registry():
+    """A02 (p26 §4.2 + captain ruling 2 + ruling 7): the manifest record
+    generation and the snapshot publication protocol are artifact-facing
+    versions — two specs whose data was confirmed/published under a
+    different generation are different evidence — so both ride the single
+    version owner index and land on the frozen spec.
+    """
+
+    from ashare_data.manifest import (
+        MANIFEST_VERSION,
+        SNAPSHOT_PUBLICATION_VERSION,
+    )
+
+    assert "manifest_version" in runspec._VERSION_IMPORTS
+    assert runspec._VERSION_IMPORTS["manifest_version"] == (
+        "ashare_data.manifest",
+        "MANIFEST_VERSION",
+    )
+    assert "snapshot_publication_version" in runspec._VERSION_IMPORTS
+    assert runspec._VERSION_IMPORTS["snapshot_publication_version"] == (
+        "ashare_data.manifest",
+        "SNAPSHOT_PUBLICATION_VERSION",
+    )
+    # Deliberate pins: bumping either generation must be an explicit,
+    # reviewed act (AGENTS §3.2), never a silent re-index.
+    assert MANIFEST_VERSION == "2"
+    assert SNAPSHOT_PUBLICATION_VERSION == "1"
+    assert RUNSPEC_SCHEMA_VERSION == 2
+
+    assert "manifest_version" in RunSpec.model_fields
+    assert "snapshot_publication_version" in RunSpec.model_fields
+
+    built = _build()
+    assert built.manifest_version == MANIFEST_VERSION
+    assert built.snapshot_publication_version == SNAPSHOT_PUBLICATION_VERSION
+    # They are part of the frozen spec's content identity, not a side note.
+    payload = built.to_payload()
+    assert payload["manifest_version"] == MANIFEST_VERSION
+    assert payload["snapshot_publication_version"] == SNAPSHOT_PUBLICATION_VERSION

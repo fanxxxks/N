@@ -29,6 +29,7 @@ import importlib
 import math
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -37,7 +38,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ashare_model.identity import content_hash, sha256_hex
 
-RUNSPEC_SCHEMA_VERSION = 1
+# A02 (p26 §4.2, captain ruling 1): 1 -> 2. The dataset identity carried by
+# a frozen spec changes meaning from "the latest saved id of the primary DB"
+# to the content-confirmed composite snapshot identity (+ its publication
+# generation), so a v1 spec and a v2 spec are not interchangeable evidence.
+# Old specs stay readable for audit but are refused as lineage sources
+# (``require_current_schema`` + exact round-trip), never silently reused.
+RUNSPEC_SCHEMA_VERSION = 2
 
 _SPEC_ID_KIND = "runspec"
 _KNOWN_SEARCHERS = ("gp", "tpe", "random", "rl")
@@ -71,7 +78,244 @@ _VERSION_IMPORTS: dict[str, tuple[str, str]] = {
         "PORTFOLIO_CONSTRUCTOR_VERSION",
     ),
     "rebalance_policy_version": ("ashare_portfolio.rebalance", "REBALANCE_POLICY_VERSION"),
+    # A02 (p26 §4.2, captain ruling 2 + ruling 7): the manifest record
+    # generation and the publication-protocol version are artifact-facing
+    # versions — two specs whose data was published under a different
+    # protocol are different evidence, so both ride the single owner index
+    # instead of being re-derived by each consumer (AGENTS §3.2).
+    "manifest_version": ("ashare_data.manifest", "MANIFEST_VERSION"),
+    "snapshot_publication_version": (
+        "ashare_data.manifest",
+        "SNAPSHOT_PUBLICATION_VERSION",
+    ),
 }
+
+
+#: Kind tag of the composite snapshot identity in the single hash authority
+#: (``ashare_model.identity.content_hash``) — no second hashing path.
+_COMPOSITE_SNAPSHOT_KIND = "snapshot"
+
+
+def composite_snapshot_id(
+    primary_manifest,
+    v2_manifest=None,
+    *,
+    publication_version: str | None = None,
+) -> str:
+    """Composite identity over both databases (A02, p26 §3/I3 + §4.2).
+
+    Composed strictly from the two existing content-addressed manifest ids
+    plus the publication-protocol version, through the single hash authority
+    ``ashare_model.identity.content_hash`` — no second hashing path and no
+    re-derivation of either side's content (AGENTS §1 principle 3).
+
+    It lives here rather than in ``ashare_data.manifest`` because it must call
+    the hash authority, and ``ashare_data`` is the bottom layer of the §9
+    dependency graph (guard:
+    ``test_ashare_data_package_has_no_reverse_model_imports``).  The
+    publication version and the included/not-included domain lists remain
+    owned by ``ashare_data.manifest``.
+
+    Adding a domain to the identity requires the I3-EXT extension contract and
+    a ``SNAPSHOT_PUBLICATION_VERSION`` bump (R15/R16) — never a silent edit.
+    """
+
+    from ashare_data.manifest import SNAPSHOT_PUBLICATION_VERSION
+
+    payload = {
+        "primary": primary_manifest.dataset_id,
+        "primary_manifest_version": primary_manifest.manifest_version,
+        "v2": v2_manifest.dataset_id if v2_manifest is not None else None,
+        "v2_manifest_version": (
+            v2_manifest.manifest_version if v2_manifest is not None else None
+        ),
+        "publication_version": (
+            publication_version
+            if publication_version is not None
+            else SNAPSHOT_PUBLICATION_VERSION
+        ),
+    }
+    return content_hash(_COMPOSITE_SNAPSHOT_KIND, payload)
+
+
+@dataclass(frozen=True)
+class CompositeSnapshot:
+    """The content-confirmed dual-database snapshot (A02 p26 §3/I2/I3).
+
+    ``composite_id`` is the identity a formal run binds to (RunSpec /
+    cache keys consume this one string, I6); ``primary`` and ``v2`` are
+    the two confirmed member manifests.
+    """
+
+    composite_id: str
+    publication_id: int
+    primary: object  # DatasetManifest (typed loosely: ashare_data layer)
+    v2: object
+
+    @property
+    def dataset_id(self) -> str:
+        """The composite identity (the field the pre-A03 artifact surface
+        still names ``dataset_id``; the literal rename is a deferred,
+        separately-scoped package)."""
+
+        return self.composite_id
+
+
+def publish_composite_snapshot(
+    primary_db,
+    primary_config,
+    v2_db,
+    *,
+    source_versions: dict[str, str] | None = None,
+) -> CompositeSnapshot:
+    """Publish ONE dual-database composite generation (A02 p26 §3/I7).
+
+    Builds BOTH member manifests uncached — a published generation
+    asserts the content it names — and appends one publication id carrying
+    both member rows to the PRIMARY database's ledger (the two DuckDB
+    files cannot commit atomically, so the group row in the primary is
+    the atomicity unit: either all members are in place or none is).
+    ``v2_db`` must be a READ-ONLY connection: the v2 file is never
+    written by a composite publication (its member manifest is recorded
+    inside the primary's group; review F3 — the t46 write authorization
+    covers the primary file only).
+
+    Lives here (not in ``ashare_data.manifest``) because the composite
+    identity must be derived through the single hash authority
+    ``composite_snapshot_id`` and ``ashare_data`` is the bottom §9 layer.
+    """
+
+    from ashare_data.manifest import (
+        TUSHARE_V2_CONFIG,
+        append_publication_group,
+        build_dataset_manifest,
+        save_manifest,
+    )
+
+    if not getattr(v2_db, "read_only", False):
+        raise ValueError(
+            "v2_db must be a read-only connection: a composite publication "
+            "writes only the primary database (the v2 member manifest is "
+            "recorded inside the primary's publication group — A02 p26 "
+            "§2.2 / t46 inScope)"
+        )
+    primary_manifest = build_dataset_manifest(
+        primary_db, primary_config,
+        source_versions=source_versions, use_cache=False,
+    )
+    v2_manifest = build_dataset_manifest(v2_db, TUSHARE_V2_CONFIG, use_cache=False)
+    save_manifest(primary_db, primary_config, primary_manifest)
+    group = append_publication_group(
+        primary_db,
+        {"primary": primary_manifest, "tushare_v2": v2_manifest},
+    )
+    return CompositeSnapshot(
+        composite_id=composite_snapshot_id(primary_manifest, v2_manifest),
+        publication_id=group.publication_id,
+        primary=primary_manifest,
+        v2=v2_manifest,
+    )
+
+
+def confirm_composite_snapshot(
+    primary_db,
+    primary_config,
+    v2_db,
+) -> CompositeSnapshot:
+    """Content-confirm the dual-database snapshot through the newest
+    COMPLETE publication group (A02 p26 §3/I2/I5/I7).
+
+    Refuses (``DatasetIdMismatch``, with I12 attribution) when no complete
+    composite generation exists — an intermediate state (one member
+    published, the other not; e.g. a primary-only sync publication) is
+    never research-open — when the group was published under an older
+    publication protocol (R16: legacy, never silently re-identified), or
+    when either library's current content no longer matches the group
+    member (full uncached re-hash on both sides, so value mutations
+    preserving count/max are caught).  ``v2_db`` must be read-only (F3).
+    """
+
+    from ashare_data.manifest import (
+        COMPOSITE_PUBLICATION_MEMBERS,
+        DatasetIdMismatch,
+        SNAPSHOT_PUBLICATION_VERSION,
+        TUSHARE_V2_CONFIG,
+        build_dataset_manifest,
+        drifted_tables,
+        latest_publication_group,
+        newest_publication_members,
+    )
+
+    group = latest_publication_group(primary_db)
+    if group is None:
+        newest = newest_publication_members(primary_db)
+        if newest is None:
+            raise DatasetIdMismatch(
+                "no snapshot publication exists for the primary database: "
+                "a formal run requires a dual-database composite generation "
+                "(primary + tushare_v2, A02 p26 I7); publish a composite "
+                "snapshot generation first"
+            )
+        publication_id, members = newest
+        missing = ", ".join(
+            member for member in COMPOSITE_PUBLICATION_MEMBERS
+            if member not in members
+        )
+        raise DatasetIdMismatch(
+            f"the newest publication {publication_id} carries only the "
+            f"member(s) {', '.join(members)} — members not all in place "
+            f"(missing: {missing}); an intermediate state is not research "
+            "open: publish the composite snapshot generation before a "
+            "formal run (A02 p26 I7)"
+        )
+    if group.publication_version != SNAPSHOT_PUBLICATION_VERSION:
+        raise DatasetIdMismatch(
+            f"the newest complete composite generation "
+            f"{group.publication_id} was published under publication "
+            f"protocol {group.publication_version}, the current protocol "
+            f"is {SNAPSHOT_PUBLICATION_VERSION}: the old generation is "
+            "legacy and must not be silently re-identified under the new "
+            "protocol (A02 I3-EXT / R16); publish a new composite "
+            "generation under the current protocol"
+        )
+    # The v2 database is only read from here on — enforce it (review F3:
+    # a read-write connection would refresh the v2 partition cache, i.e.
+    # WRITE the v2 file, which the composite paths must never do).
+    if not getattr(v2_db, "read_only", False):
+        raise ValueError(
+            "v2_db must be a read-only connection: the composite confirmation "
+            "never writes the v2 database (A02 p26 §2.2)"
+        )
+    current_primary = build_dataset_manifest(
+        primary_db, primary_config, use_cache=False
+    )
+    expected_primary = group.members["primary"]
+    if current_primary.dataset_id != expected_primary.dataset_id:
+        detail = ", ".join(drifted_tables(expected_primary, current_primary))
+        raise DatasetIdMismatch(
+            f"the primary database no longer matches the composite "
+            f"generation {group.publication_id} "
+            f"({expected_primary.dataset_id[:12]}…): drifted: "
+            f"{detail or 'unknown'}; publish a new composite snapshot "
+            "generation before a formal run"
+        )
+    current_v2 = build_dataset_manifest(v2_db, TUSHARE_V2_CONFIG, use_cache=False)
+    expected_v2 = group.members["tushare_v2"]
+    if current_v2.dataset_id != expected_v2.dataset_id:
+        detail = ", ".join(drifted_tables(expected_v2, current_v2))
+        raise DatasetIdMismatch(
+            f"the tushare_v2 database no longer matches the composite "
+            f"generation {group.publication_id} "
+            f"({expected_v2.dataset_id[:12]}…): drifted: "
+            f"{detail or 'unknown'}; publish a new composite snapshot "
+            "generation before a formal run"
+        )
+    return CompositeSnapshot(
+        composite_id=composite_snapshot_id(current_primary, current_v2),
+        publication_id=group.publication_id,
+        primary=current_primary,
+        v2=current_v2,
+    )
 
 
 def new_run_id() -> str:
@@ -209,7 +453,7 @@ class RunSpec(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    runspec_schema_version: Literal[1] = RUNSPEC_SCHEMA_VERSION
+    runspec_schema_version: Literal[2] = RUNSPEC_SCHEMA_VERSION
 
     # data identity
     dataset_id: str = Field(min_length=1)
@@ -232,6 +476,13 @@ class RunSpec(BaseModel):
     # P9 §9 (additive, optional so pre-P9 artifacts stay valid): semantics
     # of the factor tensor construction; the factory always populates it.
     factor_compute_version: int | None = None
+    # A02 §4.2 (additive, optional so pre-A02 specs stay readable for audit):
+    # the manifest record generation and the snapshot publication protocol
+    # the data identity was confirmed under. The factory always populates
+    # both; a spec without them cannot pass ``require_current_schema`` and is
+    # therefore never usable as a lineage source.
+    manifest_version: str | None = None
+    snapshot_publication_version: str | None = None
 
     # research semantics
     research_domain: str = Field(min_length=1)

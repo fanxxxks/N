@@ -29,7 +29,7 @@ from .config import (
     make_sim_config,
 )
 from .db import AshareDB, sql_quoted_list
-from .manifest import build_dataset_manifest, save_manifest
+from .manifest import publish_snapshot
 from .processor import is_valid_a_share_code, normalize_daily_bars
 from .universe import member_bar_coverage
 from ashare_logging import (
@@ -368,15 +368,21 @@ def sync_all(
             f"codes = {len(universe)} codes (snapshot symbols: "
             f"{len(all_constituents)})"
         )
-        # The immutable dataset manifest: content-addressed dataset_id over
-        # per-partition hashes, persisted for experiment binding.
-        manifest = build_dataset_manifest(
+        # A02 (p26 §3/I7): the sync's manifest boundary is a PUBLICATION —
+        # one immutable, monotonic generation, re-hashed uncached (a
+        # published generation asserts the content it names).  This is the
+        # primary member only: the dual-database composite generation must
+        # be published separately, and until then a formal run is refused
+        # by design — an intermediate state is never research open.
+        publication = publish_snapshot(
             db, config, source_versions=_source_versions()
         )
-        save_manifest(db, config, manifest)
+        manifest = publication.manifest
         logger.success(
-            f"Dataset manifest recorded: {manifest.dataset_id} "
-            f"({manifest.total_rows} rows across {len(manifest.tables)} tables)"
+            f"Dataset manifest published: {manifest.dataset_id} as "
+            f"generation {publication.publication_id} "
+            f"({manifest.total_rows} rows across {len(manifest.tables)} "
+            "tables)"
         )
         return {
             "calendar_days": len(dates),

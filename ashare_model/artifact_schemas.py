@@ -41,10 +41,19 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 # Bump when any top-level field is added, removed or retyped; the contract
 # (§4) rejects unknown/future versions on read. P8-05: 1 -> 2 (identity).
-ARTIFACT_SCHEMA_VERSION = 2
+# A02 (p26 §4.2, captain ruling 1): 2 -> 3 — the recorded identity of a
+# formal run widens from "the latest saved dataset id" to the
+# content-confirmed composite snapshot identity plus its publication
+# generation (``RunSpec.manifest_version`` /
+# ``RunSpec.snapshot_publication_version``). v2 artifacts are not rewritten:
+# they classify as ``legacy`` (audit-only) and formal consumers go through
+# ``require_current_schema``.
+ARTIFACT_SCHEMA_VERSION = 3
 
 # Legacy schema generations (audit-only on read; never written anymore).
-LEGACY_SCHEMA_VERSIONS = (1,)
+# A02: generation 2 joins 1. This tuple only ever grows — shrinking it
+# would silently reclassify already-written artifacts as unknown.
+LEGACY_SCHEMA_VERSIONS = (1, 2)
 
 _SPEC_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 _RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")

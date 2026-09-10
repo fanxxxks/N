@@ -37,7 +37,10 @@ from .vocab import FormulaVocab, FORMULA_VOCAB
 
 # Bump when the fingerprint computation or the key layout changes: scores
 # cached under an older version are not comparable with a newer one.
-SEMANTIC_CACHE_VERSION = 1
+# A02 (p26 §4.2): 1 -> 2 — the key's dataset element now denotes the
+# content-confirmed composite snapshot identity, so a v1 score is not
+# comparable with a v2 score for the same key string.
+SEMANTIC_CACHE_VERSION = 2
 
 # Fixed calibration slice: the head of the training window (all stocks,
 # first CALIBRATION_DATES columns).  All stocks are included so the

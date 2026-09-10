@@ -49,7 +49,7 @@ if str(ROOT) not in sys.path:
 
 from ashare_data.config import load_config  # noqa: E402
 from ashare_data.db import AshareDB  # noqa: E402
-from ashare_data.manifest import build_v2_dataset_manifest, save_manifest  # noqa: E402
+from ashare_data.manifest import TUSHARE_V2_CONFIG, publish_snapshot  # noqa: E402
 from ashare_data.tushare_client import TushareClient  # noqa: E402
 from ashare_data.tushare_store import (  # noqa: E402
     TUSHARE_STORE_SCHEMA_VERSION,
@@ -530,14 +530,18 @@ class BackfillRunner:
 
     def step8(self) -> None:
         print("== step 8: v2 manifest")
-        manifest = build_v2_dataset_manifest(
+        # A02 (p26 §3/I7): the v2 store's manifest boundary is a PUBLICATION
+        # (one immutable, monotonic generation of the 'tushare_v2' member
+        # library, re-hashed uncached).
+        publication = publish_snapshot(
             self.store.db,
+            TUSHARE_V2_CONFIG,
             source_versions={
                 "tushare_store": TUSHARE_STORE_SCHEMA_VERSION,
                 "backfill": "d3:1",
             },
         )
-        save_manifest(self.store.db, None, manifest)
+        manifest = publication.manifest
         print(f"[manifest] dataset_id={manifest.dataset_id} "
               f"tables={len(manifest.tables)} rows={manifest.total_rows} "
               f"range={manifest.date_range}")
