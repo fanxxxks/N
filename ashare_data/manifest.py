@@ -603,10 +603,6 @@ def resolve_dataset_id(db: AshareDB, config) -> str | None:
 #: see which publication protocol produced an identity.
 SNAPSHOT_PUBLICATION_VERSION = "1"
 
-#: Kind tag of the composite snapshot identity in the single hash authority
-#: (``ashare_model.identity.content_hash``) — no second hashing path.
-_COMPOSITE_SNAPSHOT_KIND = "snapshot"
-
 #: Input domains that ARE part of the composite identity this round
 #: (p26 §3/I3).  The list is data, not a second implementation: it documents
 #: what the composite covers and feeds ``composite_snapshot_domains()``.
@@ -645,34 +641,13 @@ def composite_snapshot_domains() -> dict[str, tuple[str, ...]]:
     }
 
 
-def composite_snapshot_id(
-    primary_manifest: DatasetManifest,
-    v2_manifest: DatasetManifest | None,
-    *,
-    publication_version: str = SNAPSHOT_PUBLICATION_VERSION,
-) -> str:
-    """Composite identity over both databases (A02 I3, p26 §4.2).
-
-    Composed strictly from the two existing content-addressed manifest ids
-    plus the publication-protocol version, through the single hash authority
-    (``ashare_model.identity.content_hash``) — no second hashing path and no
-    re-derivation of either side's content.  Adding a domain to the identity
-    requires going through the I3-EXT extension contract and bumping
-    ``SNAPSHOT_PUBLICATION_VERSION`` (R15/R16).
-    """
-
-    from ashare_model.identity import content_hash
-
-    payload = {
-        "primary": primary_manifest.dataset_id,
-        "primary_manifest_version": primary_manifest.manifest_version,
-        "v2": v2_manifest.dataset_id if v2_manifest is not None else None,
-        "v2_manifest_version": (
-            v2_manifest.manifest_version if v2_manifest is not None else None
-        ),
-        "publication_version": publication_version,
-    }
-    return content_hash(_COMPOSITE_SNAPSHOT_KIND, payload)
+# NOTE (A02 layering): the composite *derivation* lives in
+# ``ashare_model.runspec.composite_snapshot_id`` because it must call the
+# single hash authority ``ashare_model.identity.content_hash``, and
+# ``ashare_data`` is the bottom layer of the AGENTS §9 dependency graph (the
+# ``test_ashare_data_package_has_no_reverse_model_imports`` guard enforces
+# this).  This module owns the publication version and the coverage lists
+# only — one authority, no second hashing path.
 
 
 #: Machine-readable capability statement of the verification modes (A02 I8).

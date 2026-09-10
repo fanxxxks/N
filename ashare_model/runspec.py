@@ -74,6 +74,53 @@ _VERSION_IMPORTS: dict[str, tuple[str, str]] = {
 }
 
 
+#: Kind tag of the composite snapshot identity in the single hash authority
+#: (``ashare_model.identity.content_hash``) — no second hashing path.
+_COMPOSITE_SNAPSHOT_KIND = "snapshot"
+
+
+def composite_snapshot_id(
+    primary_manifest,
+    v2_manifest=None,
+    *,
+    publication_version: str | None = None,
+) -> str:
+    """Composite identity over both databases (A02, p26 §3/I3 + §4.2).
+
+    Composed strictly from the two existing content-addressed manifest ids
+    plus the publication-protocol version, through the single hash authority
+    ``ashare_model.identity.content_hash`` — no second hashing path and no
+    re-derivation of either side's content (AGENTS §1 principle 3).
+
+    It lives here rather than in ``ashare_data.manifest`` because it must call
+    the hash authority, and ``ashare_data`` is the bottom layer of the §9
+    dependency graph (guard:
+    ``test_ashare_data_package_has_no_reverse_model_imports``).  The
+    publication version and the included/not-included domain lists remain
+    owned by ``ashare_data.manifest``.
+
+    Adding a domain to the identity requires the I3-EXT extension contract and
+    a ``SNAPSHOT_PUBLICATION_VERSION`` bump (R15/R16) — never a silent edit.
+    """
+
+    from ashare_data.manifest import SNAPSHOT_PUBLICATION_VERSION
+
+    payload = {
+        "primary": primary_manifest.dataset_id,
+        "primary_manifest_version": primary_manifest.manifest_version,
+        "v2": v2_manifest.dataset_id if v2_manifest is not None else None,
+        "v2_manifest_version": (
+            v2_manifest.manifest_version if v2_manifest is not None else None
+        ),
+        "publication_version": (
+            publication_version
+            if publication_version is not None
+            else SNAPSHOT_PUBLICATION_VERSION
+        ),
+    }
+    return content_hash(_COMPOSITE_SNAPSHOT_KIND, payload)
+
+
 def new_run_id() -> str:
     """Unique per-execution run identity (random UUID4, not content-derived)."""
 

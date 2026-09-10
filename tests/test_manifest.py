@@ -418,24 +418,33 @@ def test_a02_fast_capability_is_declared_not_implied(populated_db):
 
 def test_a02_composite_identity_covers_both_databases(populated_db):
     """A02 acceptance 2 (p26 I3, R3/R5): the composite identity is composed
-    from BOTH databases' content ids through the single hash authority."""
+    from BOTH databases' content ids through the single hash authority.
+
+    The derivation lives in ``ashare_model.runspec`` (it must call the hash
+    authority and ``ashare_data`` is the bottom §9 layer); the publication
+    version and the coverage lists stay in ``ashare_data.manifest``."""
 
     from ashare_data import manifest as manifest_mod
+    from ashare_model.runspec import composite_snapshot_id
     from dataclasses import replace
 
-    builder = getattr(manifest_mod, "composite_snapshot_id", None)
-    assert builder is not None, "A02 requires manifest.composite_snapshot_id"
     with AshareDB(populated_db.duckdb_path, read_only=True) as db:
         primary = _manifest(db, populated_db)
     v2 = replace(primary, dataset_id="v2-" + primary.dataset_id)
 
-    composite = builder(primary, v2)
+    composite = composite_snapshot_id(primary, v2)
     assert composite and composite != primary.dataset_id
-    assert builder(primary, v2) == composite  # deterministic (I4)
+    assert composite_snapshot_id(primary, v2) == composite  # deterministic (I4)
     # Changing ONLY the v2 side must change the composite identity (R3/R5).
-    assert builder(primary, replace(v2, dataset_id="v2-changed")) != composite
+    assert (
+        composite_snapshot_id(primary, replace(v2, dataset_id="v2-changed"))
+        != composite
+    )
     # A missing v2 side is representable and distinct (no silent fabrication).
-    assert builder(primary, None) != composite
+    assert composite_snapshot_id(primary, None) != composite
+    # The publication-protocol version is part of the identity (R15/R16).
+    assert composite_snapshot_id(primary, v2, publication_version="0") != composite
+    assert manifest_mod.SNAPSHOT_PUBLICATION_VERSION == "1"
 
 
 def test_a02_composite_domain_coverage_is_explicit(populated_db):
