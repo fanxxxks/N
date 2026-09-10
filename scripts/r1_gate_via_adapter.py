@@ -1,7 +1,7 @@
 """Empirical formal G1-G8 check via the gate adapter (p21 runbook step).
 
 Read-only with respect to research data: the adapter materializes
-_gate_* tables in the v2 store (the sanctioned d2-line pattern,
+_gate_* tables in the v2 store (the sanctioned second-workspace pattern,
 captain ruling) and drops them afterwards.  Not a research run.
 """
 
@@ -12,13 +12,22 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from ashare_data.config import load_config, make_data_config
+from ashare_data.config import load_config, make_data_config, resolve_runtime_paths
 from ashare_data.db import AshareDB
 from ashare_data.gates import ProductionGateRunner
 from ashare_data.tushare_store import TushareStore
 
-LEGACY = r"D:/minequant/AlphaGPT/data/ashare.duckdb"
-V2 = r"D:/minequant/AlphaGPT-d2/data/ashare_v2.duckdb"
+# A01 (t45): both database paths come from the single config resolver instead
+# of machine-absolute constants.  The previous V2 constant pointed at a retired
+# second-workspace database path that no longer exists.  resolve_runtime_paths
+# refuses a missing required input (InputPathMissing) before anything is
+# opened, so this adapter fails closed instead of silently building a store
+# over a nonexistent path.
+_preflight = resolve_runtime_paths(
+    _REPO_ROOT / "configs" / "r1_medium_a.yaml", project_root=_REPO_ROOT
+)
+LEGACY = str(_preflight.duckdb_path)
+V2 = str(_preflight.v2_duckdb_path)
 
 
 def main() -> int:
