@@ -28,6 +28,18 @@ Design contract:
 * **Persistence** — ``dataset_manifest`` keeps one row per distinct
   dataset_id; saving an id that already exists is a no-op (the same content
   cannot create a duplicate record).
+* **Publication** (A02, p26 §3/I7) — ``publish_snapshot`` appends an
+  immutable, monotonic *generation* to ``snapshot_publication`` and is the
+  sanctioned publication entry: it re-hashes the content uncached (a
+  published generation asserts the content it names, so a stale partition
+  hash from ``dataset_manifest_cache`` must never be published) and
+  records the member library plus the publication-protocol version.
+  ``latest_manifest`` resolves through the newest publication generation
+  — never through ``created_at`` ordering, whose second-granularity ties
+  used to be broken by the content-arbitrary ``dataset_id`` hex (the OB-1
+  defect: a same-second stale row could win permanently).  Databases with
+  no publications keep the legacy "most recently created row" semantics
+  for read-only audit.
 * **Binding** — :func:`check_dataset_id` is the explicit migration policy
   for old artifacts: a payload without a dataset_id (pre-T1-01 artifacts)
   is accepted as legacy, while a payload whose id differs from the current
@@ -555,7 +567,12 @@ def build_dataset_manifest(
 
 
 def save_manifest(db: AshareDB, config, manifest: DatasetManifest) -> None:
-    """Persist the manifest; identical content is never duplicated."""
+    """Persist the manifest; identical content is never duplicated.
+
+    This is the content-addressed *library* insert only — it records that a
+    dataset_id exists, not that it was published as a generation.  The
+    publication entry is :func:`publish_snapshot` (A02 p26 §3/I7).
+    """
 
     db.execute(
         f"""
@@ -579,9 +596,181 @@ def save_manifest(db: AshareDB, config, manifest: DatasetManifest) -> None:
     )
 
 
-def latest_manifest(db: AshareDB, config) -> DatasetManifest | None:
-    """Most recently created manifest of this database, or ``None``."""
+# --- A02 publication protocol (p26 §3/I7) --------------------------------------
+#
+# One publication = one immutable, monotonic GENERATION of one member
+# library.  The generation counter — never the second-granularity
+# ``created_at`` — decides which manifest is the latest: the observed OB-1
+# defect was that ``ORDER BY created_at DESC, dataset_id DESC`` resolved
+# same-second ties with the content-arbitrary dataset_id hex, so a stale
+# row could win, and ``ON CONFLICT (dataset_id) DO NOTHING`` then made the
+# wrong selection permanent (republishing identical content can never move
+# a row's created_at).  Publications are append-only events (I9): the
+# same content may be published again under a new generation, and nothing
+# is ever rewritten.
 
+_PUBLICATION_TABLE = "snapshot_publication"
+
+
+@dataclass(frozen=True)
+class SnapshotPublication:
+    """One published generation of one member library (A02 p26 §3/I7).
+
+    ``publication_id`` is the monotonic generation counter shared by all
+    member libraries of one database file; ``member_library`` names which
+    library the generation belongs to (``primary`` or ``tushare_v2``).
+    """
+
+    publication_id: int
+    member_library: str
+    dataset_id: str
+    manifest_version: str
+    publication_version: str
+    published_at: str
+    manifest: DatasetManifest
+
+
+def _member_library(config) -> str:
+    """The member library a config's manifests belong to."""
+
+    return "tushare_v2" if isinstance(config, _TushareV2TableNames) else "primary"
+
+
+def _ensure_publication_table(db: AshareDB) -> None:
+    db.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {_PUBLICATION_TABLE} (
+            publication_id BIGINT NOT NULL,
+            member_library VARCHAR NOT NULL,
+            dataset_id VARCHAR NOT NULL,
+            manifest_version VARCHAR NOT NULL,
+            publication_version VARCHAR NOT NULL,
+            published_at VARCHAR NOT NULL,
+            manifest VARCHAR NOT NULL,
+            PRIMARY KEY (publication_id, member_library)
+        )
+        """
+    )
+
+
+def _append_publication(
+    db: AshareDB, member_library: str, manifest: DatasetManifest
+) -> SnapshotPublication:
+    """Append one publication generation (transactional, monotonic).
+
+    The generation id is allocated inside the transaction (DuckDB allows a
+    single writer per file, so the MAX+1 read cannot race another writer).
+    A failure rolls the generation back entirely — an interrupted
+    publication leaves no row, so intermediate states never become visible
+    as generations (p26 §3/I7).
+    """
+
+    _ensure_publication_table(db)
+    published_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db.execute("BEGIN TRANSACTION")
+    try:
+        row = db.query(
+            f"SELECT COALESCE(MAX(publication_id), 0) AS m "
+            f"FROM {_PUBLICATION_TABLE}"
+        )
+        publication_id = int(row.iloc[0]["m"]) + 1
+        db.execute(
+            f"INSERT INTO {_PUBLICATION_TABLE} VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                publication_id,
+                member_library,
+                manifest.dataset_id,
+                manifest.manifest_version,
+                SNAPSHOT_PUBLICATION_VERSION,
+                published_at,
+                json.dumps(manifest.to_dict(), ensure_ascii=False, sort_keys=True),
+            ],
+        )
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+    return SnapshotPublication(
+        publication_id=publication_id,
+        member_library=member_library,
+        dataset_id=manifest.dataset_id,
+        manifest_version=manifest.manifest_version,
+        publication_version=SNAPSHOT_PUBLICATION_VERSION,
+        published_at=published_at,
+        manifest=manifest,
+    )
+
+
+def publish_snapshot(
+    db: AshareDB,
+    config,
+    *,
+    source_versions: dict[str, str] | None = None,
+) -> SnapshotPublication:
+    """Publish ONE content-confirmed generation of this database (A02 I7).
+
+    The manifest is built **uncached** — a published generation asserts the
+    content it names, so it may never serve a stale partition hash from
+    ``dataset_manifest_cache`` (a value mutation that preserves
+    ``(count, max)`` would otherwise be published under the old identity).
+    The build is then saved to the content-addressed library (idempotent)
+    and appended to the publication ledger as a new monotonic generation.
+
+    This is the sanctioned single-database publication entry; the
+    dual-database composite generation is published through the composite
+    authority in ``ashare_model.runspec`` (it must call the single hash
+    authority, and ``ashare_data`` is the bottom §9 layer).
+    """
+
+    manifest = build_dataset_manifest(
+        db, config, source_versions=source_versions, use_cache=False
+    )
+    save_manifest(db, config, manifest)
+    return _append_publication(db, _member_library(config), manifest)
+
+
+def latest_publication(db: AshareDB, config) -> SnapshotPublication | None:
+    """The newest publication generation of this config's member library."""
+
+    try:
+        rows = db.query(
+            f"SELECT publication_id, member_library, dataset_id, "
+            f"manifest_version, publication_version, published_at, manifest "
+            f"FROM {_PUBLICATION_TABLE} WHERE member_library = ? "
+            "ORDER BY publication_id DESC LIMIT 1",
+            [_member_library(config)],
+        )
+    except duckdb.CatalogException:
+        return None
+    if rows.empty:
+        return None
+    row = rows.iloc[0]
+    return SnapshotPublication(
+        publication_id=int(row["publication_id"]),
+        member_library=str(row["member_library"]),
+        dataset_id=str(row["dataset_id"]),
+        manifest_version=str(row["manifest_version"]),
+        publication_version=str(row["publication_version"]),
+        published_at=str(row["published_at"]),
+        manifest=DatasetManifest.from_dict(json.loads(str(row["manifest"]))),
+    )
+
+
+def latest_manifest(db: AshareDB, config) -> DatasetManifest | None:
+    """Most recently PUBLISHED manifest of this database, or ``None``.
+
+    A02 (p26 §3/I7, the OB-1 fix): the newest publication generation
+    decides — a monotonic counter, never the second-granularity
+    ``created_at`` whose ``dataset_id DESC`` tiebreak is content-arbitrary.
+    The legacy ``dataset_manifest`` ordering survives only as the fallback
+    for databases with no publications (the pre-A02 audit shape), where it
+    keeps its historical meaning: "the most recently created manifest
+    row", unconfirmed by any generation.
+    """
+
+    publication = latest_publication(db, config)
+    if publication is not None:
+        return publication.manifest
     rows = db.query(
         f"SELECT manifest FROM {_MANIFEST_TABLE} "
         "ORDER BY created_at DESC, dataset_id DESC LIMIT 1"
@@ -825,15 +1014,24 @@ def check_dataset_id(payload_dataset_id: Any, expected: str | None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: build and persist the dataset manifest of the local database.
+    """CLI: publish the dataset manifest of the local database.
 
     Pre-T1-01 databases have no ``dataset_manifest`` table, so
     :func:`resolve_dataset_id` degrades to ``None`` and every formal run
     records ``dataset_id: null``.  This entry builds the manifest from the
-    database content (read-only queries) and persists it (one row per
-    distinct dataset_id), so the current data becomes identifiable:
+    database content (a full uncached re-hash — a published generation
+    asserts the content it names, A02 p26 §3/I7), persists it (one row per
+    distinct dataset_id) and appends a monotonic publication generation, so
+    the current data becomes identifiable:
 
         python -m ashare_data.manifest
+
+    Note: this publishes ONE member library (the primary).  A formal run
+    consumes the dual-database composite generation, which is published
+    through the composite authority (``ashare_model.runspec``) — a
+    primary-only publication leaves the composite group incomplete and
+    formal loads refused by design (intermediate states are not research
+    open).
     """
 
     import argparse
@@ -848,15 +1046,15 @@ def main(argv: list[str] | None = None) -> int:
     raw = load_config(args.config, project_root=root)
     config = make_data_config(raw, root)
     with AshareDB(config.duckdb_path) as db:
-        manifest = build_dataset_manifest(
+        publication = publish_snapshot(
             db, config, source_versions={"manifest_cli": MANIFEST_VERSION}
         )
-        save_manifest(db, config, manifest)
+        manifest = publication.manifest
     print(f"dataset_id {manifest.dataset_id}")
     print(
-        f"manifest v{manifest.manifest_version} persisted at "
-        f"{manifest.created_at} ({manifest.total_rows} rows across "
-        f"{len(manifest.tables)} tables)"
+        f"manifest v{manifest.manifest_version} published as generation "
+        f"{publication.publication_id} at {publication.published_at} "
+        f"({manifest.total_rows} rows across {len(manifest.tables)} tables)"
     )
     return 0
 

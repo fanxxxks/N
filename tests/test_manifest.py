@@ -491,3 +491,210 @@ def test_a02_composite_domain_coverage_is_explicit(populated_db):
     assert declared["publication_version"] == (
         manifest_mod.SNAPSHOT_PUBLICATION_VERSION,
     )
+
+
+# --- A02 publication protocol (OB-1 fix + p26 §3/I7) ---------------------------
+#
+# RED block for the publication generations: the observed OB-1 defect was that
+# ``latest_manifest`` ordered generations by ``created_at DESC, dataset_id
+# DESC`` — a second-granularity timestamp whose tiebreak is content-arbitrary.
+# Two manifests published within the same second could order the WRONG way,
+# and ``ON CONFLICT (dataset_id) DO NOTHING`` made the wrong selection
+# permanent (the database could never be confirmed again).  The publication
+# protocol replaces timestamp ordering with an explicit monotonic generation
+# (p26 §3/I7: one publication = one immutable generation).
+
+
+def test_a02_publication_generation_beats_same_second_hex_tiebreak(populated_db):
+    """OB-1 regression: a same-second stale row with a hex-greater
+    dataset_id must never win over the newest publication generation.
+
+    The fabricated stale row reproduces the exact OB-1 shape observed on
+    the synthetic database in tests/test_industry_pit.py: a manifest row
+    whose created_at equals the newest publication's and whose dataset_id
+    hex-sorts above it.  The legacy ``ORDER BY created_at DESC,
+    dataset_id DESC`` resolves that tie towards the stale row; the
+    publication generation must decide instead (p26 §3/I7, I9)."""
+
+    import json as _json
+
+    from ashare_data.manifest import (
+        confirm_dataset_identity,
+        latest_publication,
+        publish_snapshot,
+    )
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        publication = publish_snapshot(db, populated_db)
+        # The stale same-second hex-greater row: the publication's own
+        # manifest with its identity replaced by a hex-maximal id and saved
+        # under the SAME created_at second (the OB-1 trap).
+        stale_payload = _json.loads(
+            _json.dumps(publication.manifest.to_dict(), sort_keys=True)
+        )
+        stale_payload["dataset_id"] = "f" * 64
+        db.execute(
+            "INSERT INTO dataset_manifest VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (dataset_id) DO NOTHING",
+            [
+                "f" * 64,
+                publication.manifest.manifest_version,
+                publication.manifest.created_at,
+                _json.dumps(stale_payload, ensure_ascii=False, sort_keys=True),
+            ],
+        )
+        latest = latest_manifest(db, populated_db)
+        newest = latest_publication(db, populated_db)
+    assert newest is not None
+    assert newest.publication_id == publication.publication_id
+    # The newest PUBLICATION decides, not the hex-greater legacy row.
+    assert latest is not None
+    assert latest.dataset_id == publication.dataset_id
+    assert latest.dataset_id != "f" * 64
+
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        # And the confirmation path consumes the same winner.
+        assert (
+            confirm_dataset_identity(db, populated_db)
+            == publication.dataset_id
+        )
+
+
+def test_a02_republishing_restores_confirmability(populated_db):
+    """The engineer's OB-1 trap, end to end: rewrite a manifest-covered
+    table AFTER a publication, republish (routinely within the same
+    created_at second), and the database must be confirmable again —
+    republishing is never a dead end (p26 §3/I7)."""
+
+    from ashare_data.manifest import (
+        confirm_dataset_identity,
+        latest_publication,
+        publish_snapshot,
+    )
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.execute(
+            "INSERT INTO sw_industry_index VALUES "
+            "('801010', '新一代', '20240101', 100.0)"
+        )
+        first = publish_snapshot(db, populated_db)
+        # A second generation of the same content lands in the same second:
+        # the manifest library dedups (same dataset_id), the publication
+        # ledger records a new generation (append-only events).
+        second = publish_snapshot(db, populated_db)
+        assert second.publication_id > first.publication_id
+        assert second.dataset_id == first.dataset_id
+    with AshareDB(populated_db.duckdb_path, read_only=True) as db:
+        assert (
+            confirm_dataset_identity(db, populated_db) == second.dataset_id
+        )
+        assert (
+            latest_publication(db, populated_db).publication_id
+            == second.publication_id
+        )
+
+
+def test_a02_publication_rehashes_value_mutations_preserving_count_and_max(
+    populated_db,
+):
+    """R2 (p26 §6, I8): a value mutation that preserves (count, max) must
+    change the PUBLISHED identity.  The publication entry may never serve
+    the stale partition hash from ``dataset_manifest_cache`` — publishing
+    must re-hash (that is what makes a published generation
+    content-confirmed)."""
+
+    from ashare_data.manifest import publish_snapshot
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        first = publish_snapshot(db, populated_db)
+        # In-place value mutation: row count and MAX(trade_date) unchanged,
+        # so the partition cache entry stays (count, max)-valid and would be
+        # served to a cached build.
+        db.execute(
+            "UPDATE daily_bar SET close = close + 1.0 "
+            "WHERE ts_code = '000001.SZ' AND trade_date = "
+            "(SELECT MIN(trade_date) FROM daily_bar)"
+        )
+        second = publish_snapshot(db, populated_db)
+    assert second.dataset_id != first.dataset_id
+    assert second.publication_id > first.publication_id
+
+
+def test_a02_publication_history_is_append_only(populated_db):
+    """R11 (p26 §6, I9): publishing new generations never rewrites the
+    existing manifest library rows or publication rows — history is
+    append-only, and old identities stay exactly as they were."""
+
+    from ashare_data.manifest import publish_snapshot
+
+    def library_rows(db):
+        return {
+            str(row["dataset_id"]): (
+                str(row["manifest_version"]),
+                str(row["created_at"]),
+                str(row["manifest"]),
+            )
+            for _, row in db.query(
+                "SELECT dataset_id, manifest_version, created_at, manifest "
+                "FROM dataset_manifest"
+            ).iterrows()
+        }
+
+    def publication_rows(db):
+        return {
+            (int(row["publication_id"]), str(row["member_library"])): (
+                str(row["dataset_id"]),
+                str(row["manifest"]),
+            )
+            for _, row in db.query(
+                "SELECT publication_id, member_library, dataset_id, manifest "
+                "FROM snapshot_publication"
+            ).iterrows()
+        }
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        first = publish_snapshot(db, populated_db)
+        before_library = library_rows(db)
+        before_publications = publication_rows(db)
+        db.execute(
+            "INSERT INTO daily_bar VALUES "
+            "('000001.SZ', '20240301', 10, 10, 10, 10, 10, 1, 10, 1, 1)"
+        )
+        second = publish_snapshot(db, populated_db)
+        after_library = library_rows(db)
+        after_publications = publication_rows(db)
+
+    # Every pre-existing row is byte-identical; new rows only appear.
+    for dataset_id, row in before_library.items():
+        assert after_library[dataset_id] == row
+    assert second.dataset_id in after_library
+    assert second.dataset_id not in before_library or (
+        after_library[second.dataset_id] == before_library[second.dataset_id]
+    )
+    for key, row in before_publications.items():
+        assert after_publications[key] == row
+    assert (
+        second.publication_id,
+        "primary",
+    ) not in before_publications
+    assert len(after_publications) == len(before_publications) + 1
+
+
+def test_a02_publications_expose_the_protocol_generation(populated_db):
+    """The publication record carries the protocol identity (member
+    library, publication version, monotonic id) so a generation is
+    attributable and machine-classifiable (p26 §3/I7, I12)."""
+
+    from ashare_data import manifest as manifest_mod
+    from ashare_data.manifest import publish_snapshot
+
+    with AshareDB(populated_db.duckdb_path) as db:
+        publication = publish_snapshot(db, populated_db)
+        assert publication.member_library == "primary"
+        assert publication.publication_id >= 1
+        assert (
+            publication.publication_version
+            == manifest_mod.SNAPSHOT_PUBLICATION_VERSION
+        )
+        assert publication.manifest_version == manifest_mod.MANIFEST_VERSION
+        assert publication.manifest.dataset_id == publication.dataset_id
