@@ -33,6 +33,31 @@ def publish_manifest(data_config: DataConfig) -> str:
     return manifest.dataset_id
 
 
+def ensure_v2_publication_schema(v2_path: Path) -> Path:
+    """Create the COMPLETE 19-table v2 store schema (idempotent).
+
+    The v2 dataset manifest fingerprints every domain table, so a synthetic
+    v2 database used for composite publications / confirmations must carry
+    all of them.  The DDL authority is ``TushareStore.create_schema`` (no
+    second DDL copy here); ``CREATE TABLE IF NOT EXISTS`` leaves tables the
+    scenario helpers already populated untouched.
+    """
+
+    from ashare_data.tushare_store import TushareStore
+
+    v2_path = Path(v2_path)
+    v2_path.parent.mkdir(parents=True, exist_ok=True)
+    with AshareDB(v2_path) as db:
+        TushareStore(
+            db,
+            v2_path.parent,
+            session_resolver=lambda date: date,
+            code_commit="tests",
+            sdk_version="tests",
+        ).create_schema()
+    return v2_path
+
+
 def with_price_semantics(raw: dict[str, "np.ndarray"]) -> dict[str, "np.ndarray"]:
     """Attach the p19 §2 cache keys to a synthetic execution-price dict.
 

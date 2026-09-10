@@ -756,6 +756,162 @@ def latest_publication(db: AshareDB, config) -> SnapshotPublication | None:
     )
 
 
+#: Member libraries that must ALL be present for one publication id to be a
+#: complete dual-database composite generation (A02 p26 §3/I7): a formal run
+#: may only consume a complete group — an intermediate state (one library
+#: published, the other not) is never research-open.
+COMPOSITE_PUBLICATION_MEMBERS: tuple[str, ...] = ("primary", "tushare_v2")
+
+
+@dataclass(frozen=True)
+class PublicationGroup:
+    """One publication id's member manifests (A02 p26 §3/I7).
+
+    ``complete`` is true exactly when every member of
+    :data:`COMPOSITE_PUBLICATION_MEMBERS` is present — the atomicity unit
+    for the cross-database generation (the two DuckDB files cannot commit
+    atomically, so "all members in place under one id" is the boundary).
+    """
+
+    publication_id: int
+    published_at: str
+    members: dict[str, DatasetManifest]
+
+    @property
+    def complete(self) -> bool:
+        return all(member in self.members for member in COMPOSITE_PUBLICATION_MEMBERS)
+
+    @property
+    def missing_members(self) -> tuple[str, ...]:
+        return tuple(
+            member
+            for member in COMPOSITE_PUBLICATION_MEMBERS
+            if member not in self.members
+        )
+
+
+def append_publication_group(
+    db: AshareDB, members: dict[str, DatasetManifest]
+) -> PublicationGroup:
+    """Append one publication id carrying ALL member manifests (atomic).
+
+    The rows share one transactional generation id: either every member is
+    in place or none is — an interrupted composite publication leaves no
+    partial group, so intermediate states never become visible as
+    generations (p26 §3/I7).  The composite *identity derivation* itself
+    lives in ``ashare_model.runspec`` (single hash authority, §9 layering);
+    this is only the ledger append.
+    """
+
+    _ensure_publication_table(db)
+    published_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db.execute("BEGIN TRANSACTION")
+    try:
+        row = db.query(
+            f"SELECT COALESCE(MAX(publication_id), 0) AS m "
+            f"FROM {_PUBLICATION_TABLE}"
+        )
+        publication_id = int(row.iloc[0]["m"]) + 1
+        for member_library, manifest in members.items():
+            db.execute(
+                f"INSERT INTO {_PUBLICATION_TABLE} VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    publication_id,
+                    member_library,
+                    manifest.dataset_id,
+                    manifest.manifest_version,
+                    SNAPSHOT_PUBLICATION_VERSION,
+                    published_at,
+                    json.dumps(
+                        manifest.to_dict(), ensure_ascii=False, sort_keys=True
+                    ),
+                ],
+            )
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+    return PublicationGroup(publication_id, published_at, dict(members))
+
+
+def latest_publication_group(db: AshareDB) -> PublicationGroup | None:
+    """The newest COMPLETE composite generation, or ``None``.
+
+    Incomplete newer groups are skipped — they are intermediate states that
+    must not be research-open — but they stay in the ledger (append-only
+    audit trail); completeness is judged per publication id.
+    """
+
+    try:
+        rows = db.query(
+            f"SELECT publication_id, member_library, published_at, manifest "
+            f"FROM {_PUBLICATION_TABLE} ORDER BY publication_id DESC"
+        )
+    except duckdb.CatalogException:
+        return None
+    if rows.empty:
+        return None
+    groups: dict[int, dict[str, DatasetManifest]] = {}
+    published_at: dict[int, str] = {}
+    for _, row in rows.iterrows():
+        publication_id = int(row["publication_id"])
+        groups.setdefault(publication_id, {})[str(row["member_library"])] = (
+            DatasetManifest.from_dict(json.loads(str(row["manifest"])))
+        )
+        published_at.setdefault(publication_id, str(row["published_at"]))
+    for publication_id in sorted(groups, reverse=True):
+        group = PublicationGroup(
+            publication_id, published_at[publication_id], groups[publication_id]
+        )
+        if group.complete:
+            return group
+    return None
+
+
+def newest_publication_members(db: AshareDB) -> tuple[int, tuple[str, ...]] | None:
+    """The newest publication id and its member libraries (I12: refusal
+    messages must be able to name WHICH members of a group are missing)."""
+
+    try:
+        rows = db.query(
+            f"SELECT publication_id, member_library FROM {_PUBLICATION_TABLE} "
+            "ORDER BY publication_id DESC"
+        )
+    except duckdb.CatalogException:
+        return None
+    if rows.empty:
+        return None
+    newest = int(rows.iloc[0]["publication_id"])
+    members = tuple(
+        sorted(
+            str(row["member_library"])
+            for _, row in rows.iterrows()
+            if int(row["publication_id"]) == newest
+        )
+    )
+    return newest, members
+
+
+def drifted_tables(expected: DatasetManifest, current: DatasetManifest) -> list[str]:
+    """Tables whose fingerprints differ between two manifests (I12: the
+    refusal message must name the drifted objects, never a bare boolean)."""
+
+    expected_tables = {table.table: table for table in expected.tables}
+    current_tables = {table.table: table for table in current.tables}
+    drifted = [
+        name
+        for name, table in current_tables.items()
+        if expected_tables.get(name) is None
+        or expected_tables[name].merkle != table.merkle
+    ]
+    drifted.extend(
+        f"{name} (missing)"
+        for name in expected_tables
+        if name not in current_tables
+    )
+    return drifted
+
+
 def latest_manifest(db: AshareDB, config) -> DatasetManifest | None:
     """Most recently PUBLISHED manifest of this database, or ``None``.
 
@@ -911,14 +1067,7 @@ def confirm_dataset_identity(
     if current.dataset_id == expected.dataset_id:
         return expected.dataset_id
 
-    expected_tables = {table.table: table for table in expected.tables}
-    drifted: list[str] = []
-    for table in current.tables:
-        previous = expected_tables.get(table.table)
-        if previous is None or previous.merkle != table.merkle:
-            drifted.append(table.table)
-    missing = [name for name in expected_tables if name not in {t.table for t in current.tables}]
-    detail = ", ".join(drifted + [f"{name} (missing)" for name in missing])
+    detail = ", ".join(drifted_tables(expected, current))
     raise DatasetIdMismatch(
         f"latest manifest {expected.dataset_id[:12]}… (published "
         f"{expected.created_at}) no longer matches the current content "

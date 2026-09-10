@@ -698,3 +698,180 @@ def test_a02_publications_expose_the_protocol_generation(populated_db):
         )
         assert publication.manifest_version == manifest_mod.MANIFEST_VERSION
         assert publication.manifest.dataset_id == publication.dataset_id
+
+
+# --- A02 composite generations (p26 §3/I7: the dual-database boundary) --------
+
+
+def _composite_v2_path(populated_db):
+    from tests.conftest import ensure_v2_publication_schema
+
+    from ashare_data.config import resolve_v2_duckdb_path
+
+    return ensure_v2_publication_schema(resolve_v2_duckdb_path(populated_db))
+
+
+def test_a02_composite_generation_publish_and_confirm_round_trip(populated_db):
+    """A published composite generation (one id, both members in place) is
+    content-confirmable, and the confirmed identity is the SAME composite
+    string the publication derived — one authority, no second derivation
+    (p26 §3/I7 + I11)."""
+
+    from ashare_model.runspec import (
+        composite_snapshot_id,
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        published = publish_composite_snapshot(primary, populated_db, v2)
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        confirmed = confirm_composite_snapshot(primary, populated_db, v2)
+        again = confirm_composite_snapshot(primary, populated_db, v2)
+    assert confirmed.composite_id == published.composite_id
+    assert again.composite_id == confirmed.composite_id  # deterministic (I4)
+    # The identity IS the single composite derivation — never a second one.
+    assert confirmed.composite_id == composite_snapshot_id(
+        confirmed.primary, confirmed.v2
+    )
+    assert confirmed.composite_id != confirmed.primary.dataset_id
+    assert confirmed.composite_id != confirmed.v2.dataset_id
+
+
+def test_a02_incomplete_group_is_not_research_open(populated_db):
+    """R6 (p26 §6, I7): a publication carrying only SOME members is an
+    intermediate state — the composite confirmation must refuse it and NAME
+    the missing member (I12), never fall back to "each library's own
+    latest"."""
+
+    from ashare_model.runspec import confirm_composite_snapshot
+    from ashare_data.manifest import publish_snapshot
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as db:
+        # Exactly what a primary-only sync publishes: one member, no group.
+        publish_snapshot(db, populated_db)
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch) as exc_info:
+            confirm_composite_snapshot(primary, populated_db, v2)
+    message = str(exc_info.value)
+    assert "tushare_v2" in message
+    assert "not all in place" in message or "incomplete" in message
+
+
+def test_a02_composite_confirm_refuses_v2_only_change(populated_db):
+    """R3/R5 (p26 §6, I3/I5): a change in the v2 database ALONE must change
+    the composite identity — the old generation is refused with the v2
+    library and the drifted table named (I12)."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+    with AshareDB(v2_path) as v2:
+        v2.execute(
+            "INSERT INTO daily_adj_factor VALUES "
+            "('000001.SZ', '20240105', 1.5)"
+        )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch) as exc_info:
+            confirm_composite_snapshot(primary, populated_db, v2)
+    message = str(exc_info.value)
+    assert "tushare_v2" in message
+    assert "daily_adj_factor" in message
+
+
+def test_a02_composite_confirm_refuses_primary_change_between_queries(populated_db):
+    """R7 (p26 §6, I2/I7): an identity confirmed before a content change
+    must not survive the change — re-confirmation detects the drift and
+    names the drifted primary table."""
+
+    from ashare_model.runspec import (
+        confirm_composite_snapshot,
+        publish_composite_snapshot,
+    )
+
+    v2_path = _composite_v2_path(populated_db)
+    with AshareDB(populated_db.duckdb_path) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        publish_composite_snapshot(primary, populated_db, v2)
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        confirm_composite_snapshot(primary, populated_db, v2)
+    # The input moves AFTER the confirmation.
+    with AshareDB(populated_db.duckdb_path) as db:
+        db.execute(
+            "INSERT INTO daily_bar VALUES "
+            "('000001.SZ', '20240301', 10, 10, 10, 10, 10, 1, 10, 1, 1)"
+        )
+    with AshareDB(populated_db.duckdb_path, read_only=True) as primary, AshareDB(
+        v2_path, read_only=True
+    ) as v2:
+        with pytest.raises(DatasetIdMismatch) as exc_info:
+            confirm_composite_snapshot(primary, populated_db, v2)
+    message = str(exc_info.value)
+    assert "primary" in message
+    assert "daily_bar" in message
+
+
+def test_a02_sync_publishes_a_primary_generation_only(tmp_path):
+    """I7 at the real sync boundary: the sync entry publishes the primary
+    member as one immutable generation and leaves the composite group
+    INCOMPLETE — the intermediate state is not research open (a formal run
+    is refused until a composite generation is published)."""
+
+    from ashare_model.runspec import confirm_composite_snapshot
+
+    cfg_path = tmp_path / "ashare_config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "data_dir": str(tmp_path / "data"),
+                "duckdb_path": str(tmp_path / "data" / "ashare.duckdb"),
+                "parquet_dir": str(tmp_path / "data" / "parquet"),
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = sync.sync_all(cfg_path, offline=True, limit=3)
+    assert isinstance(result["dataset_id"], str)
+    cfg = DataConfig(
+        data_dir=tmp_path / "data",
+        duckdb_path=tmp_path / "data" / "ashare.duckdb",
+        parquet_dir=tmp_path / "data" / "parquet",
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+    )
+    with AshareDB(cfg.duckdb_path, read_only=True) as db:
+        from ashare_data.manifest import (
+            latest_publication,
+            latest_publication_group,
+        )
+
+        publication = latest_publication(db, cfg)
+        group = latest_publication_group(db)
+        assert publication is not None
+        assert publication.member_library == "primary"
+        assert publication.dataset_id == result["dataset_id"]
+        assert group is None  # incomplete by design: no tushare_v2 member
+        with pytest.raises(DatasetIdMismatch):
+            confirm_composite_snapshot(db, cfg, None)
