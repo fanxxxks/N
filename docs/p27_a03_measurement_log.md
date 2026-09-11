@@ -131,17 +131,18 @@ store）。迁移面 = 空集；无需对账报告条目，无任何 run/事件�
    （后台实测 869s）；接线后重跑进行中（见 §9 未运行项）。
 4. 全量：`python -m pytest -q tests`（串行；`-n auto` 两次并行尝试因与本
    任务自身的其他套件并发产生资源竞争被放弃——按 §10.2 回退串行；并行
-   parity 对账仍未建立，不声称并行等价）。**最终候选 commit（647dc65）
-   实测：2 failed, 1808 passed, 6 skipped（2135.67s）**。两个失败为
-   `tests/test_lock_files.py::test_pins_match_installed_environment` 与
-   `test_freeze_lock_check_passes`——本机环境缺 `tushare` 包元数据
-   （`PackageNotFoundError`），与本变更无关：在临时 worktree 于 base
-   `aac4aad` 上实测同样 2 failed（evidence：worktree
-   `C:\Users\Administrator\AppData\Local\Temp\a03-base-check`，已删除）。
-   上一轮实现中间态曾出现的
-   `test_train_facade_line_budget` 失败（train.py 370 行 > 300 预算）已由
-   `647dc65`（CLI 入口迁入 `train_entry.py` + `_trainer_entry_gate`
-   抽取）修复，本轮通过。
+   parity 对账仍未建立，不声称并行等价）。**最终候选 commit（724805e，
+   含双审修复轮）实测：3 failed, 1809 passed, 6 skipped（1762.98s）**：
+   - 两个失败 = `tests/test_lock_files.py`（本机缺 `tushare` 包元数据，
+     与 base `aac4aad` 相同——临时 worktree 实测同样 2 failed，与变更
+     无关）；上一轮出现的 `test_train_facade_line_budget` 失败已由
+     `647dc65` 修复，本轮通过。
+   - `tests/test_task_executor.py::test_resume_fills_only_unfinished_
+     rows_and_preserves_failed_trial` 全量运行中失败
+     （`psutil.NoSuchProcess` @ psutil/__init__.py:360，进程轮询竞态）；
+     **隔离复跑该文件 9 passed（56.16s）**——归属为全量长跑下的瞬时
+     竞态而非确定性回归（该文件与 A03 变更面无交集，e1e893a/724805e
+     未触碰 task_executor/psutil 路径）。已如实记录，未放宽任何断言。
 5. `python -m compileall -q …`（改动文件逐一通过）。
 6. `git diff --check`。
 7. 版本全量检索：见 §1。
