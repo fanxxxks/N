@@ -199,6 +199,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from contextlib import nullcontext as _nullcontext
 from pathlib import Path
 
 import torch
@@ -283,7 +284,11 @@ from .research_domain import (
 )
 from .reward import REWARD_VERSION
 from .search_contract import SearchResult
-from .lifecycle import assert_formal_run_lifecycle
+from .lifecycle import (
+    LifecycleError,
+    RunContext,
+    assert_formal_run_lifecycle,
+)
 from .versions import PROTOCOL_VERSION
 from .vocab import FEATURE_NAMES
 
@@ -682,7 +687,52 @@ def main(argv=None) -> int:
         help="production gate G6: minimum eligible stocks per major window "
         "(default: 100)",
     )
+    # A03 (p27 I2/I5): the formal entry requires the preregistered run
+    # identity; the explicit non-formal modes are the only identity-free
+    # paths (工程探针 / 历史审计).  --selfcheck is a different action and
+    # must be declared engineering — it never inherits formal identity.
+    parser.add_argument(
+        "--spec-id",
+        default=None,
+        help="preregistered RunSpec id of the run to attach (formal mode)",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="run id of the preregistered run to attach (formal mode)",
+    )
+    parser.add_argument(
+        "--lifecycle-mode",
+        choices=["formal", "engineering", "audit"],
+        default="formal",
+        help="formal (default) attaches the preregistered run and enforces "
+        "the lifecycle gate; engineering/audit are explicit non-formal "
+        "declarations (p27 §3/I3)",
+    )
     args = parser.parse_args(argv)
+
+    # A03 (p27 I5/R14): boundary action-mode declaration — the selfcheck
+    # dry run is an engineering probe and refuses to inherit formal
+    # research identity; formal mode requires the preregistered identity.
+    if args.selfcheck and args.lifecycle_mode != "engineering":
+        raise SystemExit(
+            "evaluation: --selfcheck is an engineering probe and must be "
+            "declared with --lifecycle-mode engineering; a dry run never "
+            "inherits formal research identity (p27 I5)"
+        )
+    if args.lifecycle_mode != "formal" and (args.spec_id or args.run_id):
+        raise SystemExit(
+            "evaluation: --spec-id/--run-id are formal-mode identity "
+            "arguments and cannot be combined with an explicit non-formal "
+            "--lifecycle-mode (p27 I2)"
+        )
+    if args.lifecycle_mode == "formal" and not (args.spec_id and args.run_id):
+        raise SystemExit(
+            "evaluation: formal mode requires --spec-id and --run-id of a "
+            "preregistered, fully qualified run (state at least "
+            "SEARCH_PLAN_ADMITTED); declare --lifecycle-mode engineering "
+            "for an explicit non-formal probe (p27 I2/I5)"
+        )
 
     try:
         root = Path(__file__).resolve().parents[1]
@@ -697,27 +747,6 @@ def main(argv=None) -> int:
             proto_cfg.random_samples = 0
 
         loader = AshareDataLoader(data_config, model_config)
-        loader.load_data()
-        if not loader.dataset_id:
-            from .artifact_schemas import ArtifactSchemaError
-
-            raise ArtifactSchemaError(
-                "formal protocol artifacts require a resolved dataset_id "
-                "(dataset manifest); migrate the database with "
-                "`python -m ashare_data.manifest` before evaluation"
-            )
-        # A03 (p27): the entry gate is now mandatory.  Until the
-        # evaluation package commit wires the RunContext, the entry
-        # explicitly declares the non-formal engineering mode (p27
-        # I2/§5.3) — the old implicit vacuous pass is gone.
-        assert_formal_run_lifecycle(
-            "evaluation",
-            data_config.data_dir,
-            action_mode="engineering",
-        )
-        extra_trials = load_trial_rows(args.trials, loader.dataset_id)
-        ledger = ExperimentLedger(root / args.ledger)
-        regime = RegimeRegistry(root / args.regime)
 
         fold_indices = list(range(args.folds)) if args.folds else None
         seeds = (
@@ -735,25 +764,103 @@ def main(argv=None) -> int:
         from .run_store import RunStore
         from .runspec import resolve_runtime_runspec
 
-        spec = resolve_runtime_runspec(
-            dataset_id=loader.dataset_id,
-            data_cutoff=loader.dates[-1],
-            data_config=data_config,
-            backtest_config=backtest_config,
-            requested_budget=requested_budget,
-            n_folds=len(proto_cfg.folds),
-            research_domain=proto_cfg.domain,
-            seeds=spec_seeds,
-            searcher=model_config.searcher,
-            max_formula_len=model_config.max_formula_len,
-            # SPEC_LOCKED clean-tree evidence activates in P8-06+; this
-            # schema-v2 run still records the exact commit and lock hash.
-            require_clean_tree=False,
-        )
+        # A03 (p27 I6): formal mode freezes the plan and establishes the
+        # run identity BEFORE the expensive load; engineering/audit modes
+        # are the explicitly declared non-formal paths (p27 I2/§5.3).
+        run_context = None
+        if args.lifecycle_mode == "formal":
+            try:
+                loader.confirm_input_snapshot()
+                spec = resolve_runtime_runspec(
+                    dataset_id=loader.dataset_id,
+                    data_cutoff=loader.frozen_data_cutoff(),
+                    data_config=data_config,
+                    backtest_config=backtest_config,
+                    requested_budget=requested_budget,
+                    n_folds=len(proto_cfg.folds),
+                    research_domain=proto_cfg.domain,
+                    seeds=spec_seeds,
+                    searcher=model_config.searcher,
+                    max_formula_len=model_config.max_formula_len,
+                    # SPEC_LOCKED clean-tree evidence activates in P8-06+;
+                    # this schema-v2 run still records the exact commit and
+                    # lock hash.
+                    require_clean_tree=False,
+                )
+                run_context = RunContext.attach(
+                    RunStore(data_config.data_dir),
+                    spec_id=args.spec_id,
+                    run_id=args.run_id,
+                    entry_type="evaluation",
+                    action_mode="research",
+                    spec=spec,
+                )
+                # I5: the protocol is a search action — it consumes the
+                # fully admitted search plan (the attach floor enforces
+                # SEARCH_PLAN_ADMITTED; asserted at the boundary).
+                run_context.assert_search_ready()
+                # I8/R8: the OOS-boundary mode assertion — the protocol is
+                # the research action whose windows feed OOS/promotion
+                # decisions; the locked window is unreachable from
+                # non-formal modes.
+                run_context.assert_protected_oos_access()
+            except LifecycleError as exc:
+                # CLI boundary: a lifecycle refusal exits with its reason
+                # (p27 I11 — nothing has been loaded or written yet).
+                raise SystemExit(f"evaluation: {exc}")
+        else:
+            assert_formal_run_lifecycle(
+                "evaluation",
+                data_config.data_dir,
+                action_mode=args.lifecycle_mode,
+            )
+
+        loader.load_data()
+        if not loader.dataset_id:
+            from .artifact_schemas import ArtifactSchemaError
+
+            raise ArtifactSchemaError(
+                "formal protocol artifacts require a resolved dataset_id "
+                "(dataset manifest); migrate the database with "
+                "`python -m ashare_data.manifest` before evaluation"
+            )
+        if run_context is not None and loader.dataset_id != spec.dataset_id:
+            raise SystemExit(
+                "evaluation: the database content drifted between identity "
+                "freeze and load; the frozen spec no longer matches the "
+                "confirmed composite snapshot — republish and "
+                "re-preregister (A02 I2, p27 I6)"
+            )
+        extra_trials = load_trial_rows(args.trials, loader.dataset_id)
+        ledger = ExperimentLedger(root / args.ledger)
+        regime = RegimeRegistry(root / args.regime)
+        if run_context is None:
+            spec = resolve_runtime_runspec(
+                dataset_id=loader.dataset_id,
+                data_cutoff=loader.dates[-1],
+                data_config=data_config,
+                backtest_config=backtest_config,
+                requested_budget=requested_budget,
+                n_folds=len(proto_cfg.folds),
+                research_domain=proto_cfg.domain,
+                seeds=spec_seeds,
+                searcher=model_config.searcher,
+                max_formula_len=model_config.max_formula_len,
+                # SPEC_LOCKED clean-tree evidence activates in P8-06+; this
+                # schema-v2 run still records the exact commit and lock hash.
+                require_clean_tree=False,
+            )
         out_path = root / args.output
         store = RunStore(data_config.data_dir)
 
-        with store.open_run(spec) as handle:
+        if run_context is not None:
+            # A03 (p27 I7): the protocol result registers inside the
+            # attached run's store — the execution-time context owns the
+            # artifact identity; no second run is minted.
+            handle_cm = _nullcontext(run_context.handle)
+        else:
+            handle_cm = store.open_run(spec)
+        with handle_cm as handle:
             if args.selfcheck:
                 # Noise measurement is a measurement too: it must not touch a
                 # locked holdout slice.

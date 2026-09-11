@@ -557,7 +557,10 @@ def test_r12_refused_formal_run_leaves_no_business_artifacts(
 
     cfg_path = _populated_config(tmp_path, populated_db)
     out_path = tmp_path / "protocol_result.json"
-    with _ExpectRefusal("SEARCH_PLAN_ADMITTED"):
+    # The run is preregistered below the entry floor (and its fixture spec
+    # is not the entry's resolved spec) — the entry refuses either way;
+    # R12 pins that the refusal leaves no business artifact behind.
+    with _ExpectRefusal():
         evaluation.main(
             [
                 "--config", str(cfg_path),
@@ -573,7 +576,17 @@ def test_r12_refused_formal_run_leaves_no_business_artifacts(
     index = json.loads(
         (handle.run_dir / "index.json").read_text(encoding="utf-8")
     )
-    assert index["artifacts"] == []
+    # The genesis lifecycle evidence artifacts (idea + spec lock) are the
+    # run's administrative trail; the refused entry must add no business
+    # artifact (strategy/protocol/backtest/paper state).
+    business = [
+        a
+        for a in index["artifacts"]
+        if a["artifact_type"]
+        in {"strategy", "protocol", "backtest", "paper_state"}
+    ]
+    assert business == []
+    assert len(index["artifacts"]) == 2
 
 
 def test_r14_selfcheck_requires_engineering_declaration(
