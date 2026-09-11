@@ -46,6 +46,7 @@ from ashare_model.lifecycle import (
     assert_formal_run_lifecycle,
     bound_paper_account_id,
 )
+from ashare_model.run_store import RunStoreError
 from ashare_model.reward import signal_direction
 from ashare_model.time_contract import TrainingTimeContract
 from ashare_model.targets import causal_target_returns
@@ -714,6 +715,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # A03 (p27 I4): the audit mode is READ-ONLY over artifacts, event
+    # chains and paper accounts — the simulation appends observation data
+    # and is therefore refused in audit mode; engineering is the explicit
+    # non-formal probe declaration and is machine-marked in the log.
+    if args.lifecycle_mode == "audit":
+        raise SystemExit(
+            "run_sim: audit mode is read-only and never writes a paper "
+            "account (p27 §3/I4); declare --lifecycle-mode engineering for "
+            "an explicit non-formal probe"
+        )
+    if args.lifecycle_mode == "engineering":
+        logger.warning(
+            "lifecycle=unverified (engineering run): no lifecycle identity "
+            "and no lifecycle-bound account — this is not a formal paper "
+            "observation (p27 I2/§5.3)"
+        )
+
+    run_context = None
     try:
         root = _project_root()
         raw = load_config(args.config, project_root=root)
@@ -741,17 +760,32 @@ def main() -> None:
         # account write or heavy load — the strategy lineage names the
         # observing run, the attach enforces exactly PAPER_OBSERVING, and
         # the writable account comes from the run's binding evidence.
-        run_context = None
+        # (run_context is hoisted above the entry's try for the finally.)
         if args.lifecycle_mode == "formal":
-            from ashare_model.artifact_writer import reconstruct_runspec_from_lineage
-            from ashare_model.artifact_writer import read_boundary_artifact
-            from ashare_model.artifact_schemas import StrategyArtifact
+            from ashare_model.artifact_writer import (
+                assert_registered_boundary_artifact,
+                read_boundary_artifact,
+                reconstruct_runspec_from_lineage,
+            )
+            from ashare_model.artifact_schemas import (
+                ArtifactSchemaError,
+                StrategyArtifact,
+            )
             from ashare_model.run_store import RunStore
 
             formula_file = data_config.data_dir / "best_ashare_strategy.json"
-            loaded_artifact = read_boundary_artifact(
-                formula_file, model_cls=StrategyArtifact, formal=True
-            )
+            try:
+                loaded_artifact = read_boundary_artifact(
+                    formula_file, model_cls=StrategyArtifact, formal=True
+                )
+            except ArtifactSchemaError as exc:
+                raise SystemExit(
+                    "run_sim: formal paper simulation requires a current "
+                    f"schema-v2 strategy artifact at {formula_file}; the "
+                    f"pre-A03 legacy replay paths are audit-only (declare "
+                    f"--lifecycle-mode engineering for an explicit "
+                    f"non-formal probe): {exc}"
+                )
             if loaded_artifact is None:
                 raise SystemExit(
                     "run_sim: formal paper simulation requires a current "
@@ -763,6 +797,15 @@ def main() -> None:
             payload, _ = loaded_artifact
             store = RunStore(data_config.data_dir)
             try:
+                # A03 (p27 I7 read side): the consumed strategy must be the
+                # source run's REGISTERED artifact, not a copied mirror.
+                assert_registered_boundary_artifact(
+                    store,
+                    str(payload["spec_id"]),
+                    str(payload["run_id"]),
+                    payload,
+                    artifact_type="strategy",
+                )
                 source_spec = reconstruct_runspec_from_lineage(store, payload)
                 run_context = RunContext.attach(
                     store,
@@ -772,7 +815,7 @@ def main() -> None:
                     action_mode="paper",
                     spec=source_spec,
                 )
-            except LifecycleError as exc:
+            except (LifecycleError, RunStoreError) as exc:
                 raise SystemExit(f"run_sim: {exc}")
         runner = SimulationRunner(
             data_config,
@@ -807,6 +850,10 @@ def main() -> None:
                 pass
         raise
     finally:
+        # A03: the entry owns the RunContext — the single-writer lock is
+        # released on every exit path (review F1).
+        if run_context is not None:
+            run_context.close()
         export_log_txt(run_name="sim")
 
 

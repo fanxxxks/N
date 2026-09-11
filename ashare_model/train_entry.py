@@ -30,8 +30,8 @@ from ashare_logging import export_log_txt, setup_run_logging
 
 from .data_loader import AshareDataLoader
 from .lifecycle import LifecycleError, RunContext
+from .run_store import RunStore, RunStoreError
 from .runspec import resolve_runtime_runspec
-from .run_store import RunStore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,6 +147,25 @@ def main(trainer_cls) -> None:
     setup_run_logging(run_name="train")
     args = build_parser().parse_args()
 
+    # A03 (p27 I4): the audit mode is READ-ONLY over artifacts and event
+    # chains — the trainer produces business artifacts and is therefore
+    # refused in audit mode; engineering is the explicit non-formal probe
+    # declaration and is machine-marked in the log.
+    if args.lifecycle_mode == "audit":
+        raise SystemExit(
+            "train: audit mode is read-only (p27 §3/I4); declare "
+            "--lifecycle-mode engineering for an explicit non-formal probe"
+        )
+    if args.lifecycle_mode == "engineering":
+        from loguru import logger
+
+        logger.warning(
+            "lifecycle=unverified (engineering run): no lifecycle identity "
+            "— the artifacts of this entry are not formal evidence "
+            "(p27 I2/§5.3)"
+        )
+
+    run_context = None
     try:
         from .train_windows import _project_root
 
@@ -178,7 +197,7 @@ def main(trainer_cls) -> None:
                 "engineering for an explicit non-formal probe (p27 I2/I5)"
             )
 
-        run_context = None
+        # (run_context is hoisted above the entry's try for the finally.)
         if args.lifecycle_mode == "formal":
             steps = int(args.steps or model_config.train_steps)
             batch_size = int(args.batch_size or model_config.batch_size)
@@ -192,9 +211,9 @@ def main(trainer_cls) -> None:
                     steps=steps,
                     batch_size=batch_size,
                 )
-            except LifecycleError as exc:
-                # CLI boundary: a lifecycle refusal exits with its reason
-                # (p27 I11 — nothing has been loaded or written yet).
+            except (LifecycleError, RunStoreError) as exc:
+                # CLI boundary: a lifecycle/store refusal exits with its
+                # reason (p27 I11 — nothing has been loaded or written yet).
                 raise SystemExit(f"train: {exc}")
         else:
             loader = AshareDataLoader(data_config, model_config)
@@ -219,4 +238,8 @@ def main(trainer_cls) -> None:
             # scripts and CI never mistag a no-artifact run as success.
             raise SystemExit(2)
     finally:
+        # A03: the entry owns the RunContext — the single-writer lock is
+        # released on every exit path (review F1).
+        if run_context is not None:
+            run_context.close()
         export_log_txt(run_name="train")

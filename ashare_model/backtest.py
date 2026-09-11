@@ -486,6 +486,25 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # A03 (p27 I4): the audit mode is READ-ONLY over artifacts and event
+    # chains — the backtest entry produces business artifacts and is
+    # therefore refused in audit mode; engineering is the explicit
+    # non-formal probe declaration and is machine-marked in the log.
+    if args.lifecycle_mode == "audit":
+        raise SystemExit(
+            "backtest: audit mode is read-only (p27 §3/I4); declare "
+            "--lifecycle-mode engineering for an explicit non-formal probe"
+        )
+    if args.lifecycle_mode == "engineering":
+        from loguru import logger
+
+        logger.warning(
+            "lifecycle=unverified (engineering run): no lifecycle identity "
+            "— the artifacts of this entry are not formal evidence "
+            "(p27 I2/§5.3)"
+        )
+
+    run_context = None
     try:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
@@ -521,11 +540,22 @@ def main() -> None:
         if not formula_file.exists():
             raise SystemExit(f"Formula file not found: {formula_file}")
         payload, source_spec = load_formal_strategy(formula_file, store)
-        run_context = None
         if args.lifecycle_mode == "formal":
             from .lifecycle import LifecycleError, RunContext
+            from .lifecycle import RunStoreError
+            from .artifact_writer import assert_registered_boundary_artifact
 
             try:
+                # A03 (p27 I7 read side): the convenience mirror is a
+                # cache — the consumed strategy must be the source run's
+                # REGISTERED artifact, or the formal entry refuses.
+                assert_registered_boundary_artifact(
+                    store,
+                    source_spec.spec_id,
+                    str(payload["run_id"]),
+                    payload,
+                    artifact_type="strategy",
+                )
                 run_context = RunContext.attach(
                     store,
                     spec_id=source_spec.spec_id,
@@ -534,7 +564,7 @@ def main() -> None:
                     action_mode="research",
                     spec=source_spec,
                 )
-            except LifecycleError as exc:
+            except (LifecycleError, RunStoreError) as exc:
                 raise SystemExit(f"backtest: {exc}")
         loader = AshareDataLoader(data_config, model_config)
         loader.load_data()
@@ -654,6 +684,11 @@ def main() -> None:
         print(json.dumps(result.metrics, ensure_ascii=False, indent=2))
         print(f"Result saved to {out_path}")
     finally:
+        # A03: the entry owns the RunContext — the single-writer lock is
+        # released on every exit path (review F1: the lock must not
+        # outlive the process and force clear_stale_lock recovery).
+        if run_context is not None:
+            run_context.close()
         export_log_txt(run_name="backtest")
 
 

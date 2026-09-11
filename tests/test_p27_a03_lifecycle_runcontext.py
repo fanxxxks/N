@@ -689,18 +689,40 @@ def test_r11_formal_artifact_write_uses_context_identity(tmp_path):
 def test_r13_single_runcontext_type_across_entries():
     """R13/I1: the wired entries share the one RunContext type — the p27
     §6 R13 import-surface guard, plus the runtime type check the trainer
-    performs on a passed context."""
+    performs on a passed context.
+
+    Documented boundary (review F2, measurement log §9.2): p27 §2.2
+    scope item 4 (mirrored by the plan doc §四 A03 文件清单) lists the
+    wired entry files and omits ``promotion.py``, while p27 §2.1
+    assumption 4 names it — the contract is internally contradictory.
+    A03 implements the scope-item reading (four entries + the artifact
+    seam) and the promotion-side RunContext consumption (with the
+    promotion-side refusal of empty-chain artifacts, p27 R7's flip
+    side) is the explicitly tracked residual for the promotion wiring
+    package.  This test pins THAT decision so it cannot drift silently:
+    promotion.py must NOT consume RunContext until the follow-up lands.
+    """
 
     root = Path(__file__).resolve().parents[1]
-    for rel in (
+    wired = (
         "ashare_model/train.py",
         "ashare_model/evaluation.py",
         "ashare_model/backtest.py",
         "ashare_trading/run_sim.py",
         "ashare_model/train_artifacts.py",
-    ):
+    )
+    for rel in wired:
         source = (root / rel).read_text(encoding="utf-8")
         assert "RunContext" in source, f"{rel} does not consume RunContext"
+    promotion = (root / "ashare_model" / "promotion.py").read_text(
+        encoding="utf-8"
+    )
+    assert "RunContext" not in promotion, (
+        "promotion.py started consuming RunContext without the "
+        "promotion-wiring package landing (p27 §2.2 scope item 4 vs "
+        "§2.1 assumption 4 is resolved by the scope item; see "
+        "docs/p27_a03_measurement_log.md §9.2)"
+    )
 
     import inspect
 
@@ -711,3 +733,108 @@ def test_r13_single_runcontext_type_across_entries():
         "run_context" in inspect.signature(AshareTrainer.__init__).parameters
     )
     assert RunContext is lifecycle.RunContext
+
+
+def test_i4_audit_mode_is_read_only_at_every_entry(
+    monkeypatch, tmp_path, populated_db, production_gate_asof
+):
+    """I4 (review F3a): the audit mode never produces business artifacts —
+    every producing entry refuses it at the boundary, before any work."""
+
+    import yaml
+
+    from ashare_model import evaluation
+    from ashare_model import train as train_module
+    from ashare_model import backtest as backtest_module
+    from ashare_trading import run_sim as run_sim_module
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "data_dir": str(populated_db.data_dir),
+                "duckdb_path": str(populated_db.duckdb_path),
+                "parquet_dir": str(populated_db.parquet_dir),
+                "index_codes": ["000300.SH"],
+                "min_listed_sessions": 1,
+                "protocol": {
+                    "folds": [
+                        {"train_end": "2024-01-10", "test_end": "2024-01-25"}
+                    ],
+                    "seeds": [42],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = ["--config", str(cfg_path), "--min-eligible", "3"]
+    with _ExpectRefusal("read-only"):
+        evaluation.main(
+            common
+            + [
+                "--output", str(tmp_path / "o.json"),
+                "--ledger", str(tmp_path / "l.jsonl"),
+                "--regime", str(tmp_path / "h.json"),
+                "--lifecycle-mode", "audit",
+            ]
+        )
+    for module, argv in (
+        (train_module, ["train", *common, "--lifecycle-mode", "audit"]),
+        (
+            backtest_module,
+            ["backtest", *common, "--lifecycle-mode", "audit"],
+        ),
+        (
+            run_sim_module,
+            ["run_sim", *common, "--lifecycle-mode", "audit"],
+        ),
+    ):
+        monkeypatch.setattr("sys.argv", argv)
+        with _ExpectRefusal("read-only"):
+            module.main()
+
+
+def test_cli_boundary_refusals_for_backtest_and_run_sim(
+    monkeypatch, tmp_path, populated_db, production_gate_asof
+):
+    """Review F5: the backtest/run_sim CLI boundaries refuse with
+    SystemExit — backtest with a missing strategy file (formal mode),
+    run_sim with a legacy (non-current) strategy artifact."""
+
+    import yaml
+
+    from ashare_model import backtest as backtest_module
+    from ashare_trading import run_sim as run_sim_module
+
+    cfg = {
+        "data_dir": str(populated_db.data_dir),
+        "duckdb_path": str(populated_db.duckdb_path),
+        "parquet_dir": str(populated_db.parquet_dir),
+        "index_codes": ["000300.SH"],
+        "min_listed_sessions": 1,
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    # backtest: formal mode, no strategy file anywhere → refusal.
+    monkeypatch.setattr(
+        "sys.argv",
+        ["backtest", "--config", str(cfg_path), "--min-eligible", "3"],
+    )
+    with _ExpectRefusal("Formula file not found"):
+        backtest_module.main()
+    # run_sim: formal mode, legacy (schema-less) strategy mirror → the
+    # formal artifact read refuses.
+    import json
+
+    strategy = populated_db.data_dir / "best_ashare_strategy.json"
+    strategy.parent.mkdir(parents=True, exist_ok=True)
+    strategy.write_text(
+        json.dumps({"formula": [3, 1, 2], "direction": 1}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["run_sim", "--config", str(cfg_path), "--min-eligible", "3"],
+    )
+    with _ExpectRefusal("formal paper simulation requires a current"):
+        run_sim_module.main()

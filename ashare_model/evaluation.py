@@ -289,6 +289,7 @@ from .lifecycle import (
     RunContext,
     assert_formal_run_lifecycle,
 )
+from .run_store import RunStoreError
 from .versions import PROTOCOL_VERSION
 from .vocab import FEATURE_NAMES
 
@@ -711,6 +712,21 @@ def main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # A03 (p27 I4): the audit mode is READ-ONLY over artifacts and event
+    # chains — the protocol produces business artifacts and is therefore
+    # refused in audit mode; engineering is the explicit non-formal probe
+    # declaration and is machine-marked in the log.
+    if args.lifecycle_mode == "audit":
+        raise SystemExit(
+            "evaluation: audit mode is read-only (p27 §3/I4); declare "
+            "--lifecycle-mode engineering for an explicit non-formal probe"
+        )
+    if args.lifecycle_mode == "engineering":
+        logger.warning(
+            "lifecycle=unverified (engineering run): no lifecycle identity "
+            "— the artifacts of this entry are not formal evidence "
+            "(p27 I2/§5.3)"
+        )
     # A03 (p27 I5/R14): boundary action-mode declaration — the selfcheck
     # dry run is an engineering probe and refuses to inherit formal
     # research identity; formal mode requires the preregistered identity.
@@ -734,6 +750,7 @@ def main(argv=None) -> int:
             "for an explicit non-formal probe (p27 I2/I5)"
         )
 
+    run_context = None
     try:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
@@ -767,7 +784,7 @@ def main(argv=None) -> int:
         # A03 (p27 I6): formal mode freezes the plan and establishes the
         # run identity BEFORE the expensive load; engineering/audit modes
         # are the explicitly declared non-formal paths (p27 I2/§5.3).
-        run_context = None
+        # (run_context is hoisted above the entry's try for the finally.)
         if args.lifecycle_mode == "formal":
             try:
                 loader.confirm_input_snapshot()
@@ -804,9 +821,9 @@ def main(argv=None) -> int:
                 # decisions; the locked window is unreachable from
                 # non-formal modes.
                 run_context.assert_protected_oos_access()
-            except LifecycleError as exc:
-                # CLI boundary: a lifecycle refusal exits with its reason
-                # (p27 I11 — nothing has been loaded or written yet).
+            except (LifecycleError, RunStoreError) as exc:
+                # CLI boundary: a lifecycle/store refusal exits with its
+                # reason (p27 I11 — nothing has been loaded or written yet).
                 raise SystemExit(f"evaluation: {exc}")
         else:
             assert_formal_run_lifecycle(
@@ -965,6 +982,10 @@ def main(argv=None) -> int:
             )
             print(f"selfcheck passed={passed}")
     finally:
+        # A03: the entry owns the RunContext — the single-writer lock is
+        # released on every exit path (review F1).
+        if run_context is not None:
+            run_context.close()
         export_log_txt(run_name="evaluation")
     return 0
 

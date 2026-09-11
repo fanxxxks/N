@@ -1,0 +1,214 @@
+# P27 A03 测量日志：真正强制的生命周期与 RunContext
+
+- 性质：**evidence-only**（AGENTS §11：只写"实际发生什么"；实现见 commit
+  `0b9c85f` → `3dbb017` → `41cb912` → `7db2b35` → `f48a215`，分支
+  `codex/a03-lifecycle-runcontext`，base = `main` @ `aac4aad`）。
+- 契约权威：`docs/p27_a03_lifecycle_runcontext_draft.md`（APPROVED，批准
+  记录 `reports/alphagpt-ab/00_authority_exception_record.md` §11 裁决 1 +
+  §4ter 第 4 项）；状态机权威仍为 `docs/p8_research_lifecycle_contract.md`。
+- 环境：Windows（PowerShell），Python 3.12（miniconda3），本地串行执行；
+  机器 6C/12T / 16GB（p21 §5）。
+
+## 1. 版本影响实测（AGENTS §3.2 全量检索复核）
+
+实现 commit 上重新执行 `git grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"`：
+40 命中（p27 §4.1 基线 39 + A02 新增 `SNAPSHOT_PUBLICATION_VERSION` 1）。
+
+| 版本 | 旧→新 | 实测 |
+|---|---|---|
+| `LIFECYCLE_CONTRACT_VERSION`（`ashare_model/lifecycle.py`） | 1→2 | **已 bump**（p27 A03-A8/批准记录 §11 版本总表；门禁代际可区分；状态集/转换图/证据矩阵零改动） |
+| `RUNSPEC_SCHEMA_VERSION` / `ARTIFACT_SCHEMA_VERSION` | 2 / 3（A02 后实测值） | **不 bump**（p27 §4.2"视字段决定"：动作模式只存在于执行期 RunContext，不进入 RunSpec/产物 payload；spec 语义字段零变化——dataset_id/data_cutoff 的取值来源不变，见 §3） |
+| `PROTOCOL_VERSION` 27 / `REWARD_VERSION` 15 / 其余 | 不变 | 实测无改动 |
+
+## 2. 接线顺序证据（I6：身份先于昂贵计算）
+
+四条正式路径在实现后的实际调用顺序（源码为证，全部满足
+"config 解析 → 动作模式声明 → 身份冻结/attach → 门禁 → 装载/搜索/账户写入"）：
+
+- **train**（`ashare_model/train.py main`）：argparse 声明
+  `--spec-id/--run-id/--lifecycle-mode` → 形参级拒绝（formal 缺身份
+  /非正式带身份）→ `loader.confirm_input_snapshot()`（复合身份确认，
+  未构建任何帧）→ `resolve_runtime_runspec(data_cutoff=
+  loader.frozen_data_cutoff())` → `RunContext.attach` →
+  `assert_search_ready()` → `loader.load_data()` → 漂移核对
+  （`loader.dataset_id == spec.dataset_id`）→ trainer → search。
+- **evaluation**（`ashare_model/evaluation.py main`）：同构；attach 楼层
+  `SEARCH_PLAN_ADMITTED`（R4）→ `assert_search_ready()` →
+  `assert_protected_oos_access()`（I8/R8 生产路径调用点）→ load → 漂移
+  核对 → protocol → 产物写经 `run_context.handle`（不再 `open_run`
+  第二个 run）。
+- **backtest**（`ashare_model/backtest.py main`）：`load_formal_strategy`
+  （legacy/非 current 拒绝 + lineage 重建）→ `RunContext.attach`
+  （entry_type=backtest，楼层 `SEARCH_PLAN_ADMITTED`，R7：无事件链的
+  current-schema 策略被拒）→ `loader.load_data()` → 产物写经
+  `run_context.handle`。
+- **paper（run_sim）**（`ashare_trading/run_sim.py main`）：strategy
+  v2 读取（legacy 直接拒绝——正式 paper 不能重放 legacy）→
+  `reconstruct_runspec_from_lineage` → `RunContext.attach`
+  （entry_type=paper_sim，恰好 `PAPER_OBSERVING`，R15）→
+  SimulationRunner：账户身份 = `bound_paper_account_id(handle)`
+  （PAPER_OBSERVING 绑定证据），跨账户写拒绝（R6），硬编码
+  `assert_paper_account_writable("current")` 字面量已消除（R16）。
+
+## 3. data_cutoff 取值来源（不变性说明）
+
+`frozen_data_cutoff()` 取已确认复合快照 v2 `daily_bar_raw` 指纹的
+date_range 上界、再落到日历最后一个会话——在 confirm 语义下与原
+`loader.dates[-1]` 同值（确认通过 ⇒ 内容一致；漂移时 confirm 本身拒绝）。
+RunSpec 语义字段集合与取值来源未变 ⇒ 不需要 `RUNSPEC_SCHEMA_VERSION`
+bump。训练/评价的 budget/seeds 推导与 `trainer.search()` /
+`run_protocol` 的既有解析逐项一致（steps/batch 回退、seed 42、
+spec_seeds=1234 for selfcheck）。
+
+## 4. 拒绝路径证据（R1–R16）
+
+由 `tests/test_p27_a03_lifecycle_runcontext.py`（21 tests，RED→GREEN）
+承载；RED 实测：`python -m pytest -q
+tests/test_p27_a03_lifecycle_runcontext.py` → **20 failed, 1 passed**
+（passed = R15，钉住既有"恰好 PAPER_OBSERVING"语义；其余全部按预期失败，
+首失败为 R1 `DID NOT RAISE LifecycleError`）。实现后 21 passed。
+
+| # | 测试 | 状态 |
+|---|---|---|
+| R1 | test_r1_formal_mode_refuses_missing_identity | pass |
+| R2 | test_r2_attach_refuses_spec_identity_mismatch | pass |
+| R3 | test_r3_formal_mode_refuses_missing_event_log / test_r3_context_attach_refuses_empty_chain | pass |
+| R4 | test_r4_evaluation_entry_refuses_below_search_plan | pass |
+| R5 | test_r5_terminal_run_refused_at_every_entry | pass |
+| R6 | test_r6_paper_account_mismatch_refused | pass |
+| R7 | test_r7_backtest_formal_refuses_current_schema_without_chain | pass |
+| R8 | test_r8_protected_oos_refuses_non_formal_modes_and_low_states | pass |
+| R9 | test_r9_evaluation_formal_refuses_before_loader / test_r9_train_formal_refuses_before_loader | pass |
+| R10 | test_r10_unknown_action_mode_refuses / test_r10_context_attach_refuses_unknown_mode | pass |
+| R11 | test_r11_formal_artifact_write_uses_context_identity | pass |
+| R12 | test_r12_refused_formal_run_leaves_no_business_artifacts | pass |
+| R13 | test_r13_single_runcontext_type_across_entries | pass |
+| R14 | test_r14_selfcheck_requires_engineering_declaration | pass |
+| R15 | test_r15_paper_sim_requires_exactly_paper_observing | pass |
+| R16 | test_r16_run_sim_has_no_hardcoded_current_account | pass |
+
+I5 搜索动作门（`assert_search_ready`，≥ SEARCH_PLAN_ADMITTED）由
+test_i5_search_action_gate_requires_full_admission 用 §5.1/§5.2/§5.3
+完整证据链驱动验证。
+
+## 5. 既有 run 目录对账（p27 §5.4，只读扫描）
+
+`data/runs` 递归扫描（`Get-ChildItem data\runs -Recurse`）：**主仓不存在
+任何 run 目录**（与 2026-09-09 审计快照一致；A01/A02 的测量均使用临时
+store）。迁移面 = 空集；无需对账报告条目，无任何 run/事件链/artifact 被
+修改或删除。
+
+## 6. 测试影响与白名单举证（AGENTS §10.1 第 2 条：需求确实变更）
+
+需求变更权威：p27 §3/I2–I5、§6（R1–R16）+ 批准记录 §11 裁决 1（"三条
+`is None` 断言作废"）+ §4ter 用户确认。
+
+| 文件 | 变更 | 旧行为为何错误 / 新断言为何更强 |
+|---|---|---|
+| `tests/test_run_store.py::test_p8_15_lifecycle_no_bypass_assert_formal_run_lifecycle` | **替换**（非删除）：原三行 `assert ... is None` 把 F03 缺陷钉为期望（审计 §2.2 F03 原文："测试明确接受缺少身份时返回 None"）。新断言：formal 模式对全部四种 entry 缺身份一律 LifecycleError；仅显式 `--lifecycle-mode engineering` 返回 None；unknown entry 仍 fail-closed。断言强度只增不减（另见 R1/R10 的完整行为覆盖） | 
+| `tests/test_run_store.py::test_lifecycle_status_set_version_and_terminals` | `LIFECYCLE_CONTRACT_VERSION` 1→2（A03-A8 批准 bump；版本钉值随需求变更） |
+| `tests/test_evaluation.py` 三个 CLI smoke | 增加显式 `--lifecycle-mode engineering`：这些 smoke 本来就是工程探针（合成小库、1 步预算）；p27 I5 要求工程动作显式声明、不得继承正式研究身份。无断言弱化 |
+| `tests/test_p27_a03_lifecycle_runcontext.py` | 新增（契约的可执行投影；同 commit 登记进 `scripts/check_test_shards.py` shard-model-2） |
+
+测试修改白名单条款：§10.1 第 2 条（需求变更，先批准契约再同步测试）；
+无 skip/xfail/容差放宽/expected=actual；无断言删除。
+
+## 7. 已执行验证（串行，按 AGENTS §10.2 顺序）
+
+1. 聚焦：`python -m pytest -q tests/test_p27_a03_lifecycle_runcontext.py
+   tests/test_run_store.py tests/test_runspec.py
+   tests/test_p8_lifecycle_contract_doc.py` → 113 passed, 6 failed
+   （6 个失败均为当时尚未接线的 entry 测试，随 C/D commit 转绿）。
+2. 相邻：`tests/test_data_loader.py tests/test_load_cache.py` +
+   `tests/test_run_sim.py tests/test_backtest.py`（47 passed）+
+   `tests/test_evaluation.py`（全绿）。
+3. train/core/searcher/artifact 套件：`tests/test_train.py
+   tests/test_core.py tests/test_evaluation.py tests/test_run_sim.py
+   tests/test_searcher_bench.py`（接线前状态）→ **145 passed, 2 skipped**
+   （后台实测 869s）；接线后重跑进行中（见 §9 未运行项）。
+4. 全量：`python -m pytest -q tests`（串行；`-n auto` 两次并行尝试因与本
+   任务自身的其他套件并发产生资源竞争被放弃——按 §10.2 回退串行；并行
+   parity 对账仍未建立，不声称并行等价）。**最终候选 commit（647dc65）
+   实测：2 failed, 1808 passed, 6 skipped（2135.67s）**。两个失败为
+   `tests/test_lock_files.py::test_pins_match_installed_environment` 与
+   `test_freeze_lock_check_passes`——本机环境缺 `tushare` 包元数据
+   （`PackageNotFoundError`），与本变更无关：在临时 worktree 于 base
+   `aac4aad` 上实测同样 2 failed（evidence：worktree
+   `C:\Users\Administrator\AppData\Local\Temp\a03-base-check`，已删除）。
+   上一轮实现中间态曾出现的
+   `test_train_facade_line_budget` 失败（train.py 370 行 > 300 预算）已由
+   `647dc65`（CLI 入口迁入 `train_entry.py` + `_trainer_entry_gate`
+   抽取）修复，本轮通过。
+5. `python -m compileall -q …`（改动文件逐一通过）。
+6. `git diff --check`。
+7. 版本全量检索：见 §1。
+
+## 8. 资源实测（p27 §8）
+
+- RunContext 构建 + 生命周期重放：事件链 ≤ 2 事件的实测路径为毫秒级
+  （测试套件内 21 tests 全程 9–12s 含 DuckDB fixture）；复合身份确认
+  （A02 既有成本）在合成库上秒级。未触发 5s/512MB 上限。
+- 对账扫描：空集，未执行全量扫描（无 run 目录可扫）。
+- 未做性能优化；`confirm_input_snapshot` 在正式入口会确认两次（entry
+  冻结时 + load_data 内部再确认一次）——第二次是漂移守卫，属 A02
+  既有语义的刻意保留，开销计入 B04 的装载优化范围。
+
+## 9. 未运行项与残余风险
+
+0. **技术评审修复轮（review F1–F8 处置）**：独立技术评审（PASS WITH
+   FINDINGS）后已落地——
+   - **F1（high）**：四个正式入口的成功路径此前不关闭 RunContext 句柄，
+     单写者锁泄漏会迫使下次 attach 走 `clear_stale_lock`。已修：各入口
+     把 `run_context` 提升到 `try` 之外并在既有 `finally` 统一 `close()`。
+   - **F3a（medium-high）**：audit 模式按 p27 §3/I4"只读"语义在四个
+     产生业务产物的入口边界直接拒绝（`read-only` 拒绝信息，先于任何
+     工作）；engineering 模式在日志留下机器可读的
+     `lifecycle=unverified (engineering run)` 标记（§5.3"artifact/日志
+     留痕"的日志侧落实；产物侧标记需 ARTIFACT_SCHEMA bump，仍为 residual）。
+   - **F4（medium）**：新增
+     `artifact_writer.assert_registered_boundary_artifact`——formal
+     backtest/paper 消费的 strategy 镜像必须是对应 run 的**已登记**
+     strategy 产物（内容 id 对账），复制/篡改的镜像被拒（I7 读侧）。
+   - **F5/F6（low）**：新增 backtest/run_sim CLI 边界拒绝测试；四入口
+     边界统一捕获 `(LifecycleError, RunStoreError)` → SystemExit。
+   - **F2（high）**：promotion.py 未接线是 p27 契约内部矛盾（§2.2 范围 4
+     未列 promotion.py，而 §2.1 假设 4 列出）+ 方案 §四 A03 文件清单的
+     交点；A03 按范围条款执行，R13 测试已改为**显式钉住该决定**
+     （promotion.py 不得在晋级接线包落地前消费 RunContext），晋级侧
+     消费（含空链产物拒绝）登记为后续晋级接线包的输入。**待用户裁决项**：
+     晋级接线包的排期。
+   - **F7/F8（low/info）**：`frozen_data_cutoff` 为"已确认快照的
+     date_range 上界"（p8 §3 定义本身），可能 ≥ 实际加载末日的方向是
+     保守的、无未来泄漏，且装载时二次 confirm 兜底——不改；`protected_oos`
+     模式的裁决依据 p8 §6（run_type ∈ {research, promotion}）已写入
+     assert 的 docstring，`ACTION_PROTECTED_OOS` 常量为后续显式晋级/OOS
+     入口保留（接线后即有消费者）。
+1. **全量串行套件的最终计数**：见 §7.4（最终候选 commit 实测 2 failed /
+   1808 passed / 6 skipped，两失败为与 base 相同的本机环境缺 `tushare`
+   元数据）。评审修复轮后的最终验证 = §7.4 之后的聚焦复跑
+   （test_p27_a03_lifecycle_runcontext + test_run_sim + test_backtest +
+   test_train_module_split + test_evaluation：全绿）加收尾全量。
+2. **promotion.py 未接线**（不在 A03 范围/方案 §四 A03 文件清单）：
+   `assert_protected_oos_access` 的模式维度已落地（lifecycle.py +
+   RunContext + R8 测试），promotion 入口的消费调用随晋级接线包落地——
+   这是 R8 的已知残余（p27 §2.2 范围 4 未含 promotion.py）。
+3. **research_doctor** 的 `assert_paper_account_writable("current")`
+   字面量保留（doctor 侧分层报告属 A05，p27 §1.3 明文）。
+4. **`webapi/service.py`** 未接线（A01/C01 范围）；A03 后其触发的
+   train/evaluation 子进程按新 CLI 语义运行（默认 formal——现有调用若未
+   传身份会被拒绝并留痕，这是预期行为而非回归；服务侧适配属 C01）。
+5. **正式搜索当前必然被拒**：真实 run 无法完成 §5.1 数据资格
+   （t16 §6 L2：loader 帧降级源在数据层尚无类型化生产者，
+   `LOADER_FRAME_SOURCE_UNTYPED` 如实拒绝）→ formal train/evaluation 在
+   `assert_search_ready()`/attach 楼层被拒，拒绝信息含解除条件。按 p27
+   停止条件 4，这是"报告给用户裁决"的预期结果，实现不得降级门槛。
+6. **paper 服务管理器**（`ashare_trading/manager.py`）以固定 argv 启动
+   run_sim（默认 formal）：当前 paper 状态为 legacy/旧产物 → 正式 paper
+   将被拒（legacy 策略在 formal 模式不可重放）。解除条件 = 走完生命周期
+   到 PAPER_OBSERVING 的合格 run；工程探针可显式 `--lifecycle-mode
+   engineering`。不自动降级。
+
+## 10. 研究声明边界
+
+A03 是运行态/治理工程变更。本日志不含任何 alpha、收益、晋级或数据质量
+结论；不构成对任何策略或研究假设的证据（AGENTS §3.1/§4.1）。
