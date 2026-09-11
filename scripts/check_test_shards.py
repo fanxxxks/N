@@ -104,6 +104,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_ir_canonicalization.py",
         "test_ledger.py",
         "test_operator_registry.py",
+        "test_p27_a03_lifecycle_runcontext.py",
         "test_p4_admission_diagnostics.py",
         "test_p4_elite_imitation.py",
         "test_p4_search_contract.py",
