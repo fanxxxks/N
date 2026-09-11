@@ -706,11 +706,14 @@ def main(argv=None) -> int:
                 "(dataset manifest); migrate the database with "
                 "`python -m ashare_data.manifest` before evaluation"
             )
-        # P8-15 no-bypass: formal evaluation runs must pass the
-        # lifecycle gate (contract §4: the run must be at least
-        # SEARCH_PLAN_ADMITTED).
+        # A03 (p27): the entry gate is now mandatory.  Until the
+        # evaluation package commit wires the RunContext, the entry
+        # explicitly declares the non-formal engineering mode (p27
+        # I2/§5.3) — the old implicit vacuous pass is gone.
         assert_formal_run_lifecycle(
-            "evaluation", data_config.data_dir
+            "evaluation",
+            data_config.data_dir,
+            action_mode="engineering",
         )
         extra_trials = load_trial_rows(args.trials, loader.dataset_id)
         ledger = ExperimentLedger(root / args.ledger)

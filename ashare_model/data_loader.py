@@ -203,6 +203,9 @@ class AshareDataLoader:
         self.universe_status: UniverseContractStatus | None = None
         self._universe_contract: ResolvedUniverse | None = None
         self._tradability_cache: tuple[np.ndarray, np.ndarray] | None = None
+        # A03 (p27 I6): the confirmed composite snapshot retained by
+        # confirm_input_snapshot() for the pre-load RunSpec freeze.
+        self._confirmed_snapshot = None
 
     @property
     def universe_mask(self) -> np.ndarray | None:
@@ -397,6 +400,107 @@ class AshareDataLoader:
         ]
         return df
 
+    def confirm_input_snapshot(self) -> None:
+        """Establish the content-confirmed composite input identity (A02
+        p26 I2) **before** the heavy load (A03 p27 I6: identity precedes
+        expensive compute).
+
+        This is the extracted A02 confirm block, byte-for-byte the logic
+        ``load_data`` has always run; it is idempotent within one loader
+        instance only when re-entered in the same mode, and ``load_data``
+        keeps calling it so direct callers see identical behavior.  A
+        formal entry calls it first to freeze the RunSpec against the
+        confirmed snapshot, then ``load_data`` re-confirms at load time —
+        the second confirmation is the drift guard between identity
+        freeze and frame build (a drifted database refuses instead of
+        silently binding newer content to the frozen identity).
+        """
+
+        self.dataset_id = None
+        self.dataset_identity_status = "unresolved"
+        self._confirmed_snapshot = None
+        if self.dataset_identity_mode == "confirm":
+            try:
+                with AshareDB(
+                    self.config.duckdb_path, read_only=True
+                ) as db, AshareDB(
+                    resolve_v2_duckdb_path(self.config), read_only=True
+                ) as v2db:
+                    snapshot = confirm_composite_snapshot(
+                        db, self.config, v2db
+                    )
+            except DatasetIdMismatch:
+                raise
+            except (duckdb.Error, ValueError) as exc:
+                # "Unconfirmable" is a refusal, not a downgrade: a storage
+                # failure or content that cannot even be fingerprinted (e.g. a
+                # manifest-covered table that no longer exists) leaves no
+                # identity, so a formal run must stop here with a reason.  The
+                # original exception is chained, so the cause stays
+                # diagnosable; unexpected error classes still propagate.
+                raise DatasetIdMismatch(
+                    "cannot confirm the composite snapshot identity for a "
+                    f"formal load: {exc}; a formal run requires a published "
+                    "composite generation (primary + tushare_v2) whose "
+                    "content still matches both databases (A02 I2/I7)"
+                ) from exc
+            self.dataset_id = snapshot.composite_id
+            self.dataset_identity_status = "confirmed"
+            self._confirmed_snapshot = snapshot
+        else:
+            try:
+                with AshareDB(self.config.duckdb_path, read_only=True) as db:
+                    self.dataset_id = resolve_dataset_id(db, self.config)
+            except duckdb.Error as exc:
+                logger.warning(
+                    f"dataset manifest unavailable (legacy audit mode): {exc}"
+                )
+                self.dataset_id = None
+            self.dataset_identity_status = (
+                "legacy" if self.dataset_id else "degraded"
+            )
+
+    def frozen_data_cutoff(self) -> str:
+        """The data cutoff for pre-load RunSpec freezing (A03 p27 I6).
+
+        Derived from the confirmed composite snapshot's v2 ``daily_bar_raw``
+        fingerprint (the formal price source, p19 §2.1) — the same value
+        the post-load ``dates[-1]`` derivation produces under the confirm
+        semantics (last session ≤ max bar date), because a confirmed
+        snapshot's content is verified equal to the database.  Requires
+        ``confirm_input_snapshot`` in confirm mode; the legacy audit mode
+        has no frozen snapshot and refuses (a formal spec is never frozen
+        against an unconfirmed identity).
+        """
+
+        if self.dataset_identity_mode != "confirm":
+            raise DatasetIdMismatch(
+                "frozen_data_cutoff requires the confirmed composite "
+                "snapshot (dataset_identity_mode='confirm'); the legacy "
+                "audit mode has no formal data identity"
+            )
+        if self._confirmed_snapshot is None or not self.dataset_id:
+            raise DatasetIdMismatch(
+                "frozen_data_cutoff requires confirm_input_snapshot() to "
+                "have confirmed the composite identity first (A03 p27 I6)"
+            )
+        bars = self._confirmed_snapshot.v2.table("daily_bar_raw")
+        if bars.date_range is None:
+            raise DatasetIdMismatch(
+                "the confirmed v2 daily_bar_raw fingerprint carries no "
+                "date range; cannot freeze the RunSpec data cutoff"
+            )
+        upper = str(bars.date_range[1]).replace("-", "")
+        sessions = self._contract().sessions
+        eligible = [s for s in sessions if s <= upper]
+        if not eligible:
+            raise DatasetIdMismatch(
+                f"no trade-calendar session at or before the confirmed "
+                f"data cutoff {upper!r}; the calendar and the confirmed "
+                "snapshot disagree"
+            )
+        return eligible[-1]
+
     def load_data(
         self,
         ts_codes: list[str] | None = None,
@@ -572,58 +676,15 @@ class AshareDataLoader:
         # identity leaves this path byte-identical to pre-wiring
         # behavior, and a hit returns the exact float32 tensor the miss
         # path would have computed (the cast is deterministic).
-        # A02 (p26 I2/I6, acceptance 1 + 8): the FORMAL path consumes the
+        # A02 (p26 I2/I6) + A03 (p27 I6): the FORMAL path consumes the
         # *content-confirmed composite snapshot identity* — one string
         # derived through the single composite authority
-        # (``runspec.confirm_composite_snapshot``) that the RunSpec
-        # factory, the semantic cache and the regime locks consume too.
-        # Unconfirmed, unconfirmable, drifted or incomplete-generation
-        # (one member published, the other not) states are refused here —
-        # never downgraded to ``None`` and continued.  The pre-A02 query +
-        # downgrade behavior survives only under the explicitly requested
-        # legacy audit mode, and there it leaves the machine-readable
-        # ``legacy``/``degraded`` marker.
-        self.dataset_id = None
-        self.dataset_identity_status = "unresolved"
-        if self.dataset_identity_mode == "confirm":
-            try:
-                with AshareDB(
-                    self.config.duckdb_path, read_only=True
-                ) as db, AshareDB(
-                    resolve_v2_duckdb_path(self.config), read_only=True
-                ) as v2db:
-                    snapshot = confirm_composite_snapshot(
-                        db, self.config, v2db
-                    )
-            except DatasetIdMismatch:
-                raise
-            except (duckdb.Error, ValueError) as exc:
-                # "Unconfirmable" is a refusal, not a downgrade: a storage
-                # failure or content that cannot even be fingerprinted (e.g. a
-                # manifest-covered table that no longer exists) leaves no
-                # identity, so a formal run must stop here with a reason.  The
-                # original exception is chained, so the cause stays
-                # diagnosable; unexpected error classes still propagate.
-                raise DatasetIdMismatch(
-                    "cannot confirm the composite snapshot identity for a "
-                    f"formal load: {exc}; a formal run requires a published "
-                    "composite generation (primary + tushare_v2) whose "
-                    "content still matches both databases (A02 I2/I7)"
-                ) from exc
-            self.dataset_id = snapshot.composite_id
-            self.dataset_identity_status = "confirmed"
-        else:
-            try:
-                with AshareDB(self.config.duckdb_path, read_only=True) as db:
-                    self.dataset_id = resolve_dataset_id(db, self.config)
-            except duckdb.Error as exc:
-                logger.warning(
-                    f"dataset manifest unavailable (legacy audit mode): {exc}"
-                )
-                self.dataset_id = None
-            self.dataset_identity_status = (
-                "legacy" if self.dataset_id else "degraded"
-            )
+        # (``runspec.confirm_composite_snapshot``).  The block is
+        # extracted into :meth:`confirm_input_snapshot` (A03: a formal
+        # entry calls it before the heavy load to freeze the RunSpec);
+        # load_data re-runs it here so direct callers keep identical
+        # behavior and the identity is re-verified at load time.
+        self.confirm_input_snapshot()
         cache = factor_cache_for(self.config.data_dir)
         identity = loader_factor_cache_identity(
             resolve_v2_duckdb_path(self.config),

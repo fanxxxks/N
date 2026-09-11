@@ -69,6 +69,14 @@ from ashare_model.runspec import RunSpec
 
 __all__ = [
     "ACTIVATED_EDGES",
+    "ACTION_MODES",
+    "ACTION_AUDIT",
+    "ACTION_ENGINEERING",
+    "ACTION_PAPER",
+    "ACTION_PROTECTED_OOS",
+    "ACTION_RESEARCH",
+    "ENTRY_MIN_STATE",
+    "FORMAL_ENTRY_TYPES",
     "LIFECYCLE_CONTRACT_VERSION",
     "LEGAL_EDGES",
     "LEGAL_TRANSITION_LINES",
@@ -78,6 +86,9 @@ __all__ = [
     "LifecycleWriter",
     "IdentityMismatchError",
     "IllegalTransitionError",
+    "NON_FORMAL_ACTION_MODES",
+    "RunContext",
+    "SEARCH_ACTION_MIN_STATE",
     "STATUSES",
     "StageNotActivatedError",
     "TERMINAL_STATUSES",
@@ -89,6 +100,7 @@ __all__ = [
     "PromotionEvidenceError",
     "assert_paper_account_writable",
     "assert_protected_oos_access",
+    "bound_paper_account_id",
     "build_data_qualification_report",
     "build_factor_qualification_report",
     "build_oos_qualification_evidence",
@@ -104,7 +116,14 @@ __all__ = [
 
 # -- contract constants (docs/p8_research_lifecycle_contract.md §3/§4/§10) ---
 
-LIFECYCLE_CONTRACT_VERSION = 1
+# A03 (p27 §4.2/A03-A8, approved: reports/alphagpt-ab
+# 00_authority_exception_record.md §11 ruling 1): 1 -> 2.  The entry gate's
+# enforcement semantics changed from "vacuous when no identity is passed"
+# to "real identity + action mode mandatory" (p27 I2/I3/I4), so gate
+# generations are distinguishable in artifacts and logs.  The state set,
+# transition graph and evidence matrix are unchanged (p8 remains the sole
+# machine authority; p27 non-goal 1).
+LIFECYCLE_CONTRACT_VERSION = 2
 #: Canonical status set, contract §3 (order verbatim).
 STATUSES: tuple[str, ...] = (
     "IDEA",
@@ -186,6 +205,61 @@ def legal_edge_pairs() -> frozenset[tuple[str, str]]:
 #: no-bypass activation (contract §9 激活点 = P8-15) is tracked in the
 #: activation matrix of the delivery report.
 ACTIVATED_EDGES: frozenset[tuple[str, str]] = legal_edge_pairs()
+
+
+# -- action modes and entry floors (A03, p27 §3/I3 + I4 + I5) -----------------
+#
+# The five action classes of the remediation plan §四 A03.  The table below
+# is the single authority for "which lifecycle state allows which action"
+# (p27 §9 ruling 3: extending it requires a contract revision, never a
+# local edit).
+
+#: 工程探针: explicit non-formal probe.  Any state read-only; may load and
+#: run small budgets; never consumes the protected OOS; its runs carry no
+#: lifecycle chain and can therefore never enter formal consumption (R7).
+ACTION_ENGINEERING = "engineering"
+#: 历史审计: explicit read-only audit of legacy/current evidence.
+ACTION_AUDIT = "audit"
+#: 正式研究: formal research entry (train/evaluation/backtest).
+ACTION_RESEARCH = "research"
+#: 受保护 OOS: the only mode allowed to evaluate the locked OOS window.
+ACTION_PROTECTED_OOS = "protected_oos"
+#: 正式 paper: paper observation against the bound account.
+ACTION_PAPER = "paper"
+
+ACTION_MODES: frozenset[str] = frozenset(
+    {
+        ACTION_ENGINEERING,
+        ACTION_AUDIT,
+        ACTION_RESEARCH,
+        ACTION_PROTECTED_OOS,
+        ACTION_PAPER,
+    }
+)
+
+#: Explicit non-formal modes — the ONLY place the legacy "no identity"
+#: passthrough survives (p27 I2; approval record §11 ruling 1).
+NON_FORMAL_ACTION_MODES: frozenset[str] = frozenset(
+    {ACTION_ENGINEERING, ACTION_AUDIT}
+)
+
+#: Formal entry types and their minimum lifecycle state at RunContext
+#: establishment (p27 §3/I4 + I5: fixed separately per entry, pinned by
+#: tests/test_p27_a03_lifecycle_runcontext.py R4/R15; ``paper_sim`` keeps
+#: its exact-state semantics from P8-15).
+ENTRY_MIN_STATE: dict[str, str] = {
+    "train": "SPEC_LOCKED",
+    "evaluation": "SEARCH_PLAN_ADMITTED",
+    "backtest": "SEARCH_PLAN_ADMITTED",
+    "paper_sim": "PAPER_OBSERVING",
+}
+
+FORMAL_ENTRY_TYPES: frozenset[str] = frozenset(ENTRY_MIN_STATE)
+
+#: I5: the search action is a different action from loading — before any
+#: search compute the run must have consumed the full qualification chain
+#: (data + factor set + search plan).
+SEARCH_ACTION_MIN_STATE = "SEARCH_PLAN_ADMITTED"
 
 
 # -- event schema -------------------------------------------------------------
@@ -1071,13 +1145,31 @@ def _validate_promotion_evidence(
         raise PromotionEvidenceError("evidence is not completed")
 
 
-def assert_protected_oos_access(state: str | None, run_type: str) -> None:
+def assert_protected_oos_access(
+    state: str | None,
+    run_type: str,
+    *,
+    action_mode: str = ACTION_RESEARCH,
+) -> None:
     """Contract §6 isolation rule: evaluating the protected OOS window
     requires a lifecycle state at or after ``SEARCH_PLAN_ADMITTED`` and a
     run type of ``research`` or ``promotion``.  Engineering runs and
     pre-admission states are refused (the OOS never enters PR development
-    feedback)."""
+    feedback).  A03 (p27 I8/R8): the engineering/audit action modes are
+    refused in **any** state — the locked window is unreachable from the
+    explicit non-formal modes by construction."""
 
+    if action_mode not in ACTION_MODES:
+        raise LifecycleError(
+            f"unregistered action mode {action_mode!r} (p27 §3/I3); "
+            "the action-mode table is the single authority"
+        )
+    if action_mode in NON_FORMAL_ACTION_MODES:
+        raise LifecycleError(
+            f"protected OOS access refused for action mode {action_mode!r}; "
+            "engineering/audit runs never read the locked OOS window in "
+            "any state (contract §6, p27 I8)"
+        )
     if run_type not in ("research", "promotion"):
         raise LifecycleError(
             f"protected OOS access refused for run type {run_type!r}; "
@@ -1098,64 +1190,309 @@ def assert_formal_run_lifecycle(
     data_dir: Path,
     spec_id: str | None = None,
     run_id: str | None = None,
+    *,
+    action_mode: str = ACTION_RESEARCH,
 ) -> str | None:
-    """P8-15 no-bypass gate for formal entry points (train/evaluation/
-    paper simulation).
+    """A03 entry gate (p27 I2, approved semantics: 「可空转」→「强制」).
 
-    Returns the replayed lifecycle state, or ``None`` when no lifecycle
-    events exist for the run (pre-activation legacy: the run proceeds but
-    its artifacts are marked legacy by the classification authority).
+    Formal action modes (``research``/``protected_oos``/``paper``) require
+    a **real, established** lifecycle identity: a missing ``spec_id``/
+    ``run_id``, a missing or empty event log, a terminal state, or a state
+    below the entry's floor (p27 §3/I4) is refused — ``None`` is never a
+    formal pass.  The pre-A03 "no identity → pre-activation legacy"
+    passthrough survives **only** under the explicitly declared
+    non-formal modes (``engineering``/``audit``), where it returns the
+    replayed state or ``None`` (legacy/unverified marker).
 
-    Raises :class:`LifecycleError` when lifecycle events exist and the
-    state does not allow the requested entry type (fail-closed no-bypass:
-    a formal run cannot skip the lifecycle state machine).
+    Returns the replayed lifecycle state (``None`` only in the explicit
+    non-formal modes without identity).
 
-    Entry-type → minimum-state mapping (contract §4 graph):
+    Entry-type → minimum-state mapping (p27 §3/I4 + I5, fixed per entry):
 
-    * ``train`` → at least ``DATA_QUALIFIED``
+    * ``train`` → at least ``SPEC_LOCKED`` (the search action itself is
+      gated separately at ``SEARCH_PLAN_ADMITTED`` — loading ≠ search)
     * ``evaluation`` → at least ``SEARCH_PLAN_ADMITTED``
+    * ``backtest`` → at least ``SEARCH_PLAN_ADMITTED`` (the source run of
+      a formally consumed strategy must be a qualified run)
     * ``paper_sim`` → exactly ``PAPER_OBSERVING``
     """
 
-    if entry_type not in ("train", "evaluation", "paper_sim"):
+    if entry_type not in FORMAL_ENTRY_TYPES:
         raise LifecycleError(f"unknown formal entry type {entry_type!r}")
-    if run_id is None or spec_id is None:
-        return None  # no lifecycle identity → pre-activation legacy run
+    if action_mode not in ACTION_MODES:
+        raise LifecycleError(
+            f"unregistered action mode {action_mode!r} (p27 §3/I3); the "
+            "action-mode table is the single authority"
+        )
+    if action_mode in NON_FORMAL_ACTION_MODES:
+        # The only sanctioned legacy passthrough (p27 I2/§5.3): an explicit
+        # non-formal declaration may proceed without lifecycle identity.
+        if spec_id is None or run_id is None:
+            return None
+        try:
+            return replay_run(Path(data_dir), spec_id, run_id)
+        except (FileNotFoundError, KeyError):
+            return None  # no lifecycle events file → legacy/unverified
+    # Formal modes: real identity is mandatory (R1) — refuse, never guess.
+    if not str(spec_id or "").strip() or not str(run_id or "").strip():
+        raise LifecycleError(
+            f"{entry_type} entry in {action_mode!r} mode requires a real, "
+            "established lifecycle identity (spec_id/run_id); a missing "
+            "identity is a refusal, not a pre-activation pass (p27 I2, "
+            "approval record §11 ruling 1)"
+        )
     try:
-        state = replay_run(data_dir, spec_id, run_id)
-    except (FileNotFoundError, KeyError):
-        return None  # no lifecycle events file → pre-activation legacy
+        state = replay_run(Path(data_dir), spec_id, run_id)
+    except (FileNotFoundError, KeyError) as exc:
+        raise LifecycleError(
+            f"{entry_type} entry refused: the run {str(spec_id)[:12]}…/"
+            f"{str(run_id)[:12]}… has no readable lifecycle event log "
+            f"({exc}); a formal {action_mode} run requires the "
+            "append-only event chain (p27 I2/R3)"
+        ) from exc
     if state is None:
-        return None  # empty event log → pre-activation legacy
-
-    minimum = {
-        "train": "DATA_QUALIFIED",
-        "evaluation": "SEARCH_PLAN_ADMITTED",
-        "paper_sim": "PAPER_OBSERVING",
-    }
-    required = minimum[entry_type]
-    stage_order = [
-        "IDEA", "SPEC_LOCKED", "DATA_QUALIFIED", "FACTOR_SET_QUALIFIED",
-        "SEARCH_PLAN_ADMITTED", "OOS_QUALIFIED", "PAPER_OBSERVING",
-        "PROMOTED",
-    ]
+        raise LifecycleError(
+            f"{entry_type} entry refused: the run "
+            f"{str(spec_id)[:12]}…/{str(run_id)[:12]}… has an empty "
+            "lifecycle event log; preregister the run (genesis + spec "
+            "lock) before a formal entry (p27 I2/R3)"
+        )
+    if state in TERMINAL_STATUSES:
+        raise LifecycleError(
+            f"{entry_type} entry refused: the run is TERMINAL at "
+            f"{state!r}; terminal states have no out-edges and a "
+            "terminated run is never continued (p27 I4/R5)"
+        )
+    floor = ENTRY_MIN_STATE[entry_type]
     if entry_type == "paper_sim":
-        if state != required:
+        if state != floor:
             raise LifecycleError(
                 f"paper simulation requires lifecycle state "
-                f"{required!r}; got {state!r} (contract §6: paper "
+                f"{floor!r}; got {state!r} (contract §6: paper "
                 "observation starts only from OOS_QUALIFIED)"
             )
     else:
         current_idx = stage_order.index(state) if state in stage_order else -1
-        required_idx = stage_order.index(required)
+        required_idx = stage_order.index(floor)
         if current_idx < required_idx:
             raise LifecycleError(
-                f"{entry_type} entry requires lifecycle state at least "
-                f"{required!r}; got {state!r} (contract §4: the run has "
-                "not completed the prerequisite stages)"
+                f"{entry_type} entry in {action_mode!r} mode requires "
+                f"lifecycle state at least {floor!r}; got {state!r} "
+                "(p27 §3/I4 action-state table; removal condition: drive "
+                "the run's qualification chain first)"
             )
     return state
+
+
+stage_order = [
+    "IDEA", "SPEC_LOCKED", "DATA_QUALIFIED", "FACTOR_SET_QUALIFIED",
+    "SEARCH_PLAN_ADMITTED", "OOS_QUALIFIED", "PAPER_OBSERVING",
+    "PROMOTED",
+]
+
+
+def _stage_sort_key(state: str) -> int:
+    return stage_order.index(state) if state in stage_order else -1
+
+
+def bound_paper_account_id(handle: RunHandle) -> str | None:
+    """The account identity bound by the run's ``PAPER_OBSERVING``
+    transition evidence (contract §7/p27 I9) — read from the registered
+    binding artifact through the trust-rooted index, never assumed."""
+
+    index = handle.load_index()
+    for event in reversed(
+        load_events(
+            handle.run_dir / run_store.LIFECYCLE_FILENAME,
+            expect_spec_id=handle.spec.spec_id,
+            expect_run_id=handle.run_id,
+        )
+    ):
+        if event.to_state != "PAPER_OBSERVING":
+            continue
+        evidence = event.evidence or {}
+        artifact_id = str(evidence.get("artifact_id", ""))
+        if not artifact_id:
+            return None
+        payload = read_registered_artifact(handle.run_dir, index, artifact_id)
+        account = payload.get("account_id")
+        return str(account) if account else None
+    return None
+
+
+class RunContext:
+    """The single execution-identity object of the formal entries (A03
+    p27 I1/I12): the open run handle, the frozen spec, the replayed
+    lifecycle state, and the declared action mode.
+
+    Formal entries receive **this** type — never a per-entry re-assembly
+    of near-identity fields.  :meth:`attach` is the only construction
+    path: it attaches the single writer, replays the event chain, and
+    enforces the action-state table (p27 §3/I4) fail-closed.
+    """
+
+    def __init__(
+        self,
+        handle: RunHandle,
+        *,
+        entry_type: str,
+        action_mode: str,
+        writer: "LifecycleWriter",
+        run_type: str | None = None,
+    ):
+        self.handle = handle
+        self.entry_type = str(entry_type)
+        self.action_mode = str(action_mode)
+        self.run_type = run_type
+        self._writer = writer
+
+    # -- construction ---------------------------------------------------------
+
+    @classmethod
+    def attach(
+        cls,
+        store: RunStore,
+        *,
+        spec_id: str,
+        run_id: str,
+        entry_type: str,
+        action_mode: str,
+        run_type: str | None = None,
+        spec: RunSpec | None = None,
+    ) -> "RunContext":
+        """Attach to an existing, preregistered run and enforce the entry
+        gate with real identity (p27 I2/I4; R2/R3/R4/R5/R15)."""
+
+        if entry_type not in FORMAL_ENTRY_TYPES:
+            raise LifecycleError(
+                f"unknown formal entry type {entry_type!r}"
+            )
+        if action_mode not in ACTION_MODES:
+            raise LifecycleError(
+                f"unregistered action mode {action_mode!r} (p27 §3/I3)"
+            )
+        if action_mode in NON_FORMAL_ACTION_MODES:
+            raise LifecycleError(
+                "RunContext is the formal execution identity; declare the "
+                f"{action_mode!r} mode through the entry's explicit "
+                "non-formal switch instead (p27 I2)"
+            )
+        if not str(spec_id or "").strip() or not str(run_id or "").strip():
+            raise LifecycleError(
+                f"{entry_type} entry requires a real lifecycle identity "
+                "(spec_id/run_id); a missing identity is a refusal "
+                "(p27 I2/R1)"
+            )
+        if spec is None:
+            spec = _load_spec_from_run(store, str(spec_id), str(run_id))
+        if spec.spec_id != str(spec_id):
+            raise LifecycleError(
+                f"context spec identity mismatch: resolved spec_id "
+                f"{spec.spec_id!r} != requested {spec_id!r} (p27 I12/R2)"
+            )
+        handle = store.attach_run(spec, str(run_id))
+        try:
+            writer = LifecycleWriter(handle)
+            context = cls(
+                handle,
+                entry_type=entry_type,
+                action_mode=action_mode,
+                writer=writer,
+                run_type=run_type,
+            )
+            # One gate authority: the same formal entry gate, now with the
+            # real identity (empty chain → R3, terminal → R5, floor →
+            # R4/R15, all fail-closed).
+            assert_formal_run_lifecycle(
+                entry_type,
+                store.root,
+                spec.spec_id,
+                handle.run_id,
+                action_mode=action_mode,
+            )
+        except Exception:
+            handle.close()
+            raise
+        return context
+
+    # -- identity views -------------------------------------------------------
+
+    @property
+    def state(self) -> str | None:
+        return self._writer.current_state
+
+    @property
+    def spec(self) -> RunSpec:
+        return self.handle.spec
+
+    @property
+    def run_id(self) -> str:
+        return self.handle.run_id
+
+    @property
+    def run_dir(self) -> Path:
+        return self.handle.run_dir
+
+    # -- action gates ---------------------------------------------------------
+
+    def assert_search_ready(self) -> str:
+        """I5: the search action requires the full qualification chain
+        (≥ ``SEARCH_PLAN_ADMITTED``) at action time — a loading check is
+        a different action and never implies search eligibility."""
+
+        state = self.state
+        if state is None or _stage_sort_key(state) < _stage_sort_key(
+            SEARCH_ACTION_MIN_STATE
+        ):
+            raise LifecycleError(
+                f"search action refused: the run is at {state!r}; formal "
+                f"search requires the complete qualification chain (at "
+                f"least {SEARCH_ACTION_MIN_STATE!r}: data + factor set + "
+                "search plan). Removal condition: consume the §5.1/§5.2/"
+                "§5.3 qualification transitions before searching "
+                "(p27 I5/A03-A3)"
+            )
+        return state
+
+    def assert_protected_oos_access(self) -> None:
+        """I8: the context's state/mode/run-type must allow protected-OOS
+        evaluation (delegates to the single authority)."""
+
+        assert_protected_oos_access(
+            self.state,
+            self.run_type or "research",
+            action_mode=self.action_mode,
+        )
+
+    def assert_paper_account(self, target_account_id: str | None) -> str:
+        """I9/R6: the paper write target must be the account bound by the
+        run's ``PAPER_OBSERVING`` evidence; a missing or foreign account
+        is refused (no hardcoded ``current``)."""
+
+        bound = bound_paper_account_id(self.handle)
+        target = str(target_account_id or "").strip()
+        if not bound:
+            raise LifecycleError(
+                "paper write refused: the run has no PAPER_OBSERVING "
+                "account binding evidence; the writable account comes "
+                "from the lifecycle binding, never from a default "
+                "(p27 I9/A03-A7)"
+            )
+        if not target:
+            raise LifecycleError(
+                "paper write refused: no target account identity was "
+                "provided (p27 I9)"
+            )
+        if bound != target:
+            raise LifecycleError(
+                f"paper write refused: cross-account write — the run is "
+                f"bound to account {bound!r} but the target account is "
+                f"{target!r} (p27 I9/R6)"
+            )
+        return bound
+
+    def close(self) -> None:
+        self.handle.close()
 
 
 def assert_paper_account_writable(account_kind: str) -> None:

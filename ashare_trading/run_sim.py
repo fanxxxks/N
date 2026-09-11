@@ -113,9 +113,14 @@ class SimulationRunner:
         # inspect the runner (display/audit only).
         self.today = (today or datetime.now().strftime("%Y%m%d")).replace("-", "")
         validate_execution_config(backtest_config, sim_config)
-        # P8-15 no-bypass: paper simulation runs must pass the lifecycle
-        # gate and the paper account must be writable (contract §8).
-        assert_formal_run_lifecycle("paper_sim", data_config.data_dir)
+        # A03 (p27): the entry gate is now mandatory.  Until the paper
+        # package commit wires the RunContext and the real account
+        # identity, the entry explicitly declares the non-formal
+        # engineering mode (p27 I2/§5.3) — the old implicit vacuous pass
+        # and the hardcoded account literal are both interim state.
+        assert_formal_run_lifecycle(
+            "paper_sim", data_config.data_dir, action_mode="engineering"
+        )
         assert_paper_account_writable("current")
         self.portfolio = SimulationPortfolio(
             sim_config.initial_capital, sim_config.state_path

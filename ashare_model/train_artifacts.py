@@ -162,38 +162,54 @@ def _persist_strategy_artifact(
 ) -> list[int] | None:
     """Resolve the frozen RunSpec, persist through the RunStore-bound
     formal writer and mirror the RL policy checkpoint (verbatim from the
-    historical ``_write_artifact`` body)."""
+    historical ``_write_artifact`` body).
+
+    A03 (p27 I7): when the trainer carries a RunContext (the formal
+    entry), the artifact identity IS the execution-time context — the
+    strategy registers inside the attached run's store and no second run
+    is minted.  The context-less path keeps the pre-A03 behavior for the
+    explicitly declared non-formal modes.
+    """
 
     out_path = trainer.data_config.data_dir / "best_ashare_strategy.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # P8-05: resolve the frozen RunSpec for this run and persist through
-    # the RunStore-bound formal writer.  A formal strategy artifact
-    # requires a resolved dataset identity (T1-01 manifest); a legacy
-    # database without one is refused here, fail-closed.
+    context = getattr(trainer, "run_context", None)
+    owned_handle = context is None
     if not trainer.loader.dataset_id:
         raise ArtifactSchemaError(
             "formal strategy artifacts require a resolved dataset_id "
             "(dataset manifest); migrate the database with "
             "`python -m ashare_data.manifest` before training"
         )
-    spec = resolve_runtime_runspec(
-        dataset_id=trainer.loader.dataset_id,
-        data_cutoff=trainer.loader.dates[-1],
-        data_config=trainer.data_config,
-        backtest_config=trainer.backtest_config,
-        requested_budget=int(requested_budget),
-        # Training evaluates a single validation tail; the campaign's
-        # fold plan is carried by the protocol run's own spec.
-        n_folds=1,
-        research_domain=trainer.domain_id,
-        seeds=tuple(sorted({int(trainer.init_seed), int(seed)})),
-        searcher=searcher,
-        max_formula_len=int(trainer.model_config.max_formula_len),
-        # The clean-tree SPEC_LOCKED evidence gate activates with the
-        # lifecycle stages (P8-06+); the spec still records the exact
-        # git commit and dependency-lock hash.
-        require_clean_tree=False,
-    )
+    if context is not None:
+        # A03 formal path (p27 I6/I7): the frozen spec and the open run
+        # both come from the execution-time context — the strategy
+        # registers inside the attached run and no second run is minted.
+        # The handle belongs to the entry; this writer never closes it.
+        spec = context.spec
+        store_handle = context.handle
+    else:
+        # P8-05 path for the explicitly declared non-formal modes:
+        # resolve the frozen RunSpec here and open a fresh run.
+        spec = resolve_runtime_runspec(
+            dataset_id=trainer.loader.dataset_id,
+            data_cutoff=trainer.loader.dates[-1],
+            data_config=trainer.data_config,
+            backtest_config=trainer.backtest_config,
+            requested_budget=int(requested_budget),
+            # Training evaluates a single validation tail; the campaign's
+            # fold plan is carried by the protocol run's own spec.
+            n_folds=1,
+            research_domain=trainer.domain_id,
+            seeds=tuple(sorted({int(trainer.init_seed), int(seed)})),
+            searcher=searcher,
+            max_formula_len=int(trainer.model_config.max_formula_len),
+            # The clean-tree SPEC_LOCKED evidence gate activates with the
+            # lifecycle stages (P8-06+); the spec still records the exact
+            # git commit and dependency-lock hash.
+            require_clean_tree=False,
+        )
+        store_handle = RunStore(trainer.data_config.data_dir).open_run(spec)
     cand = candidate_id(spec.spec_id, trainer.best_tokens, output["direction"])
     if (
         trainer.search_result is not None
@@ -204,10 +220,19 @@ def _persist_strategy_artifact(
             trainer.search_result.elite_archive,
         )
         logger.info("search.elite_archive path={}", archive_path)
-    store = RunStore(trainer.data_config.data_dir)
-    with store.open_run(spec) as handle:
+    if owned_handle:
+        with store_handle as handle:
+            write_boundary_artifact(
+                handle,
+                artifact_type="strategy",
+                model_cls=StrategyArtifact,
+                payload=output,
+                candidate_id=cand,
+                convenience_path=out_path,
+            )
+    else:
         write_boundary_artifact(
-            handle,
+            store_handle,
             artifact_type="strategy",
             model_cls=StrategyArtifact,
             payload=output,

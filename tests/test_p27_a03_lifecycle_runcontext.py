@@ -22,7 +22,7 @@ from ashare_model import lifecycle
 from ashare_model.identity import content_hash
 from ashare_model.run_store import RunSpecMismatchError, RunStore, RunStoreError
 
-from conftest import write_current_strategy
+from conftest import make_test_spec, write_current_strategy
 from test_run_store import LIFECYCLE_IDEA, _clean_data_report, _spec
 
 
@@ -243,7 +243,7 @@ def test_r2_attach_refuses_spec_identity_mismatch(tmp_path):
     handle, writer, spec = _genesis_run(store)
     run_id = handle.run_id
     handle.close()
-    other = _spec(dataset_id="ds-other")
+    other = make_test_spec(dataset_id="ds-other")
     with pytest.raises(
         (RunSpecMismatchError, RunStoreError, lifecycle.LifecycleError)
     ):
@@ -303,10 +303,12 @@ def test_i5_search_action_gate_requires_full_admission(tmp_path):
 
     store = RunStore(tmp_path)
     handle, writer, spec = _genesis_run(store)  # SPEC_LOCKED
+    run_id = handle.run_id
+    handle.close()  # release the writer lock before attaching the context
     context = RunContext.attach(
         store,
         spec_id=spec.spec_id,
-        run_id=handle.run_id,
+        run_id=run_id,
         entry_type="train",
         action_mode="research",
         spec=spec,
@@ -320,13 +322,16 @@ def test_i5_search_action_gate_requires_full_admission(tmp_path):
         context.close()
 
     # A run driven through the full qualification chain passes the gate.
-    writer.qualify_data(_clean_data_report(spec))
-    writer.qualify_factor_set(_factor_report(spec))
-    writer.admit_search_plan(lifecycle.build_search_admission_evidence(spec))
+    handle2 = store.attach_run(spec, run_id)
+    writer2 = lifecycle.LifecycleWriter(handle2)
+    writer2.qualify_data(_clean_data_report(spec))
+    writer2.qualify_factor_set(_factor_report(spec))
+    writer2.admit_search_plan(lifecycle.build_search_admission_evidence(spec))
+    handle2.close()
     context2 = RunContext.attach(
         store,
         spec_id=spec.spec_id,
-        run_id=handle.run_id,
+        run_id=run_id,
         entry_type="train",
         action_mode="research",
         spec=spec,
@@ -612,10 +617,12 @@ def test_r11_formal_artifact_write_uses_context_identity(tmp_path):
 
     store = RunStore(tmp_path / "ctx-store")
     handle, writer, spec = _genesis_run(store)
+    run_id = handle.run_id
+    handle.close()  # release the writer lock before attaching the context
     context = RunContext.attach(
         store,
         spec_id=spec.spec_id,
-        run_id=handle.run_id,
+        run_id=run_id,
         entry_type="train",
         action_mode="research",
         spec=spec,
@@ -645,9 +652,13 @@ def test_r11_formal_artifact_write_uses_context_identity(tmp_path):
             candidate_id=cand,
         )
         index = context.handle.load_index()
-        assert [a["artifact_id"] for a in index["artifacts"]] == [
-            record.artifact_id
+        # The genesis evidence artifacts precede it; the context write is
+        # the newest registration in the SAME run (no second run minted).
+        assert index["artifacts"][-1]["artifact_id"] == record.artifact_id
+        assert record.artifact_id in [
+            a["artifact_id"] for a in index["artifacts"]
         ]
+        assert len(index["artifacts"]) == 3  # idea + spec-lock + strategy
         # A payload carrying a foreign identity is refused (I7/R11).
         conflicting = dict(payload, run_id="f" * 8)
         with pytest.raises(Exception, match="conflicts"):
