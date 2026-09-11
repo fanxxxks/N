@@ -278,60 +278,68 @@ def main() -> None:
 
         run_context = None
         if args.lifecycle_mode == "formal":
-            from .run_store import RunStore
+            try:
+                from .run_store import RunStore
 
-            # A03 (p27 I6): freeze the plan and establish the run identity
-            # BEFORE the expensive load — the composite snapshot confirms
-            # cheaply, the spec freezes from it, the run attaches, the
-            # gate fires, and only then does the loader build frames.
-            loader = AshareDataLoader(data_config, model_config)
-            loader.confirm_input_snapshot()
-            # The search budget and seed pair are resolved exactly the way
-            # trainer.search() resolves them (train_search_run: steps/batch
-            # fall back to the model config; seed defaults to 42), so the
-            # frozen spec describes the run this entry will execute.
-            steps = int(args.steps or model_config.train_steps)
-            batch_size = int(args.batch_size or model_config.batch_size)
-            from .runspec import resolve_runtime_runspec
+                # A03 (p27 I6): freeze the plan and establish the run
+                # identity BEFORE the expensive load — the composite
+                # snapshot confirms cheaply, the spec freezes from it, the
+                # run attaches, the gate fires, and only then does the
+                # loader build frames.
+                loader = AshareDataLoader(data_config, model_config)
+                loader.confirm_input_snapshot()
+                # The search budget and seed pair are resolved exactly the
+                # way trainer.search() resolves them (train_search_run:
+                # steps/batch fall back to the model config; seed defaults
+                # to 42), so the frozen spec describes the run this entry
+                # will execute.
+                steps = int(args.steps or model_config.train_steps)
+                batch_size = int(args.batch_size or model_config.batch_size)
+                from .runspec import resolve_runtime_runspec
 
-            spec = resolve_runtime_runspec(
-                dataset_id=loader.dataset_id,
-                data_cutoff=loader.frozen_data_cutoff(),
-                data_config=data_config,
-                backtest_config=backtest_config,
-                requested_budget=max(1, steps * batch_size),
-                n_folds=1,
-                research_domain="unified",
-                # The (init_seed, seed) pair the search will actually run:
-                # AshareTrainer.__init__ default init_seed=42 and
-                # search()'s default seed=42 (the CLI exposes neither), so
-                # the frozen paired-seed set is {42} — same derivation as
-                # the artifact writer's tuple(sorted({init_seed, seed})).
-                seeds=(42,),
-                searcher=model_config.searcher,
-                max_formula_len=int(model_config.max_formula_len),
-                require_clean_tree=False,
-            )
-            run_context = RunContext.attach(
-                RunStore(data_config.data_dir),
-                spec_id=args.spec_id,
-                run_id=args.run_id,
-                entry_type="train",
-                action_mode="research",
-                spec=spec,
-            )
-            # I5: search ≠ loading — the run must have consumed the full
-            # qualification chain before any search compute (this refuses
-            # before the expensive load when the chain is incomplete).
-            run_context.assert_search_ready()
-            loader.load_data()
-            if loader.dataset_id != spec.dataset_id:
-                raise SystemExit(
-                    "train: the database content drifted between identity "
-                    "freeze and load; the frozen spec no longer matches "
-                    "the confirmed composite snapshot — republish and "
-                    "re-preregister (A02 I2, p27 I6)"
+                spec = resolve_runtime_runspec(
+                    dataset_id=loader.dataset_id,
+                    data_cutoff=loader.frozen_data_cutoff(),
+                    data_config=data_config,
+                    backtest_config=backtest_config,
+                    requested_budget=max(1, steps * batch_size),
+                    n_folds=1,
+                    research_domain="unified",
+                    # The (init_seed, seed) pair the search will actually
+                    # run: AshareTrainer.__init__ default init_seed=42 and
+                    # search()'s default seed=42 (the CLI exposes neither),
+                    # so the frozen paired-seed set is {42} — same
+                    # derivation as the artifact writer's
+                    # tuple(sorted({init_seed, seed})).
+                    seeds=(42,),
+                    searcher=model_config.searcher,
+                    max_formula_len=int(model_config.max_formula_len),
+                    require_clean_tree=False,
                 )
+                run_context = RunContext.attach(
+                    RunStore(data_config.data_dir),
+                    spec_id=args.spec_id,
+                    run_id=args.run_id,
+                    entry_type="train",
+                    action_mode="research",
+                    spec=spec,
+                )
+                # I5: search ≠ loading — the run must have consumed the
+                # full qualification chain before any search compute (this
+                # refuses before the expensive load when incomplete).
+                run_context.assert_search_ready()
+                loader.load_data()
+                if loader.dataset_id != spec.dataset_id:
+                    raise SystemExit(
+                        "train: the database content drifted between "
+                        "identity freeze and load; the frozen spec no "
+                        "longer matches the confirmed composite snapshot "
+                        "— republish and re-preregister (A02 I2, p27 I6)"
+                    )
+            except LifecycleError as exc:
+                # CLI boundary: a lifecycle refusal exits with its reason
+                # (p27 I11 — nothing has been loaded or written yet).
+                raise SystemExit(f"train: {exc}")
         else:
             loader = AshareDataLoader(data_config, model_config)
 
