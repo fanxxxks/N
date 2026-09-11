@@ -472,6 +472,18 @@ def main() -> None:
         help="production gate G6: minimum eligible stocks per major window "
         "(default: 100)",
     )
+    # A03 (p27 I2/I5): formal mode attaches the strategy's source run and
+    # enforces the lifecycle gate (state ≥ SEARCH_PLAN_ADMITTED — R7: a
+    # current schema without lifecycle qualification is not formal
+    # evidence); engineering is the explicit non-formal declaration.
+    parser.add_argument(
+        "--lifecycle-mode",
+        choices=["formal", "engineering", "audit"],
+        default="formal",
+        help="formal (default) attaches the strategy's source run and "
+        "enforces the lifecycle gate; engineering/audit are explicit "
+        "non-formal declarations (p27 §3/I3)",
+    )
     args = parser.parse_args()
 
     try:
@@ -497,17 +509,36 @@ def main() -> None:
         backtest_config = make_backtest_config(raw)
         sim_config = make_sim_config(raw, root)
         validate_execution_config(backtest_config, sim_config)
-        loader = AshareDataLoader(data_config, model_config)
-        loader.load_data()
+        store = RunStore(data_config.data_dir)
 
+        # A03 (p27 I6): identity precedes the loader — the strategy file is
+        # read, its lineage reconstructed and (formal mode) the lifecycle
+        # gate fires BEFORE any frame building or formula execution (R9).
         formula_file = args.formula_file or data_config.data_dir / "best_ashare_strategy.json"
         formula_file = Path(formula_file)
         if not formula_file.is_absolute():
             formula_file = root / formula_file
         if not formula_file.exists():
             raise SystemExit(f"Formula file not found: {formula_file}")
-        store = RunStore(data_config.data_dir)
         payload, source_spec = load_formal_strategy(formula_file, store)
+        run_context = None
+        if args.lifecycle_mode == "formal":
+            from .lifecycle import LifecycleError, RunContext
+
+            try:
+                run_context = RunContext.attach(
+                    store,
+                    spec_id=source_spec.spec_id,
+                    run_id=str(payload["run_id"]),
+                    entry_type="backtest",
+                    action_mode="research",
+                    spec=source_spec,
+                )
+            except LifecycleError as exc:
+                raise SystemExit(f"backtest: {exc}")
+        loader = AshareDataLoader(data_config, model_config)
+        loader.load_data()
+
         check_dataset_id(payload.get("dataset_id"), loader.dataset_id)
         tokens = resolve_formula_tokens(payload, FORMULA_VOCAB)
 
@@ -597,15 +628,29 @@ def main() -> None:
             ),
         }
         out_path = root / args.output
-        with store.open_run(source_spec) as handle:
+        if run_context is not None:
+            # A03 (p27 I7): the backtest result is research evidence for
+            # the source run's candidate — it registers inside the
+            # attached run's store; the context owns the identity and the
+            # handle, so no second run is minted.
             write_boundary_artifact(
-                handle,
+                run_context.handle,
                 artifact_type="backtest",
                 model_cls=BacktestResultArtifact,
                 payload=output,
                 candidate_id=payload["candidate_id"],
                 convenience_path=out_path,
             )
+        else:
+            with store.open_run(source_spec) as handle:
+                write_boundary_artifact(
+                    handle,
+                    artifact_type="backtest",
+                    model_cls=BacktestResultArtifact,
+                    payload=output,
+                    candidate_id=payload["candidate_id"],
+                    convenience_path=out_path,
+                )
         print(json.dumps(result.metrics, ensure_ascii=False, indent=2))
         print(f"Result saved to {out_path}")
     finally:

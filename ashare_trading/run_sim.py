@@ -41,8 +41,10 @@ from ashare_execution import validate_execution_config
 
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.lifecycle import (
-    assert_paper_account_writable,
+    LifecycleError,
+    RunContext,
     assert_formal_run_lifecycle,
+    bound_paper_account_id,
 )
 from ashare_model.reward import signal_direction
 from ashare_model.time_contract import TrainingTimeContract
@@ -101,6 +103,8 @@ class SimulationRunner:
         loader: AshareDataLoader,
         *,
         today: str | None = None,
+        run_context: "RunContext | None" = None,
+        lifecycle_mode: str = "engineering",
     ):
         self.data_config = data_config
         self.model_config = model_config
@@ -113,15 +117,37 @@ class SimulationRunner:
         # inspect the runner (display/audit only).
         self.today = (today or datetime.now().strftime("%Y%m%d")).replace("-", "")
         validate_execution_config(backtest_config, sim_config)
-        # A03 (p27): the entry gate is now mandatory.  Until the paper
-        # package commit wires the RunContext and the real account
-        # identity, the entry explicitly declares the non-formal
-        # engineering mode (p27 I2/§5.3) — the old implicit vacuous pass
-        # and the hardcoded account literal are both interim state.
-        assert_formal_run_lifecycle(
-            "paper_sim", data_config.data_dir, action_mode="engineering"
-        )
-        assert_paper_account_writable("current")
+        # A03 (p27 I1/I2/I9): the formal paper entry passes the RunContext
+        # attached to the observing run (exactly PAPER_OBSERVING, enforced
+        # at attach); the writable account identity is DERIVED from the
+        # run's PAPER_OBSERVING binding evidence — never from a hardcoded
+        # account kind (R16).  Constructor use without a context declares
+        # the explicit non-formal mode (p27 I2/I5: 工程探针必须显式声明).
+        self.run_context = run_context
+        if run_context is not None:
+            if not isinstance(run_context, RunContext):
+                raise LifecycleError(
+                    "run_context must be the lifecycle RunContext (p27 I1: "
+                    "formal entries receive the single identity type)"
+                )
+            if run_context.entry_type != "paper_sim":
+                raise LifecycleError(
+                    f"RunContext entry type {run_context.entry_type!r} does "
+                    "not match the paper_sim entry (p27 I1)"
+                )
+        else:
+            if lifecycle_mode not in ("engineering", "audit"):
+                raise LifecycleError(
+                    "formal paper simulation requires a RunContext attached "
+                    "to the observing run; constructor use must declare "
+                    "lifecycle_mode='engineering'|'audit' explicitly "
+                    "(p27 I2/I5)"
+                )
+            assert_formal_run_lifecycle(
+                "paper_sim",
+                data_config.data_dir,
+                action_mode=lifecycle_mode,
+            )
         self.portfolio = SimulationPortfolio(
             sim_config.initial_capital, sim_config.state_path
         )
@@ -135,6 +161,29 @@ class SimulationRunner:
         self.direction = 1
         self._has_recorded_direction = False
         self._strategy_identity: dict[str, object] | None = None
+        self._bound_account_id: str | None = None
+        if run_context is not None:
+            # I9/R6: the paper write target is the account bound by the
+            # run's PAPER_OBSERVING evidence; an existing portfolio state
+            # bound to a different account is a cross-account write and is
+            # refused.  The writable kind is derived from the binding
+            # (current = lifecycle-bound), so the pre-A03 literal is gone.
+            bound = bound_paper_account_id(run_context.handle)
+            if not bound:
+                raise LifecycleError(
+                    "paper simulation refused: the observing run has no "
+                    "PAPER_OBSERVING account binding evidence; the writable "
+                    "account comes from the lifecycle binding (p27 I9)"
+                )
+            loaded = self.portfolio.loaded_lineage
+            if loaded and str(loaded.get("account_id")) != bound:
+                raise LifecycleError(
+                    "paper simulation refused: cross-account write — the "
+                    f"run is bound to account {bound!r} but the portfolio "
+                    f"state carries account "
+                    f"{str(loaded.get('account_id'))!r} (p27 I9/R6)"
+                )
+            self._bound_account_id = bound
 
     def load_formula(self) -> None:
         path = self.data_config.data_dir / "best_ashare_strategy.json"
@@ -292,7 +341,13 @@ class SimulationRunner:
         spec = reconstruct_runspec_from_lineage(store, self._strategy_identity)
         handle = store.open_run(spec)
         loaded = self.portfolio.loaded_lineage
-        account_id = loaded["account_id"] if loaded else uuid4().hex
+        # A03 (p27 I9): a formal paper run writes only into the account its
+        # observing run is bound to; the pre-A03 fresh-uuid minting is
+        # reserved for the explicitly declared non-formal path.
+        account_id = (
+            self._bound_account_id
+            or (loaded["account_id"] if loaded else uuid4().hex)
+        )
         bound = False
         try:
             self.portfolio.bind_lineage(
@@ -645,6 +700,18 @@ def main() -> None:
         help="production gate G6: minimum eligible stocks per major window "
         "(default: 100)",
     )
+    # A03 (p27 I2/I9): formal mode attaches the observing run named by the
+    # strategy's lineage (exactly PAPER_OBSERVING) and derives the writable
+    # account from its binding evidence; engineering/audit are the explicit
+    # non-formal declarations (工程探针 / 历史审计).
+    parser.add_argument(
+        "--lifecycle-mode",
+        choices=["formal", "engineering", "audit"],
+        default="formal",
+        help="formal (default) attaches the strategy's observing run and "
+        "enforces the lifecycle gate; engineering/audit are explicit "
+        "non-formal declarations (p27 §3/I3)",
+    )
     args = parser.parse_args()
 
     try:
@@ -670,8 +737,51 @@ def main() -> None:
         backtest_config = make_backtest_config(raw)
         sim_config = make_sim_config(raw, root)
         loader = AshareDataLoader(data_config, model_config)
+        # A03 (p27 I6/I9): formal paper identity is established BEFORE any
+        # account write or heavy load — the strategy lineage names the
+        # observing run, the attach enforces exactly PAPER_OBSERVING, and
+        # the writable account comes from the run's binding evidence.
+        run_context = None
+        if args.lifecycle_mode == "formal":
+            from ashare_model.artifact_writer import reconstruct_runspec_from_lineage
+            from ashare_model.artifact_writer import read_boundary_artifact
+            from ashare_model.artifact_schemas import StrategyArtifact
+            from ashare_model.run_store import RunStore
+
+            formula_file = data_config.data_dir / "best_ashare_strategy.json"
+            loaded_artifact = read_boundary_artifact(
+                formula_file, model_cls=StrategyArtifact, formal=True
+            )
+            if loaded_artifact is None:
+                raise SystemExit(
+                    "run_sim: formal paper simulation requires a current "
+                    "schema-v2 strategy artifact at "
+                    f"{formula_file}; the pre-A03 legacy replay paths are "
+                    "audit-only (declare --lifecycle-mode engineering for "
+                    "an explicit non-formal probe)"
+                )
+            payload, _ = loaded_artifact
+            store = RunStore(data_config.data_dir)
+            try:
+                source_spec = reconstruct_runspec_from_lineage(store, payload)
+                run_context = RunContext.attach(
+                    store,
+                    spec_id=source_spec.spec_id,
+                    run_id=str(payload["run_id"]),
+                    entry_type="paper_sim",
+                    action_mode="paper",
+                    spec=source_spec,
+                )
+            except LifecycleError as exc:
+                raise SystemExit(f"run_sim: {exc}")
         runner = SimulationRunner(
-            data_config, model_config, backtest_config, sim_config, loader
+            data_config,
+            model_config,
+            backtest_config,
+            sim_config,
+            loader,
+            run_context=run_context,
+            lifecycle_mode=args.lifecycle_mode,
         )
         if args.reset:
             runner.portfolio.reset()
