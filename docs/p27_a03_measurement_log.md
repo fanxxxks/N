@@ -1,13 +1,16 @@
 # P27 A03 测量日志：真正强制的生命周期与 RunContext
 
 - 性质：**evidence-only**（AGENTS §11：只写"实际发生什么"；实现见 commit
-  `0b9c85f` → `3dbb017` → `41cb912` → `7db2b35` → `f48a215`，分支
+  `0b9c85f` → `3dbb017` → `41cb912` → `7db2b35` → `f48a215` → `647dc65`
+  → `e1e893a` → 本日志提交（最终 head 以 git log 为准），分支
   `codex/a03-lifecycle-runcontext`，base = `main` @ `aac4aad`）。
 - 契约权威：`docs/p27_a03_lifecycle_runcontext_draft.md`（APPROVED，批准
   记录 `reports/alphagpt-ab/00_authority_exception_record.md` §11 裁决 1 +
   §4ter 第 4 项）；状态机权威仍为 `docs/p8_research_lifecycle_contract.md`。
 - 环境：Windows（PowerShell），Python 3.12（miniconda3），本地串行执行；
   机器 6C/12T / 16GB（p21 §5）。
+- **双审记录**：独立合规评审与独立技术评审（均 PASS WITH FINDINGS）已执行；
+  其发现的处置见 §9.0（技术 F1–F8）与 §9.0b（合规 C1–C9）。
 
 ## 1. 版本影响实测（AGENTS §3.2 全量检索复核）
 
@@ -108,7 +111,7 @@ store）。迁移面 = 空集；无需对账报告条目，无任何 run/事件�
 | `tests/test_run_store.py::test_p8_15_lifecycle_no_bypass_assert_formal_run_lifecycle` | **替换**（非删除）：原三行 `assert ... is None` 把 F03 缺陷钉为期望（审计 §2.2 F03 原文："测试明确接受缺少身份时返回 None"）。新断言：formal 模式对全部四种 entry 缺身份一律 LifecycleError；仅显式 `--lifecycle-mode engineering` 返回 None；unknown entry 仍 fail-closed。断言强度只增不减（另见 R1/R10 的完整行为覆盖） | 
 | `tests/test_run_store.py::test_lifecycle_status_set_version_and_terminals` | `LIFECYCLE_CONTRACT_VERSION` 1→2（A03-A8 批准 bump；版本钉值随需求变更） |
 | `tests/test_evaluation.py` 三个 CLI smoke | 增加显式 `--lifecycle-mode engineering`：这些 smoke 本来就是工程探针（合成小库、1 步预算）；p27 I5 要求工程动作显式声明、不得继承正式研究身份。无断言弱化 |
-| `tests/test_p27_a03_lifecycle_runcontext.py` | 新增（契约的可执行投影；同 commit 登记进 `scripts/check_test_shards.py` shard-model-2） |
+| `tests/test_p27_a03_lifecycle_runcontext.py` | 新增（契约的可执行投影；同 commit 登记进 `scripts/check_test_shards.py` shard-model-2）。实现 commit 期间对该文件的修正均为**测试自身缺陷修正**（r2 的 fixture 误用、i5 的句柄锁未释放、r11 对 genesis 证据产物的计数、r12 的拒绝消息匹配）——非断言弱化，无 skip/容差/expected=actual |
 
 测试修改白名单条款：§10.1 第 2 条（需求变更，先批准契约再同步测试）；
 无 skip/xfail/容差放宽/expected=actual；无断言删除。
@@ -119,9 +122,9 @@ store）。迁移面 = 空集；无需对账报告条目，无任何 run/事件�
    tests/test_run_store.py tests/test_runspec.py
    tests/test_p8_lifecycle_contract_doc.py` → 113 passed, 6 failed
    （6 个失败均为当时尚未接线的 entry 测试，随 C/D commit 转绿）。
-2. 相邻：`tests/test_data_loader.py tests/test_load_cache.py` +
-   `tests/test_run_sim.py tests/test_backtest.py`（47 passed）+
-   `tests/test_evaluation.py`（全绿）。
+2. 相邻：`tests/test_run_sim.py tests/test_backtest.py`（47 passed，归属
+   这两个文件）+ `tests/test_data_loader.py tests/test_load_cache.py`
+   （全绿）+ `tests/test_evaluation.py`（全绿）。
 3. train/core/searcher/artifact 套件：`tests/test_train.py
    tests/test_core.py tests/test_evaluation.py tests/test_run_sim.py
    tests/test_searcher_bench.py`（接线前状态）→ **145 passed, 2 skipped**
@@ -152,6 +155,49 @@ store）。迁移面 = 空集；无需对账报告条目，无任何 run/事件�
 - 未做性能优化；`confirm_input_snapshot` 在正式入口会确认两次（entry
   冻结时 + load_data 内部再确认一次）——第二次是漂移守卫，属 A02
   既有语义的刻意保留，开销计入 B04 的装载优化范围。
+
+## 9.0b 合规评审（C1–C9）处置
+
+- **C1（high）**：audit 模式写入 → 已修（§9.0 F3a）。残余：拒绝发生在
+  CLI 边界；库构造器仍接受 `lifecycle_mode="audit"`（构造器不产生产物，
+  I2 的强制点在入口——见 C7 第二点的同一解释）。
+- **C2（medium，OPEN→裁决记录）**：`ACTION_PROTECTED_OOS` 模式当前无
+  attach 消费者；evaluation 以 `action_mode="research"` attach 后调用
+  `assert_protected_oos_access` 并通过。**裁决（captain，p27 §9.2）**：
+  受保护 OOS 的机器权威是 p8 §6（"lifecycle 状态允许且运行类型 ∈
+  {research, promotion}"），且 p27 I4 的 protected_oos 行本身写明
+  "复用 assert_protected_oos_access"——即该行的语义 = 该函数的语义；
+  A03 在其上增加的是此前缺失的 engineering/audit 排除维度（R8）。
+  按字面把 research 模式排除会使 p8 §6 明文允许的 research 评估非法，
+  与 §9.2"冲突时以 p8 为准"矛盾。`ACTION_PROTECTED_OOS` 常量为后续
+  显式 OOS 评估入口保留（接线后即有消费者）。**待用户裁决项**：若用户
+  要求字面排他（research 也不可评价锁定 OOS），需修订 p27 I4/I8 并改
+  evaluation 的 OOS 断言——未获指示前维持 p8 语义。
+- **C4（medium，OPEN→披露）**：**范围偏差披露**——`data_loader.py`
+  （confirm_input_snapshot 抽取 + frozen_data_cutoff，161 行，行为保持）
+  与新文件 `train_entry.py`（facade 行预算由 `test_train_module_split`
+  强制）不在 p27 §2.2 / 方案 §四 A03 文件清单内。原因：I6（身份先于
+  `load_data`）在不动 loader 的前提下不可满足——A03 要求本身强制该接触
+  面；抽取为行为保持（逐字节确认）且使 formal 入口可在装载前冻结身份。
+  按 p27 §10.7 的精神此处补报而非静默：**提请用户对该偏差追认**；如否决，
+  回退方案 = loader 恢复原状 + 入口身份建立改为复用 loader 全量加载后
+  的派生（I6 降级为"产物写前"，需重新评审）。
+- **C5（partial→residual）**：工程产物的 artifact 侧 `action_mode`
+  标记需要 `ARTIFACT_SCHEMA_VERSION` bump 与读写矩阵变更，随晋级接线包
+  一并落地；日志侧标记已落地（§9.0 F3a）。
+- **C6（log hygiene）**：本版日志已修正——SHA 头补全至最终 head；
+  §9.4 的 webapi 表述修正（webapi/service.py 为展示/触发层，不经子进程；
+  真正以固定 argv 派生 run_sim 子进程的是 `ashare_trading/manager.py`）；
+  §7.2 的 47 passed 明确归属 run_sim+backtest 两文件；§6 补记 RED 文件
+  在实现 commit 期间的测试自身缺陷修正（r2 fixture、i5 句柄锁、r11 索引
+  断言、r12 拒绝消息——均为测试 bug 修正，无断言弱化）。
+- **C7（low）**：`run_sim.__init__` 已改为消费
+  `RunContext.assert_paper_account`（单一权威，消除内联重复）。构造器
+  默认 `lifecycle_mode="engineering"` 为已记录的库面设计决定（formal
+  强制点在 CLI 入口；库组件不是入口），维持并在此登记。
+- **C8（low）**：p27 §12 描述的是 DRAFT 提交当时的边界，作为历史记录
+  保留；批准头已声明状态，正文不再改动（正文改动权未获转授）。
+- **C9**：同 §9.0 F2（promotion 接线 = 用户裁决项）。
 
 ## 9. 未运行项与残余风险
 
@@ -194,9 +240,11 @@ store）。迁移面 = 空集；无需对账报告条目，无任何 run/事件�
    这是 R8 的已知残余（p27 §2.2 范围 4 未含 promotion.py）。
 3. **research_doctor** 的 `assert_paper_account_writable("current")`
    字面量保留（doctor 侧分层报告属 A05，p27 §1.3 明文）。
-4. **`webapi/service.py`** 未接线（A01/C01 范围）；A03 后其触发的
-   train/evaluation 子进程按新 CLI 语义运行（默认 formal——现有调用若未
-   传身份会被拒绝并留痕，这是预期行为而非回归；服务侧适配属 C01）。
+4. **`webapi/service.py`** 未接线（A01/C01 范围），且它是展示/触发层、
+   不经子进程；真正以固定 argv 派生 run_sim 子进程的是
+   `ashare_trading/manager.py`（见第 6 条）。formal train/evaluation 的
+   CLI 语义变化对服务侧的影响 = 现有调用若未传身份会被拒绝并留痕
+   （预期行为而非回归）；服务侧适配属 C01。
 5. **正式搜索当前必然被拒**：真实 run 无法完成 §5.1 数据资格
    （t16 §6 L2：loader 帧降级源在数据层尚无类型化生产者，
    `LOADER_FRAME_SOURCE_UNTYPED` 如实拒绝）→ formal train/evaluation 在

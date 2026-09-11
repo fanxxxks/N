@@ -164,11 +164,11 @@ class SimulationRunner:
         self._strategy_identity: dict[str, object] | None = None
         self._bound_account_id: str | None = None
         if run_context is not None:
-            # I9/R6: the paper write target is the account bound by the
-            # run's PAPER_OBSERVING evidence; an existing portfolio state
-            # bound to a different account is a cross-account write and is
-            # refused.  The writable kind is derived from the binding
-            # (current = lifecycle-bound), so the pre-A03 literal is gone.
+            # I9/R6 (review C7): the account check goes through the
+            # context's single authority.  A fresh start (no portfolio
+            # state yet) targets the run's bound account; an existing
+            # state bound to a different account is a cross-account write
+            # and is refused.
             bound = bound_paper_account_id(run_context.handle)
             if not bound:
                 raise LifecycleError(
@@ -177,14 +177,9 @@ class SimulationRunner:
                     "account comes from the lifecycle binding (p27 I9)"
                 )
             loaded = self.portfolio.loaded_lineage
-            if loaded and str(loaded.get("account_id")) != bound:
-                raise LifecycleError(
-                    "paper simulation refused: cross-account write — the "
-                    f"run is bound to account {bound!r} but the portfolio "
-                    f"state carries account "
-                    f"{str(loaded.get('account_id'))!r} (p27 I9/R6)"
-                )
-            self._bound_account_id = bound
+            self._bound_account_id = run_context.assert_paper_account(
+                str(loaded.get("account_id")) if loaded else bound
+            )
 
     def load_formula(self) -> None:
         path = self.data_config.data_dir / "best_ashare_strategy.json"
