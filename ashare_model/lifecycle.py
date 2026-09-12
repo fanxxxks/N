@@ -100,6 +100,7 @@ __all__ = [
     "PromotionEvidenceError",
     "assert_paper_account_writable",
     "assert_protected_oos_access",
+    "assert_qualified_source_run",
     "bound_paper_account_id",
     "build_data_qualification_report",
     "build_factor_qualification_report",
@@ -1293,6 +1294,56 @@ stage_order = [
 
 def _stage_sort_key(state: str) -> int:
     return stage_order.index(state) if state in stage_order else -1
+
+
+def assert_qualified_source_run(
+    store_root,
+    spec_id: str,
+    run_id: str,
+    *,
+    minimum_state: str = SEARCH_ACTION_MIN_STATE,
+) -> str:
+    """Consumption-side gate of p27 R7/I10 (A03 follow-up, user ruling
+    1a of 2026-09-12): a formal consumer of a current-schema artifact
+    must verify the artifact's source run has a lifecycle chain at or
+    above ``minimum_state`` — schema alone is never qualification.
+
+    Read-only: replays the trust-rooted chain (integrity/identity
+    failures propagate as :class:`LifecycleError` subclasses) and takes
+    **no** writer lock.  Used by the promotion entry (the fifth formal
+    entry, p27 §2.1 assumption 4 / ruling 1a); the producing entries
+    enforce the same floor through :meth:`RunContext.attach`.
+    """
+
+    if not str(spec_id or "").strip() or not str(run_id or "").strip():
+        raise LifecycleError(
+            "qualified-source check requires the artifact's lineage "
+            "(spec_id/run_id); a current schema without lifecycle "
+            "identity is never qualification evidence (p27 I10/R7)"
+        )
+    state = replay_run(Path(store_root), spec_id, run_id)
+    if state is None:
+        raise LifecycleError(
+            f"formal consumption refused: the source run "
+            f"{str(spec_id)[:12]}…/{str(run_id)[:12]}… has an empty "
+            "lifecycle event log — the artifact was produced outside "
+            "the lifecycle machine (engineering/audit products are "
+            "never promotion evidence, p27 I10/R7/R14)"
+        )
+    if state in TERMINAL_STATUSES:
+        raise LifecycleError(
+            f"formal consumption refused: the source run is TERMINAL at "
+            f"{state!r}; artifacts of a rejected/failed/retired run are "
+            "not promotion input (p27 I10)"
+        )
+    if _stage_sort_key(state) < _stage_sort_key(minimum_state):
+        raise LifecycleError(
+            f"formal consumption refused: the source run is at "
+            f"{state!r}, below the required {minimum_state!r}; the "
+            "protocol evidence must come from a fully admitted search "
+            "plan (p27 I5/R7)"
+        )
+    return state
 
 
 def bound_paper_account_id(handle: RunHandle) -> str | None:

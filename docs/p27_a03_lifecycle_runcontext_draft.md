@@ -169,6 +169,19 @@
 6. 相应测试与 `docs/CONTRACTS.md` 索引（本草案已同 commit 登记）。
 7. 可拆成训练 / 评价 / 模拟三个子提交（方案 §四 A03 范围注）。
 
+> **勘误 1（2026-09-12，用户裁决"全部按推荐进行"追认，实现包 A03
+> 回写）**：§2.2 范围 4 的文件清单在实践中补充两个接触面——
+> `ashare_model/data_loader.py`（I6 必需：身份先于 `load_data` 的
+> `confirm_input_snapshot` 抽取 + `frozen_data_cutoff`，行为保持）与
+> `ashare_model/train_entry.py`（新文件，`test_train_module_split`
+> 强制的 train.py 300 行 facade 预算所迫）。另据用户裁决 1a，本契约
+> §2.1 假设 4 与本节范围 4 的内部矛盾按用户决定解决：**promotion.py
+> 的消费侧生命周期检查已由 A03 后续小包落地**
+> （`lifecycle.assert_qualified_source_run` + promotion.main 接线，
+> ≥ `SEARCH_PLAN_ADMITTED`，R7/I10 消费侧）；promotion 是只读消费，
+> 不取单写者锁，故不经 `RunContext.attach`（R13 对 promotion.py 的
+> 断言因此仍然成立，消费侧检查为其接替约束）。
+
 ### 2.3 非目标
 
 1. **不**新建并行状态机：状态、转换与证据矩阵仍由 p8 唯一定义；A03 只做

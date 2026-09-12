@@ -691,16 +691,17 @@ def test_r13_single_runcontext_type_across_entries():
     §6 R13 import-surface guard, plus the runtime type check the trainer
     performs on a passed context.
 
-    Documented boundary (review F2, measurement log §9.2): p27 §2.2
-    scope item 4 (mirrored by the plan doc §四 A03 文件清单) lists the
-    wired entry files and omits ``promotion.py``, while p27 §2.1
-    assumption 4 names it — the contract is internally contradictory.
-    A03 implements the scope-item reading (four entries + the artifact
-    seam) and the promotion-side RunContext consumption (with the
-    promotion-side refusal of empty-chain artifacts, p27 R7's flip
-    side) is the explicitly tracked residual for the promotion wiring
-    package.  This test pins THAT decision so it cannot drift silently:
-    promotion.py must NOT consume RunContext until the follow-up lands.
+    Documented boundary (review F2 + user ruling 1a of 2026-09-12):
+    p27 §2.2 scope item 4 (mirrored by the plan doc §四 A03 文件清单)
+    lists the wired entry files and omits ``promotion.py``, while p27
+    §2.1 assumption 4 names it — the contract is internally
+    contradictory.  The user's 1a ruling resolved it: promotion does
+    NOT attach a RunContext (it is a read-only consumer that takes no
+    writer lock) and instead enforces the same floor through
+    ``lifecycle.assert_qualified_source_run`` at its consumption
+    boundary (see the R7 follow-up tests below).  This test pins that
+    decision so it cannot drift silently: promotion.py must not attach
+    a RunContext, and the consumption gate must be present.
     """
 
     root = Path(__file__).resolve().parents[1]
@@ -721,7 +722,12 @@ def test_r13_single_runcontext_type_across_entries():
         "promotion.py started consuming RunContext without the "
         "promotion-wiring package landing (p27 §2.2 scope item 4 vs "
         "§2.1 assumption 4 is resolved by the scope item; see "
-        "docs/p27_a03_measurement_log.md §9.2)"
+        "docs/p27_a03_measurement_log.md §9.0b)"
+    )
+    assert "assert_qualified_source_run" in promotion, (
+        "promotion.py lost its source-run lifecycle gate (user ruling "
+        "1a): the fifth formal entry must verify the consumed "
+        "artifact's source run (p27 R7/I10 consumption side)"
     )
 
     import inspect

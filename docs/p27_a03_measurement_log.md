@@ -2,15 +2,21 @@
 
 - 性质：**evidence-only**（AGENTS §11：只写"实际发生什么"；实现见 commit
   `0b9c85f` → `3dbb017` → `41cb912` → `7db2b35` → `f48a215` → `647dc65`
-  → `e1e893a` → 本日志提交（最终 head 以 git log 为准），分支
+  → `e1e893a` → `724805e` → `a3c1e71` → 用户三项裁决后的小包 commit
+  （最终 head 以 git log 为准），分支
   `codex/a03-lifecycle-runcontext`，base = `main` @ `aac4aad`）。
 - 契约权威：`docs/p27_a03_lifecycle_runcontext_draft.md`（APPROVED，批准
   记录 `reports/alphagpt-ab/00_authority_exception_record.md` §11 裁决 1 +
-  §4ter 第 4 项）；状态机权威仍为 `docs/p8_research_lifecycle_contract.md`。
+  §4ter 第 4 项；§2.2 勘误 1 由用户三项裁决追认回写）；状态机权威仍为
+  `docs/p8_research_lifecycle_contract.md`。
 - 环境：Windows（PowerShell），Python 3.12（miniconda3），本地串行执行；
   机器 6C/12T / 16GB（p21 §5）。
 - **双审记录**：独立合规评审与独立技术评审（均 PASS WITH FINDINGS）已执行；
   其发现的处置见 §9.0（技术 F1–F8）与 §9.0b（合规 C1–C9）。
+- **用户三项裁决（2026-09-12「全部按推荐进行」）**：1a 晋级接线包立即
+  开工；2a 范围偏差追认（p27 §2.2 勘误 1 回写）；3a 接受 formal 搜索/
+  paper 的 fail-closed 现状（不加急解除链、不静默降级 paper 服务）。
+  执行记录见 §9.0c。
 
 ## 1. 版本影响实测（AGENTS §3.2 全量检索复核）
 
@@ -199,6 +205,39 @@ store）。迁移面 = 空集；无需对账报告条目，无任何 run/事件�
 - **C8（low）**：p27 §12 描述的是 DRAFT 提交当时的边界，作为历史记录
   保留；批准头已声明状态，正文不再改动（正文改动权未获转授）。
 - **C9**：同 §9.0 F2（promotion 接线 = 用户裁决项）。
+
+## 9.0c 用户三项裁决的执行记录（2026-09-12）
+
+1. **1a（晋级接线包）——已实现**：
+   - 新增 `lifecycle.assert_qualified_source_run(store_root, spec_id,
+     run_id, *, minimum_state=SEARCH_PLAN_ADMITTED)`：只读重放（不取单
+     写者锁），拒绝空链（R7：schema ≠ 资格）、终态源 run、低于楼层。
+   - `promotion.main` 接线：新增 `--runs-root`（默认经默认配置解析
+     data_dir，解析失败则要求显式传入），在读入 artifact 之后、任何门
+     评估与 stress 装载之前执行源 run 资格检查；拒绝按该文件既有风格
+     `print(stderr) + return 1`。
+   - RED→GREEN：4 个新测试（空链拒 / SPEC_LOCKED 拒 / 伪造 lineage 拒 /
+     合格源通过且门按实质失败）先 4 failed 后 4 passed（commit
+     `06d0707` RED）。
+   - **既有测试白名单（§10.1 第 2 条，需求变更=用户 1a）**：
+     `test_promotion.py::test_cli_promotion_refuses_legacy_artifact_
+     without_dataset` 原以伪造 lineage（"a"*64/"b"*32）构造 fixture——
+     恰为新门拒绝的对象；已改为预注册合格源 run + 经
+     `write_boundary_artifact` 登记，测试原意（P0 门拒绝无 dataset_id
+     的 legacy 测量）保持，断言强度不减（另加 --runs-root）。
+   - 效果：五个正式入口（train/evaluation/backtest/run_sim/promotion）
+     现在全部强制"current schema ≠ 资格"；engineering/audit 产物在
+     晋级消费侧被拒（技术评审 F2 的高危窗口关闭）。
+2. **2a（范围偏差追认）——已回写**：p27 §2.2 勘误 1 将
+   `data_loader.py` 与 `train_entry.py` 补登进 A03 inScope，并记录
+   promotion 矛盾的用户解法（只读消费、不经 RunContext.attach，R13
+   断言保持有效）。
+3. **3a（接受 fail-closed 现状）——已登记**：formal 搜索保持被拒
+   （解除条件=t16 L2 数据层类型化 + 资格链，属后续包排序）；paper
+   服务保持 formal 拒绝（legacy 不可正式重放），不静默降级。无代码
+   动作。
+4. **晋级包验证**：`test_promotion.py + test_p27_a03_lifecycle_runcontext.py`
+   69 passed；全量串行复跑见 §7.4 末次记录。
 
 ## 9. 未运行项与残余风险
 
