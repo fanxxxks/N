@@ -735,6 +735,174 @@ def test_r13_single_runcontext_type_across_entries():
     assert RunContext is lifecycle.RunContext
 
 
+# --- R7 follow-up (user ruling 1a, 2026-09-12): promotion consumption -------
+#
+# p27 §2.1 assumption 4 vs §2.2 scope item 4 contradiction resolved by the
+# user's 1a ruling: promotion (the fifth formal entry) consumes a current
+# protocol artifact only when its source run has a lifecycle chain at or
+# above SEARCH_PLAN_ADMITTED — schema alone is never qualification (I10,
+# R7's consumption side).  Authority: user instruction "全部按推荐进行"
+# (2026-09-12) implementing p27 R7/I10 at the promotion boundary.
+
+
+def _write_protocol_artifact(store: RunStore, spec, handle) -> Path:
+    """A current-schema protocol result artifact registered in the run,
+    mirroring what the evaluation entry writes through the same writer."""
+
+    from ashare_data.config import FoldConfig, ProtocolConfig, TierConfig
+    from ashare_model.artifact_schemas import ProtocolResultArtifact
+    from ashare_model.artifact_writer import write_boundary_artifact
+    from ashare_model.evaluation import build_result
+    from test_stitched_oos import _row
+
+    proto = ProtocolConfig(
+        folds=[
+            FoldConfig("2026-01-01", "2026-06-30"),
+            FoldConfig("2026-06-30", "2026-12-31"),
+        ],
+        seeds=[42],
+        baseline_signals=[],
+        random_samples=0,
+    )
+    rows = [
+        _row(
+            "challenger", 42, "2026-01-01", "2026-06-30",
+            formula_text="RET_1", eligible=True, rejection_reasons=[],
+            direction=1, formula=[1],
+            average_turnover=0.05, capacity_utilization=0.05,
+        ),
+        _row(
+            "challenger", 42, "2026-06-30", "2026-12-31",
+            formula_text="RET_1", eligible=True, rejection_reasons=[],
+            direction=1, formula=[1],
+            average_turnover=0.05, capacity_utilization=0.05,
+        ),
+    ]
+    payload = build_result(
+        proto,
+        "confirmation",
+        TierConfig(50, 256),
+        rows,
+        spec_id=spec.spec_id,
+        run_id=handle.run_id,
+        data_end_date="2026-12-31",
+        dataset_id=spec.dataset_id,
+        regime=None,
+    )
+    out_path = store.root / "protocol_result.json"
+    write_boundary_artifact(
+        handle,
+        artifact_type="protocol",
+        model_cls=ProtocolResultArtifact,
+        payload=payload,
+        candidate_id=payload["candidate_id"],
+        convenience_path=out_path,
+    )
+    return out_path
+
+
+def _run_promotion(tmp_path, artifact_path, store_root, capsys):
+    from ashare_model import promotion
+
+    rc = promotion.main(
+        [
+            "--artifact", str(artifact_path),
+            "--runs-root", str(store_root),
+            "--output", str(tmp_path / "verdict.json"),
+            "--regime", str(tmp_path / "holdout_registry.json"),
+            "--paper", str(tmp_path / "paper_windows.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+    return rc, captured.out, captured.err
+
+
+def test_r7_promotion_refuses_source_run_without_lifecycle_chain(
+    tmp_path, capsys
+):
+    """R7 consumption side: a current-schema protocol artifact whose
+    source run has NO lifecycle chain (an engineering product) is
+    refused as promotion input — schema ≠ qualification (I10)."""
+
+    store = RunStore(tmp_path / "store")
+    spec = _spec()
+    handle = store.open_run(spec)  # empty chain: engineering-style run
+    artifact_path = _write_protocol_artifact(store, spec, handle)
+    run_id = handle.run_id
+    handle.close()
+
+    rc, out, err = _run_promotion(tmp_path, artifact_path, store.root, capsys)
+    assert rc == 1
+    assert "lifecycle" in (out + err)
+    assert not (tmp_path / "verdict.json").exists()
+
+
+def test_r7_promotion_refuses_source_run_below_admission(tmp_path, capsys):
+    """R7 consumption side: a preregistered but not-yet-admitted run
+    (SPEC_LOCKED) is below the promotion input floor."""
+
+    store = RunStore(tmp_path / "store")
+    handle, writer, spec = _genesis_run(store)  # SPEC_LOCKED
+    artifact_path = _write_protocol_artifact(store, spec, handle)
+    handle.close()
+
+    rc, out, err = _run_promotion(tmp_path, artifact_path, store.root, capsys)
+    assert rc == 1
+    assert "SEARCH_PLAN_ADMITTED" in (out + err)
+    assert not (tmp_path / "verdict.json").exists()
+
+
+def test_r7_promotion_refuses_missing_source_run(tmp_path, capsys):
+    """R7 consumption side: a lineage pointing at a run that does not
+    exist in the store is refused (no forged lineage)."""
+
+    store = RunStore(tmp_path / "store")
+    handle, writer, spec = _genesis_run(store)
+    writer.qualify_data(_clean_data_report(spec))
+    writer.qualify_factor_set(_factor_report(spec))
+    writer.admit_search_plan(lifecycle.build_search_admission_evidence(spec))
+    artifact_path = _write_protocol_artifact(store, spec, handle)
+    handle.close()
+    # Tamper the mirror's run_id to a run that does not exist: the
+    # registered-artifact check and the replay both refuse.
+    import json as _json
+
+    payload = _json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload["run_id"] = "d" * 32
+    artifact_path.write_text(
+        __import__("ashare_model.identity", fromlist=["canonical_json_strict"]).canonical_json_strict(payload),
+        encoding="utf-8",
+    )
+
+    rc, out, err = _run_promotion(tmp_path, artifact_path, store.root, capsys)
+    assert rc == 1
+    assert not (tmp_path / "verdict.json").exists()
+
+
+def test_r7_promotion_allows_qualified_source(tmp_path, capsys):
+    """The positive path: a run driven to SEARCH_PLAN_ADMITTED passes the
+    source-qualification gate; promotion proceeds to its own gates (which
+    fail on merit here — no paper window — but the verdict is produced)."""
+
+    store = RunStore(tmp_path / "store")
+    handle, writer, spec = _genesis_run(store)
+    writer.qualify_data(_clean_data_report(spec))
+    writer.qualify_factor_set(_factor_report(spec))
+    writer.admit_search_plan(lifecycle.build_search_admission_evidence(spec))
+    artifact_path = _write_protocol_artifact(store, spec, handle)
+    handle.close()
+
+    rc, out, err = _run_promotion(tmp_path, artifact_path, store.root, capsys)
+    assert (tmp_path / "verdict.json").exists()  # the gate did not refuse
+    assert "SEARCH_PLAN_ADMITTED" not in err or "requires lifecycle" not in err
+    import json as _json
+
+    verdict = _json.loads(
+        (tmp_path / "verdict.json").read_text(encoding="utf-8")
+    )
+    assert verdict["promoted"] is False  # gates fail on merit, not refusal
+
+
 def test_i4_audit_mode_is_read_only_at_every_entry(
     monkeypatch, tmp_path, populated_db, production_gate_asof
 ):
