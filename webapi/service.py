@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -292,25 +292,15 @@ def get_readiness() -> dict:
             ),
             "readiness": None,
         }
-    try:
-        resolved = _resolved_paths()
-        store = {
-            "root": str(resolved.data_dir),
-            "source": "config",
-            "detail": "runtime paths resolved (audit mode)",
-        }
-    except (ConfigPathError, FileNotFoundError, OSError) as exc:
-        store = {
-            "root": None,
-            "source": "unresolved",
-            "detail": f"runtime path resolution failed: {exc}",
-        }
+    # The A01 runtime-path resolver, audit mode (the same gatherer the
+    # doctor CLI uses — no second inline rule).
+    store = readiness_mod.gather_store_root(ROOT)
     lifecycle_checks = gather_lifecycle_checks(
         data_config.data_dir, data_config
     )
     config_path, _overrides_path = _config_paths(ROOT)
     report = readiness_mod.build_readiness_report(
-        now=datetime.now().astimezone().isoformat(timespec="seconds"),
+        now=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         evaluation_day=readiness_mod.shanghai_today(),
         config_status=readiness_mod.gather_config_binding(config_path),
         input_paths=readiness_mod.gather_input_paths(data_config),
@@ -321,7 +311,7 @@ def get_readiness() -> dict:
         # The gate pass is expensive; the API reports it unknown with the
         # doctor CLI as the computing command (see the response note).
         gates=None,
-        artifacts=[],
+        artifacts=None,
         artifact_findings=[],
         fairness=None,
         lifecycle_edges=readiness_mod.lifecycle_edges_status(lifecycle_checks),
@@ -500,20 +490,33 @@ def get_run_detail(root: Path | None, spec_id: str, run_id: str) -> dict:
     ledger trial summary — the single source for the run detail page.
 
     ``root=None`` resolves the same config-derived store root as
-    :func:`list_runs` (A01 C8); the response carries the same root
-    provenance (``runs_dir_source``/``runs_dir_exists``, A01 C9 via the
-    p30 A05 residual O5) so a wrong root cannot masquerade as "run
-    missing" on the detail page either."""
+    :func:`list_runs` (A01 C8); the root provenance
+    (``runs_dir_source``/``runs_dir_exists``, A01 C9 via the p30 A05
+    residual O5) rides BOTH the success payload and the error path — a
+    wrong root must not masquerade as "run missing" on the detail page
+    (dual-review finding 7), so resolution failures and missing runs
+    surface as :class:`RunStoreError` messages carrying the exact
+    ``runs_dir`` and its source."""
 
     from ashare_model import lifecycle
     from ashare_model.ledger import ExperimentLedger
     from ashare_model.run_store import RunStore
 
-    store_root, source = _run_store_root(root)
+    try:
+        store_root, source = _run_store_root(root)
+    except (ConfigPathError, FileNotFoundError, OSError) as exc:
+        raise RunStoreError(
+            f"run root unresolved: {exc} "
+            "(runs_dir_source=unresolved, runs_dir_exists=False)"
+        ) from exc
     store = RunStore(store_root)
     run_dir = store.runs_dir / spec_id / run_id
     if not run_dir.is_dir():
-        raise RunStoreError(f"run {spec_id}/{run_id} does not exist")
+        raise RunStoreError(
+            f"run {spec_id}/{run_id} does not exist "
+            f"(runs_dir={store.runs_dir}, runs_dir_source={source}, "
+            f"runs_dir_exists={store.runs_dir.is_dir()})"
+        )
     state = lifecycle.replay_run(store_root, spec_id, run_id)
     index = store.load_index(spec_id, run_id)
     runspec = json.loads(

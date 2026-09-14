@@ -128,11 +128,6 @@ def shanghai_today() -> str:
     return datetime.now(_SHANGHAI).date().strftime("%Y%m%d")
 
 
-# Kept as an alias for the original internal name used across the doctor
-# before the p30 refactor; new callers use ``shanghai_today``.
-_shanghai_today = shanghai_today
-
-
 def fairness_status(fairness_probes: dict | None) -> dict | None:
     """Aggregate the doctor's fairness-probe section into a readiness
     input (decision ⑥ semantics preserved: a missing/stale baseline
@@ -359,23 +354,29 @@ def gather_snapshot(data_config) -> dict[str, Any]:
 
 def _bound_paper_account(store: Any, spec_id: str, run_id: str) -> dict[str, Any]:
     """The bound account of one PAPER_OBSERVING run through the single
-    read path (``lifecycle.bound_paper_account_id``); read-only."""
+    read path (``lifecycle.bound_paper_account_id``); strictly read-only.
+
+    The handle is deliberately NOT ``close()``d: this handle never took
+    the single-writer lock, and ``RunHandle.close()`` unconditionally
+    unlinks ``runs/<spec>/<run>.lock`` — closing here would delete the
+    lock of an ACTIVE writer mid-simulation (dual-review HIGH finding;
+    ``clear_stale_lock`` is the only sanctioned lock removal and it is
+    an explicit administrative action, never automatic).  The handle
+    holds no OS resources (the ledger opens the trials file per append),
+    so dropping it without close is safe.
+    """
 
     from ashare_model import lifecycle
+    from ashare_model.ledger import LedgerIntegrityError
     from ashare_model.run_store import RunHandle, RunStoreError
 
     try:
         spec = lifecycle._load_spec_from_run(store, spec_id, run_id)
-    except lifecycle.LifecycleError as exc:
-        return {"account_id": None, "error": str(exc)}
-    run_dir = store.runs_dir / spec_id / run_id
-    handle = RunHandle(store, spec, run_id, run_dir)
-    try:
+        run_dir = store.runs_dir / spec_id / run_id
+        handle = RunHandle(store, spec, run_id, run_dir)
         account = lifecycle.bound_paper_account_id(handle)
-    except (RunStoreError, lifecycle.LifecycleError) as exc:
-        return {"account_id": None, "error": str(exc)}
-    finally:
-        handle.close()
+    except (RunStoreError, lifecycle.LifecycleError, LedgerIntegrityError, OSError) as exc:
+        return {"account_id": None, "error": f"{type(exc).__name__}: {exc}"}
     return {"account_id": account, "error": None}
 
 
@@ -458,6 +459,17 @@ def gather_paper(
                     "replayed from the RunStore"
                 )
             binding["bound"] = bound
+        elif scan_errors:
+            # A run could not be replayed: "no observation exists" is an
+            # UNPROVEN claim (the run may be one of the unread ones) —
+            # unknown, never not_applicable (p30 §2.3).
+            binding["status"] = STATUS_UNKNOWN
+            binding["detail"] = (
+                "not computable: the RunStore scan hit "
+                f"{len(scan_errors)} replay/binding failure(s) — a paper "
+                "observation cannot be ruled out or confirmed: "
+                + "; ".join(scan_errors[:5])
+            )
         else:
             binding["status"] = STATUS_NOT_APPLICABLE
             binding["detail"] = (
@@ -670,7 +682,7 @@ def build_readiness_report(
     store_root: dict[str, Any],
     snapshot: dict[str, Any] | None,
     gates: dict[str, Any] | None,
-    artifacts: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]] | None,
     artifact_findings: list[dict[str, Any]],
     fairness: dict[str, Any] | None,
     lifecycle_edges: dict[str, Any],
@@ -696,7 +708,12 @@ def build_readiness_report(
                 "fix the configuration error named in the detail; the "
                 "doctor cannot evaluate any path while the config fails"
                 if config_status.get("status") == STATUS_FAIL
-                else None
+                else (
+                    "restore the config file named in the detail, then "
+                    "re-run the doctor"
+                    if config_status.get("status") == STATUS_UNKNOWN
+                    else None
+                )
             ),
         ),
         _check(
@@ -707,7 +724,12 @@ def build_readiness_report(
                 "restore or sync the named input database(s); an empty "
                 "substitute file is never a fix"
                 if input_paths.get("status") == STATUS_FAIL
-                else None
+                else (
+                    "resolve the config error first, then re-run the "
+                    "doctor"
+                    if input_paths.get("status") == STATUS_UNKNOWN
+                    else None
+                )
             ),
         ),
     ]
@@ -717,6 +739,10 @@ def build_readiness_report(
                 "runtime_deps",
                 STATUS_UNKNOWN,
                 "not computable: the searcher is unknown (config error)",
+                release_condition=(
+                    "resolve the config error first, then re-run the "
+                    "doctor"
+                ),
             )
         )
     else:
@@ -756,16 +782,29 @@ def build_readiness_report(
                 )
             )
     store_root_ok = bool(store_root.get("root"))
+    # An explicit gatherer status wins (e.g. "unknown — not computable:
+    # config error"); otherwise the root presence decides.
+    store_root_status = str(
+        store_root.get(
+            "status",
+            STATUS_PASS if store_root_ok else STATUS_FAIL,
+        )
+    )
     runtime_checks.append(
         _check(
             "store_root_resolvable",
-            STATUS_PASS if store_root_ok else STATUS_FAIL,
+            store_root_status,
             str(store_root.get("detail", "not computable")),
             release_condition=(
                 "fix the runtime-path configuration so the RunStore root "
                 "resolves (the same resolver the write side uses)"
-                if not store_root_ok
-                else None
+                if store_root_status == STATUS_FAIL
+                else (
+                    "resolve the config error first, then re-run the "
+                    "doctor"
+                    if store_root_status == STATUS_UNKNOWN
+                    else None
+                )
             ),
         )
     )
@@ -778,6 +817,10 @@ def build_readiness_report(
                 "composite_identity_confirmed",
                 STATUS_UNKNOWN,
                 "not computed (the caller did not gather this section)",
+                release_condition=(
+                    "run `python -m ashare_model.research_doctor` for "
+                    "the full composite confirmation"
+                ),
             )
         ]
     else:
@@ -791,7 +834,13 @@ def build_readiness_report(
                     "current protocol (A02 p26 I7; see "
                     "docs/p26_a02_dataset_snapshot_identity_draft.md)"
                     if snapshot.get("status") == STATUS_FAIL
-                    else None
+                    else (
+                        "resolve the database access error named in the "
+                        "detail (a locked/missing file is an "
+                        "environmental condition), then re-run the doctor"
+                        if snapshot.get("status") == STATUS_UNKNOWN
+                        else None
+                    )
                 ),
             )
         ]
@@ -826,13 +875,25 @@ def build_readiness_report(
             gates_status,
             gates_detail,
             release_condition=(
-                "close the failed gate(s) named in the runner detail; dev "
-                "mode never substitutes for a formal gate pass"
+                "close the failed gate(s) named in the per-gate detail "
+                "(data sync/repair is a stateful action needing its own "
+                "authorization); dev mode never substitutes for a formal "
+                "gate pass"
                 if gates_status == STATUS_FAIL
-                else None
+                else (
+                    "resolve the config error, then re-run "
+                    "`python -m ashare_model.research_doctor` for the "
+                    "gate pass"
+                    if gates_status == STATUS_UNKNOWN
+                    else None
+                ),
             ),
         )
     ]
+    if gates is not None:
+        # p30 §3.1: the per-gate detail travels with the check so an
+        # API consumer sees WHICH gate failed, not just a count.
+        eligibility_checks[0]["per_gate"] = gate_checks
     if bound_run is None:
         eligibility_checks.append(
             _check(
@@ -847,11 +908,24 @@ def build_readiness_report(
         )
     else:
         eligibility = bound_run.get("eligibility", {})
+        eligibility_status = str(eligibility.get("status", STATUS_UNKNOWN))
         eligibility_checks.append(
             _check(
                 "runspec_data_eligibility",
-                str(eligibility.get("status", STATUS_UNKNOWN)),
+                eligibility_status,
                 str(eligibility.get("detail", "not computable")),
+                release_condition=(
+                    "repair the recorded D7 reasons (the failing sources "
+                    "are named in the detail) or re-qualify the run "
+                    "through the p8 §5.2 chain"
+                    if eligibility_status == STATUS_FAIL
+                    else (
+                        "repair the run's event-chain/evidence integrity "
+                        "named in the detail, then re-run the doctor"
+                        if eligibility_status == STATUS_UNKNOWN
+                        else None
+                    )
+                ),
             )
         )
     data_dim = _dimension("data_eligibility", eligibility_checks)
@@ -862,6 +936,18 @@ def build_readiness_report(
             "lifecycle_edges_activated",
             str(lifecycle_edges.get("status", STATUS_UNKNOWN)),
             str(lifecycle_edges.get("detail", "not computable")),
+            release_condition=(
+                "complete the P8-15 activation procedure "
+                "(docs/p8_research_lifecycle_contract.md §9) so every "
+                "legal edge is activated"
+                if lifecycle_edges.get("status") == STATUS_FAIL
+                else (
+                    "resolve the lifecycle check error named in the "
+                    "detail, then re-run the doctor"
+                    if lifecycle_edges.get("status") == STATUS_UNKNOWN
+                    else None
+                )
+            ),
         ),
         _check(
             "fairness_probes",
@@ -875,12 +961,32 @@ def build_readiness_report(
                 if fairness is not None
                 else "not computable: the probe harness did not run"
             ),
+            release_condition=(
+                "repair the failed probe named in the detail on this "
+                "tree — formal runs stay blocked until the probes pass "
+                "(campaign decision ⑥)"
+                if fairness is not None
+                and fairness.get("status") == STATUS_FAIL
+                else (
+                    "resolve the probe-harness error (torch/deap/vocab "
+                    "import) named in the detail, then re-run the doctor"
+                    if fairness is None
+                    or fairness.get("status") == STATUS_UNKNOWN
+                    else None
+                )
+            ),
         ),
         _check(
             "runtime_prerequisite",
             runtime["status"],
             f"carried from the runtime dimension ({runtime['status']})",
             carried_from="runtime",
+            release_condition=(
+                "resolve the failing runtime checks above (their release "
+                "conditions apply)"
+                if runtime["status"] == STATUS_FAIL
+                else None
+            ),
         ),
         _check(
             "snapshot_prerequisite",
@@ -888,6 +994,12 @@ def build_readiness_report(
             "carried from the snapshot_integrity dimension "
             f"({snapshot_dim['status']})",
             carried_from="snapshot_integrity",
+            release_condition=(
+                "resolve the snapshot_integrity blockers above (their "
+                "release conditions apply)"
+                if snapshot_dim["status"] == STATUS_FAIL
+                else None
+            ),
         ),
         _check(
             "gates_prerequisite",
@@ -895,6 +1007,12 @@ def build_readiness_report(
             "carried from data_eligibility.production_gates "
             f"({gates_status})",
             carried_from="data_eligibility.production_gates",
+            release_condition=(
+                "resolve the data_eligibility.production_gates blockers "
+                "(their release conditions apply)"
+                if gates_status == STATUS_FAIL
+                else None
+            ),
         ),
     ]
     research_dim = _dimension("research_ready", research_checks)
@@ -909,45 +1027,57 @@ def build_readiness_report(
         for finding in artifact_findings
         if finding.get("severity") == "error"
     ]
-    non_legacy = [
-        artifact
-        for artifact in artifacts
-        if artifact.get("exists") and not artifact.get("legacy")
-    ]
-    has_existing = any(artifact.get("exists") for artifact in artifacts)
-    legacy_only = has_existing and not non_legacy
-    if artifact_conflicts:
+    if artifacts is None:
         promotion_binding = _check(
             "artifact_binding",
-            STATUS_FAIL,
-            "; ".join(artifact_conflicts),
-            release_condition=(
-                "stamp the artifact legacy (scripts/"
-                "stamp_legacy_artifacts.py) or re-produce it under the "
-                "current versions; an unstaled mismatched artifact must "
-                "never be treated as the current champion"
-            ),
-        )
-    elif non_legacy:
-        promotion_binding = _check(
-            "artifact_binding",
-            STATUS_PASS,
-            f"{len(non_legacy)} non-legacy artifact(s) consistent with "
-            "the current version set",
-        )
-    elif legacy_only:
-        promotion_binding = _check(
-            "artifact_binding",
-            STATUS_NOT_APPLICABLE,
-            "only legacy artifacts present: they remain auditable and "
-            "are never promotable (p8 contract §8)",
+            STATUS_UNKNOWN,
+            "not computable: the artifact inventory was not gathered "
+            "(config error or API on-demand mode); run "
+            "`python -m ashare_model.research_doctor` for the full pass",
         )
     else:
-        promotion_binding = _check(
-            "artifact_binding",
-            STATUS_NOT_APPLICABLE,
-            "no candidate artifact exists in the configured data_dir",
+        non_legacy = [
+            artifact
+            for artifact in artifacts
+            if artifact.get("exists") and not artifact.get("legacy")
+        ]
+        has_existing = any(
+            artifact.get("exists") for artifact in artifacts
         )
+        legacy_only = has_existing and not non_legacy
+        if artifact_conflicts:
+            promotion_binding = _check(
+                "artifact_binding",
+                STATUS_FAIL,
+                "; ".join(artifact_conflicts),
+                release_condition=(
+                    "stamp the artifact legacy (scripts/"
+                    "stamp_legacy_artifacts.py) or re-produce it under "
+                    "the current versions; an unstamped mismatched "
+                    "artifact must never be treated as the current "
+                    "champion"
+                ),
+            )
+        elif non_legacy:
+            promotion_binding = _check(
+                "artifact_binding",
+                STATUS_PASS,
+                f"{len(non_legacy)} non-legacy artifact(s) consistent "
+                "with the current version set",
+            )
+        elif legacy_only:
+            promotion_binding = _check(
+                "artifact_binding",
+                STATUS_NOT_APPLICABLE,
+                "only legacy artifacts present: they remain auditable "
+                "and are never promotable (p8 contract §8)",
+            )
+        else:
+            promotion_binding = _check(
+                "artifact_binding",
+                STATUS_NOT_APPLICABLE,
+                "no candidate artifact exists in the configured data_dir",
+            )
     if bound_run is None:
         source_check = _check(
             "source_run_qualified",
@@ -957,10 +1087,23 @@ def build_readiness_report(
         )
     else:
         source = bound_run.get("source_qualified", {})
+        source_status = str(source.get("status", STATUS_UNKNOWN))
         source_check = _check(
             "source_run_qualified",
-            str(source.get("status", STATUS_UNKNOWN)),
+            source_status,
             str(source.get("detail", "not computable")),
+            release_condition=(
+                "drive the source run through the qualification chain "
+                "(p27 R7/I10) or bind a qualified source run before any "
+                "promotion claim"
+                if source_status == STATUS_FAIL
+                else (
+                    "repair the source run's event-chain integrity named "
+                    "in the detail, then re-run the doctor"
+                    if source_status == STATUS_UNKNOWN
+                    else None
+                )
+            ),
         )
     promotion_dim = _dimension(
         "promotion_ready", [promotion_binding, source_check]
@@ -969,11 +1112,31 @@ def build_readiness_report(
     # -- paper_ready ------------------------------------------------------------------
     binding = paper.get("binding", {})
     sim_state = paper.get("sim_state", {})
+    binding_status = str(binding.get("status", STATUS_UNKNOWN))
+    binding_detail = str(binding.get("detail", "not computable"))
+    if binding.get("scan_errors"):
+        # The scan-level failures must be VISIBLE in the report, not
+        # only in the gatherer output (dual-review finding 5).
+        binding_detail += " | scan errors: " + "; ".join(
+            str(error) for error in binding["scan_errors"][:5]
+        )
     paper_checks = [
         _check(
             "paper_binding_evidence",
-            str(binding.get("status", STATUS_UNKNOWN)),
-            str(binding.get("detail", "not computable")),
+            binding_status,
+            binding_detail,
+            release_condition=(
+                "retire the observed run or repair its binding evidence "
+                "(the account binding comes from the PAPER_OBSERVING "
+                "transition, p27 I9) — never resume without one"
+                if binding_status == STATUS_FAIL
+                else (
+                    "repair the replay/binding failures listed in the "
+                    "detail, then re-run the doctor"
+                    if binding_status == STATUS_UNKNOWN
+                    else None
+                )
+            ),
         ),
         _check(
             "sim_state_vs_binding",
@@ -984,7 +1147,12 @@ def build_readiness_report(
                 "the audited migration path; a state file without a "
                 "lifecycle-bound account is never resumable"
                 if sim_state.get("status") == STATUS_FAIL
-                else None
+                else (
+                    "resolve the store-root/state-path issue named in "
+                    "the detail, then re-run the doctor"
+                    if sim_state.get("status") == STATUS_UNKNOWN
+                    else None
+                )
             ),
         ),
     ]
@@ -996,7 +1164,6 @@ def build_readiness_report(
         ),
         None,
     ) if gate_checks else None
-    binding_status = str(binding.get("status", STATUS_UNKNOWN))
     if binding_status == STATUS_NOT_APPLICABLE:
         # No online observation exists: freshness has nothing to be
         # fresh FOR (the frozen snapshot answer is snapshot_integrity's).
@@ -1018,6 +1185,10 @@ def build_readiness_report(
                 "not computable: the G8 freshness gate did not produce a "
                 "result in this report",
                 carried_from="data_eligibility.production_gates",
+                release_condition=(
+                    "run `python -m ashare_model.research_doctor` for "
+                    "the full G1–G8 pass"
+                ),
             )
         )
     else:
@@ -1030,6 +1201,13 @@ def build_readiness_report(
                     "(today-dependent, unlike the frozen snapshot)"
                 ),
                 carried_from="data_eligibility.production_gates",
+                release_condition=(
+                    "bring the daily-bar window back within the G8 "
+                    "open-session tolerance (data sync is a stateful "
+                    "action needing its own authorization; p16)"
+                    if not g8["ok"]
+                    else None
+                ),
             )
         )
     paper_dim = _dimension("paper_ready", paper_checks)

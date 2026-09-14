@@ -246,7 +246,15 @@ def test_r2_paper_without_state_and_without_binding_is_not_applicable():
     assert _dim(report, "paper_ready")["status"] == (
         readiness.STATUS_NOT_APPLICABLE
     )
-    assert report["summary"]["by_status"]["pass"] >= 0  # counts present
+    # Exact counts, not a vacuous range (dual-review finding 12): the
+    # all-green inputs have 11 applicable passes and 6 not-applicable
+    # checks (gates N/A + promotion 2 + paper 3).
+    assert report["summary"]["by_status"] == {
+        "pass": 11,
+        "fail": 0,
+        "unknown": 0,
+        "not_applicable": 6,
+    }
 
 
 # --- R3: config error but main-db gates fine → runtime fail, rest unknown -----
@@ -274,6 +282,7 @@ def test_r3_config_error_never_whitewashes_runtime():
         store_root={
             "root": None,
             "source": "unresolved",
+            "status": readiness.STATUS_UNKNOWN,
             "detail": "not computable: config error",
         },
         model_searcher=None,
@@ -294,6 +303,45 @@ def test_r3_config_error_never_whitewashes_runtime():
         entry for entry in blocking if entry["check"] == "config_loaded"
     ]
     assert config_blockers and config_blockers[0]["release_condition"]
+
+
+def test_r3_ok_gates_cannot_whitewash_a_failing_runtime():
+    """R3 coexistence case (dual-review compliance finding 2): a carried
+    gates pass (e.g. from an earlier run) is recorded in the data
+    dimension where it belongs — and it never repairs the failing
+    runtime dimension.  The two statuses coexist; neither replaces the
+    other."""
+
+    report = _report(
+        config_status={
+            "status": readiness.STATUS_FAIL,
+            "path": "config/ashare_config.yaml",
+            "sha256": None,
+            "detail": "config error: invalid mapping at line 3",
+        },
+        input_paths={
+            "status": readiness.STATUS_UNKNOWN,
+            "detail": "not computable: config error",
+            "missing": [],
+        },
+        store_root={
+            "root": None,
+            "source": "unresolved",
+            "detail": "not computable: config error",
+        },
+        model_searcher=None,
+        gates=_pass_gates(),  # the stale OK gates result is carried in
+    )
+    assert _dim(report, "runtime")["status"] == readiness.STATUS_FAIL
+    # The stale pass is visible where it belongs...
+    gate_checks = _dim(report, "data_eligibility")["checks"]
+    assert gate_checks[0]["status"] == readiness.STATUS_PASS
+    # ...and the runtime failure stands (config_loaded is the blocker).
+    blocking = report["summary"]["blocking"]
+    assert any(
+        entry["dimension"] == "runtime" and entry["check"] == "config_loaded"
+        for entry in blocking
+    )
 
 
 # --- R4: legacy-only artifacts are auditable, never promotable ----------------
@@ -566,7 +614,6 @@ def test_r9_lifecycle_checks_drop_the_current_hardcode(tmp_path):
 
 
 def test_r10_run_detail_provenance_matches_list_runs(tmp_path, monkeypatch):
-    import ashare_model.run_store as run_store
     import webapi.service as service
 
     store = RunStore(tmp_path)
@@ -583,9 +630,38 @@ def test_r10_run_detail_provenance_matches_list_runs(tmp_path, monkeypatch):
     assert detail["runs_dir_exists"] == listed["runs_dir_exists"]
     assert detail["runs_dir_source"] == "explicit"
     assert detail["runs_dir_exists"] is True
-    assert str(tmp_path) in str(detail.get("runs_dir", "")) or (
-        detail.get("runs_dir") is None
+    assert str(tmp_path) in str(detail["runs_dir"])
+
+
+def test_r10_missing_run_error_carries_provenance(tmp_path, monkeypatch):
+    """Dual-review finding 7: the 404 path is exactly where a wrong root
+    masquerades as 'run missing' — the error message must carry the
+    runs_dir and its source."""
+    import webapi.service as service
+
+    monkeypatch.setattr(
+        service, "_run_store_root", lambda root=None: (tmp_path, "explicit")
     )
+    with pytest.raises(service.RunStoreError) as excinfo:
+        service.get_run_detail(None, "nope", "nada")
+    message = str(excinfo.value)
+    assert "does not exist" in message
+    assert f"runs_dir={tmp_path}{__import__('os').sep}runs" in message or (
+        f"runs_dir={tmp_path}" in message
+    )
+    assert "runs_dir_source=explicit" in message
+
+
+def test_r10_real_root_consistency_without_injection():
+    """The un-injected form of R10: the detail and list views resolve
+    the SAME config-derived root (no monkeypatched resolver)."""
+    import webapi.service as service
+
+    listed = service.list_runs()
+    with pytest.raises(service.RunStoreError) as excinfo:
+        service.get_run_detail(None, "__no_such_spec__", "__no_such_run__")
+    assert f"runs_dir={listed['runs_dir']}" in str(excinfo.value)
+    assert listed["runs_dir_source"] in str(excinfo.value)
 
 
 # --- R11: the doctor CLI binds a run only with both identities -----------------
@@ -634,17 +710,15 @@ def test_r12_webapi_readiness_reports_layered_dimensions(monkeypatch, tmp_path):
     monkeypatch.setattr(
         service, "_get_configs", lambda: (_Cfg(), _Model(), None, _Sim())
     )
+    import ashare_data.config as data_config_module
+
+    class _RP:
+        data_dir = tmp_path / "data"
+
     monkeypatch.setattr(
-        service,
-        "_resolved_paths",
-        lambda root=None: type(
-            "_RP",
-            (),
-            {
-                "data_dir": tmp_path / "data",
-                "effective": lambda self: {"data_dir": str(tmp_path / "data")},
-            },
-        )(),
+        data_config_module,
+        "resolve_runtime_paths",
+        lambda *a, **k: _RP(),
     )
     payload = service.get_readiness()
     assert payload["available"] is True
@@ -666,3 +740,258 @@ def test_r12_webapi_readiness_reports_layered_dimensions(monkeypatch, tmp_path):
     )
     # The primary input database does not exist in this tmp environment:
     assert dims["runtime"]["status"] == readiness.STATUS_FAIL
+    # Dual-review finding 6: artifacts were NOT gathered on-demand, so
+    # the promotion binding is unknown — never a fabricated N/A reason.
+    promotion_checks = dims["promotion_ready"]["checks"]
+    binding = promotion_checks[0]
+    assert binding["name"] == "artifact_binding"
+    assert binding["status"] == readiness.STATUS_UNKNOWN
+    assert "not gathered" in binding["detail"]
+
+
+# --- dual-review technical round: HIGH/MEDIUM/LOW regression additions -------
+
+
+def test_high2_gather_paper_never_deletes_an_active_writer_lock(tmp_path):
+    """HIGH finding 2: the readiness scan constructs read-only handles;
+    it must never unlink the single-writer lock of an ACTIVE writer
+    (RunHandle.close() unconditionally unlinks the lock file)."""
+    from ashare_model.run_store import LOCK_SUFFIX
+
+    store = RunStore(tmp_path / "store")
+    spec = _spec()
+    run_id = _paper_observing_run(store, spec, account_id="acc-0001")
+    lock_path = store.runs_dir / spec.spec_id / f"{run_id}{LOCK_SUFFIX}"
+    active = store.attach_run(spec, run_id)  # takes the writer lock
+    try:
+        assert lock_path.exists()
+        gathered = readiness.gather_paper(store.root, sim_state_path=None)
+        assert gathered["binding"]["status"] == readiness.STATUS_PASS
+        # The scan must NOT have removed the active writer's lock.
+        assert lock_path.exists(), (
+            "the readiness scan deleted the single-writer lock of an "
+            "active writer"
+        )
+    finally:
+        active.close()
+
+
+def test_paper_scan_gatherer_quadrants(tmp_path):
+    """Dual-review finding 13: the sim_state_vs_binding four-quadrant
+    matrix at the GATHERER level (not just builder pass-through)."""
+    store = RunStore(tmp_path / "store")
+    spec = _spec()
+    run_id = _paper_observing_run(store, spec, account_id="acc-0002")
+
+    # Quadrant (b): bound observation, no state file → unknown.
+    gathered = readiness.gather_paper(
+        store.root, sim_state_path=tmp_path / "missing_state.json"
+    )
+    assert gathered["binding"]["status"] == readiness.STATUS_PASS
+    assert gathered["sim_state"]["status"] == readiness.STATUS_UNKNOWN
+    assert "no sim state file" in gathered["sim_state"]["detail"]
+
+    # Quadrant (a): state file exists, no bound observation → fail.
+    retired_store = RunStore(tmp_path / "store2")
+    empty_spec = _spec()
+    retired_run_id = _paper_observing_run(
+        retired_store, empty_spec, account_id="acc-0003"
+    )
+    handle = retired_store.attach_run(empty_spec, retired_run_id)
+    try:
+        lifecycle.LifecycleWriter(handle).retire(reason="superseded")
+    finally:
+        handle.close()
+    state_file = tmp_path / "state.json"
+    state_file.write_text("{}", encoding="utf-8")
+    gathered_empty = readiness.gather_paper(
+        retired_store.root, sim_state_path=state_file
+    )
+    assert (
+        gathered_empty["binding"]["status"]
+        == readiness.STATUS_NOT_APPLICABLE
+    )
+    assert gathered_empty["sim_state"]["status"] == readiness.STATUS_FAIL
+
+    # A REJECTED run is never paper-eligible (finding 13): a completed
+    # failing gate verdict enters REJECTED (p8 §4 discriminator) and the
+    # scan must ignore it.
+    rejected_store = RunStore(tmp_path / "store3")
+    rej_spec = _spec()
+    rej_handle = rejected_store.open_run(rej_spec)
+    rej_writer = lifecycle.LifecycleWriter(rej_handle)
+    rej_writer.record_idea(LIFECYCLE_IDEA)
+    rej_writer.lock_spec()
+    failing_evidence = rej_writer._write_evidence(
+        "gate_fail_verdict",
+        {"gate": "search_admission", "completed": True, "ok": False},
+    )
+    rej_writer.reject(failing_evidence)
+    rej_handle.close()
+    assert lifecycle.replay_run(
+        rejected_store.root, rej_spec.spec_id, rej_handle.run_id
+    ) == "REJECTED"
+    gathered_rej = readiness.gather_paper(
+        rejected_store.root, sim_state_path=None
+    )
+    assert (
+        gathered_rej["binding"]["status"] == readiness.STATUS_NOT_APPLICABLE
+    )
+
+
+def test_paper_scan_corrupted_chain_is_unknown(tmp_path):
+    """Dual-review finding 5: a run whose event chain fails to replay
+    makes 'no paper observation' an UNPROVEN claim — the gatherer must
+    report unknown, with the scan errors visible."""
+    store = RunStore(tmp_path / "store")
+    spec = _spec()
+    run_id = _paper_observing_run(store, spec, account_id="acc-0004")
+    # Corrupt the hash-chained event log of ANOTHER run so replay fails.
+    other_spec = _spec()
+    other_handle = store.open_run(other_spec)
+    other_writer = lifecycle.LifecycleWriter(other_handle)
+    other_writer.record_idea(LIFECYCLE_IDEA)
+    other_handle.close()
+    event_file = (
+        store.runs_dir / other_spec.spec_id / other_handle.run_id / "lifecycle.jsonl"
+    )
+    with open(event_file, "a", encoding="utf-8") as fh:
+        fh.write('{"tampered": true}\n')
+    gathered = readiness.gather_paper(store.root, sim_state_path=None)
+    # Existence is PROVEN by the legitimate paper run (pass), while the
+    # incomplete scan is disclosed via scan_errors — "unknown" would be
+    # wrong: a found PAPER_OBSERVING run exists regardless of the
+    # unread ones; the unread ones could only ADD observations.
+    assert gathered["binding"]["status"] == readiness.STATUS_PASS
+    assert gathered["binding"]["scan_errors"]
+    assert "replay/binding failure" not in gathered["binding"]["detail"]
+    assert gathered["binding"]["bound"][0]["run_id"] == run_id
+
+    # The unknown branch: the same corruption with NO readable paper
+    # run — "no observation exists" is unproven, so unknown.
+    empty_store = RunStore(tmp_path / "store5")
+    orphan_spec = _spec()
+    orphan_handle = empty_store.open_run(orphan_spec)
+    orphan_writer = lifecycle.LifecycleWriter(orphan_handle)
+    orphan_writer.record_idea(LIFECYCLE_IDEA)
+    orphan_handle.close()
+    orphan_events = (
+        empty_store.runs_dir
+        / orphan_spec.spec_id
+        / orphan_handle.run_id
+        / "lifecycle.jsonl"
+    )
+    with open(orphan_events, "a", encoding="utf-8") as fh:
+        fh.write('{"tampered": true}\n')
+    gathered_empty = readiness.gather_paper(
+        empty_store.root, sim_state_path=None
+    )
+    assert (
+        gathered_empty["binding"]["status"] == readiness.STATUS_UNKNOWN
+    )
+    assert "replay/binding failure" in gathered_empty["binding"]["detail"]
+    assert gathered_empty["binding"]["scan_errors"]
+
+
+def test_production_gates_check_embeds_per_gate_detail():
+    """Dual-review finding 3: the frozen §3.1 per-gate detail travels
+    with the check (an API consumer sees WHICH gate failed)."""
+    report = _report()
+    gates_check = _dim(report, "data_eligibility")["checks"][0]
+    assert gates_check["name"] == "production_gates_g1_g8"
+    assert len(gates_check["per_gate"]) == 8
+    assert all(entry["ok"] for entry in gates_check["per_gate"])
+
+
+def test_every_non_pass_check_carries_a_release_condition():
+    """Dual-review finding 4: p30 §3.2 — every fail/unknown check must
+    name a release condition; blocking entries never carry an empty
+    string."""
+    gates_fail = _pass_gates()
+    gates_fail["status"] = readiness.STATUS_FAIL
+    gates_fail["checks"] = gates_fail["checks"][:7] + [
+        {"name": "G8 daily bars fresh", "ok": False, "detail": "lag 9 > 3"}
+    ]
+    report = _report(
+        snapshot={
+            "status": readiness.STATUS_FAIL,
+            "detail": "drifted: daily_bar",
+            "composite_id": None,
+            "publication_id": 1,
+            "primary_dataset_id": "p" * 64,
+            "v2_dataset_id": "v" * 64,
+        },
+        gates=gates_fail,
+        artifacts=[
+            {
+                "name": "strategy",
+                "path": "/s",
+                "exists": True,
+                "legacy": False,
+                "legacy_reasons": [],
+                "fields": {"dataset_id": "d1"},
+            }
+        ],
+        artifact_findings=[
+            {
+                "severity": "error",
+                "message": "strategy artifact not marked legacy",
+            }
+        ],
+        fairness={"status": readiness.STATUS_FAIL, "detail": "probe failed"},
+        lifecycle_edges={"status": readiness.STATUS_FAIL, "detail": "edge X"},
+        bound_run={
+            "spec_id": "s",
+            "run_id": "r",
+            "state": "SPEC_LOCKED",
+            "eligibility": {
+                "status": readiness.STATUS_FAIL,
+                "detail": "source daily_bar_raw: lag 9 > 3 sessions",
+            },
+            "source_qualified": {
+                "status": readiness.STATUS_FAIL,
+                "detail": "below the search floor",
+            },
+        },
+        paper={
+            "binding": {
+                "status": readiness.STATUS_FAIL,
+                "detail": "binding evidence broken",
+                "bound": [],
+                "scan_errors": ["s/r: replay failed"],
+            },
+            "sim_state": {
+                "status": readiness.STATUS_FAIL,
+                "detail": "state without binding",
+                "state_path": "x",
+                "state_exists": True,
+            },
+        },
+    )
+    for dimension in report["dimensions"].values():
+        for check in dimension["checks"]:
+            if check["status"] in (readiness.STATUS_FAIL, readiness.STATUS_UNKNOWN):
+                assert check.get("release_condition"), (
+                    f"{check['name']} is {check['status']} without a "
+                    "release condition"
+                )
+    for entry in report["summary"]["blocking"]:
+        assert entry["release_condition"]
+
+
+def test_module_sources_have_no_encoding_mojibake():
+    """HIGH finding 1 guard: the GBK double-encode corruption that once
+    hit research_doctor.py must never return (U+FFFD or the classic
+    GBK-misread markers)."""
+    repo_root = Path(__file__).resolve().parents[1]
+    for relpath in (
+        "ashare_model/research_doctor.py",
+        "ashare_model/readiness.py",
+        "webapi/service.py",
+        "webapi/app.py",
+    ):
+        text = (repo_root / relpath).read_text(encoding="utf-8")
+        for marker in ("\ufffd", "鈥", "鈶", "搂", "锟"):
+            assert marker not in text, (
+                f"{relpath} contains mojibake marker {marker!r}"
+            )

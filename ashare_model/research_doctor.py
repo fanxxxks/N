@@ -2,54 +2,55 @@
 
 Aggregates the repository's research state into one report:
 
-* **code** 鈥?git commit / branch / dirty flag (read-only git queries);
-* **data** 鈥?the content-addressed ``dataset_id`` of the current database
+* **code** — git commit / branch / dirty flag (read-only git queries);
+* **data** — the content-addressed ``dataset_id`` of the current database
   (latest dataset manifest) plus manifest metadata;
-* **gates** 鈥?the G1鈥揋8 production gate outcome (``ProductionGateRunner``,
+* **gates** — the G1–G8 production gate outcome (``ProductionGateRunner``,
   formal mode, read-only queries);
-* **fairness_probes** 鈥?the F2-(a) fairness re-probe obligation
-  (``campaign_closure_decisions_20260902.md`` 鈶?/ t59, machine-triggered by
-  IP-03): the two t59 probes (``build_action_mask`` family-鈶?admission and
+* **fairness_probes** — the F2-(a) fairness re-probe obligation
+  (``campaign_closure_decisions_20260902.md`` ⑥ / t59, machine-triggered by
+  IP-03): the two t59 probes (``build_action_mask`` family-⑤ admission and
   the GP ``build_pset`` terminal enumeration) run LIVE on whatever tree the
   doctor inspects, and the recorded probe baseline
   (``docs/fairness_probe_baseline.json``) is compared against the live
   vocabulary fingerprint;
-* **artifacts** 鈥?strategy / protocol artifact versions (searcher,
+* **artifacts** — strategy / protocol artifact versions (searcher,
   reward_version, protocol_version, model_version, dataset_id) and their
   legacy status (stamped ``legacy`` / ``legacy_reason`` fields, see
   ``ashare_model.artifact_versions`` for the stamping contract);
-* **dependencies** 鈥?versions of the research-critical packages;
-* **runtime estimates** 鈥?estimated minutes for the default train budget
+* **dependencies** — versions of the research-critical packages;
+* **runtime estimates** — estimated minutes for the default train budget
   and the protocol screening/confirmation tiers, anchored on the
   documented local pace (never a measurement);
-* **readiness** (p30, A05) 鈥?the layered per-purpose eligibility report
-  (``ashare_model.readiness``): runtime / snapshot_integrity /
+* **readiness** (p30, A05) — the layered per-purpose eligibility
+  report (``ashare_model.readiness``): runtime / snapshot_integrity /
   data_eligibility / research_ready / promotion_ready / paper_ready,
   each in the four-status vocabulary ``pass`` / ``fail`` / ``unknown`` /
-  ``not_applicable`` (N/A never counts as a pass), bound to the config,
-  composite snapshot, audit action mode and evaluation time.
+  ``not_applicable`` (N/A never counts as a pass), bound to the
+  config, composite snapshot, audit action mode and evaluation time.
 
 Conflict rules (severity ``error`` -> exit code 1):
 
-* any G1鈥揋8 gate fails;
+* any G1–G8 gate fails;
 * any F2-(a) fairness probe fails, or the probe harness cannot run
-  (torch/deap/vocab import) 鈥?formal runs are blocked until the probes
+  (torch/deap/vocab import) — formal runs are blocked until the probes
   pass on the actual tree; a stale or missing probe baseline is reported
   at warning severity (evidence bookkeeping, not a fairness break);
 * the database has no ``dataset_id`` (no dataset manifest);
 * an artifact records a reward/protocol/model version that differs from
-  the current code generation **and is not marked legacy** 鈥?a legacy
+  the current code generation **and is not marked legacy** — a legacy
   artifact is reported as informational (it is labeled, never a
   champion);
 * an artifact's recorded ``dataset_id`` differs from the current database
   and is not marked legacy;
 * the default searcher is ``gp`` but DEAP is not installed.
 
-**HEALTHY is not eligibility** (p30 搂2.7): ``healthy`` above answers
+**HEALTHY is not eligibility** (p30 §2.7): ``healthy`` above answers
 only the narrow engineering conflict list; the per-purpose readiness
-dimensions are reported separately and must be read individually 鈥?a
-HEALTHY doctor with a failing ``paper_ready`` or ``snapshot_integrity``
-dimension is exactly the false positive the 2026-09-09 audit proved.
+dimensions are reported separately and must be read individually — a
+HEALTHY doctor with a failing ``paper_ready`` or
+``snapshot_integrity`` dimension is exactly the false positive the
+2026-09-09 audit proved.
 
 The doctor never writes data, artifacts or git state; the only side
 effect is the report file the caller explicitly requests with
@@ -95,8 +96,8 @@ from ashare_portfolio.execution_spec import (
 LEGACY_FIELD = "legacy"
 LEGACY_REASON_FIELD = "legacy_reason"
 
-# Documented local pace (README): ~1.3鈥?.8 s/step at batch 256, data load
-# ~5鈥? min; per-step time scales ~sqrt(batch/256).  Estimates only.
+# Documented local pace (README): ~1.3–1.8 s/step at batch 256, data load
+# ~5–6 min; per-step time scales ~sqrt(batch/256).  Estimates only.
 _SEC_PER_STEP_AT_256 = 1.55
 _DATA_LOAD_MINUTES = 5.5
 
@@ -128,8 +129,8 @@ _ARTIFACT_FIELDS = {
 def estimate_run_minutes(steps: int, batch_size: int) -> float:
     """Estimated single-run minutes for a ``steps x batch_size`` budget.
 
-    Anchored on the README-documented local pace (1.3鈥?.8 s/step at batch
-    256 plus ~5鈥? min data load); per-step time scales with the square
+    Anchored on the README-documented local pace (1.3–1.8 s/step at batch
+    256 plus ~5–6 min data load); per-step time scales with the square
     root of the batch size.  This is an estimate for planning, not a
     measurement.
     """
@@ -175,8 +176,8 @@ def scan_artifact_conflicts(
     ``build_report`` loop produced, order and wording preserved).
 
     Extracted so the p30 readiness layer can reuse the SAME conflict
-    verdicts for ``promotion_ready.artifact_binding`` without a second
-    implementation (AGENTS 搂1 principle 3).
+    verdicts for ``promotion_ready.artifact_binding`` without a
+    second implementation (AGENTS §1 principle 3).
     """
 
     findings: list[dict[str, str]] = []
@@ -219,7 +220,7 @@ def scan_artifact_conflicts(
                             "severity": "error",
                             "message": (
                                 f"{message} and the artifact is not marked "
-                                "legacy 鈥?it must not be treated as the "
+                                "legacy — it must not be treated as the "
                                 "current champion"
                             ),
                         }
@@ -328,7 +329,7 @@ def build_report(
     ``readiness`` (p30/A05) is the layered per-purpose eligibility
     report built by :mod:`ashare_model.readiness`; ``None`` omits the
     section.  It never feeds ``healthy``: the flag keeps its narrow
-    engineering-conflict semantics (p30 搂2.7 鈥?HEALTHY is not
+    engineering-conflict semantics (p30 §2.7 — HEALTHY is not
     eligibility).
     """
 
@@ -351,10 +352,10 @@ def build_report(
                         "severity": "error",
                         "message": (
                             f"F2-(a) fairness probe {check.get('name')} "
-                            f"failed: {check.get('detail')} 鈥?formal runs "
+                            f"failed: {check.get('detail')} — formal runs "
                             "are blocked until the probes pass on this "
                             "tree (campaign_closure_decisions_20260902.md "
-                            "鈶? evidence record: "
+                            "⑥; evidence record: "
                             "docs/test_runtime_measurement_log.md)"
                         ),
                     }
@@ -368,7 +369,7 @@ def build_report(
                         "message": (
                             "no fairness probe baseline recorded "
                             "(docs/fairness_probe_baseline.json): the live "
-                            "probes passed on this tree, but decision 鈶?"
+                            "probes passed on this tree, but decision ⑥ "
                             "evidence should be recorded (see "
                             "docs/test_runtime_measurement_log.md)"
                         ),
@@ -384,8 +385,8 @@ def build_report(
                             f"{baseline.get('vocab_fingerprint')!r} != "
                             f"current "
                             f"{fairness_probes.get('vocab_fingerprint')!r} "
-                            "鈥?re-record the probe evidence after the "
-                            "vocabulary change (decision 鈶?"
+                            "— re-record the probe evidence after the "
+                            "vocabulary change (decision ⑥)"
                         ),
                     }
                 )
@@ -492,7 +493,7 @@ def gather_data_version(data_config) -> dict[str, Any]:
     return result
 
 
-#: IP-13 (03-F-09 / 05-鈶?: slow-fundamental registry features whose underlying
+#: IP-13 (03-F-09 / 05-④): slow-fundamental registry features whose underlying
 #: ``fundamental_pit`` columns exist but with known low coverage
 #: (~10.1% / 10.1% / 1.4% at the P13 backfill snapshot).  Disclosure is
 #: REPORT-ONLY (no gate, no finding): the numbers make the coverage
@@ -508,7 +509,7 @@ FUNDAMENTAL_COVERAGE_FIELDS: tuple[str, ...] = (
 def gather_fundamental_coverage(data_config) -> dict[str, Any]:
     """Finite-value coverage of the slow-fundamental columns (read-only).
 
-    Denominator mirrors the P13 搂4.1 measurement style: finite values
+    Denominator mirrors the P13 §4.1 measurement style: finite values
     (non-NULL, non-NaN) over all ``fundamental_pit`` rows.  Report-only
     by contract (IP-13): this section never raises findings and never
     gates anything.
@@ -560,7 +561,7 @@ def gather_fundamental_coverage(data_config) -> dict[str, Any]:
 
 
 def gather_gates(data_config, min_eligible: int = 100) -> dict[str, Any]:
-    """G1鈥揋8 outcome through the same runner every formal entry uses."""
+    """G1–G8 outcome through the same runner every formal entry uses."""
 
     result = ProductionGateRunner(
         data_config, min_eligible=min_eligible
@@ -576,17 +577,17 @@ def gather_gates(data_config, min_eligible: int = 100) -> dict[str, Any]:
     }
 
 
-# -- F2-(a) fairness re-probe (IP-03; campaign_closure_decisions_20260902.md 鈶? -
+# -- F2-(a) fairness re-probe (IP-03; campaign_closure_decisions_20260902.md ⑥) -
 
-#: Recorded probe evidence (committed, decision 鈶?: the doctor compares its
+#: Recorded probe evidence (committed, decision ⑥): the doctor compares its
 #: live vocabulary fingerprint against this baseline.  Provenance fields
 #: (``code_commit``) are informational; only the vocabulary fingerprint
 #: participates in the staleness comparison, so routine merges never flag.
 FAIRNESS_PROBE_BASELINE_PATH = Path("docs") / "fairness_probe_baseline.json"
 
-#: P13 family 鈶?(docs/p13_fundamental_fields_contract.md 搂5.5; decision 鈶?:
+#: P13 family ⑤ (docs/p13_fundamental_fields_contract.md §5.5; decision ⑥):
 #: the appended slow-fundamental block whose mask/GP admission the t57/t58
-#: repair chain touched.  Frozen here deliberately 鈥?the probe pins the
+#: repair chain touched.  Frozen here deliberately — the probe pins the
 #: probed layout, and a legal vocabulary evolution must go through the
 #: re-probe flow (fail-closed) instead of silently re-deriving.
 _PROBE_FAMILY5_NAMES = (
@@ -598,7 +599,7 @@ _PROBE_FAMILY5_NAMES = (
 
 #: The frozen grammar-7 layout the t69 re-probe records against
 #: (feature ids 74-77 contiguous append; 77 features, 13 deprecated,
-#: 64 samplable; vocabulary fingerprint 52f0988fd76b 鈥?the p23 v4
+#: 64 samplable; vocabulary fingerprint 52f0988fd76b — the p23 v4
 #: user-approved F1 append, grammar 7->8; token ids 1-77 unchanged).
 _PROBE_FROZEN = {
     "family5_ids": (74, 75, 76, 77),
@@ -659,7 +660,7 @@ def gather_fairness_probes(repo_root: Path) -> dict[str, Any]:
             "name": "frozen_vocab_layout",
             "ok": layout_ok,
             "detail": (
-                f"family-鈶?ids {list(family_ids)} vs frozen "
+                f"family-⑤ ids {list(family_ids)} vs frozen "
                 f"{list(_PROBE_FROZEN['family5_ids'])}; feature_count "
                 f"{vocab.feature_count} vs {_PROBE_FROZEN['feature_count']}; "
                 f"deprecated {len(DEPRECATED_FEATURE_NAMES)} vs "
@@ -670,8 +671,8 @@ def gather_fairness_probes(repo_root: Path) -> dict[str, Any]:
         }
     )
 
-    # Probe 1 (t59 鈶?: build_action_mask with feature_ids=[74..77] admits
-    # exactly the four family-鈶?tokens at step 0.
+    # Probe 1 (t59 ⑥): build_action_mask with feature_ids=[74..77] admits
+    # exactly the four family-⑤ tokens at step 0.
     try:
         stack_sizes = torch.zeros(1, dtype=torch.long)
         done = torch.zeros(1, dtype=torch.bool)
@@ -697,7 +698,7 @@ def gather_fairness_probes(repo_root: Path) -> dict[str, Any]:
             }
         )
 
-        # Probe 1b (t59 鈶?: the unrestricted mask offers exactly the
+        # Probe 1b (t59 ⑥): the unrestricted mask offers exactly the
         # samplable features (81 - 13 deprecated = 68) and no deprecated
         # token leaks into the legal set.
         full_mask = build_action_mask(
@@ -748,8 +749,8 @@ def gather_fairness_probes(repo_root: Path) -> dict[str, Any]:
             }
         )
 
-    # Probe 2 (t59 鈶?: the GP primitive set enumerates the single registry
-    # 鈥?exactly the four family-鈶?terminals under restriction, exactly the
+    # Probe 2 (t59 ⑥): the GP primitive set enumerates the single registry
+    # — exactly the four family-⑤ terminals under restriction, exactly the
     # 68 samplable features unrestricted, no duplicates, no deprecated.
     try:
         restricted = build_pset(vocab, feature_ids=list(family_ids))
@@ -874,12 +875,12 @@ def gather_artifacts(data_dir: Path) -> list[dict[str, Any]]:
 def gather_lifecycle_checks(data_dir, data_config) -> dict:
     """P8-15: lifecycle / paper / RunSpec health checks.
 
-    p30 (A05): the hardcoded ``assert_paper_account_writable("current")``
-    vacuous pass is REMOVED 鈥?it never read a real account and produced
-    exactly the F06 false positive.  Paper eligibility is reported by the
-    readiness layer's ``paper_ready`` dimension from real binding
-    evidence (:func:`ashare_model.readiness.gather_paper`); this section
-    keeps the true static check (edge activation) only.
+    p30 (A05): the hardcoded ``assert_paper_account_writable(\"current\")``
+    vacuous pass is REMOVED — it never read a real account and
+    produced exactly the F06 false positive.  Paper eligibility is
+    reported by the readiness layer's ``paper_ready`` dimension from
+    real binding evidence (:func:`ashare_model.readiness.gather_paper`);
+    this section keeps the true static check (edge activation) only.
     """
     result = {"lifecycle_available": False, "checks": []}
     try:
@@ -908,7 +909,7 @@ def gather_dependencies() -> dict[str, str | None]:
 
 
 #: The default config path convention (the same one webapi.service uses
-#: for its config dialog 鈥?never a second rule).
+#: for its config dialog — never a second rule).
 _DEFAULT_CONFIG_RELPATH = Path("config") / "ashare_config.yaml"
 
 
@@ -933,8 +934,20 @@ def _readiness_section(
     run_id: str | None,
 ) -> dict[str, Any]:
     """Assemble the p30 readiness report from the doctor's gathered
-    sections (composition only 鈥?every verdict is an existing
-    authority's)."""
+    sections (composition only — every verdict is an existing
+    authority's).
+
+    Dataset reference frames, stated honestly (dual-review finding 8):
+    the readiness ``artifact_binding`` compares against the A02
+    composite identity, while the legacy ``findings`` side of
+    ``build_report`` still compares against the primary-latest manifest
+    id (pre-A02 behavior, unchanged here).  For a non-legacy artifact
+    bound to an A02-era run the two frames can therefore disagree; that
+    divergence is REGISTERED in docs/p30_a05_dual_review_disposition.md
+    as a follow-up package (unifying the findings side on the confirmed
+    composite identity changes ``healthy``/exit-code semantics and must
+    not ride this package).
+    """
 
     from ashare_data.config import make_sim_config
     from ashare_model import readiness as readiness_mod
@@ -952,18 +965,17 @@ def _readiness_section(
         bound_run = readiness_mod.gather_bound_run(
             store_root_value, spec_id, run_id
         )
-    # The dataset binding conflicts need the CURRENT composite identity:
-    # reuse the readiness snapshot result (the A02 authority) instead of
-    # the legacy latest-manifest id, so the two sections cannot disagree.
+    # The readiness side uses the A02 composite identity (see the
+    # docstring for the honest divergence note).  The raw scan result
+    # goes to the readiness layer; it consumes only the error-severity
+    # (non-legacy) conflicts for promotion_ready — legacy-downgraded
+    # info findings are the auditable-artifact path.
     snapshot = readiness_mod.gather_snapshot(data_config)
     current_dataset_id = (
         snapshot.get("composite_id")
         if snapshot.get("status") == "pass"
         else None
     )
-    # The raw scan result goes to the readiness layer; it consumes only
-    # the error-severity (non-legacy) conflicts for promotion_ready —
-    # legacy-downgraded info findings are the auditable-artifact path.
     artifact_findings = scan_artifact_conflicts(artifacts, current_dataset_id)
     return readiness_mod.build_readiness_report(
         now=now,
@@ -1027,7 +1039,9 @@ def main(argv: list[str] | None = None) -> int:
         protocol_config = make_protocol_config(raw)
     except Exception as exc:  # noqa: BLE001
         # p30 R3: a config error is reported LAYERED (runtime=fail, the
-        # rest unknown), never silently as a bare exit code.
+        # rest unknown), never silently as a bare exit code.  The
+        # unknown inputs carry their real reasons — N/A is reserved for
+        # genuine "does not exist" conclusions (dual-review finding 6).
         config_path = _config_path_for_binding(args.config, root)
         code_facts = gather_code_version(root)
         minimal = readiness_mod.build_readiness_report(
@@ -1046,15 +1060,18 @@ def main(argv: list[str] | None = None) -> int:
             },
             dependencies=gather_dependencies(),
             model_searcher=None,
-            # Path resolution itself needs the config; report it unresolved.
+            # Path resolution itself needs the config: unknown, with the
+            # config error as the reason (fail would point at the wrong
+            # repair object).
             store_root={
                 "root": None,
                 "source": "unresolved",
+                "status": "unknown",
                 "detail": "not computable: config error",
             },
             snapshot=None,
             gates=None,
-            artifacts=[],
+            artifacts=None,
             artifact_findings=[],
             fairness=None,
             lifecycle_edges={
@@ -1201,7 +1218,7 @@ def _print_human(report: dict[str, Any]) -> None:
             else "missing"
         )
         print(
-            f"fairness probes (F2-(a) 鈶?: {probe_passed}/{probe_total} PASS "
+            f"fairness probes (F2-(a) ⑥): {probe_passed}/{probe_total} PASS "
             f"(vocab fingerprint {probes.get('vocab_fingerprint')}, "
             f"baseline {baseline_state})"
         )
