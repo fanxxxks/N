@@ -671,7 +671,7 @@ def build_readiness_report(
     snapshot: dict[str, Any] | None,
     gates: dict[str, Any] | None,
     artifacts: list[dict[str, Any]],
-    artifact_conflicts: list[str],
+    artifact_findings: list[dict[str, Any]],
     fairness: dict[str, Any] | None,
     lifecycle_edges: dict[str, Any],
     bound_run: dict[str, Any] | None,
@@ -900,6 +900,15 @@ def build_readiness_report(
     research_dim = _dimension("research_ready", research_checks)
 
     # -- promotion_ready -----------------------------------------------------------
+    # Only ERROR-severity conflicts block promotion: the doctor's scan
+    # downgrades properly-legacy-stamped mismatches to info (auditable),
+    # and a legacy artifact must never fail this dimension — it is
+    # simply not a candidate (p30 §3.1: N/A, never pass).
+    artifact_conflicts = [
+        str(finding.get("message", ""))
+        for finding in artifact_findings
+        if finding.get("severity") == "error"
+    ]
     non_legacy = [
         artifact
         for artifact in artifacts

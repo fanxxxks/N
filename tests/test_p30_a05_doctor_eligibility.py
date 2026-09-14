@@ -122,7 +122,7 @@ def _green_inputs(**overrides) -> dict:
         snapshot=_pass_snapshot(),
         gates=_pass_gates(),
         artifacts=[],
-        artifact_conflicts=[],
+        artifact_findings=[],
         fairness=_pass_fairness(),
         lifecycle_edges=_pass_lifecycle_edges(),
         bound_run=None,
@@ -310,12 +310,22 @@ def test_r4_legacy_only_artifacts_are_not_applicable():
             "fields": {},
         }
     ]
-    report = _report(artifacts=artifacts)
+    # The legacy-downgraded findings are INFO — they must not fail the
+    # dimension (a stamped legacy artifact is auditable, never a
+    # candidate: p30 §3.1 promotion_ready).
+    findings = [
+        {
+            "severity": "info",
+            "message": (
+                "strategy artifact reward_version 10 != current 15 "
+                "(legacy: reward_version 9 != current 15)"
+            ),
+        }
+    ]
+    report = _report(artifacts=artifacts, artifact_findings=findings)
     promotion = _dim(report, "promotion_ready")
     assert promotion["status"] == readiness.STATUS_NOT_APPLICABLE
-    assert "audit" in promotion["checks"][0]["detail"].lower() or (
-        "never promotable" in promotion["checks"][0]["detail"].lower()
-    )
+    assert "auditable" in promotion["checks"][0]["detail"].lower()
 
 
 def test_r4_unstamped_conflicting_artifact_fails_promotion():
@@ -329,11 +339,16 @@ def test_r4_unstamped_conflicting_artifact_fails_promotion():
             "fields": {"dataset_id": "d1"},
         }
     ]
-    conflicts = [
-        "strategy artifact reward_version 10 != current 15 and the "
-        "artifact is not marked legacy"
+    findings = [
+        {
+            "severity": "error",
+            "message": (
+                "strategy artifact reward_version 10 != current 15 and the "
+                "artifact is not marked legacy"
+            ),
+        }
     ]
-    report = _report(artifacts=artifacts, artifact_conflicts=conflicts)
+    report = _report(artifacts=artifacts, artifact_findings=findings)
     assert _dim(report, "promotion_ready")["status"] == readiness.STATUS_FAIL
     assert any(
         "not marked legacy" in entry["detail"]

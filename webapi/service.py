@@ -322,7 +322,7 @@ def get_readiness() -> dict:
         # doctor CLI as the computing command (see the response note).
         gates=None,
         artifacts=[],
-        artifact_conflicts=[],
+        artifact_findings=[],
         fairness=None,
         lifecycle_edges=readiness_mod.lifecycle_edges_status(lifecycle_checks),
         bound_run=None,

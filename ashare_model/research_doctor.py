@@ -1,4 +1,4 @@
-﻿"""Read-only research doctor (P0-03).
+"""Read-only research doctor (P0-03).
 
 Aggregates the repository's research state into one report:
 
@@ -961,10 +961,10 @@ def _readiness_section(
         if snapshot.get("status") == "pass"
         else None
     )
-    conflicts = [
-        finding["message"]
-        for finding in scan_artifact_conflicts(artifacts, current_dataset_id)
-    ]
+    # The raw scan result goes to the readiness layer; it consumes only
+    # the error-severity (non-legacy) conflicts for promotion_ready —
+    # legacy-downgraded info findings are the auditable-artifact path.
+    artifact_findings = scan_artifact_conflicts(artifacts, current_dataset_id)
     return readiness_mod.build_readiness_report(
         now=now,
         evaluation_day=evaluation_day,
@@ -976,7 +976,7 @@ def _readiness_section(
         snapshot=snapshot,
         gates=gates,
         artifacts=artifacts,
-        artifact_conflicts=conflicts,
+        artifact_findings=artifact_findings,
         fairness=readiness_mod.fairness_status(fairness_probes),
         lifecycle_edges=readiness_mod.lifecycle_edges_status(lifecycle_checks),
         bound_run=bound_run,
@@ -1055,7 +1055,7 @@ def main(argv: list[str] | None = None) -> int:
             snapshot=None,
             gates=None,
             artifacts=[],
-            artifact_conflicts=[],
+            artifact_findings=[],
             fairness=None,
             lifecycle_edges={
                 "status": "unknown",
