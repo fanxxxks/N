@@ -344,7 +344,10 @@ def test_cache_version_is_pinned():
     # A02 (p26 §4.2): 1 -> 2 — the key's dataset element now denotes the
     # content-confirmed composite snapshot identity, so v1 scores are not
     # comparable with v2 scores for the same key string.
-    assert SEMANTIC_CACHE_VERSION == 2
+    # A04 (p28 §4.2, t6 Ruling 2): 2 -> 3 — the key gains the
+    # feature-registry generation, so entries from a different registry
+    # generation (a changed legal-expression space) are never reused.
+    assert SEMANTIC_CACHE_VERSION == 3
 
 
 # --- E2: content-addressed persistent factor tensor cache ---------------------

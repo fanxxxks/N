@@ -285,7 +285,11 @@ def test_t70_margin_balance_chg_direction_reregistered_negative():
     meta = FEATURE_METADATA["MARGIN_BALANCE_CHG"]
     assert meta.expected_direction == -1
     assert meta.availability_rule.startswith("v2 margin_detail_pit")
-    assert meta.depends_on == ("margin_detail_pit",)
+    # A04 (p28 I4, whitelist §10.1 case 2 — the approved p28 contract
+    # unified the margin family's depends_on convention): the pin moves
+    # from the bare table name to the table.field form — a STRONGER
+    # assertion (the consumed field is named and auditable, p17 §5.2).
+    assert meta.depends_on == ("margin_detail_pit.rzye",)
 
 
 # ---------------------------------------------------------------------------

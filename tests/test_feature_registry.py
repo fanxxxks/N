@@ -149,7 +149,7 @@ def test_registry_version_is_pinned():
     # change path).  v5 (P9 §7 adjudication, measurement log
     # 2026-09-01).  v6 (P13 §5.3/§6.1): family ⑤ unlocks — whitelist
     # §10.1 case 2, pre-registered in docs/p13_fundamental_fields_contract.md.
-    assert FEATURE_REGISTRY_VERSION == 14  # p24 (the user-approved F2 batch); prior: 13 = the p22-flip revert
+    assert FEATURE_REGISTRY_VERSION == 15  # p28/A04 (t6 Ruling 2): the F2 semantic-type/visibility correction advances the registry generation (CS_NEUTRALIZE unlock is a measured search-space change)
 
 
 def test_registry_records_data_tiers(tensor, mask):
@@ -212,7 +212,7 @@ def test_p9_registry_version_deprecations_and_pending_data():
     LIMIT_STREAK conditional deprecation triggered, two second-pass
     consolidations).  v6 (P13 §5.3, whitelist §10.1 case 2): family ⑤
     unlocks; the pending set empties."""
-    assert FEATURE_REGISTRY_VERSION == 14  # p24 (the user-approved F2 batch); prior: 13 = the p22-flip revert
+    assert FEATURE_REGISTRY_VERSION == 15  # p28/A04 (t6 Ruling 2): the F2 semantic-type/visibility correction advances the registry generation (CS_NEUTRALIZE unlock is a measured search-space change)
     p9_deprecated = (
         "RET_5", "RET_10", "RET_120", "MOMENTUM_60",
         "VOLUME_RATIO", "TURNOVER_MA5", "MACD_DEA", "VOL_60",

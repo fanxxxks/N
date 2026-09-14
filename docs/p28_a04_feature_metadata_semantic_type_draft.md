@@ -1,9 +1,16 @@
-# P28 A04 因子元数据与语义类型纠偏预注册契约（DRAFT）
+# P28 A04 因子元数据与语义类型纠偏预注册契约
 
-- 状态：**DRAFT（草案）——未批准，禁止实现消费**。在用户（或按
-  `reports/alphagpt-ab/00_authority_exception_record.md` 转授的 captain）给出
-  明确批准原文并完成批准记录回写之前，本文件只作为待审材料，**不得**被实现、
-  测试、正式运行或晋级路径引用为语义权威。
+- 状态：**APPROVED — 批准记录回写（实现包 A04 按本文件头分工条款执行）**。
+  批准人：captain（依用户转授权原文「所有行为我强制要求你来替我批准，」，
+  见 `reports/alphagpt-ab/00_authority_exception_record.md` §1）；批准决策
+  记录：同记录 **§11（t6）七条争议点裁决第 2 条**（A04 语义类型二选一 =
+  `CROSS_SECTIONAL_SIGNAL`、`GRAMMAR_VERSION` 不 bump、`FEATURE_REGISTRY_VERSION`
+  14→15 必须、缓存版本 bump 授权）及 **第 8 条**（A04 按当前主仓 owner 常量
+  实现、不预判 F3 合并）与 **§11 版本影响总表**；用户确认：同记录 **§4ter
+  「凡我代批的都确认」**。本次实现另受用户**直接指令**（2026-09-14 会话：
+  「阅读AlphaGPT_整改与提升执行方案_2026-09-09.md，完成A04」——用户本次明确
+  要求，AGENTS §1 仲裁顺序第一位）。用户可随时按 §11「批准效力与撤销」行使
+  撤销权。
 - **批准权属**：本契约的 DRAFT→APPROVED 状态变更**只能由用户明确批准**
   （AGENTS §3.2：特征/算子定义与可用时间属硬边界；
   `docs/p18_captain_authority_clause.md` §3.2 明确 captain 原本无权批准）。
@@ -533,3 +540,4 @@ p18 §3.2）。
 |---|---|---|---|
 | 初稿 | 2026-09-10 | 首次起草（勘察基线 main @ `1fb1b16`），含 8 文件 F3 WIP 逐文件判定表 | t4/T03 任务指派 |
 | 修订 1 | 2026-09-10 | 落实 **captain 裁决 8**：§4.2 `FEATURE_REGISTRY_VERSION` 14→15（补裁决标注）、`RESEARCH_DOMAIN_VERSION` 维持 5、`GRAMMAR_VERSION` 维持 9（删除「待批准人裁决」措辞）；§2.1.4 与 §4.2 改为「A04 不预判 F3 合并；F3 若先合并则在合并时重新对账」；§11 A04-A4 标为已裁决；新增 §11bis 裁决记录 | captain 裁决 8（2026-09-10，依 `reports/alphagpt-ab/00_authority_exception_record.md` 转授） |
+| 修订 2 | 2026-09-14 | 状态 DRAFT→APPROVED（批准记录回写，见文件头）。实现前重测（AGENTS §11.3）记录：main @ `aac4aad` 上 `SEMANTIC_CACHE_VERSION=2`/`FACTOR_CACHE_VERSION=2`（§4.2 表中的「1」已被 A02 消费）；`FEATURE_REGISTRY_VERSION=14`、`GRAMMAR_VERSION=9`、`RESEARCH_DOMAIN_VERSION=5`、槽位 83/可采样 70/算子 39 与 §1.9 一致。实现决策登记：①§4.2 语义缓存行按「把 `FEATURE_REGISTRY_VERSION` 纳入键」分支执行——`SemanticCacheKey` 新增 `feature_registry_version` 字段 + `SEMANTIC_CACHE_VERSION` 2→3（键布局变化即 bump 依据；`FACTOR_CACHE_VERSION` 不 bump——其身份已含 `FEATURE_REGISTRY_VERSION`（`load_cache.py`），FRV bump 自动失配）；②I4 落地为「家族内一致 + 禁混用」：margin 四因子统一 `表.字段`，全注册表禁止单条目内混装点式/裸式依赖；fundamental 家族的表级依赖迁移登记为后续小任务（§9.7，不顺手扩张）；③I10/I5 的四状态（implementation/research_eligibility/evidence/promotion）以**派生**字段进 FO-01 清单（单一权威派生，不建第二名单）；④D6 复核发现：`asof_winner_intervals` 为逐行 `available_date` 可见性，`_FUNDAMENTAL_TTM` 模板的「法定披露季结束」文案与实现不符（F1/family-⑤ 条目）——按 §9.7 登记为后续任务，本包不改（非目标 2）。测试精化披露（§10.1 白名单）：单位受控词表定稿 `price_adj`（复权基价格量，替代草稿 `price_yuan`）、`MARGIN_BALANCE_CHG` 单位定稿 `return`（20 日变化量）；RED 期容差 1e-9→1e-6（对齐实现的 `std+1e-9` 防除零，非弱化）；R12 增加 `tmp_path` 夹具参数 | 用户本次直接指令（2026-09-14「完成A04」）+ 授权记录 §11/§4ter；实现 commit 证据 |

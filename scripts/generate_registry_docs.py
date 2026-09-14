@@ -7,7 +7,10 @@ fact comes from one authority — the authored feature metadata
 (:mod:`ashare_model.data_tier` via the public
 :func:`ashare_model.feature_registry.pit_level_of` path) and the operator
 registry (:mod:`ashare_model.operator_registry`, which derives arity from
-``OPS_CONFIG``).  Measured quantities (empirical coverage, correlation
+``OPS_CONFIG``).  Section 4 additionally projects the p28 (A04) FO-01
+machine-checkable contract manifest — units, NaN semantics, token ids and
+the four distinct status fields — from the same authorities.  Measured
+quantities (empirical coverage, correlation
 clusters) are deliberately excluded: they depend on the calibration data,
 not on the declaration.
 
@@ -19,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -77,9 +81,10 @@ def build_document() -> str:
     add("")
     add(
         "本文件由注册表生成（见文件头命令），是特征/算子元数据的唯一文档化"
-        "视图；手工维护的名单已退役（P7 D3）。语义类型与推荐周期目前仅为"
-        "**描述性**元数据：进入搜索合法性判定是 Phase E 独立预注册契约的"
-        "事项。实测覆盖率与相关簇依赖校准数据，不在本生成物中。"
+        "视图；手工维护的名单已退役（P7 D3）。语义类型是搜索合法性的活约束"
+        "（p7-E 语义类型契约：GP/Random/TPE/RL 的动作掩码与 GP 类型化原语集"
+        "共同消费）；§4 的 FO-01 清单是其机器可核对投影（p28 I5）。实测覆盖"
+        "率与相关簇依赖校准数据，不在本生成物中。"
     )
     add("")
 
@@ -87,10 +92,10 @@ def build_document() -> str:
     add(f"## 1. 基础特征（{len(FEATURE_NAMES)} 个，按词表稳定顺序）")
     add("")
     add(
-        "| 特征 | 家族 | Tier | PIT | 语义类型 | 推荐周期 | 预期方向 |"
+        "| 特征 | 家族 | Tier | PIT | 语义类型 | 单位 | NaN 语义 | 推荐周期 | 预期方向 |"
         " 计算成本 | 依赖 | 归属研究域 | 可用时间规则 | 经济假设 |"
     )
-    add("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    add("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for name in FEATURE_NAMES:
         authored = FEATURE_METADATA[name]
         tier = tier_of_pit_level(pit_level_of(name)).value
@@ -102,6 +107,8 @@ def build_document() -> str:
             f"| {tier} "
             f"| {pit_level_of(name).value} "
             f"| {authored.semantic_type.value} "
+            f"| {authored.unit} "
+            f"| {authored.nan_policy.value} "
             f"| {horizon.value if horizon else '—'} "
             f"| {authored.expected_direction:+d} "
             f"| {resolve_cost(name, authored).value} "
@@ -156,7 +163,112 @@ def build_document() -> str:
         "promotion_allowed=False）。"
     )
     add("")
+    _append_fo01_manifest(add)
+    add("")
     return "\n".join(lines)
+
+
+def _evidence_status_of(name: str, authored) -> str:
+    """Evidence status (p28 I10/R14) — derived from the authoritative
+    flags, never a second hand-maintained table."""
+
+    from ashare_model.factors import NEUTRAL_FEATURE_NAMES
+
+    if name in NEUTRAL_FEATURE_NAMES:
+        return "source_discontinued"
+    if not authored.promotion_allowed:
+        return "measurement_withdrawn"
+    return "preregistered_hypothesis"
+
+
+def _append_fo01_manifest(add) -> None:
+    """§4: the FO-01 machine-checkable contract manifest (p28 I5).
+
+    A pure projection of the single registries — the manifest adds no
+    facts of its own and no hand-maintained second list.  The manifest
+    schema rides the registry versions in the header line (it is a
+    documentation projection, not an artifact-facing schema; the drift
+    guard pins it byte-for-byte).
+    """
+
+    from ashare_model.factors import NEUTRAL_FEATURE_NAMES
+    from ashare_model.vocab import (
+        DEPRECATED_FEATURE_NAMES,
+        FORMULA_VOCAB,
+    )
+
+    deprecated = set(DEPRECATED_FEATURE_NAMES)
+    samplable = [n for n in FEATURE_NAMES if n not in deprecated]
+
+    features = []
+    for index, name in enumerate(FEATURE_NAMES):
+        authored = FEATURE_METADATA[name]
+        features.append({
+            "name": name,
+            "vocab_index": index,
+            "family": family_of(name),
+            "domain": _feature_domain(name),
+            "pit_level": pit_level_of(name).value,
+            "tier": tier_of_pit_level(pit_level_of(name)).value,
+            "semantic_type": authored.semantic_type.value,
+            "availability_rule": authored.availability_rule,
+            "unit": authored.unit,
+            "nan_policy": authored.nan_policy.value,
+            "depends_on": list(resolve_depends_on(name, authored)),
+            "promotion_allowed": bool(authored.promotion_allowed),
+            "implementation_status": (
+                "neutral_placeholder"
+                if name in NEUTRAL_FEATURE_NAMES
+                else "computed_live"
+            ),
+            "research_eligibility": (
+                "deprecated" if name in deprecated else "samplable"
+            ),
+            "evidence_status": _evidence_status_of(name, authored),
+            "deprecated": name in deprecated,
+        })
+
+    operators = []
+    for index, (name, _, arity) in enumerate(OPS_CONFIG):
+        meta = OPERATOR_REGISTRY[name]
+        operators.append({
+            "name": name,
+            "vocab_index": index,
+            "arity": arity,
+            "category": meta.category.value,
+            "inputs": [
+                [t.value for t in arg_types] for arg_types in meta.inputs
+            ],
+            "output": meta.output.value if meta.output is not None else None,
+            "cost": meta.cost.value,
+            "stability": meta.stability,
+        })
+
+    manifest = {
+        "manifest_version": 1,
+        "counts": {
+            "feature_slots": len(FEATURE_NAMES),
+            "samplable": len(samplable),
+            "deprecated": len(deprecated),
+            "operators": len(OPS_CONFIG),
+        },
+        "legend": (
+            "四个状态互不相同，禁止混读：promotion_allowed=候选池准入资格"
+            "（p23/p24 族级门通过的承载），不是单因子有效性；"
+            "evidence_status=measurement_withdrawn 记录测量撤回；"
+            "research_eligibility=samplable 只表示可采样；"
+            "implementation_status 描述计算实现现状。族级通过、单因子有效、"
+            "可晋级是三个不同的结论层级（p28 I10）。"
+        ),
+        "features": features,
+        "operators": operators,
+    }
+
+    add("## 4. FO-01 存量契约清单（p28 I5；机器可核对投影）")
+    add("")
+    add("```json")
+    add(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=False))
+    add("```")
 
 
 def _family_of(name: str) -> str:

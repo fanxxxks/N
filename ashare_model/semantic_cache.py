@@ -40,7 +40,12 @@ from .vocab import FormulaVocab, FORMULA_VOCAB
 # A02 (p26 §4.2): 1 -> 2 — the key's dataset element now denotes the
 # content-confirmed composite snapshot identity, so a v1 score is not
 # comparable with a v2 score for the same key string.
-SEMANTIC_CACHE_VERSION = 2
+# A04 (p28 §4.2, t6 Ruling 2): 2 -> 3 — the key gains the feature-registry
+# generation: the A04 metadata correction changed the legal-expression
+# space (F2 semantic type), so an entry cached under a different registry
+# generation is not comparable even for an identical formula string, and
+# future registry bumps now invalidate the semantic cache automatically.
+SEMANTIC_CACHE_VERSION = 3
 
 # Fixed calibration slice: the head of the training window (all stocks,
 # first CALIBRATION_DATES columns).  All stocks are included so the
@@ -75,6 +80,11 @@ class SemanticCacheKey:
     reward_version: int
     protocol_version: int
     window_id: str
+    # A04 (p28 §4.2): the feature-registry generation the formula was
+    # evaluated under — a registry-generation change alters the legal
+    # expression space, so keys never collide across generations.  No
+    # default: every key must carry its generation explicitly.
+    feature_registry_version: str
 
 
 T = TypeVar("T")
@@ -160,12 +170,18 @@ class SemanticCache(Generic[T]):
         ast = canonical_ast(tokens, vocab)
         if ast is None:
             return None
+        # Lazy import: ``feature_registry`` imports this module's
+        # CalibrationSlice at module level, so the dependency cannot be
+        # module-level here either (same pattern as FeatureRegistry.summary).
+        from .feature_registry import FEATURE_REGISTRY_VERSION
+
         return SemanticCacheKey(
             structural_hash=structural_hash(ast),
             dataset_id=self._dataset_id,
             reward_version=self._reward_version,
             protocol_version=self._protocol_version,
             window_id=self._window_id,
+            feature_registry_version=str(FEATURE_REGISTRY_VERSION),
         )
 
     # --- fingerprint ------------------------------------------------------

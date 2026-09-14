@@ -26,6 +26,7 @@ from ashare_data.fundamentals import FUNDAMENTAL_PIT_NAMES
 
 from .feature_metadata import (
     ComputeCost,
+    NaNSemantics,
     RecommendedHorizon,
     SemanticType,
     authored_metadata_of,
@@ -82,7 +83,13 @@ from .vocab import FEATURE_NAMES
 # authored +1 preserved as falsified evidence.
 # v14 (p24, user-approved F2 batch): the two margin-crowding factors join
 # the vocabulary and registry (metadata + depends_on).
-FEATURE_REGISTRY_VERSION = 14
+# v15 (p28/A04, t6 Ruling 2): the F2 factors' semantic type corrects to
+# CROSS_SECTIONAL_SIGNAL and their availability_rule/depends_on state the
+# real source semantics — a registry-recorded semantic-field change that
+# alters the legal expression space (CS_NEUTRALIZE unlocks), so the
+# registry generation advances (old artifacts stay readable by name;
+# cache identities carry this constant and invalidate accordingly).
+FEATURE_REGISTRY_VERSION = 15
 
 # Default correlation threshold for cluster membership.
 CORR_THRESHOLD = 0.9
@@ -121,6 +128,9 @@ class FeatureRecord:
     hypothesis: str
     expected_direction: int
     semantic_type: SemanticType
+    # p28 I6: the structured unit/NaN declarations (authored, required).
+    unit: str
+    nan_policy: NaNSemantics
     expected_horizon: RecommendedHorizon | None
     promotion_allowed: bool
     compute_cost: ComputeCost
@@ -331,6 +341,8 @@ class FeatureRegistry:
                     "hypothesis": r.hypothesis,
                     "expected_direction": r.expected_direction,
                     "semantic_type": r.semantic_type.value,
+                    "unit": r.unit,
+                    "nan_policy": r.nan_policy.value,
                     "expected_horizon": (
                         r.expected_horizon.value if r.expected_horizon else None
                     ),
@@ -408,6 +420,8 @@ class FeatureRegistry:
                 hypothesis=authored.hypothesis,
                 expected_direction=authored.expected_direction,
                 semantic_type=authored.semantic_type,
+                unit=authored.unit,
+                nan_policy=authored.nan_policy,
                 expected_horizon=resolve_expected_horizon(name),
                 promotion_allowed=authored.promotion_allowed,
                 compute_cost=resolve_cost(name, authored),

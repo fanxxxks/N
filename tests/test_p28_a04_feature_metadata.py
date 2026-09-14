@@ -57,7 +57,7 @@ SAMPLABLE = [n for n in FEATURE_NAMES if n not in DEPRECATED_FEATURE_NAMES]
 # the per-feature source-scale chains (yuan vs wan_yuan vs qian_yuan) are
 # audited in the p28 measurement log's declaration-source table.
 _UNITS = frozenset({
-    "ratio", "return", "pct", "price_yuan", "cap_proxy", "per_amount",
+    "ratio", "return", "pct", "price_adj", "cap_proxy", "per_amount",
     "log_volume", "count", "sessions", "boolean", "score_0_100", "neutral",
 })
 
@@ -142,9 +142,18 @@ def test_r2_units_declared_for_every_samplable_feature():
         assert unit in _UNITS, f"{name}: unit {unit!r} outside the controlled set"
 
 
-@pytest.mark.parametrize("name", MARGIN_FAMILY)
-def test_r2_margin_family_units_are_ratios(name):
-    assert FEATURE_METADATA[name].unit == "ratio", name
+@pytest.mark.parametrize(
+    ("name", "unit"),
+    [
+        ("MARGIN_BALANCE_TO_CIRC_MV", "ratio"),
+        ("MARGIN_BUY_PRESSURE_5", "ratio"),
+        # The 20-session change of the balance is a return-scale quantity.
+        ("MARGIN_BALANCE_CHG", "return"),
+        ("MARGIN_CROWD_60", "ratio"),
+    ],
+)
+def test_r2_margin_family_units_are_declared(name, unit):
+    assert FEATURE_METADATA[name].unit == unit, name
 
 
 def test_r2_f2_unit_chain_is_the_yuan_over_wanyuan_ratio():

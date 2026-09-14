@@ -103,7 +103,7 @@ def test_registry_version_is_pinned():
     # placeholders become authoritative metadata (4 features join the
     # vocabulary).  Whitelist §10.1 case 2 — requirement change pre-registered
     # in the approved p13 contract.
-    assert FEATURE_REGISTRY_VERSION == 14  # p24 (the user-approved F2 batch); prior: 13 = the p22-flip revert
+    assert FEATURE_REGISTRY_VERSION == 15  # p28/A04 (t6 Ruling 2): the F2 semantic-type/visibility correction advances the registry generation (CS_NEUTRALIZE unlock is a measured search-space change)
 
 
 def test_expected_horizon_derives_from_research_domains():
