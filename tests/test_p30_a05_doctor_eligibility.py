@@ -971,11 +971,16 @@ def test_every_non_pass_check_carries_a_release_condition():
     for dimension in report["dimensions"].values():
         for check in dimension["checks"]:
             if check["status"] in (readiness.STATUS_FAIL, readiness.STATUS_UNKNOWN):
+                assert isinstance(check.get("release_condition"), str), (
+                    f"{check['name']} release_condition must be a string, "
+                    f"got {type(check.get('release_condition'))}"
+                )
                 assert check.get("release_condition"), (
                     f"{check['name']} is {check['status']} without a "
                     "release condition"
                 )
     for entry in report["summary"]["blocking"]:
+        assert isinstance(entry["release_condition"], str)
         assert entry["release_condition"]
 
 

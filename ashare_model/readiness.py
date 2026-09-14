@@ -886,7 +886,7 @@ def build_readiness_report(
                     "gate pass"
                     if gates_status == STATUS_UNKNOWN
                     else None
-                ),
+                )
             ),
         )
     ]
