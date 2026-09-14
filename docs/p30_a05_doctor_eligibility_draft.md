@@ -143,8 +143,10 @@ snapshot: {composite_id, publication_id, primary_dataset_id, v2_dataset_id}|{err
   argparse 级报错）；配置加载失败时以最小 readiness 报告（runtime=fail、
   其余 unknown）如实呈现后仍以退出码 2 结束。
 - `gather_lifecycle_checks`：删除 `assert_paper_account_writable("current")`
-  恒真检查（该 API 本身保留给其真实调用方）；paper 资格改由 paper_ready
-  维度以真实绑定证据呈现。
+  恒真检查。该 API 保留为公开接口——**如实声明**：生产调用方为零（双审
+  T10 检索确认），当前仅测试/审计语义消费者（P8-15① 仍测其字面量拒止
+  语义）；若需退役须按 AGENTS §9.1 以独立机械 PR 举证。paper 资格改由
+  paper_ready 维度以真实绑定证据呈现。
 - webapi：`GET /api/readiness`（只读、防御性降级：错误显式标
   unavailable，不显示健康）；`get_run_detail` 响应增加
   `runs_dir_source`/`runs_dir_exists`（O5）。
