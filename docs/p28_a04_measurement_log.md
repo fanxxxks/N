@@ -2,6 +2,7 @@
 
 - 契约：`docs/p28_a04_feature_metadata_semantic_type_draft.md`（APPROVED，批准记录回写见文件头）
 - 实现分支：`codex/a04-feature-metadata-evidence`（base = main @ `aac4aad`）
+- **被测实现 SHA：`36f5f62`**（feat(a04) 原子实现 commit；RED = `480d9f5`，本日志 = `8217f40` 后续 evidence-only 修订）。
 - 本日志只写**实际发生**的测量（AGENTS §11.1）；契约在 `docs/p28_..._draft.md`。
 
 ## 1. 命令与环境
@@ -18,7 +19,7 @@ MARGIN_BUY_PRESSURE_5     | 同上（deps ('rzmre', 'circ_mv')）
 ```
 
 - 与契约 §1.9 的对照：槽位/可采样/算子/FRV/GRAMMAR/RDV 全部一致；**偏差**：`SEMANTIC_CACHE_VERSION`、`FACTOR_CACHE_VERSION` 实测为 **2**（§4.2 草案写的 1 已被 A02 消费，授权记录 §11 版本总表「A02/A04」归属一致）。按契约「实现前必须重测、以重测为准」处理（修订 2 已登记）。
-- 版本 owner 全量检索（AGENTS §3.2 强制动作，实现前在 base 上重跑）：
+- 版本 owner 全量检索（AGENTS §3.2 强制动作，实现前在 base 上重跑）。下表为与 A04 相关的 **owner 子集**（base 上 `git grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"` 实测共 **40 行**；全量清单先例见 `docs/p26_a02_dataset_snapshot_identity_draft.md` §4.1，本包不复制第二份，AGENTS §11.5）：
 
 ```
 main:ashare_model/data_tier.py:41:DATA_TIER_VERSION = 2
@@ -72,7 +73,7 @@ main:ashare_model/vocab.py:317:GRAMMAR_VERSION = 9
 
 | 因子 | 声明（修正后） | 来源证据 |
 |---|---|---|
-| MARGIN_BALANCE_TO_CIRC_MV | availability = margin_detail_pit T+1（available_date）AND daily_basic_pit 当日（trade_date 收盘已知）；type=cross_sectional_signal；unit=ratio（rzye[元]/circ_mv[万元]，常数 1e4 尺度被逐日 xcs-z 吸收——z 对正尺度变换不变）；deps=(margin_detail_pit.rzye, daily_basic_pit.circ_mv)；nan=missing_nan（缺源保持 NaN，绝不预填 0） | p17 §5.2 表 18（rzye/rzmre=元）+ 表 4（circ_mv=万元）；p17 §6.1 T+1；p24 §2（xcs-z 预注册）；`capital_flow.py:528-559`（原始比率）+ `data_loader.py:648-651`（xcs-z）+ `data_loader.py:143`（NaN 恢复） |
+| MARGIN_BALANCE_TO_CIRC_MV | availability = margin_detail_pit T+1（available_date）AND daily_basic_pit 当日（trade_date 收盘已知）；type=cross_sectional_signal；unit=ratio（rzye[元]/circ_mv[万元]，常数 1e4 尺度被逐日 xcs-z 吸收——z 对正尺度变换不变）；deps=(margin_detail_pit.rzye, daily_basic_pit.circ_mv)；nan=missing_nan（缺源保持 NaN，绝不预填 0） | p17 §5.2 表 18（rzye/rzmre=元）+ 表 4（circ_mv=万元）；p17 §6.1 T+1；p24 §2（xcs-z 预注册）；`capital_flow.py:528-559`（原始比率）+ `data_loader.py:544-547`（xcs-z 施加；定义 :116-146，NaN 恢复 :143）——行号以 base `aac4aad` 为准（A03 分支工作树行号有位移，审核发现 T-F-1 已勘误） |
 | MARGIN_BUY_PRESSURE_5 | 同上，分子为 rzmre 的 5 个可见会话滚动和（T+1 使第 k 列承载第 k 会话明细） | 同上 + `capital_flow.py:544-559` |
 | MARGIN_BALANCE_CHG | deps 由 `("margin_detail_pit",)` 收紧为 `("margin_detail_pit.rzye",)`（I4 口径统一；消费字段实测 rzye）；unit=return；type/可见性不变 | `capital_flow.py:516-525`（wide=rzye pivot）；测试钉值更新属白名单第 2 类（已批准 p28 I4），断言更强（字段级可审计） |
 | MARGIN_CROWD_60 | 同上（deps 收紧为 rzye） | `capital_flow.py:518,526`（wide 复用） |
@@ -120,3 +121,21 @@ main:ashare_model/vocab.py:317:GRAMMAR_VERSION = 9
 - 结果：**1819 passed / 2 failed / 6 skipped**（2097.91s ≈ 35min）。
 - 2 个失败均为 `tests/test_lock_files.py`（`test_pins_match_installed_environment`、`test_freeze_lock_check_passes`），根因 = 本机解释器缺 `tushare` 包元数据（`importlib.metadata.distribution('tushare')` 抛 `PackageNotFoundError`，实测复现于解释器本身）→ `freeze_lock.py --check` exit 1。归属：**pre-existing 环境失败**，与 A03 最终证据（commit `5b6812e`：「2 pre-existing env failures」）记录的同一对环境失败一致；本包 diff 未触碰任何依赖/锁文件（`git diff --name-only` 无 requirements/lock/pyproject/package 文件）。原始输出：`reports/alphagpt-ab/_a04_full_suite.txt`（未跟踪）。
 - 6 个 skipped：既有基线 skip，无净新增（与 main 基线一致）。
+
+## 11. 双审核处置记录（evidence-only 修订）
+
+按 p28 §9.6 与用户指令（恰好两个独立审核子 agent，审核者非实现者/起草人）完成审核：
+
+| 审核 | 判定 | 发现 |
+|---|---|---|
+| 合规（review-compliance） | **pass**（0 blocker / 0 major / 3 minor） | C-F-1 §2.2 inScope 未列 semantic_cache.py；C-F-2 日志未显式写被测 SHA；C-F-3 RED 期精化无 committed 原值痕迹 |
+| 技术/验证（review-technical） | **pass**（0 blocker / 0 major / 5 minor） | T-F-1 日志 §6 行号漂移（648-651→544-547）；T-F-2 「全量检索」仅贴 owner 子集；T-F-3 evidence_status 混淆去重撤回与证伪撤回；T-F-4 契约 §4.2 RUNSPEC/ARTIFACT_SCHEMA 旧值过时（base 实测 2/3）；T-F-5 INDUSTRY_MOMENTUM deps 混装（既有遗留） |
+
+审核者独立复跑：RED（`git archive 480d9f5`）23F/9P、聚焦集 92 passed、邻域 66 passed、分片守卫与 drift guard exit 0、39 算子枚举核实 CS_NEUTRALIZE 唯一单型、批准记录原文核对。
+
+**处置（本修订 commit）**：
+1. C-F-2/T-F-1：本日志补被测 SHA `36f5f62`、行号勘误（`data_loader.py:544-547`，行号以 base 为准）。
+2. C-F-1/T-F-4：契约修订 3——§2.2 inScope 补列 `ashare_model/semantic_cache.py`（授权链 §4.2「视实现决定」+ t6 裁决 2 + 修订 2）；§4.2 勘误 `RUNSPEC_SCHEMA_VERSION` 旧值 1→2、`ARTIFACT_SCHEMA_VERSION` 旧值 2→3（A02 已消费；A04 未触碰两者的决策不变）。
+3. T-F-2：§1 检索段注明「owner 子集，base 实测 40 行，全量先例 p26 §4.1」。
+4. **登记为后续任务**（§9.7，本次不修）：T-F-3 evidence_status 派生规则区分撤回原因（去重撤回 vs 测量证伪撤回）或 legend 细分；T-F-5 全注册表 depends_on 口径统一（含 INDUSTRY_MOMENTUM 既有混装）；C-F-3 未来 RED 期精化在测试注释/amendment 保留原值痕迹。
+5. A04_report §2 的同款行号引用同步勘误（未跟踪文件）。

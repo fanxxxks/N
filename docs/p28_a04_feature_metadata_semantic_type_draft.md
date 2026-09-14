@@ -228,6 +228,12 @@
 6. `tests/`：新增 FO-01 清单守卫与 F2 类型纠偏的 RED 测试（新测试文件必须
    同 commit 注册进 `scripts/check_test_shards.py` 分片，否则 fail-closed 红）。
 7. `docs/CONTRACTS.md` 索引（本草案已同 commit 登记）。
+8. （修订 3 补列，对齐 §4.2 版本表 owner 文件——合规审核 C-F-1）
+   `ashare_model/semantic_cache.py`：`SEMANTIC_CACHE_VERSION` 与
+   `SemanticCacheKey` 的键布局属 §4.2 该行「视实现决定」分支（把
+   `FEATURE_REGISTRY_VERSION` 纳入键 = 键布局变化即 bump），并经 t6 裁决 2
+   明示缓存 bump 授权；改动限于键字段、版本常量与惰性导入，不触碰缓存
+   语义/预算语义。
 
 ### 2.3 非目标
 
@@ -342,8 +348,8 @@ git -C D:\minequant\AlphaGPT grep -nE "^[A-Z][A-Z0-9_]*_VERSION" -- "*.py"
 | `ashare_model/factor_cache.py` `FACTOR_CACHE_VERSION` | `1` | **不变** | 缓存键已含 `feature_registry_version`（`load_cache.py:127`），因此 `FEATURE_REGISTRY_VERSION` bump 会自动使旧张量条目失配（identity 校验判 miss）。除非 A02 一并改变键语义，否则本包不 bump。 |
 | `ashare_model/data_tier.py` `DATA_TIER_VERSION` | `2` | **不变** | `tier_of_pit_level` 的映射机制零改动；F2 的 PIT level 实测已是 `PIT_CAPITAL`（§1.7），纠偏不改变 tier。若实现改变了任何特征的 tier，必须停下重新分类并在此表登记。 |
 | `ashare_model/research_domain.py` `RESEARCH_DOMAIN_VERSION` | `5` | **维持 `5`（captain 裁决 8，2026-09-10：维持 5）** | F2 的域归属（`ashare_domain.py:166`）不在本次纠偏范围；裁决 8 确认维持 5。若 FO-01 清单核对发现域归属与真实语义冲突，须**另立契约**修订，不在本包内顺手改。 |
-| `ashare_model/artifact_schemas.py` `ARTIFACT_SCHEMA_VERSION` | `2` | **视字段决定** | 若为 I6 新增结构化「单位/NaN」字段并写入 artifact 顶层，则按 `artifact_schemas.py:41-44` 约定 bump 并同步 `LEGACY_SCHEMA_VERSIONS`；若只存在于注册表/生成文档，则不 bump。 |
-| `ashare_model/runspec.py` `RUNSPEC_SCHEMA_VERSION` | `1` | **不变（建议）** | RunSpec 已通过 `feature_registry_version` 间接承载注册表代际；除非新增顶层字段（如显式 `feature_metadata_version`），否则不 bump。 |
+| `ashare_model/artifact_schemas.py` `ARTIFACT_SCHEMA_VERSION` | `3`（修订 3 勘误：base 实测 3，起草表的 `2` 已被 A02 消费） | **不变（A04 未触碰）** | 若为 I6 新增结构化「单位/NaN」字段并写入 artifact 顶层，则按 `artifact_schemas.py:41-44` 约定 bump 并同步 `LEGACY_SCHEMA_VERSIONS`；A04 实现只存在于注册表/生成文档，不写入 artifact 顶层，故不 bump（决策与勘误前的表意一致）。 |
+| `ashare_model/runspec.py` `RUNSPEC_SCHEMA_VERSION` | `2`（修订 3 勘误：base 实测 2，起草表的 `1` 已被 A02 消费） | **不变** | RunSpec 已通过 `feature_registry_version` 间接承载注册表代际；A04 未新增顶层字段（如显式 `feature_metadata_version`），不 bump。 |
 | `ashare_model/versions.py` `PROTOCOL_VERSION` | `"27"` | **不变** | 评价协议（fold、指标、统计校正）零改动。 |
 | `ashare_model/reward.py` `REWARD_VERSION` | `"15"` | **不变** | Reward 语义零改动。 |
 | `ashare_model/promotion.py` `PROMOTION_RULE_VERSION` | `"2"` | **不变** | 晋级门判定零改动；F2 的 `promotion_allowed` 保持 `True`（p24 已批准候选池准入）。 |
@@ -541,3 +547,4 @@ p18 §3.2）。
 | 初稿 | 2026-09-10 | 首次起草（勘察基线 main @ `1fb1b16`），含 8 文件 F3 WIP 逐文件判定表 | t4/T03 任务指派 |
 | 修订 1 | 2026-09-10 | 落实 **captain 裁决 8**：§4.2 `FEATURE_REGISTRY_VERSION` 14→15（补裁决标注）、`RESEARCH_DOMAIN_VERSION` 维持 5、`GRAMMAR_VERSION` 维持 9（删除「待批准人裁决」措辞）；§2.1.4 与 §4.2 改为「A04 不预判 F3 合并；F3 若先合并则在合并时重新对账」；§11 A04-A4 标为已裁决；新增 §11bis 裁决记录 | captain 裁决 8（2026-09-10，依 `reports/alphagpt-ab/00_authority_exception_record.md` 转授） |
 | 修订 2 | 2026-09-14 | 状态 DRAFT→APPROVED（批准记录回写，见文件头）。实现前重测（AGENTS §11.3）记录：main @ `aac4aad` 上 `SEMANTIC_CACHE_VERSION=2`/`FACTOR_CACHE_VERSION=2`（§4.2 表中的「1」已被 A02 消费）；`FEATURE_REGISTRY_VERSION=14`、`GRAMMAR_VERSION=9`、`RESEARCH_DOMAIN_VERSION=5`、槽位 83/可采样 70/算子 39 与 §1.9 一致。实现决策登记：①§4.2 语义缓存行按「把 `FEATURE_REGISTRY_VERSION` 纳入键」分支执行——`SemanticCacheKey` 新增 `feature_registry_version` 字段 + `SEMANTIC_CACHE_VERSION` 2→3（键布局变化即 bump 依据；`FACTOR_CACHE_VERSION` 不 bump——其身份已含 `FEATURE_REGISTRY_VERSION`（`load_cache.py`），FRV bump 自动失配）；②I4 落地为「家族内一致 + 禁混用」：margin 四因子统一 `表.字段`，全注册表禁止单条目内混装点式/裸式依赖；fundamental 家族的表级依赖迁移登记为后续小任务（§9.7，不顺手扩张）；③I10/I5 的四状态（implementation/research_eligibility/evidence/promotion）以**派生**字段进 FO-01 清单（单一权威派生，不建第二名单）；④D6 复核发现：`asof_winner_intervals` 为逐行 `available_date` 可见性，`_FUNDAMENTAL_TTM` 模板的「法定披露季结束」文案与实现不符（F1/family-⑤ 条目）——按 §9.7 登记为后续任务，本包不改（非目标 2）。测试精化披露（§10.1 白名单）：单位受控词表定稿 `price_adj`（复权基价格量，替代草稿 `price_yuan`）、`MARGIN_BALANCE_CHG` 单位定稿 `return`（20 日变化量）；RED 期容差 1e-9→1e-6（对齐实现的 `std+1e-9` 防除零，非弱化）；R12 增加 `tmp_path` 夹具参数 | 用户本次直接指令（2026-09-14「完成A04」）+ 授权记录 §11/§4ter；实现 commit 证据 |
+| 修订 3 | 2026-09-14 | 双审核（合规 + 技术/验证，均独立于实现者）**pass** 后的勘误与对齐（evidence-only，无代码变更）：①§2.2 范围清单补列第 8 项 `ashare_model/semantic_cache.py`（对齐 §4.2「视实现决定」分支 + t6 裁决 2——合规 C-F-1）；②§4.2 勘误两行：`RUNSPEC_SCHEMA_VERSION` 旧值 1→**2**、`ARTIFACT_SCHEMA_VERSION` 旧值 2→**3**（base `aac4aad` 实测，A02 已消费；A04 未触碰两者的决策不变——技术 T-F-4）；③登记后续任务：evidence_status 派生规则区分撤回原因（技术 T-F-3）、全注册表 depends_on 口径统一（技术 T-F-5，含 INDUSTRY_MOMENTUM 既有混装）、RED 期精化保留原值痕迹（合规 C-F-3，实践改进）。完整处置清单见测量日志 §11 | 双审核报告（pass ×2，0 blocker/0 major/8 minor）；`reports/alphagpt-ab/A04_report.md` §10 |
