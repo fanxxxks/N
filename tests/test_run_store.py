@@ -495,7 +495,12 @@ def _lifecycle_writer(store, spec):
 def test_lifecycle_status_set_version_and_terminals():
     from ashare_model import lifecycle
 
-    assert lifecycle.LIFECYCLE_CONTRACT_VERSION == 1
+    # A03 (p27 §4.2/A03-A8): LIFECYCLE_CONTRACT_VERSION 1 -> 2.  Whitelist
+    # §10.1-2 (requirement change, pre-approved): the entry gate's
+    # enforcement semantics changed from vacuous to mandatory (p27 I2),
+    # so gate generations must be distinguishable; the p8 state set,
+    # graph and evidence matrix are unchanged.
+    assert lifecycle.LIFECYCLE_CONTRACT_VERSION == 2
     assert lifecycle.STATUSES == (
         "IDEA",
         "SPEC_LOCKED",
@@ -1403,9 +1408,20 @@ import numpy as np
 
 
 def test_p8_15_lifecycle_no_bypass_assert_formal_run_lifecycle():
-    """P8-15①: the no-bypass gate function exists and enforces the
-    entry-type → minimum-state mapping.  Pre-activation runs (no
-    lifecycle events) pass through with None."""
+    """P8-15① entry gate — REPLACED (whitelist §10.1-2, requirement
+    change pre-approved by p27 A03-A1/A2; approval record §11 ruling 1).
+
+    The old assertions pinned the DEFECT F03 as a contract: three
+    ``assert ... is None`` lines documented that a formal entry without
+    lifecycle identity passes vacuously.  That behavior was wrong — the
+    audit (reports/AlphaGPT_整改与提升执行方案_2026-09-09.md §2.2 F03)
+    and the approved p27 contract (§1.1, §3/I2) require the formal mode
+    to REFUSE a missing identity; the ``None`` passthrough survives only
+    in the explicitly declared non-formal modes.  The replacement is
+    strictly stronger: it asserts the refusal for every formal entry
+    type AND the mode-declaration requirement for the surviving legacy
+    path (full behavioral coverage lives in
+    tests/test_p27_a03_lifecycle_runcontext.py R1/R10)."""
     import tempfile
     from pathlib import Path
 
@@ -1415,10 +1431,20 @@ def test_p8_15_lifecycle_no_bypass_assert_formal_run_lifecycle():
     )
 
     data_dir = Path(tempfile.mkdtemp())
-    # Pre-activation (no spec_id/run_id): passes through with None.
-    assert assert_formal_run_lifecycle("train", data_dir) is None
-    assert assert_formal_run_lifecycle("evaluation", data_dir) is None
-    assert assert_formal_run_lifecycle("paper_sim", data_dir) is None
+    # Formal mode (default): a missing identity is a refusal, not a pass.
+    with pytest.raises(LifecycleError):
+        assert_formal_run_lifecycle("train", data_dir)
+    with pytest.raises(LifecycleError):
+        assert_formal_run_lifecycle("evaluation", data_dir)
+    with pytest.raises(LifecycleError):
+        assert_formal_run_lifecycle("paper_sim", data_dir)
+    # Explicit non-formal declaration: the sanctioned legacy passthrough.
+    assert (
+        assert_formal_run_lifecycle(
+            "train", data_dir, action_mode="engineering"
+        )
+        is None
+    )
     # Unknown entry type: fail-closed.
     with pytest.raises(LifecycleError, match="unknown formal entry type"):
         assert_formal_run_lifecycle("unknown", data_dir)

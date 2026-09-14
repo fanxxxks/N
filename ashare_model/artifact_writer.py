@@ -158,6 +158,47 @@ def write_boundary_artifact(
     return record
 
 
+def assert_registered_boundary_artifact(
+    store: RunStore,
+    spec_id: str,
+    run_id: str,
+    payload: dict[str, Any],
+    *,
+    artifact_type: str,
+) -> str:
+    """Verify a convenience-mirror payload is the run's registered
+    artifact of the given type (A03, p27 I7 read side).
+
+    Formal lineage followers (backtest / paper) consume the convenience
+    mirror file; the mirror is a cache, never the formal evidence.  This
+    check recomputes the payload's content id and requires it to be
+    index-registered in the source run under the same artifact type — a
+    tampered, copied or foreign-run mirror is refused before any formula
+    execution or account write.  Returns the registered artifact_id.
+    """
+
+    index = store.load_index(spec_id, run_id)
+    artifact_id = artifact_id_of(payload)
+    record = next(
+        (
+            entry
+            for entry in index["artifacts"]
+            if entry["artifact_id"] == artifact_id
+        ),
+        None,
+    )
+    if record is None or record["artifact_type"] != artifact_type:
+        raise ArtifactSchemaError(
+            f"the {artifact_type} payload is not the run "
+            f"{spec_id[:12]}…/{run_id[:12]}…'s registered artifact "
+            f"(content id {artifact_id[:12]}… not registered as "
+            f"{artifact_type!r}); the convenience mirror is a cache — "
+            "formal consumption resolves identity from the RunStore "
+            "(p27 I7: copying across runs is forbidden)"
+        )
+    return artifact_id
+
+
 def read_boundary_artifact(
     path: str | Path,
     *,

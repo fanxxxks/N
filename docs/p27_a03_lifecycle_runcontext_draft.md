@@ -1,9 +1,16 @@
-# P27 A03 真正强制的生命周期与 RunContext 预注册契约（DRAFT）
+# P27 A03 真正强制的生命周期与 RunContext 预注册契约
 
-- 状态：**DRAFT（草案）——未批准，禁止实现消费**。在用户（或按
-  `reports/alphagpt-ab/00_authority_exception_record.md` 转授的 captain）给出
-  明确批准原文并完成批准记录回写之前，本文件只作为待审材料，**不得**被实现、
-  测试、正式运行或晋级路径引用为语义权威。
+- 状态：**APPROVED — 批准记录回写（实现包 A03 按本文件头分工条款执行）**。
+  批准人：captain（依用户转授权原文「所有行为我强制要求你来替我批准，」，
+  见 `reports/alphagpt-ab/00_authority_exception_record.md` §1）；批准决策
+  记录：同记录 **§11（t6）七条争议点裁决第 1 条**（A03 动作模式表 +
+  「None 放行仅限非正式模式」＝A03-A1/A2 **批准**）及 **§11 版本影响总表**
+  （`LIFECYCLE_CONTRACT_VERSION` 1→2 归属 A03）；用户确认：同记录 **§4ter
+  第 4 项**（2026-09-10，含裁决 1–8 全部条目，用户保留逐条撤销权）。批准
+  引用范围：`5efc79c` → `1578e07` → `2996cdb` → `37f7609`（契约正文 SHA）。
+  起草人（governance-author）无权自改状态；本状态行由实现包随实现 commit
+  写入并引用上述记录，符合 §11「DRAFT→APPROVED 的改写由各实现包在自身的
+  inScope 内、随实现 commit 一并完成」的分工条款。
 - **批准权属**：本契约的 DRAFT→APPROVED 状态变更**只能由用户明确批准**
   （AGENTS §3.2；`docs/p18_captain_authority_clause.md` §3.2 明确 captain
   原本无权批准）。本团队存在用户转授批准权的例外记录
@@ -161,6 +168,19 @@
    来自执行期上下文（若需要新字段）。
 6. 相应测试与 `docs/CONTRACTS.md` 索引（本草案已同 commit 登记）。
 7. 可拆成训练 / 评价 / 模拟三个子提交（方案 §四 A03 范围注）。
+
+> **勘误 1（2026-09-12，用户裁决"全部按推荐进行"追认，实现包 A03
+> 回写）**：§2.2 范围 4 的文件清单在实践中补充两个接触面——
+> `ashare_model/data_loader.py`（I6 必需：身份先于 `load_data` 的
+> `confirm_input_snapshot` 抽取 + `frozen_data_cutoff`，行为保持）与
+> `ashare_model/train_entry.py`（新文件，`test_train_module_split`
+> 强制的 train.py 300 行 facade 预算所迫）。另据用户裁决 1a，本契约
+> §2.1 假设 4 与本节范围 4 的内部矛盾按用户决定解决：**promotion.py
+> 的消费侧生命周期检查已由 A03 后续小包落地**
+> （`lifecycle.assert_qualified_source_run` + promotion.main 接线，
+> ≥ `SEARCH_PLAN_ADMITTED`，R7/I10 消费侧）；promotion 是只读消费，
+> 不取单写者锁，故不经 `RunContext.attach`（R13 对 promotion.py 的
+> 断言因此仍然成立，消费侧检查为其接替约束）。
 
 ### 2.3 非目标
 

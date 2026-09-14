@@ -544,6 +544,32 @@ def test_cli_promotion_refuses_legacy_artifact_without_dataset(
     rows = _strong_rows()[:1]
     rows[0]["fold_train_end"] = "2024-01-10"
     rows[0]["fold_test_end"] = "2024-01-25"
+    # A03 follow-up (user ruling 1a, 2026-09-12; p27 R7/I10 consumption
+    # side — AGENTS §10.1 whitelist case 2, requirement change): the
+    # promotion CLI now verifies the artifact's source run (lifecycle
+    # chain ≥ SEARCH_PLAN_ADMITTED) BEFORE the gates.  The old fixture
+    # carried fabricated lineage ("a"*64/"b"*32) — exactly what the new
+    # gate refuses — so the scenario keeps its original intent (the P0
+    # gate refuses the dataset-less legacy measurement) by preregistering
+    # a qualified source run and registering the artifact in its store.
+    from ashare_model import lifecycle
+    from ashare_model.artifact_schemas import ProtocolResultArtifact
+    from ashare_model.artifact_writer import write_boundary_artifact
+    from ashare_model.run_store import RunStore
+    from test_p27_a03_lifecycle_runcontext import _factor_report
+    from test_run_store import LIFECYCLE_IDEA, _clean_data_report, _spec
+
+    store = RunStore(populated_db.data_dir)
+    spec = _spec()
+    handle = store.open_run(spec)
+    writer = lifecycle.LifecycleWriter(handle)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    writer.qualify_data(_clean_data_report(spec))
+    writer.qualify_factor_set(_factor_report(spec))
+    writer.admit_search_plan(
+        lifecycle.build_search_admission_evidence(spec)
+    )
     artifact = build_result(
         ProtocolConfig(
             folds=[FoldConfig("2024-01-10", "2024-01-25")],
@@ -554,15 +580,21 @@ def test_cli_promotion_refuses_legacy_artifact_without_dataset(
         "confirmation",
         TierConfig(50, 256),
         rows,
-        spec_id="a" * 64,
-        run_id="b" * 32,
+        spec_id=spec.spec_id,
+        run_id=handle.run_id,
         data_end_date="2024-01-25",
         # dataset_id deliberately absent: legacy measurement.
     )
     artifact_path = tmp_path / "artifact.json"
-    artifact_path.write_text(
-        _json.dumps(artifact, ensure_ascii=False), encoding="utf-8"
+    write_boundary_artifact(
+        handle,
+        artifact_type="protocol",
+        model_cls=ProtocolResultArtifact,
+        payload=artifact,
+        candidate_id=artifact["candidate_id"],
+        convenience_path=artifact_path,
     )
+    handle.close()
     verdict_path = tmp_path / "verdict.json"
     result = subprocess.run(
         [
@@ -581,6 +613,8 @@ def test_cli_promotion_refuses_legacy_artifact_without_dataset(
             str(tmp_path / "paper.json"),
             "--min-eligible",
             "3",
+            "--runs-root",
+            str(populated_db.data_dir),
         ],
         capture_output=True,
         text=True,

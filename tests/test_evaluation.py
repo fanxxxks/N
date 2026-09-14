@@ -1063,6 +1063,12 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig, production_gate_asof):
             str(tmp_path / "ledger.jsonl"),
             "--regime",
             str(tmp_path / "holdout_registry.json"),
+            # A03 (p27 I5): the CLI smoke run is an engineering probe —
+            # declared explicitly; it never inherits formal research
+            # identity. (Whitelist §10.1-2, requirement change pre-approved
+            # via p27 A03-A2; approval record §11 ruling 1.)
+            "--lifecycle-mode",
+            "engineering",
         ]
     )
     assert rc == 0
@@ -1322,6 +1328,9 @@ def test_cli_confirmation_smoke(
             str(tmp_path / "ledger.jsonl"),
             "--regime",
             str(tmp_path / "holdout_registry.json"),
+            # A03 (p27 I5): engineering-probe declaration (see cli_smoke).
+            "--lifecycle-mode",
+            "engineering",
         ]
     )
     assert rc == 0
@@ -1370,6 +1379,10 @@ def test_cli_selfcheck_smoke(
             str(tmp_path / "ledger.jsonl"),
             "--regime",
             str(tmp_path / "holdout_registry.json"),
+            # A03 (p27 I5/R14): --selfcheck is an engineering probe and is
+            # declared as such; a dry run never inherits formal identity.
+            "--lifecycle-mode",
+            "engineering",
         ]
     )
     assert rc == 0

@@ -706,6 +706,14 @@ def main(argv=None) -> int:
         action="store_true",
         help="P2-03: run the separate Tier A+B comparison (default: Tier A only)",
     )
+    parser.add_argument(
+        "--runs-root",
+        default=None,
+        help="RunStore root holding the protocol artifact's source run "
+        "(default: the configured data_dir; A03 follow-up, user ruling "
+        "1a: the source run's lifecycle chain is verified before any "
+        "gate evaluation)",
+    )
     args = parser.parse_args(argv)
 
     root = Path(__file__).resolve().parents[1]
@@ -742,6 +750,49 @@ def main(argv=None) -> int:
     if loaded is None:
         raise FileNotFoundError(f"protocol artifact not found: {artifact_path}")
     artifact, _ = loaded
+
+    # A03 follow-up (user ruling 1a of 2026-09-12; p27 R7/I10 consumption
+    # side): the source run named by the artifact's lineage must have a
+    # lifecycle chain at or above SEARCH_PLAN_ADMITTED — a current schema
+    # alone is never qualification, and engineering/audit products are
+    # never promotion evidence.  Read-only replay, before any gate work.
+    from .lifecycle import (
+        LifecycleError,
+        RunStoreError,
+        assert_qualified_source_run,
+    )
+    from .run_store import RunStore
+
+    if args.runs_root:
+        runs_root = Path(args.runs_root)
+    else:
+        try:
+            from ashare_data.config import load_config, make_data_config
+
+            data_config = make_data_config(
+                load_config(None, project_root=root), root
+            )
+            runs_root = data_config.data_dir
+        except Exception as exc:
+            print(
+                "promotion: cannot resolve the RunStore root for the "
+                "source-run lifecycle check — pass --runs-root "
+                f"explicitly ({exc})",
+                file=sys.stderr,
+            )
+            return 1
+    try:
+        assert_qualified_source_run(
+            runs_root,
+            str(artifact.get("spec_id", "")),
+            str(artifact.get("run_id", "")),
+        )
+    except (LifecycleError, RunStoreError) as exc:
+        print(
+            f"promotion: source-run lifecycle check refused: {exc}",
+            file=sys.stderr,
+        )
+        return 1
 
     regime = RegimeRegistry(root / args.regime)
     paper = PaperWindowRegistry(root / args.paper)
