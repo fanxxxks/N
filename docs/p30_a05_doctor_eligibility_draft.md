@@ -118,7 +118,7 @@
 | promotion_ready | source_run_qualified | `assert_qualified_source_run` + 状态 ≥ OOS_QUALIFIED | 仅绑定 run 时适用；not_applicable=未绑定 run |
 | paper_ready | paper_binding_evidence | RunStore 全扫描：存在重放态=PAPER_OBSERVING 的 run，`bound_paper_account_id` 读路径取绑定账户 | pass=存在（列 spec/run/account）；not_applicable=不存在（附原因：「本环境无生命周期绑定的 paper 观察；续跑声明被拒绝」） |
 | paper_ready | sim_state_vs_binding | paper 状态文件存在性 × 绑定证据 | fail=有状态文件但无绑定证据（「无账户却可续跑」的假阳性关闭点）；pass=两者一致存在；not_applicable=无状态文件且无绑定；unknown=绑定存在但状态文件缺失 |
-| paper_ready | online_data_freshness（carried） | G8 结果 | 状态携带（今日相关）；与 snapshot_integrity 显式分离 |
+| paper_ready | online_data_freshness（carried） | G8 结果 | 状态携带（今日相关；仅当存在 paper 观察时适用——无观察为 not_applicable：G8 回答「在线观察的数据是否新鲜」，冻结快照的答案在 snapshot_integrity）；与 snapshot_integrity 显式分离 |
 
 ### 3.2 聚合与 summary
 

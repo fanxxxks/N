@@ -261,6 +261,89 @@ def get_sim_day(date: str) -> dict:
     }
 
 
+def get_readiness() -> dict:
+    """The p30 A05 layered readiness report (cheap layers only).
+
+    The API computes the always-cheap authorities (config binding, input
+    paths, deps, RunStore root, lifecycle edges, the paper binding scan)
+    and leaves the expensive content-confirmation authorities
+    (``snapshot_integrity``, the G1–G8 pass) explicitly ``unknown`` with
+    the doctor CLI named as the command that computes them — an
+    on-demand full re-hash of both databases behind an HTTP GET would be
+    a self-inflicted denial of service.  Defensive degradation (AGENTS
+    §9): a config failure yields ``available=False`` with the reason,
+    never a healthy-looking empty report.
+    """
+
+    from ashare_model import readiness as readiness_mod
+    from ashare_model.research_doctor import (
+        gather_dependencies,
+        gather_lifecycle_checks,
+    )
+
+    data_config, model_config, _backtest_config, sim_config = _get_configs()
+    if data_config is None or model_config is None:
+        return {
+            "available": False,
+            "reason": (
+                "config load failed; run `python -m "
+                "ashare_model.research_doctor` for the full layered "
+                "report"
+            ),
+            "readiness": None,
+        }
+    try:
+        resolved = _resolved_paths()
+        store = {
+            "root": str(resolved.data_dir),
+            "source": "config",
+            "detail": "runtime paths resolved (audit mode)",
+        }
+    except (ConfigPathError, FileNotFoundError, OSError) as exc:
+        store = {
+            "root": None,
+            "source": "unresolved",
+            "detail": f"runtime path resolution failed: {exc}",
+        }
+    lifecycle_checks = gather_lifecycle_checks(
+        data_config.data_dir, data_config
+    )
+    config_path, _overrides_path = _config_paths(ROOT)
+    report = readiness_mod.build_readiness_report(
+        now=datetime.now().astimezone().isoformat(timespec="seconds"),
+        evaluation_day=readiness_mod.shanghai_today(),
+        config_status=readiness_mod.gather_config_binding(config_path),
+        input_paths=readiness_mod.gather_input_paths(data_config),
+        dependencies=gather_dependencies(),
+        model_searcher=model_config.searcher,
+        store_root=store,
+        snapshot=None,
+        # The gate pass is expensive; the API reports it unknown with the
+        # doctor CLI as the computing command (see the response note).
+        gates=None,
+        artifacts=[],
+        artifact_conflicts=[],
+        fairness=None,
+        lifecycle_edges=readiness_mod.lifecycle_edges_status(lifecycle_checks),
+        bound_run=None,
+        paper=readiness_mod.gather_paper(
+            store["root"], sim_state_path=Path(sim_config.state_path)
+        ),
+        git_commit=None,
+        repo_root=str(ROOT),
+    )
+    return {
+        "available": True,
+        "note": (
+            "snapshot_integrity and the G1–G8 pass are not computed "
+            "on-demand by the API (both are expensive read-only "
+            "authorities); run `python -m ashare_model.research_doctor` "
+            "for the full report"
+        ),
+        "readiness": report,
+    }
+
+
 def get_data_status() -> dict:
     data_config, model_config, backtest_config, _ = _get_configs()
     if data_config is None:
@@ -417,13 +500,16 @@ def get_run_detail(root: Path | None, spec_id: str, run_id: str) -> dict:
     ledger trial summary — the single source for the run detail page.
 
     ``root=None`` resolves the same config-derived store root as
-    :func:`list_runs` (A01 C8)."""
+    :func:`list_runs` (A01 C8); the response carries the same root
+    provenance (``runs_dir_source``/``runs_dir_exists``, A01 C9 via the
+    p30 A05 residual O5) so a wrong root cannot masquerade as "run
+    missing" on the detail page either."""
 
     from ashare_model import lifecycle
     from ashare_model.ledger import ExperimentLedger
     from ashare_model.run_store import RunStore
 
-    store_root, _source = _run_store_root(root)
+    store_root, source = _run_store_root(root)
     store = RunStore(store_root)
     run_dir = store.runs_dir / spec_id / run_id
     if not run_dir.is_dir():
@@ -466,6 +552,9 @@ def get_run_detail(root: Path | None, spec_id: str, run_id: str) -> dict:
         "dataset_id": runspec.get("dataset_id"),
         "research_domain": runspec.get("research_domain"),
         "git_commit": runspec.get("git_commit"),
+        "runs_dir": str(store.runs_dir),
+        "runs_dir_source": source,
+        "runs_dir_exists": store.runs_dir.is_dir(),
         "artifacts": [
             {
                 "artifact_id": record["artifact_id"],

@@ -156,6 +156,14 @@ def data_status() -> dict:
     return service.get_data_status()
 
 
+@app.get("/api/readiness")
+def readiness() -> dict:
+    """The p30 A05 layered per-purpose readiness report (cheap layers;
+    the expensive content confirmations are named `unknown` with the
+    doctor CLI as their computing command)."""
+    return service.get_readiness()
+
+
 @app.get("/api/runs")
 def runs() -> dict:
     """RunStore-backed run inventory (spec_id/run_id → replayed lifecycle

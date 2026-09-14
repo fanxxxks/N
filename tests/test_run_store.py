@@ -1465,7 +1465,20 @@ def test_p8_15_paper_account_writable_wired():
 
 def test_p8_15_research_doctor_lifecycle_section():
     """P8-15②: research_doctor's gather_lifecycle_checks returns
-    lifecycle/paper check results (calls lifecycle.py, zero duplication)."""
+    lifecycle/paper check results (calls lifecycle.py, zero duplication).
+
+    p30 (A05) contract amendment (§10.1 whitelist class 2 — the
+    requirement itself changed, approved via the user's 2026-09-14
+    direct instruction 「完成A05」, docs/p30_a05_doctor_eligibility_draft.md
+    §3.4/R9): the old ``paper_account_writable`` check was the hardcoded
+    ``assert_paper_account_writable("current")`` vacuous pass — it never
+    read a real account and produced the F06 false positive the audit
+    proved.  The new contract REMOVES it from this section (paper
+    eligibility now lives in the readiness layer's paper_ready dimension,
+    driven by real binding evidence); the replacement assertion below is
+    strictly stronger about the real invariant: the vacuous name is gone
+    AND the true static check remains.
+    """
     import tempfile
     from pathlib import Path
 
@@ -1477,7 +1490,8 @@ def test_p8_15_research_doctor_lifecycle_section():
     assert "lifecycle_available" in result
     check_names = [c["name"] for c in result["checks"]]
     assert "lifecycle_edges_activated" in check_names
-    assert "paper_account_writable" in check_names
+    # p30 R9: the hardcoded-"current" false positive is gone.
+    assert "paper_account_writable" not in check_names
 
     # build_report's OUTPUT must carry the lifecycle section (not just the
     # direct function call): the report schema includes it when provided.

@@ -105,7 +105,7 @@ def _green_paper() -> dict:
 
 
 def _green_dependencies() -> dict:
-    return {"torch": "2.0", "numpy": "1.24", "deap": "1.4.4"}
+    return {"torch": "2.0", "numpy": "1.24", "pandas": "2.0", "deap": "1.4.4"}
 
 
 def _green_inputs(**overrides) -> dict:
@@ -253,13 +253,12 @@ def test_r2_paper_without_state_and_without_binding_is_not_applicable():
 
 
 def test_r3_config_error_never_whitewashes_runtime():
-    gates = {
-        "status": readiness.STATUS_PASS,
-        "checks": [
-            {"name": f"G{i} check", "ok": True, "detail": "ok"}
-            for i in range(1, 9)
-        ],
-    }
+    """R3: with a config error the doctor cannot compute gates at all —
+    the data dimension must read ``unknown`` (never a stale pass), while
+    the runtime dimension carries the concrete config failure.  The
+    fact that the main-db gates WOULD pass lives outside the report; a
+    stale gate pass must never whitewash a runtime failure."""
+
     report = _report(
         config_status={
             "status": readiness.STATUS_FAIL,
@@ -278,15 +277,23 @@ def test_r3_config_error_never_whitewashes_runtime():
             "detail": "not computable: config error",
         },
         model_searcher=None,
-        gates=gates,  # the stale gate pass must not whitewash anything
+        gates=None,
+        snapshot=None,
+        fairness=None,
+        lifecycle_edges={
+            "status": readiness.STATUS_UNKNOWN,
+            "detail": "not computable: config error",
+        },
     )
     assert _dim(report, "runtime")["status"] == readiness.STATUS_FAIL
     assert _dim(report, "data_eligibility")["status"] == readiness.STATUS_UNKNOWN
+    assert _dim(report, "snapshot_integrity")["status"] == readiness.STATUS_UNKNOWN
     assert _dim(report, "research_ready")["status"] == readiness.STATUS_FAIL
-    # The dimension statuses remain distinct: gates passing is recorded,
-    # runtime failing is recorded, neither replaces the other.
-    gate_checks = _dim(report, "data_eligibility")["checks"]
-    assert gate_checks[0]["status"] == readiness.STATUS_PASS
+    blocking = report["summary"]["blocking"]
+    config_blockers = [
+        entry for entry in blocking if entry["check"] == "config_loaded"
+    ]
+    assert config_blockers and config_blockers[0]["release_condition"]
 
 
 # --- R4: legacy-only artifacts are auditable, never promotable ----------------
@@ -337,6 +344,32 @@ def test_r4_unstamped_conflicting_artifact_fails_promotion():
 # --- R5: frozen snapshot vs online freshness are separate ---------------------
 
 
+def _bound_paper() -> dict:
+    """A paper observation exists (the carried freshness applies)."""
+
+    return {
+        "binding": {
+            "status": readiness.STATUS_PASS,
+            "detail": "1 lifecycle-bound paper observation replayed",
+            "bound": [
+                {
+                    "spec_id": "s",
+                    "run_id": "r",
+                    "account_id": "acc-0001",
+                    "state": "PAPER_OBSERVING",
+                }
+            ],
+        },
+        "sim_state": {
+            "status": readiness.STATUS_PASS,
+            "detail": "paper state file present and consistent with the "
+            "binding evidence",
+            "state_path": "paper/sim_portfolio_state.json",
+            "state_exists": True,
+        },
+    }
+
+
 def test_r5_frozen_snapshot_pass_coexists_with_stale_online_freshness():
     gates = {
         "status": readiness.STATUS_FAIL,
@@ -352,12 +385,23 @@ def test_r5_frozen_snapshot_pass_coexists_with_stale_online_freshness():
             }
         ],
     }
-    report = _report(gates=gates)
+    report = _report(gates=gates, paper=_bound_paper())
     assert _dim(report, "snapshot_integrity")["status"] == readiness.STATUS_PASS
     paper_checks = _dim(report, "paper_ready")["checks"]
     carried = [c for c in paper_checks if c["name"] == "online_data_freshness"]
     assert carried and carried[0]["status"] == readiness.STATUS_FAIL
     assert carried[0].get("carried_from") == "data_eligibility.production_gates"
+
+
+def test_r5_freshness_carry_is_not_applicable_without_an_observation():
+    """The G8 carry answers 'is the LIVE observation's data fresh?' —
+    with no observation it is not_applicable, never a silent pass."""
+
+    report = _report(paper=_green_paper())
+    paper_checks = _dim(report, "paper_ready")["checks"]
+    carried = [c for c in paper_checks if c["name"] == "online_data_freshness"]
+    assert carried
+    assert carried[0]["status"] == readiness.STATUS_NOT_APPLICABLE
 
 
 # --- R7: the bindings block is mandatory --------------------------------------
@@ -374,6 +418,7 @@ def test_r7_bindings_are_mandatory_and_audit_mode():
         "config_path",
         "config_sha256",
         "git_commit",
+        "repo_root",
         "store_root",
         "store_root_source",
         "bound_run",
@@ -562,6 +607,7 @@ def test_r12_webapi_readiness_reports_layered_dimensions(monkeypatch, tmp_path):
 
     class _Cfg:
         duckdb_path = tmp_path / "missing.duckdb"
+        v2_duckdb_path = str(tmp_path / "missing_v2.duckdb")
         data_dir = tmp_path / "data"
 
     class _Model:
