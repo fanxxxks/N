@@ -12,10 +12,14 @@ Failure-test mapping (contract §4, R1-R9 = the plan's nine scenarios):
 loading-phase crash, half-written state, duplicate start, killed
 process tree, lost worker (heartbeat timeout), stale marker after an
 identity change, partial config failure, budget exhaustion (row wall /
-row RSS / campaign wall cap), user abort.
+row RSS / campaign wall cap), user abort.  R10-R12 (rev 1, dual-review
+dispositions): typed exit-2 refusals (identity resolution, config
+preflight) and the --retry-failed drill; G7 pins the venv-shim subtree
+rationale with a real grandchild interpreter.
 
-Stub row commands are small real script files (never one-line ``-c``
-programs): they exercise the real worker/env/plumbing without any DB.
+Stub row commands are small real script files (worker/supervisor/state
+all real); only the trivial exit/sleep helpers are one-line ``-c``
+programs.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ import threading
 import time
 from pathlib import Path
 
+import psutil
 import pytest
 import yaml
 
@@ -170,7 +175,11 @@ def _identity() -> tuple[str, str]:
 
 
 def _manifest(
-    tmp_path: Path, builders: dict, *, budgets: dict | None = None
+    tmp_path: Path,
+    builders: dict,
+    *,
+    budgets: dict | None = None,
+    name: str = "b03-test",
 ) -> ce.CampaignManifest:
     legs = []
     for leg_id, builder in builders.items():
@@ -184,7 +193,7 @@ def _manifest(
             )
         )
     return ce.CampaignManifest(
-        name="b03-test",
+        name=name,
         legs=tuple(legs),
         **(budgets or {}),
     )
@@ -265,6 +274,7 @@ def test_r1_loading_phase_crash_is_recorded_leg_failed_and_others_complete(tmp_p
         "aborted": 0,
         "reused": 0,
         "not_run": 0,
+        "running": 0,
     }
 
     state = _state(tmp_path)
@@ -367,6 +377,12 @@ def test_r3_second_driver_is_refused_and_stale_lock_needs_explicit_clear(
     # A stale lock (holder pid is dead) is refused by default...
     dead = subprocess.Popen([sys.executable, "-c", "raise SystemExit(0)"])
     dead.wait()
+    # Windows pid reuse guard (review A#9): the drill's stale-holder pid
+    # must actually be dead, not freshly recycled by an xdist neighbor.
+    deadline = time.time() + 10
+    while psutil.pid_exists(dead.pid) and time.time() < deadline:
+        time.sleep(0.05)
+    assert not psutil.pid_exists(dead.pid)
     lock_path = tmp_path / "data" / "r1" / "campaign" / "campaign.lock"
     lock_path.write_text(
         json.dumps({"pid": dead.pid, "started_at": "t"}), encoding="utf-8"
@@ -440,6 +456,8 @@ runner.run()
     assert '"status":"running"' in ledger_before  # canonical compact JSON
 
     # The stale campaign lock is explicit: the holder pid is dead, verified.
+    # The relaunch manifest keeps the SAME campaign name (review A#7: a
+    # state file belongs to exactly one campaign).
     ok_stub = _stub(tmp_path, "ok", _OK_STUB)
     manifest = _manifest(
         tmp_path,
@@ -448,6 +466,7 @@ runner.run()
             "leg_b": lambda row: _cmd(wait_stub, marker, started, go, "leg_b"),
             "leg_c": lambda row: _cmd(ok_stub, marker, "leg_c"),
         },
+        name="b03-r4",
     )
     summary = _runner(tmp_path, manifest, clear_stale_lock=True).run()
     assert summary["exit_code"] == 0
@@ -670,6 +689,26 @@ def test_r9_user_abort_records_aborted_kills_worker_and_resume_reexecutes(
     assert state["legs"]["leg_a"]["status"] == "aborted"
     assert state["summary"]["exit_code"] == 130
     run_dir = _leg_run_dir(tmp_path, state, "leg_a")
+    # Review A#1/A#4: the abort must actually KILL the worker tree — read
+    # the worker's self-announced pids from its heartbeat and assert both
+    # the worker and its row command are gone (contract §4/R9: the worker
+    # tree is indeed dead).
+    import psutil
+
+    heartbeat = json.loads(
+        next(iter((run_dir / "executor_rows").glob("*.heartbeat.json"))).read_text(
+            "utf-8"
+        )
+    )
+    deadline = time.time() + 30
+    while (
+        psutil.pid_exists(heartbeat["pid"]) or psutil.pid_exists(heartbeat["child_pid"])
+    ) and time.time() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(heartbeat["pid"]), "worker survived the abort"
+    assert not psutil.pid_exists(heartbeat["child_pid"]), (
+        "row command survived the abort"
+    )
     ledger = _read_ledger(run_dir)
     # The interrupted attempt stays open in the ledger (append-only
     # evidence; the resume closes it as failed and re-executes).
@@ -931,3 +970,206 @@ def test_g6_real_evaluation_records_all_five_stage_phases(
         "evaluation",
         "artifact_write",
     ]
+
+
+# --------------------------------------------------------------------------
+# rev 1 dispositions (dual review A#2/A#3, B#1/B#2/B#6): typed refusals,
+# reuse identity hardening, retry-failed drill, grandchild subtree kill
+# --------------------------------------------------------------------------
+
+
+def test_r10_identity_resolution_refusal_is_exit_2(tmp_path):
+    """DatasetIdMismatch (and any identity-resolution failure) is an
+    OPERATIONAL refusal: CampaignExecutorError (exit 2), never a leg
+    failure and never a raw traceback (p32 §3.4 rev 1)."""
+
+    from ashare_data.manifest import DatasetIdMismatch
+
+    def refusing_identity():
+        raise DatasetIdMismatch("no complete composite generation exists")
+
+    marker = tmp_path / "m.log"
+    ok_stub = _stub(tmp_path, "ok", _OK_STUB)
+    manifest = _manifest(
+        tmp_path, {"leg_a": lambda row: _cmd(ok_stub, marker, "leg_a")}
+    )
+    with pytest.raises(ce.CampaignExecutorError) as excinfo:
+        _runner(
+            tmp_path, manifest, identity_provider=refusing_identity
+        ).run()
+    assert "identity resolution refused" in str(excinfo.value)
+    # Nothing ran: no state was created, no leg executed.
+    assert not (
+        tmp_path / "data" / "r1" / "campaign" / "campaign_state.json"
+    ).exists()
+    assert not marker.exists()
+
+
+def test_r11_config_preflight_refusal_is_exit_2(tmp_path):
+    """The A01 pre-flight refusal is an OPERATIONAL refusal (p32 §3.4
+    rev 1, review B#2): it stops the campaign with exit 2 semantics
+    instead of being recorded as a leg failure."""
+
+    marker = tmp_path / "m.log"
+    ok_stub = _stub(tmp_path, "ok", _OK_STUB)
+    manifest = _manifest(
+        tmp_path, {"leg_a": lambda row: _cmd(ok_stub, marker, "leg_a")}
+    )
+    # Remove the required input the write_leg_config fixture touched.
+    (tmp_path / "shared_data" / "ashare_v2.duckdb").unlink()
+    with pytest.raises(ce.CampaignExecutorError) as excinfo:
+        _runner(tmp_path, manifest).run()
+    assert "pre-flight" in str(excinfo.value)
+    # The leg never started.
+    state = _state(tmp_path)
+    assert not state["legs"].get("leg_a", {}).get("run_id")
+    assert not marker.exists()
+
+
+def test_r12_retry_failed_opens_new_run_and_preserves_old_evidence(tmp_path):
+    """p32 §3.5/I7 drill (review B#6): a terminal-failed leg is skipped
+    with its reason by default; --retry-failed opens a NEW run while the
+    old run's ledger stays byte-identical."""
+
+    marker = tmp_path / "markers.log"
+    fail_stub = _stub(tmp_path, "fail3", "raise SystemExit(3)\n")
+    ok_stub = _stub(tmp_path, "ok", _OK_STUB)
+    manifest = _manifest(
+        tmp_path, {"leg_a": lambda row: _cmd(fail_stub, marker, "leg_a")}
+    )
+    assert _runner(tmp_path, manifest).run()["exit_code"] == 1
+    state = _state(tmp_path)
+    old_run_dir = _leg_run_dir(tmp_path, state, "leg_a")
+    ledger_before = (old_run_dir / "trials.jsonl").read_text(encoding="utf-8")
+
+    # Default relaunch: skipped with the preservation reason, no new run.
+    summary = _runner(tmp_path, manifest).run()
+    assert summary["legs"]["leg_a"]["status"] == "failed"
+    assert "retry-failed" in summary["legs"]["leg_a"]["reason"]
+    assert _leg_run_dir(tmp_path, _state(tmp_path), "leg_a") == old_run_dir
+    assert (
+        (old_run_dir / "trials.jsonl").read_text(encoding="utf-8")
+        == ledger_before
+    )
+
+    # The explicit retry: NEW run id, old ledger untouched, leg succeeds.
+    manifest_retry = _manifest(
+        tmp_path,
+        {"leg_a": lambda row: _cmd(ok_stub, marker, "leg_a")},
+    )
+    summary = _runner(tmp_path, manifest_retry, retry_failed=True).run()
+    assert summary["exit_code"] == 0
+    assert summary["legs"]["leg_a"]["status"] == "succeeded"
+    state_after = _state(tmp_path)
+    assert (
+        state_after["legs"]["leg_a"]["run_id"]
+        != state["legs"]["leg_a"]["run_id"]
+    )
+    assert _leg_run_dir(tmp_path, state_after, "leg_a") != old_run_dir
+    assert (
+        (old_run_dir / "trials.jsonl").read_text(encoding="utf-8")
+        == ledger_before
+    )
+
+
+def test_g7_subtree_rss_and_tree_kill_cover_a_real_grandchild(tmp_path):
+    """The venv-shim rationale (measurement log §3.1) as a test: the row
+    command spawns a REAL grandchild interpreter; the budget kill takes
+    the whole tree down including the grandchild (review A#13)."""
+
+    marker = tmp_path / "markers.log"
+    grandchild_pid_file = tmp_path / "grandchild.pid"
+    stop = tmp_path / "stop"
+    spawn_stub = _stub(
+        tmp_path,
+        "spawner",
+        """\
+import pathlib, subprocess, sys, time
+grandchild = subprocess.Popen(
+    [
+        sys.executable,
+        "-c",
+        "import os, pathlib, time; "
+        "pathlib.Path(r'" + sys.argv[2] + "').write_text(str(os.getpid())); "
+        "time.sleep(120)",
+    ],
+)
+pathlib.Path(sys.argv[1]).parent.mkdir(parents=True, exist_ok=True)
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write("spawner" + chr(10))
+deadline = time.time() + 60
+while not pathlib.Path(sys.argv[3]).exists() and time.time() < deadline:
+    time.sleep(0.05)
+""",
+    )
+    manifest = _manifest(
+        tmp_path,
+        {
+            "leg_tree": lambda row: _cmd(
+                spawn_stub, marker, grandchild_pid_file, stop
+            ),
+        },
+        budgets={"row_wall_clock_budget_s": 2.0},
+    )
+    summary = _runner(tmp_path, manifest).run()
+    assert summary["exit_code"] == 1
+    assert summary["legs"]["leg_tree"]["status"] == "failed"
+    assert "wall-clock budget" in summary["legs"]["leg_tree"]["error"]
+    # The wall budget killed the tree: worker, row command AND the real
+    # grandchild interpreter are all gone.
+    state = _state(tmp_path)
+    run_dir = _leg_run_dir(tmp_path, state, "leg_tree")
+    heartbeat = json.loads(
+        next(iter((run_dir / "executor_rows").glob("*.heartbeat.json"))).read_text(
+            "utf-8"
+        )
+    )
+    deadline = time.time() + 30
+    while time.time() < deadline and (
+        psutil.pid_exists(heartbeat["pid"])
+        or psutil.pid_exists(heartbeat["child_pid"])
+    ):
+        time.sleep(0.1)
+    assert not psutil.pid_exists(heartbeat["pid"])
+    assert not psutil.pid_exists(heartbeat["child_pid"])
+    grandchild_pid = int(grandchild_pid_file.read_text(encoding="utf-8"))
+    deadline = time.time() + 30
+    while psutil.pid_exists(grandchild_pid) and time.time() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(grandchild_pid), (
+        "the grandchild interpreter survived the budget tree kill"
+    )
+
+
+def test_g2b_telemetry_partial_missing_fields_stay_null(tmp_path):
+    """I11 (review A#12): a field is null unless its source is present —
+    a row without a field never fabricates a 0."""
+
+    output = tmp_path / "r1" / "leg_a" / "protocol_result.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(
+            {
+                "n_candidates": 5,
+                "rows": [
+                    {"search_result": {"consumed_budget": 8}},
+                    {"no_search_result_here": True},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = tmp_path / "markers.log"
+    ok_stub = _stub(tmp_path, "ok", _OK_STUB)
+    manifest = _manifest(
+        tmp_path, {"leg_a": lambda row: _cmd(ok_stub, marker, "leg_a")}
+    )
+    summary = _runner(tmp_path, manifest).run()
+    assert summary["exit_code"] == 0
+    telemetry = _state(tmp_path)["legs"]["leg_a"]["telemetry"]
+    assert telemetry["consumed_budget"] == 8
+    assert telemetry["requested_budget"] is None
+    assert telemetry["proposal_count"] is None
+    assert telemetry["invalid_proposals"] is None
+    assert telemetry["semantic_duplicates"] is None
+    assert telemetry["n_candidates"] == 5

@@ -56,13 +56,13 @@ from loguru import logger
 from ashare_data.io_utils import atomic_write_json, read_json_safe
 
 from .identity import content_hash
+from .ledger import LedgerIntegrityError
 from .run_store import RunStore, RunStoreError
 from .runspec import resolve_runtime_runspec
 from .task_executor import (
     TaskExecutor,
     TaskExecutorError,
     TaskRow,
-    row_slug,
 )
 
 CAMPAIGN_STATE_SCHEMA_VERSION = 1
@@ -176,9 +176,7 @@ class CampaignManifest:
                 raise ValueError(f"{name} must be a positive number or None")
 
 
-def default_evaluation_command(
-    leg: CampaignLeg, python: str | None = None
-) -> list[str]:
+def default_evaluation_command(leg: CampaignLeg) -> list[str]:
     """The standard engineering-mode evaluation row command (p32 §3.7).
 
     Engineering is the explicit non-formal declaration (p27 I2).  Formal
@@ -188,7 +186,7 @@ def default_evaluation_command(
     import sys
 
     return [
-        python or str(sys.executable),
+        str(sys.executable),
         "-m",
         "ashare_model.evaluation",
         "--config",
@@ -221,6 +219,8 @@ class CampaignRunner:
         heartbeat_timeout_s: float = 600.0,
         poll_interval_s: float = 0.2,
         kill_grace_s: float = 3.0,
+        done_dir: str | Path | None = None,
+        marker_path: str | Path | None = None,
     ):
         self.manifest = manifest
         self.state_dir = Path(state_dir)
@@ -228,6 +228,17 @@ class CampaignRunner:
             Path(repo_root)
             if repo_root is not None
             else Path(__file__).resolve().parents[1]
+        )
+        # Derived-display and human-history locations (review A#14: the
+        # generic module takes them as parameters; the R1 CLI pins the
+        # data/r1 convention).
+        self.done_dir = (
+            Path(done_dir) if done_dir is not None else self.repo_root / "data" / "r1"
+        )
+        self.marker_log_path = (
+            Path(marker_path)
+            if marker_path is not None
+            else self.repo_root / "data" / "r1" / "markers.log"
         )
         self._identity_provider = identity_provider
         self._clear_stale_lock_enabled = bool(clear_stale_lock)
@@ -292,7 +303,12 @@ class CampaignRunner:
                 f"campaign lock holder pid {pid} is still alive; refusing "
                 "to clear a live lock"
             )
-        self.lock_path.unlink()
+        try:
+            self.lock_path.unlink()
+        except FileNotFoundError:
+            # A concurrent driver won the removal race; treat as cleared
+            # (its own acquire will fail with the live-holder refusal).
+            return False
         self._stale_campaign_lock_cleared = True
         logger.warning(
             "campaign {} stale lock cleared (holder pid {!r} verified dead)",
@@ -321,8 +337,16 @@ class CampaignRunner:
         configs: dict[str, Any] = {}
         reference_payload: dict[str, Any] | None = None
         for leg in self.manifest.legs:
-            raw = load_config(leg.config, project_root=self.repo_root)
-            data_config = make_data_config(raw, self.repo_root)
+            try:
+                raw = load_config(leg.config, project_root=self.repo_root)
+                data_config = make_data_config(raw, self.repo_root)
+            except CampaignExecutorError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - typed refusal (exit 2)
+                raise CampaignExecutorError(
+                    f"leg {leg.leg_id!r} config resolution refused: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
             payload = asdict(data_config)
             if reference_payload is None:
                 reference_payload = payload
@@ -345,29 +369,40 @@ class CampaignRunner:
 
         if self._dataset_id and self._data_cutoff:
             return self._dataset_id, self._data_cutoff
-        if self._identity_provider is not None:
-            dataset_id, data_cutoff = self._identity_provider()
-        else:
-            from ashare_data.config import (
-                load_config,
-                make_model_config,
-            )
-            from ashare_model.data_loader import AshareDataLoader
+        try:
+            if self._identity_provider is not None:
+                dataset_id, data_cutoff = self._identity_provider()
+            else:
+                from ashare_data.config import (
+                    load_config,
+                    make_model_config,
+                )
+                from ashare_model.data_loader import AshareDataLoader
 
-            if self._reference_data_config is None:
-                self._resolve_data_configs()
-            loader = AshareDataLoader(
-                self._reference_data_config,
-                make_model_config(
-                    load_config(
-                        self.manifest.legs[0].config,
-                        project_root=self.repo_root,
-                    )
-                ),
-            )
-            loader.confirm_input_snapshot()
-            dataset_id = loader.dataset_id
-            data_cutoff = loader.frozen_data_cutoff()
+                if self._reference_data_config is None:
+                    self._resolve_data_configs()
+                loader = AshareDataLoader(
+                    self._reference_data_config,
+                    make_model_config(
+                        load_config(
+                            self.manifest.legs[0].config,
+                            project_root=self.repo_root,
+                        )
+                    ),
+                )
+                loader.confirm_input_snapshot()
+                dataset_id = loader.dataset_id
+                data_cutoff = loader.frozen_data_cutoff()
+        except CampaignExecutorError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - typed refusal (exit 2)
+            # DatasetIdMismatch and every other identity-resolution
+            # refusal is an OPERATIONAL refusal (p32 §3.4): fail-closed
+            # with exit 2, never a leg failure and never a downgrade.
+            raise CampaignExecutorError(
+                f"campaign identity resolution refused: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
         if not dataset_id or not data_cutoff:
             raise CampaignExecutorError(
                 "campaign launch requires a confirmed composite identity "
@@ -380,7 +415,8 @@ class CampaignRunner:
 
     def _leg_spec(self, leg: CampaignLeg, data_config: Any):
         """Build the leg's frozen RunSpec through the single runtime
-        authority (the same factory the evaluation entry uses)."""
+        authority (the same factory the evaluation entry uses).  A
+        resolution failure is an operational refusal (exit 2)."""
 
         from ashare_data.config import (
             load_config,
@@ -389,32 +425,45 @@ class CampaignRunner:
             make_protocol_config,
         )
 
-        raw = load_config(leg.config, project_root=self.repo_root)
-        model_config = make_model_config(raw)
-        backtest_config = make_backtest_config(raw)
-        proto_cfg = make_protocol_config(raw)
-        tier = getattr(proto_cfg, leg.tier)
-        # The evaluation entry's budget identity formula (evaluation.main):
-        # requested = tier.steps * tier.batch_size, minimum one.
-        requested_budget = max(1, int(tier.steps) * int(tier.batch_size))
-        return resolve_runtime_runspec(
-            dataset_id=self._dataset_id,
-            data_cutoff=self._data_cutoff,
-            data_config=data_config,
-            backtest_config=backtest_config,
-            requested_budget=requested_budget,
-            n_folds=len(proto_cfg.folds),
-            research_domain=proto_cfg.domain,
-            seeds=tuple(int(s) for s in proto_cfg.seeds),
-            searcher=model_config.searcher,
-            max_formula_len=int(model_config.max_formula_len),
-            require_clean_tree=False,
-        )
+        try:
+            raw = load_config(leg.config, project_root=self.repo_root)
+            model_config = make_model_config(raw)
+            backtest_config = make_backtest_config(raw)
+            proto_cfg = make_protocol_config(raw)
+            tier = getattr(proto_cfg, leg.tier)
+            # The evaluation entry's budget identity formula
+            # (evaluation.main): requested = tier.steps * tier.batch_size,
+            # minimum one.
+            requested_budget = max(1, int(tier.steps) * int(tier.batch_size))
+            return resolve_runtime_runspec(
+                dataset_id=self._dataset_id,
+                data_cutoff=self._data_cutoff,
+                data_config=data_config,
+                backtest_config=backtest_config,
+                requested_budget=requested_budget,
+                n_folds=len(proto_cfg.folds),
+                research_domain=proto_cfg.domain,
+                seeds=tuple(int(s) for s in proto_cfg.seeds),
+                searcher=model_config.searcher,
+                max_formula_len=int(model_config.max_formula_len),
+                require_clean_tree=False,
+            )
+        except CampaignExecutorError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - typed refusal (exit 2)
+            raise CampaignExecutorError(
+                f"leg {leg.leg_id!r} RunSpec resolution refused: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
     def _leg_identity(self, leg: CampaignLeg, spec) -> tuple[str, dict[str, Any]]:
         """The content identity a reuse decision must match exactly
         (config/snapshot/code/seed/budget + the leg's research semantics,
-        p32 §3.2/I3)."""
+        p32 §3.2/I3, rev 1: the frozen ``spec_id`` is part of the
+        identity — the runtime_overrides/.env deep-merge channel and a
+        dirty tree can change the effective run parameters without
+        touching the leg YAML, and ``spec_id`` is computed from the
+        resolved spec either way)."""
 
         config_bytes = Path(leg.config).read_bytes()
         payload = {
@@ -422,6 +471,7 @@ class CampaignRunner:
             "dataset_id": self._dataset_id,
             "data_cutoff": self._data_cutoff,
             "git_commit": spec.git_commit,
+            "spec_id": spec.spec_id,
             "seeds": [int(seed) for seed in spec.seeds],
             "requested_budget": int(spec.requested_budget),
             "frequency": str(spec.frequency),
@@ -445,6 +495,16 @@ class CampaignRunner:
                 f"unknown campaign state schema version {version!r} in "
                 f"{self.state_path} (this code understands "
                 f"<= {CAMPAIGN_STATE_SCHEMA_VERSION})"
+            )
+        # Review A#7: the state file belongs to exactly one campaign — a
+        # different manifest pointed at the same state_dir would mix leg
+        # records and cross-campaign reuse.  Fail closed (exit 2).
+        state_campaign = state.get("campaign_id")
+        if state_campaign != self.manifest.name:
+            raise CampaignExecutorError(
+                f"campaign state {self.state_path} belongs to campaign "
+                f"{state_campaign!r}, not {self.manifest.name!r}; refusing "
+                "to mix leg records across campaigns (p32 §3.6, rev 1)"
             )
         return state
 
@@ -487,7 +547,7 @@ class CampaignRunner:
         return [str(part) for part in leg.command]
 
     def _derived_done_path(self, leg: CampaignLeg) -> Path:
-        return self.repo_root / "data" / "r1" / f"{leg.leg_id}.done"
+        return self.done_dir / f"{leg.leg_id}.done"
 
     def _write_derived_done(self, leg: CampaignLeg, identity_hash: str) -> None:
         """Derived display only (p32 §3.2): written from terminal success,
@@ -509,9 +569,8 @@ class CampaignRunner:
             f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {name} {detail}"
         )
         try:
-            marker_log = self.repo_root / "data" / "r1" / "markers.log"
-            marker_log.parent.mkdir(parents=True, exist_ok=True)
-            with marker_log.open("a", encoding="utf-8") as handle:
+            self.marker_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.marker_log_path.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
         except OSError as exc:
             logger.warning("campaign marker write failed: {}", exc)
@@ -536,60 +595,53 @@ class CampaignRunner:
         """Telemetry extracted from the leg's own protocol artifact
         (p32 §3.7/I11): requested/consumed unique semantic evaluations,
         proposal/duplicate/invalid counts and the candidate count.  A
-        field is ``None`` when its source is absent — never invented."""
+        field is ``None`` unless its source is present — per-field (a
+        row without a field contributes nothing and never turns the
+        field into a fabricated 0)."""
 
-        telemetry: dict[str, Any] = {
-            "requested_budget": None,
-            "consumed_budget": None,
-            "proposal_count": None,
-            "invalid_proposals": None,
-            "semantic_duplicates": None,
-            "n_candidates": None,
-        }
         payload = read_json_safe(leg.output)
         if not isinstance(payload, dict):
-            return telemetry
-        sums = {
-            key: 0
-            for key in (
-                "requested_budget",
-                "consumed_budget",
-                "proposal_count",
-                "invalid_proposals",
-                "semantic_duplicates",
-            )
-        }
-        found = False
+            return {
+                "requested_budget": None,
+                "consumed_budget": None,
+                "proposal_count": None,
+                "invalid_proposals": None,
+                "semantic_duplicates": None,
+                "n_candidates": None,
+            }
+        keys = (
+            "requested_budget",
+            "consumed_budget",
+            "proposal_count",
+            "invalid_proposals",
+            "semantic_duplicates",
+        )
+        sums = {key: 0 for key in keys}
+        found = {key: False for key in keys}
         for row in payload.get("rows", []) or []:
             search_result = (
                 row.get("search_result") if isinstance(row, dict) else None
             )
             if not isinstance(search_result, dict):
                 continue
-            for key in sums:
+            for key in keys:
                 value = search_result.get(key)
                 if isinstance(value, (int, float)) and not isinstance(
                     value, bool
                 ):
                     sums[key] += int(value)
-                    found = True
-        if found:
-            telemetry.update(sums)
+                    found[key] = True
+        telemetry: dict[str, Any] = {
+            key: (sums[key] if found[key] else None) for key in keys
+        }
         n_candidates = payload.get("n_candidates")
-        if isinstance(n_candidates, (int, float)) and not isinstance(
-            n_candidates, bool
-        ):
-            telemetry["n_candidates"] = int(n_candidates)
-        return telemetry
-
-    def _executor_result_path(self, data_config: Any, spec, run_id: str, row: TaskRow) -> Path:
-        return (
-            RunStore(data_config.data_dir).runs_dir
-            / spec.spec_id
-            / run_id
-            / "executor_rows"
-            / f"{row_slug(row)}.result.json"
+        telemetry["n_candidates"] = (
+            int(n_candidates)
+            if isinstance(n_candidates, (int, float))
+            and not isinstance(n_candidates, bool)
+            else None
         )
+        return telemetry
 
     def _execute_leg(
         self,
@@ -604,13 +656,28 @@ class CampaignRunner:
         """Run one leg through the TaskExecutor and update its state
         record.  Returns the terminal leg status."""
 
-        run_id = record.get("run_id")
-        resume = bool(
-            run_id
-            and record.get("identity_hash") == identity_hash
+        resume_candidate = bool(
+            record.get("run_id")
             and record.get("status") in ("running", "aborted")
         )
-        if not resume:
+        identity_stale = resume_candidate and (
+            record.get("identity_hash") != identity_hash
+        )
+        resume = bool(resume_candidate and not identity_stale)
+        update: dict[str, Any] = {}
+        if identity_stale:
+            # The leg died in flight and its identity changed since: the
+            # recovery decision (NEW run; the old run stays discoverable)
+            # is explicit in the state, not only in the log (p32 §3.5
+            # rev 1, review A#5).
+            update["superseded_run_id"] = record.get("run_id")
+            update["superseded_reason"] = (
+                "identity changed while the attempt was in flight; the "
+                "old run keeps its open trial as evidence"
+            )
+        if resume:
+            run_id = record["run_id"]
+        else:
             run_id = f"leg-{leg.leg_id}-{spec.spec_id[:8]}-{_short_id()}"
 
         store = RunStore(data_config.data_dir)
@@ -654,11 +721,17 @@ class CampaignRunner:
                 row_wall_clock_budget_s=self.manifest.row_wall_clock_budget_s,
                 row_peak_rss_budget_mb=self.manifest.row_peak_rss_budget_mb,
             )
-        except (RunStoreError, TaskExecutorError) as exc:
+        except (
+            RunStoreError,
+            TaskExecutorError,
+            LedgerIntegrityError,
+        ) as exc:
             if resume:
                 # The stored run's frozen spec no longer matches (identity
                 # changed under an in-flight record): never force-attach.
-                # Open a NEW run; the old evidence stays untouched.
+                # Open a NEW run; the superseded pointer + refusal reason
+                # stay in the state (p32 §3.5 rev 1), the old evidence
+                # stays untouched.
                 logger.warning(
                     "campaign leg {} attach of run {} refused ({}); "
                     "opening a new run (old evidence preserved)",
@@ -670,12 +743,24 @@ class CampaignRunner:
                     leg,
                     data_config,
                     state,
-                    {**record, "run_id": None, "status": "failed"},
+                    {
+                        **record,
+                        "run_id": None,
+                        "status": "failed",
+                        "superseded_run_id": run_id,
+                        "superseded_reason": f"attach refused: {exc}",
+                    },
                     spec,
                     identity_hash,
                     identity_payload,
                 )
-            raise
+            # A ledger-integrity or store refusal on a fresh attempt is an
+            # OPERATIONAL refusal (evidence problem), not a leg work
+            # failure: exit 2, never a silently failed leg (review A#2).
+            raise CampaignExecutorError(
+                f"leg {leg.leg_id!r} executor construction refused: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
         # I1 (p32 §3.1): the attempt start is registered immediately.
         self._mark_leg(
             state,
@@ -687,6 +772,7 @@ class CampaignRunner:
                 "identity": identity_payload,
                 "run_id": run_id,
                 "spec_id": spec.spec_id,
+                **update,
             },
         )
         try:
@@ -701,21 +787,35 @@ class CampaignRunner:
                 },
             )
             raise
+        except TaskExecutorError as exc:
+            # Attach-time reconciliation can raise TaskExecutorError
+            # (plan drift / concurrent supervisor) — an operational
+            # refusal, never a leg work failure (review A#2).
+            self._mark_leg(
+                state,
+                leg,
+                {
+                    "status": "failed",
+                    "error": f"executor refused: {exc}",
+                },
+            )
+            raise CampaignExecutorError(
+                f"leg {leg.leg_id!r} executor refused: {exc}"
+            ) from exc
         row_result = payload["rows"][row.row_id]
         status = row_result["status"]
         trial_id = row_result.get("trial_id")
-        update: dict[str, Any] = {
+        # Review A#11: the executor's own payload carries the row metrics
+        # (single authority; no layout re-derivation on this side).
+        metrics = row_result.get("metrics") or {}
+        update = {
             "status": status,
             "trial_id": trial_id,
             "error": row_result.get("error"),
+            "wall_seconds": metrics.get("wall_seconds"),
+            "peak_rss_mb": metrics.get("peak_rss_mb"),
+            "active_phase": metrics.get("active_phase"),
         }
-        result = read_json_safe(
-            self._executor_result_path(data_config, spec, run_id, row)
-        )
-        if isinstance(result, dict):
-            update["wall_seconds"] = result.get("wall_seconds")
-            update["peak_rss_mb"] = result.get("peak_rss_mb")
-            update["active_phase"] = result.get("phase")
         if status == "succeeded":
             update["telemetry"] = self._leg_telemetry(leg)
             update["output"] = str(leg.output)
@@ -776,28 +876,23 @@ class CampaignRunner:
                 for leg in selected:
                     record = state["legs"].get(leg.leg_id) or {}
                     status_before = record.get("status")
-                    try:
-                        spec = self._leg_spec(leg, data_configs[leg.leg_id])
-                        identity_hash, identity_payload = self._leg_identity(
-                            leg, spec
-                        )
-                    except CampaignExecutorError:
-                        raise
-                    except Exception as exc:  # noqa: BLE001 - leg-level refusal
-                        self._mark_leg(
-                            state,
-                            leg,
-                            {
-                                "status": "failed",
-                                "error": "identity/spec resolution refused: "
-                                f"{type(exc).__name__}: {exc}",
-                            },
-                        )
-                        continue
+                    # Review A#2: a config/spec resolution failure is an
+                    # OPERATIONAL refusal (exit 2), never a leg failure —
+                    # typed wrapping happens in _resolve_data_configs /
+                    # _resolve_identity / _leg_spec callers below.
+                    spec = self._leg_spec(leg, data_configs[leg.leg_id])
+                    identity_hash, identity_payload = self._leg_identity(
+                        leg, spec
+                    )
                     if (
                         status_before == "succeeded"
                         and record.get("identity_hash") == identity_hash
+                        and record.get("output") == str(leg.output)
                     ):
+                        # Rev 1 (review A#3): reuse additionally requires
+                        # the recorded output pointer to match — an
+                        # identity cannot silently vouch for results
+                        # written somewhere else.
                         record.update({"reused": True})
                         state["legs"][leg.leg_id] = record
                         self._persist_state(state)
@@ -830,13 +925,18 @@ class CampaignRunner:
                         and time.perf_counter() - started
                         > float(self.manifest.campaign_wall_clock_budget_s)
                     ):
+                        # Rev 1 (review A#6): a stale "running" record is an
+                        # INTERRUPTED leg from a killed prior driver — the
+                        # attach-same-run recovery target (p32 §3.5).  The
+                        # sweep must not demote it to not_run (that would
+                        # orphan the open trial); it stays attachable.
                         for remaining in selected:
                             remaining_status = (
                                 state["legs"]
                                 .get(remaining.leg_id, {})
                                 .get("status")
                             )
-                            if remaining_status in ("running", None, "not_run"):
+                            if remaining_status in (None, "not_run"):
                                 self._mark_leg(
                                     state,
                                     remaining,
@@ -848,13 +948,10 @@ class CampaignRunner:
                                     },
                                 )
                         break
-                    try:
-                        self._preflight(leg)
-                    except CampaignExecutorError as exc:
-                        self._mark_leg(
-                            state, leg, {"status": "failed", "error": str(exc)}
-                        )
-                        continue
+                    # Review B#2 (p32 §3.4): the A01 pre-flight refusal is
+                    # an OPERATIONAL refusal (exit 2), not a leg failure —
+                    # it propagates out of run().
+                    self._preflight(leg)
                     self._execute_leg(
                         leg,
                         data_configs[leg.leg_id],
@@ -887,6 +984,7 @@ class CampaignRunner:
             "aborted": 0,
             "reused": 0,
             "not_run": 0,
+            "running": 0,
         }
         statuses: dict[str, str] = {}
         for leg in selected:
@@ -898,9 +996,16 @@ class CampaignRunner:
             if status in counts:
                 counts[status] += 1
         if aborted or any(s == "aborted" for s in statuses.values()):
+            # A user abort is sticky for the campaign (review B#5): a
+            # later budget stop must not downgrade the abort evidence.
             campaign_status = "aborted"
             exit_code = EXIT_ABORTED
-        elif any(s == "failed" for s in statuses.values()):
+        elif any(
+            s in ("failed", "running") for s in statuses.values()
+        ):
+            # A leftover "running" leg is an interrupted attempt the cap
+            # sweep deliberately left attachable (rev 1): the campaign is
+            # not completed — recovery happens on the next launch.
             campaign_status = "failed"
             exit_code = EXIT_FAILED
         elif any(s == "not_run" for s in statuses.values()):

@@ -325,10 +325,16 @@ def _kill_tree(pid: int, grace_s: float) -> None:
             psutil.Process(victim_pid).terminate()
         except psutil.NoSuchProcess:
             pass
-    _, alive = psutil.wait_procs(
-        [psutil.Process(v) for v in victims if psutil.pid_exists(v)],
-        timeout=grace_s,
-    )
+    # A victim can exit between pid_exists() and Process(): guard the
+    # reaping sweep exactly like the terminate loop (a raw NoSuchProcess
+    # here would otherwise kill the supervisor's own unwind).
+    procs = []
+    for victim_pid in victims:
+        try:
+            procs.append(psutil.Process(victim_pid))
+        except psutil.NoSuchProcess:
+            continue
+    _, alive = psutil.wait_procs(procs, timeout=grace_s)
     for proc in alive:
         try:
             proc.kill()
@@ -733,9 +739,11 @@ class TaskExecutor:
         exit_code: int | None,
         author: str,
         phase_path: Path | None = None,
-    ) -> str:
+    ) -> tuple[str, dict[str, Any]]:
         """Close an attempt abnormally: supervisor-written result record
-        (the worker produced none) + terminal failed ledger entry."""
+        (the worker produced none) + terminal failed ledger entry.
+        Returns ``(status, metrics)`` so the summary can carry the same
+        evidence the ledger holds."""
 
         phases = read_phase_journal(phase_path)
         write_row_result(
@@ -761,7 +769,7 @@ class TaskExecutor:
             metrics["phases"] = phases
             metrics["active_phase"] = phases[-1]["phase"]
         self._handle.fail_trial(trial_id, error=error, metrics=metrics)
-        return "failed"
+        return "failed", metrics
 
     def _run_row(self, row: TaskRow, attempt: int) -> dict[str, Any]:
         rows_dir = self.rows_dir
@@ -838,6 +846,14 @@ class TaskExecutor:
                     break
                 time.sleep(self.poll_interval_s)
             proc.wait()
+        except KeyboardInterrupt:
+            # B03 p32 §3.6/R9: the except clause runs BEFORE the finally
+            # below, so the ownership-verified kill executes while the
+            # worker reference is still alive — a user abort must never
+            # orphan the worker or its row command (the interrupted
+            # attempt stays open for the resume to close + re-execute).
+            self._terminate_worker_tree(proc, job_path)
+            raise
         finally:
             self._active = (None, None)
 
@@ -847,7 +863,7 @@ class TaskExecutor:
                 f"{self.heartbeat_timeout_s:.1f}s without a beat "
                 "(worker killed by the supervisor)"
             )
-            status = self._finish_attempt(
+            status, metrics = self._finish_attempt(
                 row=row,
                 trial_id=trial_id,
                 error=error,
@@ -856,7 +872,12 @@ class TaskExecutor:
                 author="supervisor",
                 phase_path=phase_path,
             )
-            return {"status": status, "trial_id": trial_id, "error": error}
+            return {
+                "status": status,
+                "trial_id": trial_id,
+                "error": error,
+                "metrics": metrics,
+            }
 
         result = _read_valid_result(result_path, row)
         if result is None:
@@ -864,7 +885,7 @@ class TaskExecutor:
                 f"row {row.row_id}: worker exited {proc.returncode} "
                 "without a valid result record"
             )
-            status = self._finish_attempt(
+            status, metrics = self._finish_attempt(
                 row=row,
                 trial_id=trial_id,
                 error=error,
@@ -873,7 +894,12 @@ class TaskExecutor:
                 author="supervisor",
                 phase_path=phase_path,
             )
-            return {"status": status, "trial_id": trial_id, "error": error}
+            return {
+                "status": status,
+                "trial_id": trial_id,
+                "error": error,
+                "metrics": metrics,
+            }
 
         metrics = {
             "wall_seconds": result.get("wall_seconds"),
@@ -886,10 +912,20 @@ class TaskExecutor:
             metrics["active_phase"] = result.get("phase")
         if result["status"] == "succeeded":
             self._handle.complete_trial(trial_id, metrics=metrics)
-            return {"status": "succeeded", "trial_id": trial_id, "error": None}
+            return {
+                "status": "succeeded",
+                "trial_id": trial_id,
+                "error": None,
+                "metrics": metrics,
+            }
         error = str(result.get("error")) or f"row {row.row_id} failed"
         self._handle.fail_trial(trial_id, error=error, metrics=metrics)
-        return {"status": "failed", "trial_id": trial_id, "error": error}
+        return {
+            "status": "failed",
+            "trial_id": trial_id,
+            "error": error,
+            "metrics": metrics,
+        }
 
     def _abort_active_worker(self) -> None:
         """User-abort path (B03 p32 §3.6/R9): terminate the active worker
@@ -913,7 +949,17 @@ class TaskExecutor:
         """Kill the worker and its command subtree — but only after the
         ownership check: the pid's command line must still name this
         run's job file, so a recycled pid can never route a kill into an
-        unrelated process (B03 p32 §3.6)."""
+        unrelated process (B03 p32 §3.6).
+
+        Fallback invariant (review A#10/B#4): when the cmdline check
+        fails, the Popen-handle ``proc.kill()`` below still targets the
+        exact process this supervisor spawned — while ``proc`` is
+        unreaped (``poll() is None`` pins it on Windows via the open
+        handle, on POSIX as an unreaped zombie) the OS cannot recycle
+        that pid, so the fallback can never hit a foreign process.  It
+        is deliberately NOT a tree kill: an orphaned command grandchild
+        after a genuine worker death is recorded evidence, not a target.
+        """
 
         if job_path is not None and _process_cmdline_has(
             proc.pid, str(job_path)
@@ -982,6 +1028,7 @@ class TaskExecutor:
                                 "status": "succeeded",
                                 "trial_id": open_ids[0],
                                 "error": None,
+                                "metrics": metrics,
                             }
                         else:
                             error = (
@@ -995,6 +1042,7 @@ class TaskExecutor:
                                 "status": "failed",
                                 "trial_id": open_ids[0],
                                 "error": error,
+                                "metrics": metrics,
                             }
                         logger.info(
                             "task_executor run={} row={} adopted interrupted "

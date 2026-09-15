@@ -69,10 +69,14 @@ F09（方案 §2.3）：`scripts/r1_campaign.ps1` 以 `.done` 文件跳过任务
 ### 3.2 身份与复用（I3/I4）
 
 * **I3**：leg 身份 = `content_hash("campaign_leg_identity", {config_sha256, dataset_id,
-  data_cutoff, git_commit, seeds, requested_budget, frequency, horizon, research_domain,
-  searcher, max_formula_len, lifecycle_mode})`。复用判定**只**来自状态文件：leg 状态为
-  `succeeded` 且身份哈希与当前一致 → 跳过（派生 `.done` 仅作显示，由终态成功写出；
-  绝不读取 `.done` 做决策；无状态记录的裸 `.done` 一律视为不可复用 → 重跑）。
+  data_cutoff, git_commit, spec_id, seeds, requested_budget, frequency, horizon,
+  research_domain, searcher, max_formula_len, lifecycle_mode})`。复用判定**只**来自
+  状态文件：leg 状态为 `succeeded` 且身份哈希与当前一致、且 state 记录的 output 指针
+  与当前 leg 一致 → 跳过（派生 `.done` 仅作显示，由终态成功写出；绝不读取 `.done`
+  做决策；无状态记录的裸 `.done` 一律视为不可复用 → 重跑）。`spec_id` 与 output
+  指针入闸是 rev 1 修订（见 §9）：`runtime_overrides.yaml`/`.env` 深合并与脏树
+  可以在 leg YAML 不变的情况下改变有效运行参数（spec_id 必变），output 指针防
+  「身份替另一路径的产物作保」。
 * **I4**：数据身份经唯一权威解析：驱动每次启动构建一次 `AshareDataLoader`（首个 leg
   的 data_config；跨 leg 校验 data 配置一致，不一致拒绝），调用
   `confirm_input_snapshot()`（全量未缓存重哈希，代价在 §5 披露）与
@@ -90,30 +94,42 @@ F09（方案 §2.3）：`scripts/r1_campaign.ps1` 以 `.done` 文件跳过任务
 
 ### 3.4 终态语义与退出码（I6）
 
-* **I6**：leg 终态三义：`succeeded` / `failed`（命令失败、心跳失联、预算超限）/ 
+* **I6**：leg 终态三义：`succeeded` / `failed`（命令失败、心跳失联、预算超限）/
   `aborted`（用户中止 SIGINT，或驱动被杀后 leg 留存 open trial——恢复时关闭为 failed
   并补执行，账本证据保留）。campaign 状态：`completed` / `failed` /
   `stopped_budget` / `aborted`。退出码：全 completed（含复用）= 0；任一 leg failed =
   1（**部分失败不得返回整体成功**）；用户中止 = 130；操作前置拒绝（锁冲突、快照
-  确认失败、配置预检失败）= 2。
+  确认失败、配置/RunSpec 解析失败、配置预检失败、账本完整性拒绝）= 2。
+  rev 1 澄清：(a) 配置预检失败与身份/RunSpec 解析失败同样映射 exit 2（操作前置
+  拒绝），不作为 leg 失败；(b) campaign 墙钟上限触发时，遗留的 `running` 记录
+  （被杀前驱的 interrupted leg）保持 attachable、不被降级为 `not_run`，此时
+  campaign 终态为 `failed`/exit 1（下一轮恢复）；(c) `aborted` 对 campaign 是
+  粘性的——后续的预算停止不得把已有 abort 证据降级。
 
 ### 3.5 恢复语义（I7）
 
-* **I7**：重启驱动时逐 leg 对账：`succeeded` 且身份一致 → 复用；状态为
-  `running/aborted` 且存在 run_id → **attach 同一 run 继续**（TaskExecutor 把 interrupted
-  尝试关闭为 failed 并补执行一次，或采纳其有效结果；旧失败试错保留在链上）；
-  `failed`（终态工作失败）→ 默认**不**自动重跑；`--retry-failed` 显式开新 run
-  （新 run_id，旧 run 与账本原样保留）。恢复是「继续已验证 checkpoint（同 run 新
-  attempt）」还是「新 attempt（新 run）」由上述规则唯一决定，并在状态与日志中显式。
+* **I7**：重启驱动时逐 leg 对账：`succeeded` 且身份一致且 output 指针一致 → 复用；
+  状态为 `running/aborted` 且存在 run_id 且身份一致 → **attach 同一 run 继续**
+  （TaskExecutor 把 interrupted 尝试关闭为 failed 并补执行一次，或采纳其有效结果；
+  旧失败试错保留在链上）；身份在 in-flight 期间变化 → 不 attach，开**新 run**，
+  state 记录 `superseded_run_id` 与原因（rev 1，review A#5）；`failed`（终态工作
+  失败）→ 默认**不**自动重跑；`--retry-failed` 显式开新 run（新 run_id，旧 run 与
+  账本原样保留）。恢复是「继续已验证 checkpoint（同 run 新 attempt）」还是
+  「新 attempt（新 run）」由上述规则唯一决定，并在状态与日志中显式。
 
 ### 3.6 归属核验与单写者（I8/I9）
 
 * **I8**：supervisor 在任何杀树前核验目标进程 cmdline 包含本 run 的 job 文件路径
   （心跳超时与用户中止两条路径；worker 杀的是自己 spawn 的子命令，无需核验）。
-  核验失败（PID 已消失或被复用为无关进程）→ 不杀、记录，不得影响其他模型任务。
+  核验失败（PID 已消失或被复用为无关进程）→ 不做树杀、记录；此时仅允许对**自有
+  Popen 句柄**做单进程终止——句柄未 reap 期间 OS 不会复用该 PID（Windows 句柄
+  钉住 / POSIX 未收尸僵尸），故该回退不可能命中无关进程，也不可能是树杀
+  （rev 1 澄清，review A#10/B#4）。
 * **I9**：campaign 级锁（`O_CREAT|O_EXCL`，内容含 pid）：第二个驱动 → `exit 2` 拒绝；
   陈旧锁只能经显式 `--clear-stale-lock` 清除，清除前用 psutil 核验持锁 pid 已死亡
-  （对齐 RunStore `clear_stale_lock` 的显式管理动作语义）。
+  （对齐 RunStore `clear_stale_lock` 的显式管理动作语义）。状态文件的
+  `campaign_id` 与当前 manifest 不一致时拒绝（exit 2）——禁止跨 campaign 混用
+  leg 记录（rev 1，review A#7）。
 
 ### 3.7 驱动与入口（I10/I11/I12）
 
@@ -182,3 +198,18 @@ loading→feature_build→search→evaluation→artifact_write 与真实 telemet
 涉及删除 `.done`/历史 campaign 产物、数据库操作、正式 R1 运行或研究裁决时停止并
 请求用户裁决。实施中发现契约缺口（如 evaluation 阶段边界与 §3.1 不符）先修订本
 契约再继续，不静默扩大范围。
+
+## 9 修订记录
+
+* **rev 1（2026-09-15，双审处置，approval 不变——用户直接指令「完成B03」的授权
+  范围内的契约澄清与收紧，均为面向未来的行为修订，不重写已发生证据）**：
+  - I3：身份 payload 增补 `spec_id`；复用门槛增补 output 指针一致性（双审 A#3：
+    `runtime_overrides.yaml`/`.env` 深合并与脏树可在 leg YAML 不变时改变有效参数）。
+  - I6：exit 2 澄清覆盖身份/RunSpec 解析失败与配置预检失败（双审 A#2/B#1/B#2）；
+    墙钟上限扫描不降级 `running`（保持 attachable）、`aborted` 粘性优先
+    （双审 A#6/B#5）。
+  - I7：身份 in-flight 变化时 state 记录 `superseded_run_id` + 原因（双审 A#5）。
+  - I8：核验失败回退的自有 Popen 句柄终止不变量化（双审 A#10/B#4）。
+  - I9：state `campaign_id` 与 manifest 不一致 → 拒绝（双审 A#7）。
+  - I10：`_executor_result_path` 布局重推导退役，改由 TaskExecutor payload 携带
+    行 metrics（加性可选字段，双审 A#11）。
