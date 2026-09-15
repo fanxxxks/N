@@ -1,9 +1,21 @@
-# P29 B01 PIT 与可交易数据质量预注册契约（DRAFT）
+# P29 B01 PIT 与可交易数据质量预注册契约（APPROVED）
 
-- 状态：**DRAFT（草案）——未批准，禁止实现消费**。在用户（或按
-  `reports/alphagpt-ab/00_authority_exception_record.md` 转授的 captain）给出
-  明确批准原文并完成批准记录回写之前，本文件只作为待审材料，**不得**被实现、
-  测试、正式运行或晋级路径引用为语义权威。
+- 状态：**APPROVED — 批准记录回写（实现包 B01 按本文件头分工条款执行）**。
+  批准人：captain（依用户转授权原文「所有行为我强制要求你来替我批准，」，
+  见 `reports/alphagpt-ab/00_authority_exception_record.md` §1）；批准决策
+  记录：同记录 **§11（t6）七条争议点裁决第 5 条**（B01 的 118 行 ISO 混合
+  日期缺陷**只报告不修复**——该修复其后已由用户本人单独授权并执行完毕，
+  见同记录 §4quater(1) 与 `reports/alphagpt-ab/T46_iso_date_normalization.md`，
+  本文 §1.1 的 118 行实测为修复前的历史基线）、**第 7 条**（新增
+  artifact-facing 版本必须登记进 `runspec.py:_VERSION_IMPORTS` 或等价
+  owner 索引）与 **§11 版本影响总表 B01 行**（`DATA_TIER_VERSION` / gate
+  契约版本 / `TIER_REPORT_VERSION` 由实现阶段按实测择一并逐项举证）；
+  用户确认：同记录 **§4ter 条目 4**（四份契约批准决策「凡我代批的都确认」，
+  用户保留逐条撤销权）。本次实现另受用户**直接指令**（2026-09-15 会话：
+  「阅读AlphaGPT_整改与提升执行方案_2026-09-09.md，完成B01，开两个子agent
+  来负责审核你的工作，除此之外不要开任何多余的子agent」——用户本次明确
+  要求，AGENTS §1 仲裁顺序第一位）。用户可随时按 §11「批准效力与撤销」
+  行使撤销权。
 - **批准权属**：本契约的 DRAFT→APPROVED 状态变更**只能由用户明确批准**
   （AGENTS §3.2：可用时间、PIT mask、数据 tier、股票池、晋级阈值属硬边界；
   `docs/p18_captain_authority_clause.md` §3.2 明确 captain 原本无权批准）。
