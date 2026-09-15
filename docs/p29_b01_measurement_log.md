@@ -170,3 +170,18 @@ not_copied_i12`（monkeypatch gates 常量 → 报告 tolerance 随动）；
 `daily_price_limit` 缺口样例 21 = 20 缺约束 + 1 漏采（修复前 23 = 20 + 3
 误判）。10,701 / 61,272 / 8,564 / 93.39% / 272,948÷913,619 / 895 等头条
 数字不变（修复不触及这些口径）。
+
+## 10. 复核轮与终态
+
+- 技术复核：**PASS**（F1–F6 闭合确认 + 偏离接受；详见 disposition §4）。
+- 复核轮新发现 F7（daily 方向条件误用 status 作键）/ F8（payload 结构
+  增加未 bump 版本）→ 已闭合：方向改以 lag 为键；`DATA_QUALITY_REPORT_
+  VERSION` 1→2（加法性字段仍 bump；版本钉与四态测试同步更新）。
+- 终态探针（复核轮修复 commit 工作树）：审计模式 **69.2s / 2,108 MB**；
+  三个 JSON 证据以 **report_version=2** 重新生成（`D:\minequant\reports\
+  AlphaGPT-B01-2026-09-15\`），头条数字全部不变。
+- 回归：shard-data + shard-model-2 于修复轮 commit **1218P/1S**；
+  shard-data 于终态 commit **543P/1S**；B01 全套 **34 passed**。
+- 分支 commit 链（终态）：`41f771c` → `a927d20` → `5013423` →
+  `ab68ff0` → `ffe1ab4` → `5beb4e1` → `1efd8df`。未 push、未合并
+  （push 不在转授范围）。

@@ -42,8 +42,26 @@
   （缺口清单 −2）与 margin 钉定日转 fail。
 - 两分片回归：修复 commit 上复跑（见测量日志 §9）。
 
-## 4. 复核轮
+## 4. 复核轮（技术审核者，同一 agent）
 
-修复 commit 落盘后，由原技术审核者复核 F1–F6 处置与偏离裁决；合规侧
-C-1 为文档精确性项，其闭合由本记录 + 日志 diff 自证。复核结论回写于
-本文件末节。
+**总裁决：PASS**。首轮 F1（high）与 F2–F6（low）全部闭合（逐项独立验证，
+非采信声明）；对 0 批次处置的偏离**专项裁决：接受偏离**（三点理由：
+I8 契约字面执行；「ledger 不可读→unknown」与「可读但 0 批次→missed→
+fail」区分度更强；命名漂移经 payload/detail/负例测试三重机器可见）。
+
+复核轮新发现 2 条 low，已随后续小提交闭合：
+
+| id | 问题 | 处置 |
+|---|---|---|
+| F7 | build_daily 方向条件误用整体 status 作键：adj 缺陷触发 fail 而 lag 新鲜时打印反向假陈述 `lag 0 > 3` | 方向改以 lag 为键（与 price_limit/margin 同款）；测试钉：adj-fail 场景 detail 含 `lag 0 <= 3`（先 RED 实测复现该假陈述） |
+| F8 | 修复轮新增 payload 结构字段未 bump `DATA_QUALITY_REPORT_VERSION` | **bump 1→2**（加法性字段仍 bump 约定适用于独立版本；版本钉与四态测试同步更新，§10.1 白名单举证：钉值随 owner 常量的合法演进）；最终探针 JSON 证据以 report_version=2 生成 |
+
+复核者实测验证矩阵：B01 34 passed、universe/pit_import/gates 67 passed、
+真实库头条数字全部不变、两库 mtime 未变（修复轮零数据库写入）。
+
+## 5. 终态
+
+- 分支 commit 链：`41f771c`（批准）→ `a927d20`（RED）→ `5013423`
+  （GREEN）→ `ab68ff0`（测量日志）→ `ffe1ab4`（修复轮 F1–F6）→
+  `5beb4e1`（处置+日志更正）→ 复核轮修复 commit（F7/F8 + 版本 bump）。
+- 双审终态：合规 PASS；技术 PASS（复核轮）。
