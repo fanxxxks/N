@@ -426,7 +426,12 @@ def test_report_version_is_standalone_audit_product():
     from ashare_model.data_eligibility import DATA_QUALITY_REPORT_VERSION
     from ashare_model.runspec import _VERSION_IMPORTS
 
-    assert DATA_QUALITY_REPORT_VERSION == 1
+    # v2 (F8): the repair round added payload structure (quality
+    # suspension_endpoint/ingest_batches_seen, coverage.pre_family_sessions,
+    # the events revision sub-item, denominator_rule wording) — the
+    # additive-fields-still-bump convention applies to the standalone
+    # version too, so v1 and v2 report payloads are distinguishable.
+    assert DATA_QUALITY_REPORT_VERSION == 2
     assert "data_quality_report_version" not in _VERSION_IMPORTS
     # The pattern precedent: the A05 readiness report version is likewise
     # standalone (not in the owner index).
@@ -463,7 +468,7 @@ def test_report_four_state_vocabulary_and_space_labels(tmp_path):
     }
     cfg = _build_scenario(tmp_path)
     report = de.build_data_quality_report(cfg, evaluation_day=EVAL_DAY)
-    assert report.report_version == 1
+    assert report.report_version == 2  # F8: payload structure bumped at the repair round
     assert report.evaluation_day == EVAL_DAY
     for family, check in report.families.items():
         assert family in QUALITY_FAMILIES
@@ -541,6 +546,10 @@ def test_report_daily_invalid_adj_factor_gap_r8(tmp_path):
     assert daily.status == STATUS_FAIL
     broken = [g for g in daily.gaps if g.kind == "invalid_adj_factor"]
     assert [(g.ts_code, g.date) for g in broken] == [(A, "20240202")]
+    # F7 repair pin: the lag direction keys on the LAG, not the overall
+    # status — a fresh family failing on adj-factor defects must not
+    # print the reverse-false "lag 0 > 3".
+    assert "lag 0 <= 3" in daily.detail
 
 
 def test_report_mixed_format_audit_i1_r12_and_g_space_note(tmp_path):

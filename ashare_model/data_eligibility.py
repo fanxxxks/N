@@ -731,7 +731,14 @@ def check_runspec_data_eligibility(
 # report is strictly read-only (I14) and carries deliberately NO global
 # ok/healthy boolean (the F06 lesson).
 
-DATA_QUALITY_REPORT_VERSION = 1
+# v2 (B01 re-review F8): the repair round added payload structure
+# (quality.suspension_endpoint / ingest_batches_seen,
+# coverage.pre_family_sessions, the events revision sub-item and the
+# denominator_rule wording) — the additive-fields-still-bump convention
+# applies to the standalone report version, so v1 and v2 payloads are
+# distinguishable.  Standalone (not spec-bound) per the
+# READINESS_REPORT_VERSION precedent — see the v1 rationale below.
+DATA_QUALITY_REPORT_VERSION = 2
 
 SOURCE_INDEX_WEIGHT = "index_weight_pit"
 SOURCE_EVENTS_AUDIT = "events_audit"
@@ -1265,9 +1272,12 @@ def build_data_quality_report(
             status = STATUS_FAIL
         else:
             status = STATUS_PASS
+        # The lag direction keys on the LAG, never on the overall status
+        # (B01 re-review F7): a family failing on adj-factor defects while
+        # fresh must not print the reverse-false "lag 0 > 3".
         detail = (
             f"lag {worst} "
-            f"{'<=' if status == STATUS_PASS else '>'} {tolerance} sessions; "
+            f"{'<=' if worst <= tolerance else '>'} {tolerance} sessions; "
             f"coverage {covered_units}/{expected_units} collected "
             f"(gaps: missing_bar={gap_count}, "
             f"invalid_adj_factor={quality['invalid_adj_factor']}); a "
