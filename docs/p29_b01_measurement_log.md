@@ -48,7 +48,7 @@
 | 族 | 状态 | 关键数字（精确） |
 |---|---|---|
 | `daily_bar_raw` | **fail**（新鲜度） | lag 4 > 3 会话；覆盖 2,390,681/2,451,953 = **97.50%**（分母 = 已上市 ∧ PIT universe ∧ 应当可观察，I6）；缺口 61,272 个 missing_bar 单元（例：000001.SZ 20140715 等——多为停牌日合法无 bar，报告只列缺口不定罪） |
-| `daily_price_limit` | **fail**（I7 真实缺口） | **10,701 个 bar 单元缺 `daily_price_limit` 记录**（逐码逐日反连接枚举，按板块分类；例：001914.SZ 20140113 起，szse_main）；停牌族漏采 3 日 |
+| `daily_price_limit` | **fail**（I7 真实缺口） | **10,701 个 bar 单元缺 `daily_price_limit` 记录**（逐码逐日反连接枚举，按板块分类；例：001914.SZ 20140113 起，szse_main）；停牌族对账：**零事件 2 日（20141013、20240412，各有 succeeded+0 行批次）+ 漏采 1 日（20260907）**（§9 修复轮更正，证据引用批次 ingest_id） |
 | `margin_detail_pit` | **fail**（新鲜度+缺口） | lag 6 > 2；2 个全会话无行：**20260904、20260907**（同步停止前的最后两个会话） |
 | `industry_membership_pit` | pass | 覆盖 99.96% ≥ 98%，overlap 0，availability 完整 |
 | `industry_index` | **fail**（新鲜度） | lag 5 > 3 会话 |
@@ -59,9 +59,11 @@
 
 ### 2.2 审计模式（evaluation_day 钉在 20260908，工程探针）
 
-钉在最后 bar 次日时：daily/industry_index/margin 全部转 pass（lag 归
-零/1），**price_limit 的 10,701 缺口与 events 的 holder 缺口不变**——
-证明这些是与时钟无关的真实数据缺陷，不是新鲜度伪影。
+钉在最后 bar 次日时：daily/industry_index 转 pass，**price_limit 的
+10,701 缺口与 events 的 holder 缺口不变**——证明这些是与时钟无关的真
+实数据缺陷，不是新鲜度伪影。margin 在修复轮（§9 F4）后于钉定日亦判
+**fail**（20260904/20260907 两会话在族活跃期内无行，属缺陷而非新鲜度
+伪影；修复前误判 pass，因当时缺口不影响状态）。
 
 ### 2.3 RunSpec 模式（RET_1，纯价格因子集，I10 实证）
 
@@ -87,15 +89,29 @@ holder_number 缺口阻断**（p29 §1.7/I10 在真实库上的机器证明）�
   （star/chinext/sse_main/szse_main/bse/unknown）。
 - 未使用任何硬编码涨跌幅填补；这些单元在 p19 §2.4 语义下本就
   fail-closed 不可作成交证据——B01 把「不可见缺口」变成机器清单。
-- `daily_suspension`：3 个会话（20260904/09 前后）零行且无成功批次
-  证据 → 判「漏采」计入缺口（I8），与「零事件」不混同。
+- `daily_suspension`（§9 修复轮更正）：零行会话 3 个——
+  **20141013、20240412 各有 1 个 succeeded 且 row_count=0 的
+  `daily_suspension` 批次（`daily_suspension_20260904T071106Z_c964ca82`、
+  `daily_suspension_20260904T090313Z_f27ab964`）→ 判「零事件」，不进
+  缺口清单**；**20260907 无任何批次 → 判「漏采」**，进缺口清单。首轮
+  报告因 endpoint 常量错用 Tushare API 名（`suspend_d`）把前两日误判
+  漏采（F1），修复后与台账逐条对齐。
 
-## 5. 零事件 vs 漏采对账（§7.5，I8）
+## 5. 零事件 vs 漏采对账（§7.5，I8；§9 修复轮更正）
 
 - 对账权威 = `source_ingest_runs`（endpoint 匹配 + parameters_json 内
-  日期匹配 + status）。fixture 级行为由 R3/R4/R15 测试钉住。
-- 真实库：停牌族 3 日无成功批次证据 → 漏采；其余有行会话不宣称
-  「零事件」。ledger 不可读时该族判 unknown（不判 pass）。
+  日期匹配 + status）。**endpoint 权威命名 = V2 表名**（写入侧
+  `backfill_v2.py` 把表名传给批次记录器，store 以 `V2_TABLES` 校验），
+  修复轮把常量从 API 名 `suspend_d` 改为 `daily_suspension` 并加测试
+  钉（F1）。台账中该 endpoint 共 3,083 批次。
+- 真实库最终分类：**零事件 2 日**（20141013、20240412，证据批次
+  `daily_suspension_20260904T071106Z_c964ca82`、
+  `daily_suspension_20260904T090313Z_f27ab964`，均 succeeded +
+  row_count=0）+ **漏采 1 日**（20260907，无批次）。payload 另带
+  `suspension_endpoint` / `ingest_batches_seen` 诊断字段，命名再漂移
+  时 0 批次对账在证据中可见。
+- ledger 不可读或 endpoint 无批次时保持 fail-closed：零行一律判漏采
+  （机器钉：`test_zero_event_requires_the_ledger_endpoint_name`）。
 
 ## 6. 阈值一致性（§7.6，I12）
 
@@ -119,7 +135,9 @@ not_copied_i12`（monkeypatch gates 常量 → 报告 tolerance 随动）；
 - G1–G8 判定逻辑与阈值零改动（p29 §2.3-2）；主库 daily_bar 的格式
   发现标 G-space 归属注记，不改门禁 ok 值。既有 D7 verdict 语义未改
   （`check_runspec_data_eligibility` 仅内部重构为复用 `_financial_
-  coverage` 富结果，ratio/detail 字符串语义不变，相关 1210 例回归通过）。
+  coverage` 富结果：**ratio、阈值判定与既有语义段逐字保留，detail 串
+  为加法性追加计数**（gaps/versioned/non-quarter-end），非逐字节不变
+  ——双审 C-1 澄清），相关 1210 例回归通过。
 
 ## 8. 剩余风险与移交项
 
@@ -132,3 +150,23 @@ not_copied_i12`（monkeypatch gates 常量 → 报告 tolerance 随动）；
    走 I3-EXT 扩展契约 + `SNAPSHOT_PUBLICATION_VERSION` bump。
 4. R01 前若做 F3 扩张，holder_number_pit 的 2023+ 缺口必须先单独检查
    （p29 §1.7；本报告的 events_audit 族已在真实库上给出缺口清单）。
+
+## 9. 双审修复轮（evidence-only 更正，修复 commit 见 disposition 文档）
+
+双审（合规 PASS + 技术 NEEDS_REVISION）发现 1 high + 6 low，全部处置：
+
+| 发现 | 处置 | 修复后实测 |
+|---|---|---|
+| **F1 (high)** I8 对账 endpoint 常量 `suspend_d` ≠ 台账权威命名 `daily_suspension`（写入侧以表名入账），真实库 0 批次命中，20141013/20240412 两个有 succeeded+0 行批次的会话被误判漏采 | 常量改为台账权威表名 + 测试钉（`V2_TABLES` 成员 + 族声明 tables 成员）+ fixture 改用真实约定 + 负例钉（错误命名不构成零事件证据）+ `suspension_endpoint`/`ingest_batches_seen` 诊断字段 | 重测：zero_event = [20141013, 20240412]（证据引用批次）、missed = [20260907]、batches_seen = 3083；缺口清单 −2 |
+| F2 三处 detail 无条件打印 `lag N <= T` | 条件方向（与 industry_index 一致）+ fail 路径测试钉 | fail 路径输出 `lag 4 > 3` |
+| F3 `month_end_snapshot_intervals` 不校验 sessions 有序/唯一 | fail-closed 断言 + 乱序/重复测试 | 乱序输入抛 ValueError |
+| F4 margin 全会话缺行不影响四态 | 活跃期（族首会话起）缺行 → fail + 缺口；族前期会话出分母；两测试钉 | 钉定日 margin 由误判 pass 转 fail（20260904/20260907 为真实缺陷） |
+| F5 缺口样例无 ORDER BY 不可复现 | 反连接与 adj 查询加 `ORDER BY ts_code, trade_date` + 确定性测试 | 样例跨运行可复现 |
+| F6 事件族无 I3 声明、四分项不全 | `EVENTS_AUDIT_TIME_SEMANTICS`（unrestorable + I4 注记）+ revision 分项 + detail 显式豁免边界 | 声明进 shipped-declarations 测试 |
+| C-1 (合规，low) 日志 §7「detail 字符串语义不变」易误读 | §7 增补「加法性追加计数、原语义段逐字保留」 | 已改 |
+
+修复后复测（同一探针，修复 commit 工作树）：审计模式 **67.2s /
+2,111 MB**（§8.2 限内）；B01 测试 **34 passed**（26 原有 + 8 修复钉）；
+`daily_price_limit` 缺口样例 21 = 20 缺约束 + 1 漏采（修复前 23 = 20 + 3
+误判）。10,701 / 61,272 / 8,564 / 93.39% / 272,948÷913,619 / 895 等头条
+数字不变（修复不触及这些口径）。
