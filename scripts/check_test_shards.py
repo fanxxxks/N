@@ -78,6 +78,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_no_signal_semantics.py",
         "test_p10_adjudication.py",
         "test_p10_campaign.py",
+        "test_p31_b02_entry_canary.py",
         "test_research_domain.py",
         "test_searcher_bench.py",
         "test_semantic_cache.py",

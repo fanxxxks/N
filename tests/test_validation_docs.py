@@ -66,18 +66,61 @@ def test_onboarding_python_gates_match_agents() -> None:
         assert fragment in section, f"missing from onboarding §9.2: {fragment}"
 
 
+def _ci_web_job_steps() -> str:
+    """The ``web`` job block of ci.yml (from its header to the next
+    2-space-indented job key)."""
+
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line == "  web:")
+    end = next(
+        (
+            i
+            for i, line in enumerate(lines[start + 1:], start + 1)
+            if line.startswith("  ") and not line.startswith("   ")
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
+
+
+WEB_GATE_COMMANDS = (
+    "npm ci",
+    "npm ls --depth=0",
+    "npm test",
+    "npm run lint",
+    "npm run build",
+)
+
+
 def test_onboarding_web_gates_match_ci() -> None:
-    """§9.2 must mirror the CI web job: clean install, tree check, build."""
+    """§9.2 must mirror the CI web job: clean install, tree check, unit
+    tests, type-check lint, build (p31 B02 promoted ``npm test`` /
+    ``npm run lint`` from local-only conveniences to CI gates; both the
+    workflow and the onboarding mirror must carry them)."""
 
     section = _onboarding_recommended_commands()
-    for fragment in ("npm ci", "npm ls --depth=0", "npm run build"):
+    web_job = _ci_web_job_steps()
+    for fragment in WEB_GATE_COMMANDS:
         assert fragment in section, f"missing from onboarding §9.2: {fragment}"
+        assert fragment in web_job, f"missing from ci.yml web job: {fragment}"
 
 
 def test_onboarding_has_no_standalone_tsc_step() -> None:
-    """tsc runs inside `npm run build`; a standalone step drifts from CI."""
+    """No §9.2 line may run a bare ``tsc`` directly: the lint gate is the
+    ``npm run lint`` script (p31 B02 moved it into the CI web job, so the
+    script — not a hand-typed compiler invocation — is the single command
+    both locals and CI execute).  Mentioning the equivalence in a comment
+    is fine; a standalone ``tsc`` command line is the 2026-08-31 drift."""
 
-    assert "tsc --noEmit" not in _onboarding_recommended_commands()
+    offenders = [
+        line.strip()
+        for line in _onboarding_recommended_commands().splitlines()
+        if line.strip().startswith("tsc")
+    ]
+    assert not offenders, f"standalone tsc command in onboarding §9.2: {offenders}"
 
 
 def test_local_full_suite_gate_runs_parallel() -> None:
