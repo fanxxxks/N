@@ -19,6 +19,8 @@ stays overridable/patchable on the facade class.
 
 from __future__ import annotations
 
+import math
+
 import torch
 from loguru import logger
 
@@ -73,6 +75,31 @@ def write_trainer_artifact(
         seed=seed,
         requested_budget=requested_budget,
     )
+
+
+def _json_telemetry_value(value):
+    """JSON representation rule for strategy-artifact telemetry (p31 B02
+    defect fix).
+
+    The strategy payload embeds diagnostics that legitimately carry
+    non-finite floats — the search contract's best-so-far curve is
+    ``-inf`` while no candidate is eligible yet, and robust statistics
+    saturate to ``±inf`` on degenerate windows.  JSON has no ±inf, and
+    the fail-closed canonical identity correctly refuses them, which
+    made every such formal run unable to persist its artifact.  The
+    faithful JSON representation of a non-finite float is ``null``; the
+    recursive rule applies to the payload's float leaves only — identity
+    fields (strings, ints, bools) pass through untouched, and the
+    canonical writer stays the fail-closed backstop for anything else.
+    """
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _json_telemetry_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_telemetry_value(item) for item in value]
+    return value
 
 
 def _artifact_output(
@@ -149,7 +176,7 @@ def _artifact_output(
                 "experimental": trainer.rl_initialization == "random",
             }
         )
-    return output
+    return _json_telemetry_value(output)
 
 
 def _persist_strategy_artifact(

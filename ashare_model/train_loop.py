@@ -142,6 +142,26 @@ class _RLRunState:
     best_reward: float = -float("inf")
 
 
+def history_reward_value(value: float) -> float | None:
+    """Telemetry value for a "best so far" statistic (p31 B02 defect fix).
+
+    The search contract (``search_contract.SearchResult``) deliberately
+    allows ``-inf`` best-so-far entries: the running best is ``-inf``
+    while no evaluated candidate has yet been eligible (test_evaluation
+    constructs exactly that state).  The typed strategy artifact,
+    however, is written through the fail-closed canonical JSON identity,
+    which refuses non-finite floats — the two authorities disagree, and
+    every formal search whose FIRST evaluation is ineligible could not
+    persist its strategy artifact.  The trainer's history is telemetry,
+    so the honest cross-authority representation of "no best yet" is
+    ``None`` (JSON null; the artifact schema's ``history: list[dict]``
+    already accepts it).  Finite values pass through unchanged.
+    """
+
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
 class RLTrainingLoopMixin:
     """REINFORCE loop lifecycle of ``AshareTrainer`` (B4, IP-07b)."""
 
@@ -750,7 +770,7 @@ class RLTrainingLoopMixin:
             {
                 "step": float(step),
                 "avg_reward": float(rewards.mean()),
-                "best_val_reward": float(self.best_val_reward),
+                "best_val_reward": history_reward_value(self.best_val_reward),
                 "loss": float(loss.detach()),
                 "value_loss": float(value_loss.detach()),
                 "entropy": float(entropy.detach()),

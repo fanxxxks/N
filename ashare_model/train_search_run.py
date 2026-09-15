@@ -39,7 +39,7 @@ from .search_backends import (
     log_search_stop,
 )
 from .search_contract import SearchRequest, SearchResult
-from .train_loop import _facade_logger
+from .train_loop import _facade_logger, history_reward_value
 from .versions import PROTOCOL_VERSION
 from .train_windows import resolve_device
 from ashare_portfolio.rebalance import RebalancePolicy
@@ -315,11 +315,15 @@ class SearchRunnerMixin:
         }
         self.selection_result = SelectionResult(selected, None, result.scores)
         self._sync_best_from_selection()
+        # p31 B02 defect fix: the best-so-far curve is contract-legal with
+        # ``-inf`` while no candidate is eligible yet, but the typed
+        # artifact identity refuses non-finite floats — the history
+        # telemetry carries ``None`` for "no best yet" instead.
         self.history = [
             {
                 "step": float(step),
-                "avg_reward": float(reward),
-                "best_val_reward": float(reward),
+                "avg_reward": history_reward_value(reward),
+                "best_val_reward": history_reward_value(reward),
                 "unique_semantic_evals": float(budget_used),
                 "searcher": searcher,
             }
