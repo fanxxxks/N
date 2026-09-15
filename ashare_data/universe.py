@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import IntFlag
+from functools import lru_cache
 from numbers import Integral
 from typing import Iterable
 
@@ -178,6 +179,34 @@ def _normalize_date_axis(values: Iterable[object], field: str) -> list[str]:
     if len(set(normalized)) != len(normalized):
         raise UniverseContractError(f"{field} contains duplicate normalized dates")
     return normalized
+
+
+class DateAxisFormatError(ValueError):
+    """B01 I1/I2 (p29): a date value or axis is not in the canonical
+    compact ``YYYYMMDD`` form.  Mixed formats must never enter an
+    interval comparison — they fail closed instead (p29 §1.1: the
+    historic 118-row ISO pathology made string interval checks silently
+    pass while 118 bars vanished from the mask)."""
+
+
+def is_canonical_date(value: object) -> bool:
+    """B01 I2: True when ``value`` is ALREADY the canonical compact
+    ``YYYYMMDD`` form.  No normalization is applied — an ISO string is a
+    format finding, never a valid canonical date (the normalize-permissive
+    ``_require_date`` behavior of the existing universe/loader path is
+    unchanged; p29 §2.3 non-goal 2).  Distinct-date memoization keeps the
+    full-column format audit of multi-million-row tables cheap."""
+
+    if not isinstance(value, str):
+        return False
+    return _is_canonical_date_cached(value.strip())
+
+
+@lru_cache(maxsize=8192)
+def _is_canonical_date_cached(text: str) -> bool:
+    if len(text) != 8 or not text.isdigit():
+        return False
+    return _valid_date(text)
 
 
 def _validate_policy(policy: UniversePolicy) -> tuple[str, ...]:
@@ -774,3 +803,47 @@ def require_production_universe(config: DataConfig) -> UniverseContractStatus:
     return resolve_universe_contract(
         config, allow_development_fallback=False
     ).status
+
+
+def expected_observable_units(
+    ts_codes: Iterable[str],
+    signal_dates: Iterable[object],
+    open_sessions: Iterable[object],
+    constituents: Iterable[Mapping[str, object]] | pd.DataFrame,
+    list_dates: Mapping[str, object],
+    policy: UniversePolicy,
+) -> np.ndarray:
+    """The B01 I6 coverage denominator: ``[stock, date]`` cells that are
+    listed ∧ belong to the target PIT universe ∧ should be observable.
+
+    Single implementation: the unit set is exactly the eligible set of
+    :func:`build_universe_mask` evaluated against an all-present bar
+    panel, so the denominator can never drift from the mask the loader
+    consumes (no second universe logic, no cartesian stock×history
+    product).  Both date axes must ALREADY be canonical compact
+    ``YYYYMMDD`` (B01 I2): mixed formats raise :class:`DateAxisFormatError`
+    instead of being silently normalized into a comparison.
+    """
+
+    for axis_name, axis in (
+        ("signal_dates", signal_dates),
+        ("open_sessions", open_sessions),
+    ):
+        offenders = [
+            value for value in axis if not is_canonical_date(value)
+        ]
+        if offenders:
+            raise DateAxisFormatError(
+                f"{axis_name} must be canonical YYYYMMDD before any "
+                f"interval comparison (B01 I2); offenders: {offenders[:3]}"
+            )
+    codes = _normalize_codes(ts_codes)
+    dates = _normalize_date_axis(signal_dates, "signal_dates")
+    sessions = _normalize_date_axis(open_sessions, "open_sessions")
+    if not sessions:
+        raise UniverseContractError("open_sessions cannot be empty")
+    all_present = np.ones((len(codes), len(dates)), dtype=bool)
+    mask = build_universe_mask(
+        codes, dates, sessions, constituents, list_dates, all_present, policy,
+    )
+    return mask.eligible

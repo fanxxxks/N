@@ -35,7 +35,46 @@ from .config import resolve_v2_duckdb_path
 from .db import AshareDB, sql_quoted_list
 from .fundamentals import _cached_or_fetch, _read_cached, _write_cached
 from .gates import FRESHNESS_TOLERANCE_SESSIONS
+from .pit_import import SourceTimeSemantics
 from .universe import OPEN_ENDED_OUT_DATE
+
+#: B01 I3 (p29): the margin family's four-time semantics.  The T+1
+#: ``available_date`` is writer-computed and consumed as-is — the report
+#: never re-derives it (p17 §6.1; t22 fix).
+MARGIN_DETAIL_TIME_SEMANTICS = SourceTimeSemantics(
+    family="margin_detail",
+    tables=("margin_detail_pit",),
+    economic_time="trade_date (the session the margin detail describes)",
+    availability_time=(
+        "available_date (writer-computed T+1; consumed, never re-derived)"
+    ),
+    collection_authority="source_ingest_runs",
+    revision_semantics="single_final",
+    revision_history_complete=True,
+    tier_limit_note="",
+    visibility_rule=(
+        "the value visible at session s is the detail whose available_date "
+        "== s (the previous session's detail, t22 in-place fix)"
+    ),
+)
+
+#: B01 I3 (p29): the industry membership family's four-time semantics
+#: (expanded rows per p17 勘误 #2; one valid industry per stock/level/day).
+INDUSTRY_MEMBERSHIP_TIME_SEMANTICS = SourceTimeSemantics(
+    family="industry_membership",
+    tables=("industry_membership_pit",),
+    economic_time="[in_date, out_date) half-open membership interval",
+    availability_time="available_date (p17 §6.1)",
+    collection_authority="source_ingest_runs",
+    revision_semantics="single_final",
+    revision_history_complete=True,
+    tier_limit_note="",
+    visibility_rule=(
+        "an assignment is visible from max(in_date, available_date) until "
+        "out_date; overlapping intervals raise IndustryMembershipError "
+        "(p17 §14.3 fail-closed)"
+    ),
+)
 
 # Vocabulary feature names produced by this module.
 EXTERNAL_FACTOR_NAMES = (

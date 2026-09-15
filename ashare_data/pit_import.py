@@ -7,7 +7,17 @@ had zero test coverage before this split).
 
 from __future__ import annotations
 
+import bisect
+from dataclasses import dataclass
+
 import pandas as pd
+
+from .universe import (
+    DateAxisFormatError,
+    _normalize_date,
+    _valid_date,
+    is_canonical_date,
+)
 
 
 def merge_list_dates(stocks: pd.DataFrame, fetched: pd.DataFrame) -> pd.DataFrame:
@@ -193,3 +203,224 @@ def asof_winner_intervals(
     if not segments:
         return empty
     return pd.concat(segments, ignore_index=True)
+
+
+# --- B01 (p29 §3): import-boundary date canon (I1/I2), the month-end
+# --- snapshot as-of rule (I5) and the four-time semantics declaration (I3/I4).
+
+__all__ = [
+    "DateAxisFormatError",
+    "SourceTimeSemantics",
+    "DAILY_PRICE_FAMILY_TIME_SEMANTICS",
+    "INDEX_WEIGHT_TIME_SEMANTICS",
+    "asof_winner_intervals",
+    "assert_comparable_date_axes",
+    "bs_code_to_ts_code",
+    "merge_list_dates",
+    "month_end_samples",
+    "month_end_snapshot_intervals",
+    "normalize_import_date",
+    "timeline_to_intervals",
+    "validate_canonical_date_column",
+    "validate_time_semantics",
+]
+
+#: B01 I4: revision-history completeness is declared, never assumed from
+#: the presence of ``ann_date``.  ``unrestorable``/incomplete families must
+#: carry their Tier limit note (p2 A/B/C semantics preserved).
+_REVISION_SEMANTICS = ("versioned_rows", "single_final", "unrestorable")
+
+
+def normalize_import_date(value: object) -> str:
+    """The I1 explicit record-and-fix primitive: one date value to the
+    canonical compact ``YYYYMMDD`` form.  ISO strings normalize (the
+    caller must record the fix — the B01 report's format audit does);
+    anything that is not a real calendar date raises.  NULL/NaN maps to
+    ``""`` (absence is not a format violation)."""
+
+    normalized = _normalize_date(value)
+    if not normalized:
+        return ""
+    if not _valid_date(normalized):
+        raise DateAxisFormatError(
+            f"not a real calendar date in YYYYMMDD form: {value!r}"
+        )
+    return normalized
+
+
+def validate_canonical_date_column(
+    values: list[object], *, table: str, field: str
+) -> list[str]:
+    """The I2 machine assertion over one date column: every non-null
+    value must ALREADY be canonical compact ``YYYYMMDD``.  Offenders are
+    named and the check fails closed — mixed formats never pass through
+    into a comparison (p29 §1.1: ISO rows silently vanished from the
+    mask/presence alignment).  Returns the values unchanged when clean;
+    the ISO→compact fix primitive is :func:`normalize_import_date`."""
+
+    offenders = [value for value in values if not is_canonical_date(value)]
+    if offenders:
+        raise DateAxisFormatError(
+            f"{table}.{field} must be canonical YYYYMMDD before any "
+            f"interval comparison (B01 I1/I2); "
+            f"{len(offenders)} offender(s), examples: {offenders[:3]}"
+        )
+    return [normalize_import_date(value) for value in values]
+
+
+def assert_comparable_date_axes(*axes: list[object], field: str = "date_axis") -> None:
+    """I2: every axis participating in an interval comparison must be
+    100% canonical (the machine assertion p29 §3/I2 requires).  Fails
+    closed before the comparison happens."""
+
+    for position, axis in enumerate(axes):
+        validate_canonical_date_column(
+            list(axis), table=f"{field}[{position}]", field=field,
+        )
+
+
+def month_end_snapshot_intervals(
+    snapshot_dates: list[str], open_sessions: list[str]
+) -> list[tuple[str, str, str]]:
+    """The I5 machine rule: month-end snapshots → daily visible intervals.
+
+    Preregistered rule (p29 §3/I5): a month-end snapshot becomes visible
+    at the **first open session strictly after the snapshot date** (a
+    non-trading month end is therefore deferred to the next open
+    session — the same deterministic treatment for both cases), and
+    stays visible until the next visible snapshot's first session
+    (half-open ``[visible_from, visible_to)``; the trailing interval
+    ends at the ``99991231`` open sentinel).  A snapshot with no
+    following open session produces no interval (it is never visible
+    within the calendar horizon).  Both axes must be canonical (I2) and
+    the snapshots strictly ascending/unique.
+    """
+
+    snaps = list(snapshot_dates)
+    sessions = list(open_sessions)
+    assert_comparable_date_axes(snaps, sessions, field="month_end_snapshot")
+    if len(set(snaps)) != len(snaps) or snaps != sorted(snaps):
+        raise ValueError(
+            "snapshot_dates must be strictly ascending and unique: "
+            f"{snaps[:5]}"
+        )
+    visible_from: dict[str, str] = {}
+    for snap in snaps:
+        position = bisect.bisect_right(sessions, snap)
+        if position >= len(sessions):
+            continue  # never visible within the calendar horizon
+        visible_from[snap] = sessions[position]
+    ordered = [snap for snap in snaps if snap in visible_from]
+    intervals: list[tuple[str, str, str]] = []
+    for index, snap in enumerate(ordered):
+        visible_to = (
+            visible_from[ordered[index + 1]]
+            if index + 1 < len(ordered)
+            else "99991231"
+        )
+        intervals.append((snap, visible_from[snap], visible_to))
+    return intervals
+
+
+@dataclass(frozen=True)
+class SourceTimeSemantics:
+    """B01 I3: the machine declaration of one source family's four time
+    semantics — (a) economic valid time, (b) announcement/availability
+    time, (c) actual collection time (the single ``source_ingest_runs``
+    ledger), (d) revision versions.  ``revision_history_complete=False``
+    requires a non-empty ``tier_limit_note`` (I4: an unrestorable
+    revision history keeps its p2 Tier limit; ``ann_date`` presence never
+    implies a complete restatement history)."""
+
+    family: str
+    tables: tuple[str, ...]
+    economic_time: str
+    availability_time: str | None
+    collection_authority: str
+    revision_semantics: str
+    revision_history_complete: bool
+    tier_limit_note: str
+    visibility_rule: str
+
+
+def validate_time_semantics(decl: SourceTimeSemantics) -> None:
+    """Fail-closed validation of one four-time declaration (I3/I4)."""
+
+    if not isinstance(decl, SourceTimeSemantics):
+        raise ValueError("declaration must be a SourceTimeSemantics")
+    if not decl.family or not decl.tables or not decl.economic_time:
+        raise ValueError(
+            f"declaration {decl.family!r}: family/tables/economic_time are "
+            "required"
+        )
+    if not decl.visibility_rule:
+        raise ValueError(
+            f"declaration {decl.family!r}: the visibility rule must be stated"
+        )
+    if decl.collection_authority != "source_ingest_runs":
+        raise ValueError(
+            f"declaration {decl.family!r}: the collection-time authority is "
+            f"the source_ingest_runs ledger (B01 I3), got "
+            f"{decl.collection_authority!r}"
+        )
+    if decl.revision_semantics not in _REVISION_SEMANTICS:
+        raise ValueError(
+            f"declaration {decl.family!r}: unknown revision semantics "
+            f"{decl.revision_semantics!r}; expected one of "
+            f"{_REVISION_SEMANTICS}"
+        )
+    if not decl.revision_history_complete and not decl.tier_limit_note:
+        raise ValueError(
+            f"declaration {decl.family!r}: an incomplete revision history "
+            "must carry its Tier limit note (B01 I4)"
+        )
+
+
+#: The daily price family (bars / adjustment / basics / execution
+#: constraints).  Cell-complete: absence of a row is an enumerated gap,
+#: never a "zero event" (p29 I8 applies to event-style families only).
+DAILY_PRICE_FAMILY_TIME_SEMANTICS = SourceTimeSemantics(
+    family="daily_price",
+    tables=(
+        "daily_bar_raw", "daily_adj_factor", "daily_basic_pit",
+        "daily_price_limit", "daily_suspension",
+    ),
+    economic_time="trade_date (the session the row describes)",
+    availability_time=(
+        "p17 §6.1: daily-family bars of T are available at the next open "
+        "session after T; price-limit rows of T at T's own session (p19 "
+        "§2.4); a suspension record is available at its own session"
+    ),
+    collection_authority="source_ingest_runs",
+    revision_semantics="single_final",
+    revision_history_complete=True,
+    tier_limit_note="",
+    visibility_rule=(
+        "the loader pivots bars/basics by trade_date and constraints onto "
+        "the same session axis; a missing price-limit record is fail-closed "
+        "degraded (p19 §2.4), never filled"
+    ),
+)
+
+#: The month-end index-weight snapshot family.  Visibility follows the
+#: I5 as-of rule (:func:`month_end_snapshot_intervals`); the writer's
+#: ``available_date`` (p17 §6.1 month_end rule) must agree with it.
+INDEX_WEIGHT_TIME_SEMANTICS = SourceTimeSemantics(
+    family="index_weight",
+    tables=("index_weight_pit",),
+    economic_time="trade_date (the month-end snapshot date)",
+    availability_time=(
+        "available_date (writer-computed: the first open session after the "
+        "month end, p17 §6.1 'month_end' rule)"
+    ),
+    collection_authority="source_ingest_runs",
+    revision_semantics="single_final",
+    revision_history_complete=True,
+    tier_limit_note="",
+    visibility_rule=(
+        "a month-end snapshot is visible [first open session after the "
+        "snapshot, next snapshot's first session) — "
+        "month_end_snapshot_intervals; the store's available_date must "
+        "match the rule (B01 I5 machine contract)"
+    ),
+)

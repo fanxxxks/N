@@ -39,8 +39,40 @@ import pandas as pd
 from loguru import logger
 
 from .db import AshareDB, sql_quoted_list
-from .pit_import import asof_winner_intervals
+from .pit_import import SourceTimeSemantics, asof_winner_intervals
 from .processor import is_valid_a_share_code
+
+#: B01 I3/I4 (p29): the financial version family's four-time semantics.
+#: ``revision_history_complete`` is honestly False — ``ann_date`` presence
+#: does not prove a complete restatement history, so the p2 Tier B limits
+#: stay (I4) and the note travels with every report that consumes the
+#: family.
+FINANCIAL_VERSION_TIME_SEMANTICS = SourceTimeSemantics(
+    family="financial_version",
+    tables=(
+        "income_statement_pit", "balance_sheet_pit", "cashflow_statement_pit",
+    ),
+    economic_time="end_date (the report period the row describes)",
+    availability_time=(
+        "available_date (p17 §6.2: per-session winner ranked by f_ann_date "
+        "else ann_date; visible from available_date)"
+    ),
+    collection_authority="source_ingest_runs",
+    revision_semantics="versioned_rows",
+    revision_history_complete=False,
+    tier_limit_note=(
+        "F1 features still ride the legacy statutory disclosure-season "
+        "template and ann_date presence does not prove a complete "
+        "restatement history; the p2 Tier B limits are preserved (B01 I4)"
+    ),
+    visibility_rule=(
+        "asof_winner_intervals is the ONLY as-of reader for the version "
+        "tables (p17 §6.2 rule 5); restated rows stay auditable "
+        "(update_flag never filtered); non-quarter-end end_dates are "
+        "skipped by the TTM machinery (erratum #4) and reported as quality "
+        "findings (B01 R11)"
+    ),
+)
 
 # Feature names produced by the point-in-time pipeline (MARKET_CAP is a
 # local daily-bar factor, not a PIT field).  The four family-⑤ features

@@ -262,11 +262,14 @@ def test_normalize_import_date_canonicalizes_iso_and_rejects_invalid():
 
 
 def test_validate_canonical_date_column_lists_offenders_fail_closed():
+    # Clean column: passes through unchanged (already canonical).
     values = validate_canonical_date_column(
-        ["20240101", "20240102", "2024-01-03"],
+        ["20240101", "20240102", "20240103"],
         table="daily_bar", field="trade_date",
     )
     assert values == ["20240101", "20240102", "20240103"]
+    # ANY non-canonical value fails closed with the offender named — the
+    # ISO→compact fix primitive is normalize_import_date, not a silent fix.
     with pytest.raises(DateAxisFormatError) as excinfo:
         validate_canonical_date_column(
             ["20240101", "2024-01-02", "2024-01-03"],
@@ -400,14 +403,23 @@ def test_expected_units_rejects_mixed_format_axes_i2():
 # -- the report: version registration, spaces, thresholds ------------------------
 
 
-def test_report_version_is_registered_in_the_owner_index():
+def test_report_version_is_standalone_audit_product():
+    """The B01 report is an audit product, not a run-input authority:
+    its schema version is standalone (the approved READINESS_REPORT_VERSION
+    precedent) and must NOT be spec-bound — binding it would change the
+    RunSpec payload shape and force RUNSPEC/ARTIFACT_SCHEMA_VERSION bumps
+    for a report no formal entry consumes (p29 §4.2; AGENTS §3.2)."""
+
+    from ashare_model import readiness
     from ashare_model.data_eligibility import DATA_QUALITY_REPORT_VERSION
     from ashare_model.runspec import _VERSION_IMPORTS
 
     assert DATA_QUALITY_REPORT_VERSION == 1
-    assert _VERSION_IMPORTS["data_quality_report_version"] == (
-        "ashare_model.data_eligibility", "DATA_QUALITY_REPORT_VERSION",
-    )
+    assert "data_quality_report_version" not in _VERSION_IMPORTS
+    # The pattern precedent: the A05 readiness report version is likewise
+    # standalone (not in the owner index).
+    assert "readiness_report_version" not in _VERSION_IMPORTS
+    assert readiness.READINESS_REPORT_VERSION == "1"
 
 
 def test_board_classification_for_gap_lists():
