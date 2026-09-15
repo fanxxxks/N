@@ -102,5 +102,14 @@ jobs:
       - name: Verify web dependency tree
         run: npm ls --depth=0
 
+      # p31 B02: the frontend behavior tests and the TypeScript lint are
+      # merge gates, not local conveniences (F10: the audit found the web
+      # job installing and building without ever running the tests).
+      - name: Run web tests
+        run: npm test
+
+      - name: Lint (TypeScript)
+        run: npm run lint
+
       - name: Build production bundle
         run: npm run build

@@ -168,7 +168,7 @@ AlphaGPT 的核心目标是自动发现可解释的 A 股横截面选股公式�
 
 - Python 代码没有 <code>pyproject.toml</code>、<code>setup.py</code> 或 <code>setup.cfg</code>，不是可安装包；通常必须从仓库根目录运行。
 - 没有 Dockerfile、Compose、Kubernetes、Makefile、tox、正式迁移工具或部署清单。
-- 唯一 CI 是 GitHub Actions：Python 3.12 job（安装两份 pin 文件、执行 pip check、lock check 和全量 pytest；freeze_lock 还校验 <code>requirements-cuda.txt</code> 与基础 torch 版本一致）加 Node 22 web job（npm ci、npm ls --depth=0、npm run build），见 [.github/workflows/ci.yml](../.github/workflows/ci.yml)。
+- 唯一 CI 是 GitHub Actions：Python 3.12 job（安装两份 pin 文件、执行 pip check、lock check 和全量 pytest；freeze_lock 还校验 <code>requirements-cuda.txt</code> 与基础 torch 版本一致）加 Node 22 web job（npm ci、npm ls --depth=0、npm test、npm run lint、npm run build——p31 B02 起 web 测试与 lint 为合并门禁），见 [.github/workflows/ci.yml](../.github/workflows/ci.yml)。
 - 前端没有测试和 lint；CI 已有构建步骤（P0-05 新增）。
 - Web 的“生产模式”只是先构建 <code>webui/dist</code>，再由单个 Uvicorn/FastAPI 进程提供 API 和静态文件，见 [webapi/app.py](../webapi/app.py#L7)。
 
@@ -912,8 +912,9 @@ API 没有数据同步、训练、回测、协议评价或晋级路由，这些�
 | dayjs | ^1.11.13 | 日期 |
 | typescript | ^5.6.3 | 类型 |
 | vite / react plugin | ^5.4.11 / ^4.3.4 | 构建/开发服务 |
+| vitest / testing-library | ^2.1.8 / ^16.1.0 | 前端行为测试（<code>src/__tests__/</code>，jsdom 环境） |
 
-[webui/package-lock.json](../webui/package-lock.json) 锁定实际 npm 依赖树；CI web job 执行 <code>npm ci</code>、<code>npm ls --depth=0</code> 和 <code>npm run build</code>（含 <code>tsc -b</code>），仍没有 lint 或前端测试。
+[webui/package-lock.json](../webui/package-lock.json) 锁定实际 npm 依赖树；CI web job 执行 <code>npm ci</code>、<code>npm ls --depth=0</code>、<code>npm test</code>（vitest 行为测试）、<code>npm run lint</code>（<code>tsc --noEmit</code>）和 <code>npm run build</code>（含 <code>tsc -b</code>）——p31 B02 起测试与 lint 为合并门禁。
 
 ### 7.4 内部依赖约束
 
@@ -1189,6 +1190,8 @@ git diff --check
 Set-Location webui
 npm ci
 npm ls --depth=0
+npm test        # 前端行为测试（vitest）；p31 B02 起为 CI 合并门禁
+npm run lint    # tsc --noEmit；p31 B02 起为 CI 合并门禁
 npm run build   # build 内含 tsc -b；CI 无独立 tsc 步骤，保持一致
 ~~~
 

@@ -110,3 +110,29 @@ C5 API 读取：`webapi.service.list_runs/get_run_detail` 以配置派生的 Run
 - train 最小搜索在 canary 数据上无法产生被选候选（系统性门槛不满足）时：降级为"固定候选经真实
   资格链 + 评价入口"的等价闭环（方案 B02 明示允许"最小搜索**或**固定候选"），并在测量日志记录原因。
 - 触碰数据库移动/删除/旧工作区产物处置时停止并列明清单（方案 A01 停止条款同款）。
+
+## 8. 修订记录
+
+### 修订 1（RED 阶段发现的真实缺陷，依 §7 授权本包内修复）
+
+**发现**：canary 闭环（C3→C4 边界）在 RED 探针中暴露真实缺陷——形式 train 入口在"首个唯一语义
+评价不合格"时无法落盘策略产物：search 契约（`search_contract.SearchResult`）允许 best-so-far 曲线
+以 `-inf` 起步（运行最优在尚无合格候选时为 `-inf`；`tests/test_evaluation.py` 已构造过该合法状态），
+而类型化产物经 fail-closed canonical JSON（`identity.canonical_json_strict`）拒绝一切非有限浮点。
+两个权威矛盾：任何首评价不合格的正式搜索（GP/random/TPE；RL 的 `best_val_reward` 同理）都会在
+`CanonicalJSONError` 上崩溃。RED 证据：canary 闭环探针输出
+`CanonicalJSONError: value.history[0].avg_reward: non-finite float -inf …`
+及修复一层后的 `value.search_result.best_so_far[0][1]` 同类失败。
+
+**修复（工程遥测表示，非研究语义）**：
+1. `train_loop.history_reward_value()`：历史遥测中"尚无最优"表示为 `None`（JSON null；
+   `StrategyArtifact.history: list[dict]` 本就接受），RL 步历史的 `best_val_reward` 同规则；
+2. `train_artifacts._json_telemetry_value()`：产物载荷内嵌遥测（search_result 曲线、score、
+   imitation 等）的非有限浮点叶子统一表示为 `null`——JSON 无 ±inf，null 是无损表示；
+   身份字段（字符串/整数/布尔）不受影响，canonical writer 保持 fail-closed 兜底。
+
+**版本影响**：全部 `*_VERSION` 不变（`history: list[dict]` 与 `search_result: dict | None`
+均为宽松类型，载荷内容表示变化不构成 schema 版本变化；不新增/修改任何研究语义常量）。
+**新增 RED**：`test_search_history_maps_no_best_yet_to_none`（D1，先于实现失败）+ 上述端到端
+失败输出。**GREEN**：canary 全文件 + `test_train_module_split`（导入面）+ `test_artifact_schemas`
++ `test_artifact_writer` 全绿。
