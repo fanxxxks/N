@@ -321,6 +321,16 @@ def test_month_end_snapshot_intervals_fail_closed_on_bad_input():
         month_end_snapshot_intervals(["20240229", "20240131"], ["20240301"])
 
 
+def test_month_end_snapshot_intervals_requires_sorted_unique_sessions():
+    """F3 repair pin: open_sessions is the bisect precondition — unordered
+    or duplicated sessions must fail closed, never silently mis-interval."""
+
+    with pytest.raises(ValueError):
+        month_end_snapshot_intervals(["20240131"], ["20240201", "20240102"])
+    with pytest.raises(ValueError):
+        month_end_snapshot_intervals(["20240131"], ["20240201", "20240201"])
+
+
 # -- I3/I4: four-time semantics declarations ------------------------------------
 
 
@@ -330,6 +340,7 @@ def test_shipped_time_semantics_declarations_validate():
         MARGIN_DETAIL_TIME_SEMANTICS,
     )
     from ashare_data.fundamentals import FINANCIAL_VERSION_TIME_SEMANTICS
+    from ashare_model.data_eligibility import EVENTS_AUDIT_TIME_SEMANTICS
 
     for decl in (
         DAILY_PRICE_FAMILY_TIME_SEMANTICS,
@@ -337,6 +348,7 @@ def test_shipped_time_semantics_declarations_validate():
         FINANCIAL_VERSION_TIME_SEMANTICS,
         MARGIN_DETAIL_TIME_SEMANTICS,
         INDUSTRY_MEMBERSHIP_TIME_SEMANTICS,
+        EVENTS_AUDIT_TIME_SEMANTICS,
     ):
         validate_time_semantics(decl)
         assert decl.collection_authority == "source_ingest_runs"
@@ -592,14 +604,17 @@ def test_report_zero_event_vs_missed_collection_r3_r4_r9_r15(tmp_path):
         ingest_rows=[
             {
                 "ingest_id": "ing-susp-0206",
-                "endpoint": "suspend_d",
+                # The ledger convention: the endpoint column records the V2
+                # TABLE name (backfill passes the table to the batch
+                # recorder; the store validates it against V2_TABLES).
+                "endpoint": "daily_suspension",
                 "parameters_json": '{"trade_date": "20240206"}',
                 "status": "succeeded",
                 "row_count": 0,
             },
             {
                 "ingest_id": "ing-susp-0207",
-                "endpoint": "suspend_d",
+                "endpoint": "daily_suspension",
                 "parameters_json": '{"trade_date": "20240207"}',
                 "status": "failed",
                 "error_type": "ConnectionError",
@@ -623,6 +638,165 @@ def test_report_zero_event_vs_missed_collection_r3_r4_r9_r15(tmp_path):
     missed = [g for g in family.gaps if g.kind == "missed_collection"]
     assert (None, "20240207") in [(g.ts_code, g.date) for g in missed]
     assert family.status == STATUS_FAIL  # unprovable absence must not pass
+
+
+def test_suspension_endpoint_naming_matches_the_ledger_convention():
+    """F1 repair pin: the ledger's endpoint column records the V2 TABLE
+    name (the writer passes the table to the batch recorder and the store
+    validates the endpoint against V2_TABLES) — the Tushare API name
+    (``suspend_d``) is NOT the key.  A mismatch makes the zero-event
+    branch unreachable on the real ledger (the review finding)."""
+
+    from ashare_data.pit_import import DAILY_PRICE_FAMILY_TIME_SEMANTICS
+    from ashare_data.tushare_store import V2_TABLES
+    from ashare_model.data_eligibility import SUSPENSION_INGEST_ENDPOINT
+
+    assert SUSPENSION_INGEST_ENDPOINT == "daily_suspension"
+    assert SUSPENSION_INGEST_ENDPOINT in V2_TABLES
+    assert SUSPENSION_INGEST_ENDPOINT in (
+        DAILY_PRICE_FAMILY_TIME_SEMANTICS.tables
+    )
+
+
+def test_zero_event_requires_the_ledger_endpoint_name(tmp_path):
+    """A batch recorded under a WRONG endpoint name must NOT prove a zero
+    event: absence of evidence stays a missed collection (I8, fail-closed
+    default — the exact pre-review failure mode)."""
+
+    from ashare_model.data_eligibility import (
+        SOURCE_PRICE_LIMIT, build_data_quality_report,
+    )
+
+    cfg = _build_scenario(
+        tmp_path,
+        ingest_rows=[
+            {
+                "ingest_id": "ing-wrong-name",
+                "endpoint": "suspend_d",  # Tushare API name, not the ledger key
+                "parameters_json": '{"trade_date": "20240206"}',
+                "status": "succeeded",
+                "row_count": 0,
+            },
+        ],
+    )
+    report = build_data_quality_report(cfg, evaluation_day=EVAL_DAY)
+    quality = report.families[SOURCE_PRICE_LIMIT].quality
+    assert "20240206" not in quality["zero_event_dates"]
+    assert "20240206" in quality["missed_collection_dates"]
+    assert quality["suspension_endpoint"] == "daily_suspension"
+    assert quality["ingest_batches_seen"] == 0
+
+
+def test_daily_family_fail_detail_states_the_lag_direction(tmp_path):
+    """F2 repair pin: the fail path must print the real direction — a
+    stale family must never read 'lag N <= T sessions'."""
+
+    from ashare_model.data_eligibility import (
+        SOURCE_DAILY, STATUS_FAIL, build_data_quality_report,
+    )
+
+    cfg = _build_scenario(tmp_path)
+    with AshareDB(cfg.duckdb_path) as db:
+        db.upsert_calendar(
+            [{"trade_date": d, "is_open": True}
+             for d in ("20240212", "20240213", "20240214", "20240215",
+                       "20240216")],
+            cfg,
+        )
+    report = build_data_quality_report(cfg, evaluation_day="20240217")
+    daily = report.families[SOURCE_DAILY]
+    assert daily.status == STATUS_FAIL
+    assert daily.lag["worst_sessions"] == 4
+    assert ">" in daily.detail
+    assert "<=" not in daily.detail
+
+
+def test_margin_missing_sessions_fail(tmp_path):
+    """F4 repair pin: whole-market margin sessions without rows inside the
+    family's active span are defects (no suspension-like excuse) — they
+    fail the family and enter the gap list."""
+
+    from ashare_model.data_eligibility import (
+        SOURCE_MARGIN, STATUS_FAIL, build_data_quality_report,
+    )
+
+    active = [date for date in SESSIONS if date != "20240205"]
+    margin_rows = [
+        {
+            "ts_code": code, "trade_date": date, "rzye": 1.0, "rzmre": 1.0,
+            "available_date": date,
+        }
+        for code in (A,) for date in active
+    ]
+    cfg = _build_scenario(tmp_path, margin_rows=margin_rows)
+    report = build_data_quality_report(cfg, evaluation_day=EVAL_DAY)
+    family = report.families[SOURCE_MARGIN]
+    assert family.status == STATUS_FAIL  # the missing session is a defect
+    gap_dates = [
+        g.date for g in family.gaps if g.kind == "missing_margin_date"
+    ]
+    assert gap_dates == ["20240205"]
+    assert family.coverage["expected_units"] == 6
+    assert family.coverage["gap_count"] == 1
+
+
+def test_margin_pre_family_sessions_are_out_of_the_denominator(tmp_path):
+    """F4 companion pin: sessions before the family's first collected
+    session are the pre-family era — out of the denominator, never
+    fabricated into a coverage failure (mirrors the daily family's
+    honest-gap treatment without inventing a zero excuse)."""
+
+    from ashare_model.data_eligibility import (
+        SOURCE_MARGIN, STATUS_PASS, build_data_quality_report,
+    )
+
+    margin_rows = [
+        {
+            "ts_code": code, "trade_date": date, "rzye": 1.0, "rzmre": 1.0,
+            "available_date": date,
+        }
+        for code in (A,) for date in ("20240206", "20240207", "20240208")
+    ]
+    cfg = _build_scenario(tmp_path, margin_rows=margin_rows)
+    report = build_data_quality_report(cfg, evaluation_day=EVAL_DAY)
+    family = report.families[SOURCE_MARGIN]
+    assert family.status == STATUS_PASS
+    assert family.coverage["expected_units"] == 3  # 0201/0202 out (pre-family)
+    assert family.coverage["gap_count"] == 0
+    assert family.coverage["pre_family_sessions"] == 3
+    assert family.coverage["ratio"] == pytest.approx(1.0)
+
+
+def test_price_limit_gap_examples_are_deterministic(tmp_path):
+    """F5 repair pin: gap examples come out in (ts_code, trade_date) order
+    regardless of the engine's scan order — reproducible evidence."""
+
+    from ashare_model.data_eligibility import (
+        SOURCE_PRICE_LIMIT, build_data_quality_report,
+    )
+
+    cfg = _build_scenario(
+        tmp_path, drop_limit_for={(B, "20240202"), (A, "20240206")}
+    )
+    report = build_data_quality_report(cfg, evaluation_day=EVAL_DAY)
+    gaps = [
+        (g.ts_code, g.date)
+        for g in report.families[SOURCE_PRICE_LIMIT].gaps
+        if g.kind == "missing_price_limit"
+    ]
+    assert gaps == [(A, "20240206"), (B, "20240202")]
+
+
+def test_events_family_declares_four_time_semantics():
+    """F6 repair pin: the informational events family carries its I3/I4
+    declaration (unrestorable revision history + Tier note)."""
+
+    from ashare_model.data_eligibility import EVENTS_AUDIT_TIME_SEMANTICS
+
+    validate_time_semantics(EVENTS_AUDIT_TIME_SEMANTICS)
+    assert EVENTS_AUDIT_TIME_SEMANTICS.revision_semantics == "unrestorable"
+    assert not EVENTS_AUDIT_TIME_SEMANTICS.revision_history_complete
+    assert EVENTS_AUDIT_TIME_SEMANTICS.tier_limit_note
 
 
 # -- margin / industry / financial / index-weight / events families --------------

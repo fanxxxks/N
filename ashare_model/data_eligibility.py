@@ -88,6 +88,7 @@ from ashare_data.manifest import (
 from ashare_data.pit_import import (
     DAILY_PRICE_FAMILY_TIME_SEMANTICS,
     INDEX_WEIGHT_TIME_SEMANTICS,
+    SourceTimeSemantics,
     _FINANCIAL_VALUE_COLUMNS,
     assert_comparable_date_axes,
     month_end_snapshot_intervals,
@@ -784,9 +785,12 @@ _THRESHOLD_SOURCES = {
 
 #: I8: the event-style reconciliation runs per collection date — a
 #: zero-row day is only "zero event" when a succeeded ingest batch
-#: proves it.  The endpoint name is the suspension family's collection
-#: unit (the per-date whole-market feed).
-SUSPENSION_INGEST_ENDPOINT = "suspend_d"
+#: proves it.  The ledger's ``endpoint`` column records the V2 TABLE
+#: name (the writer passes the table to the batch recorder, and the
+#: store validates the endpoint against ``V2_TABLES``) — the Tushare API
+#: name (``suspend_d``) is NOT the key (B01 review F1: an API-name
+#: constant made the zero-event branch unreachable on the real ledger).
+SUSPENSION_INGEST_ENDPOINT = "daily_suspension"
 
 #: The informational events family (I10): the F3 tables are NOT in the
 #: p17 §12 verdict set (p26 ruling 4) — the family reports honestly and
@@ -796,6 +800,31 @@ _EVENT_TABLES = (
     "earnings_express_pit",
     "repurchase_event_pit",
     "holder_number_pit",
+)
+
+#: The informational events family's I3/I4 declaration (B01 review F6):
+#: event rows are single-version (source_row_hash keyed) and no
+#: restatement chain is restorable from the source, so the revision
+#: history is honestly unrestorable and the informational Tier limit
+#: travels with every report.
+EVENTS_AUDIT_TIME_SEMANTICS = SourceTimeSemantics(
+    family="events_audit",
+    tables=_EVENT_TABLES,
+    economic_time="ann_date / end_date (the announcement or report period)",
+    availability_time="available_date (writer-computed per p17 §6.1)",
+    collection_authority="source_ingest_runs",
+    revision_semantics="unrestorable",
+    revision_history_complete=False,
+    tier_limit_note=(
+        "event rows are single-version and the source exposes no "
+        "restatement chain; the informational Tier limit is preserved "
+        "and F3 expansion must re-check coverage separately (p29 §1.7)"
+    ),
+    visibility_rule=(
+        "visible from available_date; the family is informational "
+        "(not in the p17 §12 verdict set, p26 ruling 4) — it reports "
+        "lag/staleness only and never blocks a price baseline (I10)"
+    ),
 )
 
 
@@ -1203,7 +1232,8 @@ def build_data_quality_report(
                         break
         broken = v2_db.query(
             "SELECT ts_code, trade_date FROM daily_adj_factor "
-            "WHERE adj_factor IS NULL OR adj_factor <= 0"
+            "WHERE adj_factor IS NULL OR adj_factor <= 0 "
+            "ORDER BY ts_code, trade_date"
         )
         quality["invalid_adj_factor"] = int(len(broken))
         for entry in broken.head(gap_example_limit).itertuples(index=False):
@@ -1236,8 +1266,9 @@ def build_data_quality_report(
         else:
             status = STATUS_PASS
         detail = (
-            f"lag {worst} <= {tolerance} sessions; coverage "
-            f"{covered_units}/{expected_units} collected "
+            f"lag {worst} "
+            f"{'<=' if status == STATUS_PASS else '>'} {tolerance} sessions; "
+            f"coverage {covered_units}/{expected_units} collected "
             f"(gaps: missing_bar={gap_count}, "
             f"invalid_adj_factor={quality['invalid_adj_factor']}); a "
             "missing bar is a listed gap, not automatically a defect "
@@ -1292,13 +1323,15 @@ def build_data_quality_report(
         lag = _lag_sessions(axis, latest, same_day=True)
         # I7: a constraint record must accompany every bar cell — the SQL
         # anti-join IS the real per-code-per-day gap list (no hardcoded
-        # board rates anywhere near the evidence).
+        # board rates anywhere near the evidence).  Deterministic order:
+        # reproducible evidence samples (B01 review F5).
         gap_frame = v2_db.query(
             "SELECT b.ts_code AS ts_code, b.trade_date AS trade_date "
             "FROM daily_bar_raw b "
             "LEFT JOIN daily_price_limit p "
             "ON p.ts_code = b.ts_code AND p.trade_date = b.trade_date "
-            "WHERE p.ts_code IS NULL"
+            "WHERE p.ts_code IS NULL "
+            "ORDER BY b.ts_code, b.trade_date"
         )
         gap_count = int(len(gap_frame))
         for entry in gap_frame.head(gap_example_limit).itertuples(index=False):
@@ -1403,6 +1436,10 @@ def build_data_quality_report(
             "suspension_reconciliation": (
                 "ledger" if ledger_ok else "unavailable"
             ),
+            # Diagnosability: a 0-batch reconciliation is visible in the
+            # payload instead of silently reading as "no evidence".
+            "suspension_endpoint": suspension_endpoint,
+            "ingest_batches_seen": len(run_list),
         }
         statuses = [STATUS_PASS if lag <= tolerance else STATUS_FAIL]
         if gap_count:
@@ -1410,10 +1447,13 @@ def build_data_quality_report(
         statuses.append(suspension_status)
         status = aggregate_status(statuses)
         detail = (
-            f"lag {lag} <= {tolerance} sessions; "
+            f"lag {lag} "
+            f"{'<=' if lag <= tolerance else '>'} {tolerance} sessions; "
             f"missing price-limit records: {gap_count}; "
             f"suspension zero-event days: {len(zero_event_dates)}, "
-            f"missed-collection days: {len(missed_dates)}"
+            f"missed-collection days: {len(missed_dates)} "
+            f"(endpoint {suspension_endpoint}, "
+            f"batches seen {len(run_list) if ledger_ok else 'n/a'})"
             + (f"; {suspension_note}" if suspension_note else "")
         )
         revision = {
@@ -1463,35 +1503,55 @@ def build_data_quality_report(
         window = horizon[2] if horizon is not None else []
         rows = v2_db.query(
             "SELECT trade_date, COUNT(*) AS rows_n FROM margin_detail_pit "
-            "GROUP BY trade_date"
+            "GROUP BY trade_date ORDER BY trade_date"
         )
         dates_with_rows = {
             str(row.trade_date) for row in rows.itertuples(index=False)
         }
-        missing_dates = [d for d in window if d not in dates_with_rows]
+        # The whole-market family's active span starts at its first
+        # collected session: earlier sessions are the pre-family era (out
+        # of the denominator, never fabricated into a coverage failure),
+        # while sessions WITHOUT rows inside the span are defects — a
+        # whole-market publication has no suspension-like zero excuse
+        # (B01 review F4), so they fail the family.
+        earliest = min(dates_with_rows) if dates_with_rows else None
+        span = [d for d in window if earliest is None or d >= earliest]
+        pre_family_sessions = len(window) - len(span)
+        missing_dates = [d for d in span if d not in dates_with_rows]
         gaps = [
             DataGap(
                 "margin_detail_pit", "trade_date", None, date,
                 "missing_margin_date",
-                detail="whole-market family: the session carries no rows",
+                detail=(
+                    "whole-market family: the session carries no rows "
+                    "(no zero-event excuse, B01 review F4)"
+                ),
             )
             for date in missing_dates[:gap_example_limit]
         ]
-        covered_units = len(window) - len(missing_dates)
+        covered_units = len(span) - len(missing_dates)
         coverage = {
-            "ratio": covered_units / len(window) if window else None,
-            "expected_units": len(window),
+            "ratio": covered_units / len(span) if span else None,
+            "expected_units": len(span),
             "covered_units": covered_units,
             "gap_count": len(missing_dates),
+            "pre_family_sessions": pre_family_sessions,
             "denominator_rule": (
-                "open sessions in the collection horizon (whole-market "
-                "per-date publication)"
+                "open sessions from the family's first collected session "
+                "through the collection horizon (whole-market per-date "
+                "publication)"
             ),
         }
-        status = STATUS_PASS if lag <= tolerance else STATUS_FAIL
+        if lag > tolerance or missing_dates:
+            status = STATUS_FAIL
+        else:
+            status = STATUS_PASS
         detail = (
-            f"lag {lag} <= {tolerance} sessions; sessions with rows: "
-            f"{covered_units}/{len(window)} (writer-computed T+1 "
+            f"lag {lag} "
+            f"{'<=' if lag <= tolerance else '>'} {tolerance} sessions; "
+            f"sessions with rows: {covered_units}/{len(span)} "
+            f"(missing: {len(missing_dates)}, pre-family sessions out of "
+            f"the denominator: {pre_family_sessions}; writer-computed T+1 "
             "available_date consumed as-is)"
         )
         revision = {
@@ -1894,11 +1954,21 @@ def build_data_quality_report(
         )
         detail = (
             "event-family audit (informational; not in the p17 §12 "
-            f"verdict set): lags {lags}"
+            f"verdict set): lags {lags}; four-subitem boundary — this "
+            "informational family reports lag/staleness only (coverage "
+            "and quality live in the stale_source gaps; the revision "
+            "semantics come from its unrestorable declaration)"
         )
+        revision = {
+            "semantics": EVENTS_AUDIT_TIME_SEMANTICS.revision_semantics,
+            "revision_history_complete": (
+                EVENTS_AUDIT_TIME_SEMANTICS.revision_history_complete
+            ),
+            "tier_limit_note": EVENTS_AUDIT_TIME_SEMANTICS.tier_limit_note,
+        }
         return _check(
             SOURCE_EVENTS_AUDIT, SOURCE_EVENTS_AUDIT in required, status,
-            {}, {"per_table": lags}, {}, {}, gaps, detail,
+            {}, {"per_table": lags}, revision, {}, gaps, detail,
         )
 
     builders = {

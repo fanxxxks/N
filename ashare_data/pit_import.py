@@ -304,6 +304,14 @@ def month_end_snapshot_intervals(
             "snapshot_dates must be strictly ascending and unique: "
             f"{snaps[:5]}"
         )
+    # The bisect lookups below PRECONDITION a strictly ascending session
+    # axis — unordered/duplicated sessions fail closed instead of silently
+    # mis-interval-ing (B01 review F3).
+    if len(set(sessions)) != len(sessions) or sessions != sorted(sessions):
+        raise ValueError(
+            "open_sessions must be strictly ascending and unique: "
+            f"{sessions[:5]}"
+        )
     visible_from: dict[str, str] = {}
     for snap in snaps:
         position = bisect.bisect_right(sessions, snap)
