@@ -707,7 +707,10 @@ def test_canary_future_perturbation_leaves_past_features_unchanged(tmp_path):
     loader.load_data()
     before = loader.factor_tensor.detach().cpu().numpy().copy()
     n_dates = len(loader.dates)
-    past = loader.dates.index(_canary_dates()[25])
+    # Every session strictly BEFORE the perturbation boundary (dates[30],
+    # review R1 #1: the invariance window must cover ALL of the past, not
+    # a prefix of it) — a 1..5-session look-ahead leak cannot escape.
+    past = loader.dates.index(_canary_dates()[30])
 
     dates = _canary_dates()
     with AshareDB(resolve_v2_duckdb_path(data_config)) as db:
