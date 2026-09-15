@@ -290,6 +290,7 @@ from .lifecycle import (
     assert_formal_run_lifecycle,
 )
 from .run_store import RunStoreError
+from .task_executor import row_phase
 from .versions import PROTOCOL_VERSION
 from .vocab import FEATURE_NAMES
 
@@ -324,8 +325,15 @@ def run_protocol(
     :class:`~ashare_model.regime.HoldoutViolation`), and ``ledger``
     records every trial automatically.  The benchmark row is a reference
     curve, not a trial, and is never recorded.
+
+    B03 (p32 §3.1): the entry records coarse stage milestones through
+    ``task_executor.row_phase`` — a no-op outside an executor row.  The
+    milestone semantics are coarse: ``feature_build`` covers the domain
+    restriction, ``search`` the candidate-production fold loop, and
+    ``evaluation`` the corrections/aggregation that follows it.
     """
 
+    row_phase("feature_build")
     if tier_name not in ("screening", "confirmation"):
         raise ValueError(f"unknown tier: {tier_name}")
     tier = getattr(proto_cfg, tier_name)
@@ -426,6 +434,9 @@ def run_protocol(
         frequency=proto_cfg.frequency,
         horizon=proto_cfg.horizon,
     )
+    # B03 (p32 §3.1): the candidate-production fold loop is the coarse
+    # "search" milestone (baselines, random/GP/TPE ladders, trained rows).
+    row_phase("search")
     rows: list[dict] = []
     for fold in folds:
         rows.append(benchmark_row(loader, fold))
@@ -568,6 +579,9 @@ def run_protocol(
                     fold_test_end=fold.test_end,
                 )
             )
+    # B03 (p32 §3.1): corrections/aggregation ("evaluation" milestone)
+    # begins after the fold loop.
+    row_phase("evaluation")
     ledger_payload = None
     if ledger is not None:
         open_trials = ledger.finalize()
@@ -832,6 +846,9 @@ def main(argv=None) -> int:
                 action_mode=args.lifecycle_mode,
             )
 
+        # B03 (p32 §3.1): the data load is the first coarse milestone; the
+        # identity freeze (formal mode) precedes it by design (p27 I6).
+        row_phase("loading")
         loader.load_data()
         if not loader.dataset_id:
             from .artifact_schemas import ArtifactSchemaError
@@ -941,6 +958,9 @@ def main(argv=None) -> int:
                     spec_id=spec.spec_id,
                     run_id=handle.run_id,
                 )
+            # B03 (p32 §3.1): boundary artifact registration is the final
+            # coarse milestone of the entry.
+            row_phase("artifact_write")
             write_boundary_artifact(
                 handle,
                 artifact_type="protocol",

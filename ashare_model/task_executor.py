@@ -29,6 +29,23 @@ Contract (AGENTS.md §4.3/§4.5):
   ``os.replace`` (:func:`ashare_data.io_utils.atomic_write_json`, the
   single atomic-JSON authority): an injected write failure leaves zero
   half rows.
+* **Stage telemetry (B03, p32)** — the worker exports the row phase file
+  path to the row command through ``TASK_EXECUTOR_ROW_PHASE_FILE``; the
+  command records coarse stage milestones via :func:`row_phase`
+  (``loading / feature_build / search / evaluation / artifact_write``).
+  The phase journal flows into the row result (``phases`` / ``phase``)
+  and from there into the ledger trial metrics — best-effort telemetry
+  that must never break a row.
+* **Row budgets (B03, p32)** — optional ``row_wall_clock_budget_s`` /
+  ``row_peak_rss_budget_mb`` are enforced by the worker on its own
+  command child: exceeding either terminates the child and records the
+  row failed with a budget-specific error (distinct from crashes and
+  heartbeat timeouts).  ``None`` means uncapped; values are frozen in
+  the caller's campaign manifest, never hardcoded here.
+* **Ownership-verified kills (B03, p32)** — before the supervisor tears
+  a worker tree down (heartbeat timeout or user abort) it verifies the
+  target pid's command line still references this row's job file, so a
+  recycled pid can never route a kill into an unrelated process.
 * **Resume reconciliation** — a terminal ledger record (succeeded OR
   failed) is final for the run: failed trials stay in the chain and are
   never overwritten, renamed or re-executed; redoing a failed row is a
@@ -84,6 +101,12 @@ _RESULT_SUFFIX = ".result.json"
 _HEARTBEAT_SUFFIX = ".heartbeat.json"
 _JOB_SUFFIX = ".job.json"
 _LOG_SUFFIX = ".log"
+_PHASES_SUFFIX = ".phases.jsonl"
+
+#: Environment variable exporting the row phase journal path to the row
+#: command (B03 p32 §3.1).  Unset outside a TaskExecutor worker, so
+#: :func:`row_phase` is a no-op for every direct caller.
+ROW_PHASE_ENV = "TASK_EXECUTOR_ROW_PHASE_FILE"
 
 
 class TaskExecutorError(Exception):
@@ -195,6 +218,95 @@ def _read_valid_result(path: Path, row: TaskRow) -> dict[str, Any] | None:
     return payload
 
 
+def row_phase(name: str) -> None:
+    """Record one coarse stage milestone for the running executor row.
+
+    Writes one JSON line (``{"phase": ..., "entered_at": ...}``) to the
+    row phase journal the worker exported via ``ROW_PHASE_ENV``.  A no-op
+    unless called inside a TaskExecutor worker's row command, and a
+    failed write is logged — never raised — so telemetry cannot break a
+    research row (B03 p32 §3.1).
+    """
+
+    path = os.environ.get(ROW_PHASE_ENV)
+    if not path:
+        return
+    line = json.dumps(
+        {"phase": str(name), "entered_at": _now_iso()},
+        ensure_ascii=False,
+    )
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError as exc:
+        logger.warning(
+            "task_executor row phase write failed ({}): {}", name, exc
+        )
+
+
+def read_phase_journal(path: str | Path | None) -> list[dict[str, Any]]:
+    """Tolerant phase journal reader: malformed lines (a killed child can
+    tear the last line) are skipped, never trusted."""
+
+    if path is None:
+        return []
+    journal = Path(path)
+    if not journal.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in journal.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and payload.get("phase"):
+            entries.append(
+                {
+                    "phase": str(payload["phase"]),
+                    "entered_at": str(payload.get("entered_at") or ""),
+                }
+            )
+    return entries
+
+
+def _process_cmdline_has(pid: int, needle: str) -> bool:
+    """Whether the process behind ``pid`` still names ``needle`` on its
+    command line (the ownership check in front of every supervisor kill;
+    ``False`` when the pid is gone or unreadable)."""
+
+    try:
+        cmdline = psutil.Process(pid).cmdline()
+    except psutil.Error:
+        return False
+    return any(needle in str(part) for part in cmdline)
+
+
+def _subtree_rss_mb(proc: psutil.Process) -> float | None:
+    """Total resident memory of the command process and its whole
+    descendant tree (MB), or ``None`` when nothing could be read.
+
+    The row command may be a launcher whose real interpreter is a
+    grandchild (venv shims), so per-child RSS alone under-measures the
+    row's footprint and would silently never trip a memory budget.
+    """
+
+    try:
+        procs = [proc, *proc.children(recursive=True)]
+    except psutil.Error:
+        procs = [proc]
+    total: float | None = None
+    for member in procs:
+        try:
+            rss = member.memory_info().rss / (1024.0 * 1024.0)
+        except psutil.Error:
+            continue
+        total = rss if total is None else total + rss
+    return total
+
+
 def _kill_tree(pid: int, grace_s: float) -> None:
     """Terminate a worker and its whole command subtree (best effort)."""
 
@@ -291,6 +403,9 @@ def worker_main(job_path: str | Path) -> int:
     log_path = Path(job["log_path"])
     interval_s = float(job["heartbeat_interval_s"])
     cwd = job.get("cwd")
+    phase_path = job.get("phase_path")
+    row_wall_clock_budget_s = job.get("row_wall_clock_budget_s")
+    row_peak_rss_budget_mb = job.get("row_peak_rss_budget_mb")
 
     worker_pid = os.getpid()
     self_proc = psutil.Process(worker_pid)
@@ -303,6 +418,7 @@ def worker_main(job_path: str | Path) -> int:
     error: str | None = None
     peak_rss_mb: float | None = None
     cpu_seconds = 0.0
+    budget_error: str | None = None
     beat_stop = threading.Event()
 
     def beat_loop() -> None:
@@ -323,11 +439,17 @@ def worker_main(job_path: str | Path) -> int:
     try:
         log_handle = log_path.open("ab")
         try:
+            env = dict(os.environ)
+            if phase_path:
+                # B03 p32 §3.1: the row command learns its phase journal
+                # only through the environment (additive, optional).
+                env[ROW_PHASE_ENV] = str(phase_path)
             child = subprocess.Popen(
                 command,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 cwd=cwd,
+                env=env,
             )
             child_proc = psutil.Process(child.pid)
         finally:
@@ -347,19 +469,60 @@ def worker_main(job_path: str | Path) -> int:
         try:
             while child.poll() is None:
                 try:
-                    rss = child_proc.memory_info().rss / (1024.0 * 1024.0)
-                    peak_rss_mb = (
-                        rss
-                        if peak_rss_mb is None
-                        else max(peak_rss_mb, rss)
-                    )
+                    rss = _subtree_rss_mb(child_proc)
+                    # A child that dies mid-sample yields None: keep the
+                    # previous peak instead of comparing None (the row is
+                    # already terminal — poll() catches it next turn).
+                    if rss is not None:
+                        peak_rss_mb = (
+                            rss
+                            if peak_rss_mb is None
+                            else max(peak_rss_mb, rss)
+                        )
                 except psutil.Error:
-                    pass
+                    rss = None
                 try:
                     times = child_proc.cpu_times()
                     cpu_seconds = float(times.user) + float(times.system)
                 except psutil.Error:
                     pass
+                # B03 p32 §3.3: the worker enforces the row budgets on its
+                # own child — a budget kill is a recorded measurement with
+                # a budget-specific reason, never a silent drop.
+                if budget_error is None and (
+                    row_wall_clock_budget_s is not None
+                    and time.perf_counter() - started_perf
+                    > float(row_wall_clock_budget_s)
+                ):
+                    budget_error = (
+                        f"row {row_id}: wall-clock budget "
+                        f"{float(row_wall_clock_budget_s):.1f}s exceeded "
+                        f"after {time.perf_counter() - started_perf:.1f}s "
+                        "(command terminated by the worker)"
+                    )
+                if budget_error is None and (
+                    row_peak_rss_budget_mb is not None
+                    and rss is not None
+                    and rss > float(row_peak_rss_budget_mb)
+                ):
+                    budget_error = (
+                        f"row {row_id}: peak RSS budget "
+                        f"{float(row_peak_rss_budget_mb):.1f} MB exceeded "
+                        f"({rss:.1f} MB resident; command terminated by "
+                        "the worker)"
+                    )
+                if budget_error is not None:
+                    # Kill the whole command subtree: the row command may
+                    # be a launcher (venv shim) whose real work runs in a
+                    # grandchild — terminating the direct child alone
+                    # would orphan the real work process.
+                    _kill_tree(child.pid, DEFAULT_KILL_GRACE_S)
+                    try:
+                        child.wait(timeout=DEFAULT_KILL_GRACE_S + 5.0)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                        child.wait()
+                    break
                 time.sleep(WORKER_POLL_INTERVAL_S)
             exit_code = child.returncode
         finally:
@@ -371,15 +534,18 @@ def worker_main(job_path: str | Path) -> int:
 
     if peak_rss_mb is None and child_proc is not None:
         try:  # fast-exiting children: sample once after reaping
-            peak_rss_mb = child_proc.memory_info().rss / (1024.0 * 1024.0)
+            peak_rss_mb = _subtree_rss_mb(child_proc)
         except psutil.Error:
             peak_rss_mb = None
+    if budget_error is not None:
+        error = budget_error
     if exit_code is None and error is None:
         error = "row command did not produce an exit code"
     status = "succeeded" if error is None and exit_code == 0 else "failed"
     if status == "failed" and error is None:
         error = f"row {row_id}: command exited {exit_code}"
 
+    phases = read_phase_journal(phase_path)
     write_row_result(
         result_path,
         {
@@ -395,6 +561,8 @@ def worker_main(job_path: str | Path) -> int:
             "finished_at": _now_iso(),
             "worker_pid": worker_pid,
             "child_pid": child.pid if child is not None else None,
+            "phases": phases,
+            "phase": phases[-1]["phase"] if phases else None,
             "author": "worker",
         },
     )
@@ -420,17 +588,28 @@ class TaskExecutor:
         heartbeat_timeout_s: float = DEFAULT_HEARTBEAT_TIMEOUT_S,
         poll_interval_s: float = 0.2,
         kill_grace_s: float = DEFAULT_KILL_GRACE_S,
+        row_wall_clock_budget_s: float | None = None,
+        row_peak_rss_budget_mb: float | None = None,
     ):
         self._plan = build_plan(rows)
         if heartbeat_interval_s <= 0 or heartbeat_timeout_s <= 0:
             raise ValueError("heartbeat intervals must be positive")
+        for name, value in (
+            ("row_wall_clock_budget_s", row_wall_clock_budget_s),
+            ("row_peak_rss_budget_mb", row_peak_rss_budget_mb),
+        ):
+            if value is not None and (isinstance(value, bool) or value <= 0):
+                raise ValueError(f"{name} must be a positive number or None")
         self.heartbeat_interval_s = float(heartbeat_interval_s)
         self.heartbeat_timeout_s = float(heartbeat_timeout_s)
         self.poll_interval_s = float(poll_interval_s)
         self.kill_grace_s = float(kill_grace_s)
+        self.row_wall_clock_budget_s = row_wall_clock_budget_s
+        self.row_peak_rss_budget_mb = row_peak_rss_budget_mb
         self._command_builder = command_builder
         self._executed = False
         self._handle = None
+        self._active: tuple[subprocess.Popen | None, Path | None] = (None, None)
         try:
             if resume:
                 if not run_id or not str(run_id).strip():
@@ -553,10 +732,12 @@ class TaskExecutor:
         wall_seconds: float,
         exit_code: int | None,
         author: str,
+        phase_path: Path | None = None,
     ) -> str:
         """Close an attempt abnormally: supervisor-written result record
         (the worker produced none) + terminal failed ledger entry."""
 
+        phases = read_phase_journal(phase_path)
         write_row_result(
             self.rows_dir / f"{row_slug(row)}{_RESULT_SUFFIX}",
             {
@@ -570,14 +751,16 @@ class TaskExecutor:
                 "error": error,
                 "started_at": None,
                 "finished_at": _now_iso(),
+                "phases": phases,
+                "phase": phases[-1]["phase"] if phases else None,
                 "author": author,
             },
         )
-        self._handle.fail_trial(
-            trial_id,
-            error=error,
-            metrics={"wall_seconds": wall_seconds},
-        )
+        metrics: dict[str, Any] = {"wall_seconds": wall_seconds}
+        if phases:
+            metrics["phases"] = phases
+            metrics["active_phase"] = phases[-1]["phase"]
+        self._handle.fail_trial(trial_id, error=error, metrics=metrics)
         return "failed"
 
     def _run_row(self, row: TaskRow, attempt: int) -> dict[str, Any]:
@@ -587,6 +770,7 @@ class TaskExecutor:
         result_path = rows_dir / f"{slug}{_RESULT_SUFFIX}"
         heartbeat_path = rows_dir / f"{slug}{_HEARTBEAT_SUFFIX}"
         log_path = rows_dir / f"{slug}{_LOG_SUFFIX}"
+        phase_path = rows_dir / f"{slug}{_PHASES_SUFFIX}"
         command = [str(part) for part in self._command_builder(row)]
         if not command:
             raise TaskExecutorError(
@@ -619,7 +803,10 @@ class TaskExecutor:
                 "result_path": str(result_path),
                 "heartbeat_path": str(heartbeat_path),
                 "log_path": str(log_path),
+                "phase_path": str(phase_path),
                 "heartbeat_interval_s": self.heartbeat_interval_s,
+                "row_wall_clock_budget_s": self.row_wall_clock_budget_s,
+                "row_peak_rss_budget_mb": self.row_peak_rss_budget_mb,
                 "cwd": str(Path(__file__).resolve().parents[1]),
             },
         )
@@ -630,24 +817,29 @@ class TaskExecutor:
             attempt,
             trial_id,
         )
-        proc = self._spawn_worker(rows_dir / f"{slug}{_JOB_SUFFIX}")
+        job_path = rows_dir / f"{slug}{_JOB_SUFFIX}"
+        proc = self._spawn_worker(job_path)
+        self._active = (proc, job_path)
         attempt_start = time.time()
         timed_out = False
-        while proc.poll() is None:
-            age = self._heartbeat_age_s(heartbeat_path, attempt_start)
-            if age > self.heartbeat_timeout_s:
-                logger.error(
-                    "task_executor row={} trial={} heartbeat timeout after "
-                    "{:.1f}s without a beat; killing worker tree",
-                    row.row_id,
-                    trial_id,
-                    age,
-                )
-                _kill_tree(proc.pid, self.kill_grace_s)
-                timed_out = True
-                break
-            time.sleep(self.poll_interval_s)
-        proc.wait()
+        try:
+            while proc.poll() is None:
+                age = self._heartbeat_age_s(heartbeat_path, attempt_start)
+                if age > self.heartbeat_timeout_s:
+                    logger.error(
+                        "task_executor row={} trial={} heartbeat timeout after "
+                        "{:.1f}s without a beat; killing worker tree",
+                        row.row_id,
+                        trial_id,
+                        age,
+                    )
+                    self._terminate_worker_tree(proc, job_path)
+                    timed_out = True
+                    break
+                time.sleep(self.poll_interval_s)
+            proc.wait()
+        finally:
+            self._active = (None, None)
 
         if timed_out:
             error = (
@@ -662,6 +854,7 @@ class TaskExecutor:
                 wall_seconds=time.time() - attempt_start,
                 exit_code=None,
                 author="supervisor",
+                phase_path=phase_path,
             )
             return {"status": status, "trial_id": trial_id, "error": error}
 
@@ -678,6 +871,7 @@ class TaskExecutor:
                 wall_seconds=time.time() - attempt_start,
                 exit_code=proc.returncode,
                 author="supervisor",
+                phase_path=phase_path,
             )
             return {"status": status, "trial_id": trial_id, "error": error}
 
@@ -687,12 +881,56 @@ class TaskExecutor:
             "peak_rss_mb": result.get("peak_rss_mb"),
             "exit_code": result.get("exit_code"),
         }
+        if result.get("phases"):
+            metrics["phases"] = result["phases"]
+            metrics["active_phase"] = result.get("phase")
         if result["status"] == "succeeded":
             self._handle.complete_trial(trial_id, metrics=metrics)
             return {"status": "succeeded", "trial_id": trial_id, "error": None}
         error = str(result.get("error")) or f"row {row.row_id} failed"
         self._handle.fail_trial(trial_id, error=error, metrics=metrics)
         return {"status": "failed", "trial_id": trial_id, "error": error}
+
+    def _abort_active_worker(self) -> None:
+        """User-abort path (B03 p32 §3.6/R9): terminate the active worker
+        tree (ownership-verified) so a KeyboardInterrupt never leaves an
+        orphaned worker or row command behind."""
+
+        proc, job_path = self._active
+        if proc is None:
+            return
+        logger.warning(
+            "task_executor run={} user abort: terminating the active "
+            "worker tree (pid={})",
+            self.run_id,
+            proc.pid,
+        )
+        self._terminate_worker_tree(proc, job_path)
+
+    def _terminate_worker_tree(
+        self, proc: subprocess.Popen, job_path: Path | None
+    ) -> None:
+        """Kill the worker and its command subtree — but only after the
+        ownership check: the pid's command line must still name this
+        run's job file, so a recycled pid can never route a kill into an
+        unrelated process (B03 p32 §3.6)."""
+
+        if job_path is not None and _process_cmdline_has(
+            proc.pid, str(job_path)
+        ):
+            _kill_tree(proc.pid, self.kill_grace_s)
+            return
+        logger.error(
+            "task_executor worker pid={} no longer matches its job file "
+            "{}; skipping the tree kill and falling back to the owned "
+            "Popen handle only (recycled-pid guard)",
+            proc.pid,
+            job_path,
+        )
+        try:
+            proc.kill()
+        except OSError:
+            pass
 
     def execute(self) -> dict[str, Any]:
         """Run the plan to its terminal state and return the summary.
@@ -733,6 +971,9 @@ class TaskExecutor:
                             "peak_rss_mb": result.get("peak_rss_mb"),
                             "exit_code": result.get("exit_code"),
                         }
+                        if result.get("phases"):
+                            metrics["phases"] = result["phases"]
+                            metrics["active_phase"] = result.get("phase")
                         if result["status"] == "succeeded":
                             self._handle.complete_trial(
                                 open_ids[0], metrics=metrics
@@ -822,6 +1063,13 @@ class TaskExecutor:
                 payload["counts"]["failed"],
             )
             return payload
+        except KeyboardInterrupt:
+            # B03 p32 §3.6: a user abort kills the active worker tree
+            # (ownership-verified) before unwinding.  The interrupted
+            # attempt stays OPEN in the ledger — the resume closes it as
+            # failed and re-executes, preserving the append-only evidence.
+            self._abort_active_worker()
+            raise
         finally:
             self._handle.close()
 
