@@ -169,7 +169,7 @@ AlphaGPT 的核心目标是自动发现可解释的 A 股横截面选股公式�
 - Python 代码没有 <code>pyproject.toml</code>、<code>setup.py</code> 或 <code>setup.cfg</code>，不是可安装包；通常必须从仓库根目录运行。
 - 没有 Dockerfile、Compose、Kubernetes、Makefile、tox、正式迁移工具或部署清单。
 - 唯一 CI 是 GitHub Actions：Python 3.12 job（安装两份 pin 文件、执行 pip check、lock check 和全量 pytest；freeze_lock 还校验 <code>requirements-cuda.txt</code> 与基础 torch 版本一致）加 Node 22 web job（npm ci、npm ls --depth=0、npm test、npm run lint、npm run build——p31 B02 起 web 测试与 lint 为合并门禁），见 [.github/workflows/ci.yml](../.github/workflows/ci.yml)。
-- 前端没有测试和 lint；CI 已有构建步骤（P0-05 新增）。
+- 前端测试（vitest，<code>webui/src/__tests__/</code>）与 lint（<code>tsc --noEmit</code>）自 p31 B02 起是 CI 合并门禁；构建步骤更早已有（P0-05 新增）。
 - Web 的“生产模式”只是先构建 <code>webui/dist</code>，再由单个 Uvicorn/FastAPI 进程提供 API 和静态文件，见 [webapi/app.py](../webapi/app.py#L7)。
 
 ## 3. 整体架构

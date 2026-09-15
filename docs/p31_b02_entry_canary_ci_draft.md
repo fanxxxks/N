@@ -20,7 +20,9 @@
 **范围内**：`tests/`（新增 canary 测试文件）、`.github/workflows/ci.yml`（web job 门禁）、
 `scripts/check_test_shards.py`（新测试文件同 commit 分片注册）、`docs/PROJECT_ONBOARDING.md` §9.2
 （与 CI web job 同步）、`tests/test_validation_docs.py`（web 门禁镜像守卫同步）、`webui/`（如本地
-发现前端测试缺口则补，不重写既有测试）。
+发现前端测试缺口则补，不重写既有测试）。修订 2 补列：`ashare_model/train_loop.py`、
+`ashare_model/train_search_run.py`、`ashare_model/train_artifacts.py`（D1 缺陷修复，见 §8 修订 1——
+RED 探针发现的产物边界权威矛盾，行为修复经 §7 授权本包内执行）。
 
 **非目标**：不改任何研究语义（数据、公式、Reward、执行、统计、晋级语义零变化）；不新增 ESLint
 （方案 B02 明示独立评估，本包仅保留 `lint = tsc --noEmit` 并如实记录）；不新增 CI 矩阵腿（Windows/
@@ -45,9 +47,12 @@ C1 配置解析：`load_config()` 从真实 YAML 文件解析（非 Python dict 
 C2 身份与资格：`confirm_input_snapshot()` 得到复合身份 → `resolve_runtime_runspec()` 冻结 RunSpec →
    LifecycleWriter 走完 `IDEA → SPEC_LOCKED → DATA_QUALIFIED → FACTOR_SET_QUALIFIED →
    SEARCH_PLAN_ADMITTED`（真实 writer + 证据校验）。
-C3 最小搜索：train 形式入口（`--spec-id/--run-id`，`--steps 1 --batch-size 4`，`searcher: random`）
-   在 canary 数据上产出策略产物（RunStore 登记）。`reward` 下限按 canary YAML 显式声明
-   （`make_reward_config` 全字段透传）；这是单次运行的实验配置，不是生产默认值变化。
+C3 最小搜索：train 形式入口（`--spec-id/--run-id`，`--steps 2 --batch-size 8 --min-eligible 3`，
+   `searcher: random`；预算 = 16 个唯一语义评价）在 canary 数据上产出策略产物（RunStore 登记）。
+   `reward` 下限按 canary YAML 显式声明（`make_reward_config` 全字段透传）；这是单次运行的实验
+   配置，不是生产默认值变化。（修订 2 更正：起草文本原写 `--steps 1 --batch-size 4`，实现取
+   2×8 以在 12 股合成截面上稳定选出合格候选——RED 探针实测 1×4 的首步批量不足以保证候选
+   产出；偏差已在修订 2 登记。）
 C4 回测：backtest 形式入口消费 C3 的注册策略（registered-artifact 校验 + RunContext + dataset 一致性），
    产出 backtest 产物并登记进同一 run。
 C5 API 读取：`webapi.service.list_runs/get_run_detail` 以配置派生的 RunStore 根读到该 run 的状态、
@@ -68,7 +73,10 @@ C5 API 读取：`webapi.service.list_runs/get_run_detail` 以配置派生的 Run
 
 手算样例独立性：费用公式取自执行契约（`ashare_execution.ExecutionCostModel` 文档字符串：买单
 `commission=max(rate×notional, min)+transfer+slippage`，卖单另加印花税；`fraction = total/capital`），
-费率取自 canary 自己写入的 YAML；价格/日期取自 canary 构造的行情与日历。预期值不调用被测引擎生成。
+费率取自 `BacktestConfig` 的文档化默认值（canary YAML 未覆盖费率项，与被测引擎实际读取的
+费率同源）；价格/日期取自 canary 构造的行情与日历。预期值不调用被测引擎生成。
+（修订 2 更正措辞：原句"费率取自 canary 自己写入的 YAML"不准确——YAML 未设费率，独立性
+论证不受影响。）
 
 ### 3.4 CI 与文档门禁
 
@@ -136,3 +144,15 @@ C5 API 读取：`webapi.service.list_runs/get_run_detail` 以配置派生的 Run
 **新增 RED**：`test_search_history_maps_no_best_yet_to_none`（D1，先于实现失败）+ 上述端到端
 失败输出。**GREEN**：canary 全文件 + `test_train_module_split`（导入面）+ `test_artifact_schemas`
 + `test_artifact_writer` 全绿。
+（修订 2 补记：修订 1 修复实现涉及 `ashare_model/train_loop.py`、`ashare_model/train_search_run.py`、
+`ashare_model/train_artifacts.py` 三个文件；修订 1 文本当时未逐一列名 `train_search_run.py`，
+且修订 1 随 CI/文档提交晚于修复提交 `dfacfe5`——D1 的 RED 测试先于实现提交，门禁顺序未倒置。）
+
+### 修订 2（双审处置：参数偏差登记 + 措辞更正 + 范围补列）
+
+双审（技术 PASS、合规 NEEDS_REVISION）发现集中处置：§2 范围补列 D1 修复的三个
+`ashare_model` 文件；§3.2 C3 更正为实际执行参数（`--steps 2 --batch-size 8 --min-eligible 3`，
+起草值 1×4 不足以在合成截面上稳定选出候选）并登记偏差；§3.3 费率来源措辞更正为
+`BacktestConfig` 文档化默认值。C8 不变式断言窗口按技术审核发现 #1 扩展至扰动边界前
+**全部**过去会话（`[0:30]`，原 `[0:25]` 留有 5 会话逃逸窗口）。无研究语义变化，
+版本影响不变（同修订 1）。
