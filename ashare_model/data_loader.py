@@ -508,6 +508,50 @@ class AshareDataLoader:
             )
         return eligible[-1]
 
+    def loader_frame_status(self) -> dict:
+        """The typed loader-frame degradation status (p8 §5.1).
+
+        Single typed outlet for every degradation source the loader
+        itself records: the dataset identity binding, the universe
+        contract status (including the explicit development fallback),
+        per-code price-semantics degradation (p19) and the industry
+        source state (p17/D5).  ``status="clean"`` requires every source
+        to be genuinely clean; anything else lists concrete reasons —
+        the §5.1 data-qualification report consumes this verbatim, so an
+        undisclosed degradation can no longer exist by construction.
+        """
+
+        reasons: list[str] = []
+        if self.dataset_identity_status != "confirmed":
+            reasons.append(
+                f"dataset_identity_status={self.dataset_identity_status!r} "
+                "(formal frames require a confirmed composite identity)"
+            )
+        if self.allow_development_universe_fallback:
+            reasons.append("development_universe_fallback_enabled")
+        try:
+            contract = self._contract()
+        except Exception as exc:  # noqa: BLE001 - surfaced as a reason
+            reasons.append(f"universe_contract_unresolvable={exc}")
+        else:
+            if contract.status.degraded:
+                reasons.append(
+                    "universe_contract_degraded="
+                    f"{contract.status.reason_codes!r}"
+                )
+        if self.price_degraded:
+            reasons.append(
+                f"price_semantics_degraded={sorted(self.price_degraded)!r}"
+            )
+        if self.industry_source_degraded:
+            reasons.append(
+                f"industry_source_degraded={self.industry_source_degraded!r}"
+            )
+        return {
+            "status": "clean" if not reasons else "degraded",
+            "reasons": reasons,
+        }
+
     def load_data(
         self,
         ts_codes: list[str] | None = None,

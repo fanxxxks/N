@@ -155,6 +155,16 @@
 
 ## 4 变更分类与版本影响表
 
+**Rev 1（实现期修订，先于实现 commit）**：§5.2 因子资格报告构建器的
+check-4 存在潜伏缺陷——`in_domain_execution` 用
+`int(spec.horizon) in domain.horizon_range` 判成员，而 `horizon_range`
+是闭区间 `(min, max)`；p8 §5.2 check 4 点名的权威是
+`ResearchDomain.is_legal_execution`（区间语义 + P3 非重叠标签校验）。
+此前所有消费者均为 `unified` 域（跳过该检查），缺陷未暴露；R01 是第一个
+真实命中者（mini canary RED：`VOL_20` 在 horizon 10 ∈ [5,20] 被拒）。
+本包将该检查改为直接调用权威 `is_legal_execution`，属缺陷修复
+（裁决语义与契约原文一致），连同本节修订一并进入实现 commit。
+
 本包工程改动（不改任何既有研究语义默认值）：
 
 1. `ashare_model/data_loader.py`：新增 `loader_frame_status()` 类型化降级状态

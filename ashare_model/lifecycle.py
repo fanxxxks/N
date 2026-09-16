@@ -38,11 +38,13 @@ Hard properties (each pinned by ``tests/test_run_store.py``):
 Known staged limitation (t16 baseline §6 L1): the ``-> REJECTED`` edges are
 activated at P8-08, so in P8-06 a completed-but-failing data gate is refused
 with its evidence artifact preserved; it cannot enter ``REJECTED`` yet.
-Known honest gap (t16 baseline §6 L2): the §5.1 loader-frame degradation
-channel has no typed producer in the data layer yet, so
-:func:`build_data_qualification_report` truthfully emits
-``degraded_sources.loader_frames = LOADER_FRAME_SOURCE_UNTYPED`` and the
-verdict rule refuses such reports — no silent green.
+Resolved (P34, 2026-09-16): the §5.1 loader-frame degradation channel now
+consumes the typed producer the data layer grew (p19 price semantics,
+p17/D5 industry source, universe contract status, dataset identity binding)
+via ``AshareDataLoader.loader_frame_status()`` — the t16-era
+``"untyped_in_current_data_layer"`` marker (which made every real report
+fail-closed) is retired; the verdict rule still refuses anything not
+genuinely clean.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -276,7 +279,6 @@ _RECORD_TYPE_OOS = "oos_qualification_evidence"
 _RECORD_TYPE_PAPER_BINDING = "paper_account_binding"
 _RECORD_TYPE_PROMOTION = "promotion_evidence"
 _IDEA_FIELDS = ("hypothesis", "scope", "economic_mechanism", "non_goals")
-_LOADER_FRAME_SOURCE_UNTYPED = "untyped_in_current_data_layer"
 _ADAPTER_FEATURE_DOMAIN_SOURCE = "ashare_domain.domain_of_feature"
 
 
@@ -577,6 +579,35 @@ def _gate_check_names(checks: list[dict[str, Any]]) -> dict[int, dict[str, Any]]
     return found
 
 
+def _jsonable_payload(value: Any) -> Any:
+    """Explicit canonicalization of dataclass-derived payloads (tuples →
+    lists, numpy scalars → builtins, non-finite floats → ``None``) so
+    strict content identity never sees implicit coercion targets."""
+
+    import numpy as _np
+
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, _np.floating):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, _np.integer):
+        return int(value)
+    if isinstance(value, _np.bool_):
+        return bool(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable_payload(item) for item in value]
+    if isinstance(value, _np.ndarray):
+        return [_jsonable_payload(item) for item in value.tolist()]
+    if dataclasses.is_dataclass(value):
+        return _jsonable_payload(dataclasses.asdict(value))
+    return str(value)
+
+
 def build_data_qualification_report(
     spec: RunSpec,
     gate_result: Any,
@@ -585,15 +616,21 @@ def build_data_qualification_report(
     actual_trading_days: int,
     missing_trading_days: list[str],
     coverage: float,
+    loader_frames: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the §5.1 ``DataQualificationReport`` payload from a real
     :class:`ashare_data.gates.GateResult` (the G1–G8 authority — 判定逻辑
     零复制; G8 freshness added by p16).
 
-    ``degraded_sources.loader_frames`` is truthfully
-    :data:`LOADER_FRAME_SOURCE_UNTYPED` until the data layer grows a typed
-    degradation source (t16 baseline §6 L2); the §5.1 verdict rule therefore
-    refuses reports from real runs — fail closed, never a silent green.
+    ``loader_frames`` is the loader's typed frame-degradation status
+    (``AshareDataLoader.loader_frame_status()`` — the p8 §5.1 mandated
+    typed field).  The t16-era honest gap (the builder hardcoded
+    ``"untyped_in_current_data_layer"`` and every real report was
+    refused) is closed now that the data layer owns typed degradation
+    sources (p19 price semantics, p17/D5 industry source, universe
+    contract status, dataset identity binding): the builder passes the
+    typed status through verbatim and the validator still refuses
+    anything not genuinely clean — fail closed, never a silent green.
     """
 
     checks = [
@@ -601,7 +638,7 @@ def build_data_qualification_report(
         for check in gate_result.checks
     ]
     universe_contract = (
-        dataclasses.asdict(gate_result.status)
+        _jsonable_payload(gate_result.status)
         if gate_result.status is not None
         else None
     )
@@ -627,7 +664,7 @@ def build_data_qualification_report(
         "min_eligible": None if min_eligible is None else float(min_eligible),
         "coverage": float(coverage),
         "universe_contract": universe_contract,
-        "degraded_sources": {"loader_frames": _LOADER_FRAME_SOURCE_UNTYPED},
+        "degraded_sources": {"loader_frames": dict(loader_frames)},
         "completed": bool(completed),
     }
 
@@ -666,10 +703,16 @@ def _validate_data_report(report: dict[str, Any], spec: RunSpec) -> None:
     loader_frames = (
         sources.get("loader_frames") if isinstance(sources, dict) else None
     )
-    if loader_frames != "clean":
+    if (
+        not isinstance(loader_frames, dict)
+        or loader_frames.get("status") != "clean"
+        or loader_frames.get("reasons") != []
+    ):
         raise DataQualificationError(
             f"loader-frame degradation source is {loader_frames!r}; the "
-            "§5.1 'no undisclosed degraded' rule cannot be certified"
+            "§5.1 'no undisclosed degraded' rule cannot be certified "
+            "(the typed status comes from "
+            "AshareDataLoader.loader_frame_status())"
         )
     if report.get("completed") is not True:
         raise DataQualificationError("gate evaluation is not completed")
@@ -776,11 +819,17 @@ def build_factor_qualification_report(
                 "promotion_allowed": bool(meta.promotion_allowed),
                 "domain_id": domain.id,
                 "domain_consistent": domain_consistent,
+                # p8 §5.2 check 4 names ResearchDomain.is_legal_execution
+                # as the authority — the horizon_range is an inclusive
+                # (min, max) interval, not an enumeration.  (P34 repair:
+                # the previous `in domain.horizon_range` membership test
+                # refused every legal interior horizon — e.g. 10 in
+                # (5, 20) — and every pre-P34 consumer was `unified`,
+                # which skips this check, so the defect was latent.)
                 "in_domain_execution": (
                     spec.research_domain == _UNIFIED_DOMAIN_ID
-                    or (
-                        spec.frequency in domain.frequencies
-                        and int(spec.horizon) in domain.horizon_range
+                    or domain.is_legal_execution(
+                        spec.frequency, int(spec.horizon)
                     )
                 ),
                 "coverage": (

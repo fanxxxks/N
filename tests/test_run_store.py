@@ -480,7 +480,12 @@ def _clean_data_report(spec, ok=True):
         "min_eligible": 100.0,
         "coverage": 0.99,
         "universe_contract": {"mode": "strict", "degraded": False},
-        "degraded_sources": {"loader_frames": "clean"},
+        # P34 (p34 §4, pre-registered): the loader_frames field is the
+        # typed AshareDataLoader.loader_frame_status() payload — the
+        # t16-era bare "clean" string never had a real passing consumer.
+        "degraded_sources": {
+            "loader_frames": {"status": "clean", "reasons": []}
+        },
         "completed": True,
     }
 

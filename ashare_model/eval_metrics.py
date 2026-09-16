@@ -182,6 +182,30 @@ def evaluate_signal(
         "rebalance_count": int(m.get("rebalance_count", 0)),
         "order_count": int(m.get("order_count", 0)),
         "suppressed_trade_count": int(m.get("suppressed_trade_count", 0)),
+        # P34 R01 (additive observability, p34 §4): the remaining engine
+        # diagnostics the baseline report needs — due rebalances, realized
+        # book size / invested fraction and the total cost fraction.  The
+        # engine already computes all of them; existing fields keep their
+        # values bit-for-bit.
+        "rebalance_due_count": int(m.get("rebalance_due_count", 0)),
+        "holdings_mean": (
+            float(np.mean([len(p["ts_codes"]) for p in result.positions]))
+            if result.positions
+            else 0.0
+        ),
+        "holdings_max": (
+            int(max(len(p["ts_codes"]) for p in result.positions))
+            if result.positions
+            else 0
+        ),
+        "invested_ratio_mean": (
+            float(np.mean([float(np.sum(w)) for w in result.target_weights]))
+            if result.target_weights
+            else 0.0
+        ),
+        "cost_fraction_sum": (
+            float(np.sum(result.cost_fractions)) if result.cost_fractions else 0.0
+        ),
         # Raw per-day series: kept in every row so the DS / max-t corrections
         # and later analysis never have to reconstruct them from aggregates.
         "daily_returns": [float(x) for x in result.daily_returns],

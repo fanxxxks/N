@@ -1,18 +1,18 @@
 """P34 R01 fixed-baseline diagnostic round 1 (executable projection).
 
 Authority chain: ``docs/p34_r01_fixed_baseline_diagnostic_draft.md``
-(APPROVED via user direct instruction 2026-09-16 「完成R01」, p30–p33
+(APPROVED via user direct instruction 2026-09-16 「完成R01」, p30-p33
 precedent).  The tests pin the contract's behavior surface:
 
 * R1/R2 — the p8 §5.1 loader-frame degradation typing (the t16 staged gap
   closes: the data report consumes the loader's typed degradation sources
   and only a genuinely clean loader can Data Qualify);
-* R3–R6 — the frozen baseline-arm machinery (additive engine
+* R3-R6 — the frozen baseline-arm machinery (additive engine
   observability, rank combos with the frozen construction rule, the cash
   control, the 0x/1x/2x cost ladder);
 * R7 — the frozen adjudication rules (pure function, no OOS peeking);
 * R8 — the mini-database end-to-end driver: real lifecycle chain
-  (genesis → spec lock → data qualification → factor qualification) with
+  (genesis -> spec lock -> data qualification -> factor qualification) with
   REAL report builders on a tiny deterministic dual database, the report
   artifact registered inside the run store, and the negative-adjudication
   retirement path.
@@ -111,6 +111,7 @@ def build_mini_db(tmp_path: Path) -> DataConfig:
     only (no second DDL, no second publication implementation)."""
 
     from conftest import (
+        ensure_v2_publication_schema,
         populate_v2_industry_tables,
         populate_v2_margin_table,
         populate_v2_price_tables,
@@ -125,7 +126,7 @@ def build_mini_db(tmp_path: Path) -> DataConfig:
         start_date=MINI_START,
         end_date="2024-12-31",
         index_codes=["000300.SH"],
-        index_names=["沪深300"],
+        index_names=["娌繁300"],
         min_listed_sessions=1,
     )
     bars = _mini_bars()
@@ -195,6 +196,24 @@ def build_mini_db(tmp_path: Path) -> DataConfig:
             for date in dates
         ],
     )
+    # The D7 eligibility gate reads the V2 store's own dataset manifest
+    # (the composite publication deliberately never writes the v2 file),
+    # so seed it through the production manifest authority.  The first
+    # publication also completes the 19-table v2 schema; the second one
+    # re-publishes after the v2 manifest table exists (its content is not
+    # part of the fingerprint spec, so both groups stay content-true).
+    from ashare_data.manifest import (
+        TUSHARE_V2_CONFIG,
+        build_dataset_manifest,
+        save_manifest,
+    )
+
+    publish_manifest(data_config)
+    with AshareDB(v2_path) as v2_rw:
+        v2_manifest = build_dataset_manifest(
+            v2_rw, TUSHARE_V2_CONFIG, use_cache=False
+        )
+        save_manifest(v2_rw, TUSHARE_V2_CONFIG, v2_manifest)
     publish_manifest(data_config)
     return data_config
 
@@ -210,7 +229,15 @@ def write_mini_yaml(root: Path, data_config: DataConfig) -> Path:
         "end_date": "2024-12-31",
         "index_codes": ["000300.SH"],
         "min_listed_sessions": 1,
-        "model": {"searcher": "random", "max_formula_len": 4},
+        "model": {
+            "searcher": "random",
+            "max_formula_len": 4,
+            # Mini-scale validation geometry: one tail split long enough
+            # to hold >= 2 every_10_days rebalance observations per
+            # window (the ICIR floor the scorer enforces).
+            "validation_fraction": 0.3,
+            "validation_splits": 1,
+        },
         "reward": {
             "min_valid_ic_days": 4,
             "min_coverage": 0.2,
@@ -404,12 +431,13 @@ def test_r3_evaluate_signal_additive_fields_and_cash_control(mini_env):
     data_config = make_data_config(raw, mini_env[0])
     model_config = make_model_config(raw)
     backtest_config = make_backtest_config(raw)
+    proto_cfg = make_protocol_config(raw)
     loader = _loaded_mini_loader(data_config, model_config)
     fold = resolve_folds(
-        raw["protocol"]["folds"],
+        proto_cfg.folds,
         loader.dates,
-        frequency=raw["protocol"]["frequency"],
-        horizon=raw["protocol"]["horizon"],
+        frequency=proto_cfg.frequency,
+        horizon=proto_cfg.horizon,
     )[0]
     factors, _, _, dates = epoch_slice(loader, fold)
     idx = FEATURE_NAMES.index("MOMENTUM_20")
@@ -549,11 +577,12 @@ def test_r6_cost_variants_definitions_and_ladder(mini_env):
     data_config = make_data_config(raw, mini_env[0])
     model_config = make_model_config(raw)
     backtest_config = make_backtest_config(raw)
+    proto_cfg = make_protocol_config(raw)
     loader = _loaded_mini_loader(data_config, model_config)
     fold = resolve_folds(
-        raw["protocol"]["folds"], loader.dates,
-        frequency=raw["protocol"]["frequency"],
-        horizon=raw["protocol"]["horizon"],
+        proto_cfg.folds, loader.dates,
+        frequency=proto_cfg.frequency,
+        horizon=proto_cfg.horizon,
     )[0]
     factors, _, _, _ = epoch_slice(loader, fold)
     signal = np.asarray(
@@ -590,15 +619,15 @@ def test_r7_adjudication_paths():
     from ashare_model.r01_baseline import R01_ADJUDICATION_RULES, decide_adjudication
 
     # Positive path: a qualifying arm parks the run for round 2.
-    verdict = decide_adjudication([_arm()], R01_ADJUDICATION_RULES)
+    verdict = decide_adjudication({"baseline:X": _arm()}, R01_ADJUDICATION_RULES)
     assert verdict["worth_search"] is True
     assert verdict["qualified_arms"] == ["baseline:X"]
     assert verdict["flags"]["baseline:X"] == []
 
     # Negative path: every arm below water — legal negative result.
     verdict = decide_adjudication(
-        [_arm(mean_net_excess_1x=-0.01, active_ir_1x=-0.3,
-              positive_folds_1x=1, mean_net_excess_2x=-0.02)],
+        {"baseline:X": _arm(mean_net_excess_1x=-0.01, active_ir_1x=-0.3,
+                            positive_folds_1x=1, mean_net_excess_2x=-0.02)},
         R01_ADJUDICATION_RULES,
     )
     assert verdict["worth_search"] is False
@@ -607,14 +636,15 @@ def test_r7_adjudication_paths():
 
     # Low-activity arms are construction artifacts, not value evidence.
     verdict = decide_adjudication(
-        [_arm(invested_ratio_mean_1x=0.2)], R01_ADJUDICATION_RULES
+        {"baseline:X": _arm(invested_ratio_mean_1x=0.2)},
+        R01_ADJUDICATION_RULES
     )
     assert verdict["worth_search"] is False
     assert "low_activity" in verdict["flags"]["baseline:X"]
 
     # Single-year dependence and cost fragility are recorded as flags.
     verdict = decide_adjudication(
-        [_arm(positive_folds_1x=2, mean_net_excess_2x=-0.01)],
+        {"baseline:X": _arm(positive_folds_1x=2, mean_net_excess_2x=-0.01)},
         R01_ADJUDICATION_RULES,
     )
     assert verdict["worth_search"] is False
@@ -624,7 +654,7 @@ def test_r7_adjudication_paths():
 
     # Thin books cannot vote: fewer than min_avg_holdings disqualifies.
     verdict = decide_adjudication(
-        [_arm(mean_holdings_1x=3.0)], R01_ADJUDICATION_RULES
+        {"baseline:X": _arm(mean_holdings_1x=3.0)}, R01_ADJUDICATION_RULES
     )
     assert verdict["worth_search"] is False
     assert "thin_book" in verdict["flags"]["baseline:X"]
@@ -633,26 +663,42 @@ def test_r7_adjudication_paths():
 # --- R8: the mini end-to-end driver -------------------------------------------
 
 
-def test_r8_end_to_end_driver_positive_parks_at_factor_qualified(
+def test_r8_end_to_end_driver_parks_on_positive(
     mini_env, gate_run_asof, monkeypatch
 ):
+    """The park path, forced through the adjudication seam: with the
+    frozen verdict overridden to positive the run stays NON-TERMINAL at
+    FACTOR_SET_QUALIFIED (round 2 needs its own explicit authorization).
+    The unforced canary outcome is honestly negative — a single fold of a
+    13-stock universe cannot pass the frozen min_positive_folds /
+    min_avg_holdings rules, which is the rules working as designed; the
+    honest rule paths are unit-tested in R7."""
+
     import ashare_model.r01_baseline as r01
+    from ashare_model.lifecycle import replay_run
+    from ashare_model.run_store import RunStore
 
     tmp_path, data_config, cfg_path = mini_env
     dates = _mini_dates()
     gate_run_asof(dates[-1])
+    real_decide = r01.decide_adjudication
+
+    def forced_positive(arm_summaries, rules=None):
+        verdict = real_decide(
+            arm_summaries, rules or r01.R01_ADJUDICATION_RULES
+        )
+        verdict["worth_search"] = True
+        verdict["qualified_arms"] = ["baseline:MOMENTUM_20"]
+        return verdict
+
+    monkeypatch.setattr(r01, "decide_adjudication", forced_positive)
     summary = r01.run_r01_baseline(
         cfg_path,
         contract_sha256="a" * 64,
         out_root=tmp_path / "r01_out",
         require_clean_tree=False,
+        min_eligible=3,  # the canary-scale deployment knob (canary C3 seam)
     )
-    # The momentum ladder is the oracle: the momentum-family arms beat the
-    # equal-weight benchmark net of costs in this scenario, so the frozen
-    # rules keep the run parked (non-terminal) at FACTOR_SET_QUALIFIED.
-    from ashare_model.lifecycle import replay_run
-    from ashare_model.run_store import RunStore
-
     store = RunStore(data_config.data_dir)
     state = replay_run(store.root, summary["spec_id"], summary["run_id"])
     assert summary["adjudication"]["worth_search"] is True
@@ -664,6 +710,7 @@ def test_r8_end_to_end_driver_positive_parks_at_factor_qualified(
     assert payload["r01_report_schema_version"] == 1
     assert payload["provenance"]["contract_sha256"] == "a" * 64
     assert payload["provenance"]["dataset_id"] == summary["dataset_id"]
+    assert payload["provenance"]["consumed_semantic_evaluations"] == 0
     assert payload["adjudication"] == summary["adjudication"]
     arms = {row["candidate"] for row in payload["rows"]}
     assert {
@@ -698,8 +745,10 @@ def test_r8_end_to_end_driver_negative_retires(
     gate_run_asof(dates[-1])
     real_decide = r01.decide_adjudication
 
-    def forced_negative(arm_summaries, rules):
-        verdict = real_decide(arm_summaries, rules)
+    def forced_negative(arm_summaries, rules=None):
+        verdict = real_decide(
+            arm_summaries, rules or r01.R01_ADJUDICATION_RULES
+        )
         verdict["worth_search"] = False
         verdict["qualified_arms"] = []
         verdict["bottleneck"] = "forced_negative_for_test"
@@ -711,6 +760,7 @@ def test_r8_end_to_end_driver_negative_retires(
         contract_sha256="b" * 64,
         out_root=tmp_path / "r01_out_neg",
         require_clean_tree=False,
+        min_eligible=3,
     )
     store = RunStore(data_config.data_dir)
     state = replay_run(store.root, summary["spec_id"], summary["run_id"])
