@@ -23,7 +23,7 @@
 | 相邻契约 | `test_p27_a03_lifecycle_runcontext test_p31_b02_entry_canary test_run_store test_evaluation test_data_loader test_baseline_harness test_p29_b01_data_quality` → **207 passed**（515.53s） |
 | compileall | exit 0 |
 | 分片权威 | `python scripts/check_test_shards.py --check` → 107 files across 4 shards cover all 107 test files |
-| 全量 | `python -m pytest -q tests -n auto` → **1964 passed, 1 skipped, 0 failed**，908.82s（p33 基线 1953P/1S + 新增 11P，严格对齐；1 skip 为既有环境 skip。**勘误 1**：本表初稿写有「无净新增 warning/skip」——skip 结论有据，warning 计数因 `-q` 尾部截断未单独留档，该断言撤回，如需 warning 对账须重跑并归档原始输出） |
+| 全量 | `python -m pytest -q tests -n auto` → **1964 passed, 1 skipped, 0 failed**，908.82s（1 skip 为既有环境 skip。**勘误 1**：撤回「无净新增 warning/skip」断言——warning 计数因 `-q` 尾部截断未单独留档。**勘误 3**：本行初稿的分解「p33 基线 1953P + 新增 11P」有误——1953P 实录于 `ffe3361`（当时 b04 测试文件 10 项），`553f95b` 又新增 1 项（p33 rev 1 记 11P 新套件、未重跑全量），故 faad2f4 树推算 1954P；1954 + 本包新增 10P = 1964P 实测，自洽） |
 | `git diff --check` | 干净 |
 
 ## 2 正式运行：被 G8 数据新鲜度门禁 fail-closed 阻断
@@ -40,7 +40,10 @@ D:\minequant\.venv\Scripts\python.exe scripts\r01_baseline.py \
 （门禁在 run 创建之前拒绝——与 evaluation 入口的 `require_production` 同一边界
 次序；`data/r1/r01_baseline` 与 `data/r1/medium_a/runs` 均不存在）。
 
-门禁原文（logs/r01_baseline_20260916_190808.log）：
+门禁原文（**勘误 3：证据出处更正**——拒绝文本捕获自进程 **stderr/控制台输出**
+（后台作业输出留档），并非下述 `.log` 文件；该文件仅含 143 字节的
+"Run logging configured" DEBUG 头，R01Refusal 走 print-to-stderr 路径，
+未经过 loguru 文件 sink。后续包应将拒绝路径接入日志体系或归档控制台原始输出）：
 
 ```
 r01_baseline: refused: production gate check failed (p34 §7): G8 daily bars
