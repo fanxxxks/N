@@ -76,33 +76,40 @@ def _table_exists(db, table: str) -> bool:
     return int(row.iloc[0]["n"]) > 0
 
 
-def loader_factor_cache_identity(
+def loader_factor_cache_identity_with_reason(
     v2_db_path: Path | str,
     dataset_id: str | None,
     dates: list[str],
     ts_codes: list[str],
-) -> FactorCacheIdentity | None:
+) -> tuple[FactorCacheIdentity | None, str | None]:
     """Derive the eight-element cache identity from store state, or
-    ``None`` when the store cannot support it (the cache is then
-    disabled — never approximated).  ``dataset_id`` None (a legacy
+    ``(None, reason)`` when the store cannot support it (the cache is
+    then disabled — never approximated).  ``dataset_id`` None (a legacy
     manifest) likewise disables the cache: a tensor without a dataset
-    identity must not be cached."""
+    identity must not be cached.
+
+    B04 (p33 I2): the reason is machine-readable so the loader can record
+    WHY the cache was disabled — one of ``identity_inputs_missing``,
+    ``ingest_source_missing``, ``ingest_source_empty``,
+    ``marker_tables_missing`` or ``identity_derivation_failed``; ``None``
+    on success.
+    """
 
     if not dataset_id or not dates or not ts_codes:
-        return None
+        return None, "identity_inputs_missing"
     try:
         with AshareDB(v2_db_path, read_only=True) as db:
             if not _table_exists(db, "source_ingest_runs"):
-                return None
+                return None, "ingest_source_missing"
             ingested = db.query("SELECT ingest_id FROM source_ingest_runs")
             if ingested.empty:
-                return None
+                return None, "ingest_source_empty"
             snapshot_ids = tuple(
                 str(value) for value in ingested["ingest_id"]
             )
             marker_tables = ("industry_membership_pit",) + _FINANCIAL_TABLES
             if not all(_table_exists(db, table) for table in marker_tables):
-                return None
+                return None, "marker_tables_missing"
             industry = _source_generation_marker(
                 db, "industry_membership_pit"
             )
@@ -118,14 +125,32 @@ def loader_factor_cache_identity(
         logger.warning(
             f"factor cache disabled: identity derivation failed ({exc})"
         )
-        return None
-    return FactorCacheIdentity(
-        dataset_id=str(dataset_id),
-        window_id=f"{dates[0]}..{dates[-1]}:{len(dates)}",
-        universe_hash=content_hash("universe_codes", sorted(ts_codes)),
-        factor_compute_version=str(FACTOR_COMPUTE_VERSION),
-        feature_registry_version=str(FEATURE_REGISTRY_VERSION),
-        industry_membership_version=industry,
-        financial_pit_version=financial,
-        source_snapshot_ids=snapshot_ids,
+        return None, "identity_derivation_failed"
+    return (
+        FactorCacheIdentity(
+            dataset_id=str(dataset_id),
+            window_id=f"{dates[0]}..{dates[-1]}:{len(dates)}",
+            universe_hash=content_hash("universe_codes", sorted(ts_codes)),
+            factor_compute_version=str(FACTOR_COMPUTE_VERSION),
+            feature_registry_version=str(FEATURE_REGISTRY_VERSION),
+            industry_membership_version=industry,
+            financial_pit_version=financial,
+            source_snapshot_ids=snapshot_ids,
+        ),
+        None,
     )
+
+
+def loader_factor_cache_identity(
+    v2_db_path: Path | str,
+    dataset_id: str | None,
+    dates: list[str],
+    ts_codes: list[str],
+) -> FactorCacheIdentity | None:
+    """The derived identity, or ``None`` when the store cannot support it
+    (compat projection of :func:`loader_factor_cache_identity_with_reason`
+    — callers that need the disabled reason use the reasoned form)."""
+
+    return loader_factor_cache_identity_with_reason(
+        v2_db_path, dataset_id, dates, ts_codes
+    )[0]

@@ -15,6 +15,7 @@ import json
 
 import duckdb
 import numpy as np
+import pandas as pd
 import pytest
 
 from ashare_data.capital_flow import (
@@ -496,11 +497,13 @@ def _membership_rows() -> list[dict]:
     ]
 
 
-def _bars_frame(window_only: bool):
-    sessions = _WINDOW if window_only else [_OUT_PRE] + _WINDOW + [_OUT_POST]
+def _bars_frame():
+    # populate_v2_price_tables writes exactly the (_WINDOW x _CODES) cells;
+    # out-of-window presence in the full store comes from the margin rows,
+    # the direct daily_basic INSERT and the sw-index rows.
     rows = []
     for code in _CODES:
-        for index, session in enumerate(sessions):
+        for index, session in enumerate(_WINDOW):
             close = 10.0 + index
             rows.append(
                 {
@@ -518,13 +521,15 @@ def _bars_frame(window_only: bool):
     return pd.DataFrame(rows)
 
 
-def _circ_mv(window_only: bool) -> dict:
-    sessions = _WINDOW if window_only else [_OUT_PRE] + _WINDOW + [_OUT_POST]
-    mapping = {}
-    for code in _CODES:
-        for index, session in enumerate(sessions):
-            mapping[(code, session)] = 10000.0 + index
-    return mapping
+def _circ_mv() -> dict:
+    # Window dates carry the SAME circ_mv in the full and the windowed
+    # store — the parity guard compares the two stores, so every value
+    # that is not an out-of-window exclusion probe must be identical.
+    return {
+        (code, session): 10000.0 + index
+        for code in _CODES
+        for index, session in enumerate(_WINDOW)
+    }
 
 
 def _make_config(tmp_path, name: str) -> DataConfig:
@@ -545,8 +550,8 @@ def _populate_capital_fixture(cfg: DataConfig, *, window_only: bool) -> None:
     cfg.parquet_dir.mkdir(parents=True, exist_ok=True)
     v2_path = resolve_v2_duckdb_path(cfg)
     populate_v2_price_tables(
-        v2_path, _WINDOW, _CODES, _bars_frame(window_only),
-        circ_mv=_circ_mv(window_only),
+        v2_path, _WINDOW, _CODES, _bars_frame(),
+        circ_mv=_circ_mv(),
     )
     if not window_only:
         # Out-of-window daily_basic rows (the pushdown target): present in

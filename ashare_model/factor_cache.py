@@ -157,6 +157,11 @@ class FactorCache:
         self._n_hits = 0
         self._n_misses = 0
         self._n_rejected = 0
+        # B04 (p33 I2): how the LAST get() fared — "hit", "no_entry",
+        # "unreadable" or "identity_mismatch".  Read-side observability
+        # only: it never changes what may be reused (the identity check
+        # stays the sole authority).
+        self.last_outcome: str | None = None
 
     # --- entries -------------------------------------------------------------
 
@@ -215,6 +220,7 @@ class FactorCache:
         path = self.root / f"{key}.npz"
         if not path.is_file():
             self._n_misses += 1
+            self.last_outcome = "no_entry"
             logger.info(
                 "factor_cache miss (no entry) key={} dataset={} window={}",
                 key[:12],
@@ -228,6 +234,7 @@ class FactorCache:
                 tensor = np.array(data["tensor"])
         except Exception as exc:  # noqa: BLE001 - a corrupt entry is a miss
             self._n_rejected += 1
+            self.last_outcome = "unreadable"
             logger.warning(
                 "factor_cache entry rejected (unreadable, recomputing) "
                 "key={}: {}",
@@ -237,6 +244,7 @@ class FactorCache:
             return None
         if stored_identity != factor_cache_payload(identity):
             self._n_rejected += 1
+            self.last_outcome = "identity_mismatch"
             logger.warning(
                 "factor_cache entry rejected (stored identity does not "
                 "match the requested identity; recomputing) key={} "
@@ -247,6 +255,7 @@ class FactorCache:
             )
             return None
         self._n_hits += 1
+        self.last_outcome = "hit"
         logger.info(
             "factor_cache hit key={} dataset={} window={}",
             key[:12],

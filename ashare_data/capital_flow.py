@@ -505,12 +505,31 @@ def build_capital_frames(
     if not ts_codes:
         return frames
     quoted = sql_quoted_list(ts_codes)
+    # B04 (p33 I3): the window bounds are pushed into the SQL reads.  The
+    # pivots below `reindex(columns=dates)` anyway — rows outside
+    # [min(dates), max(dates)] were read and then dropped, so filtering
+    # them at the source is output-equivalent (the shift/rolling windows
+    # operate on the reindexed frame's window columns only).
+    bounds = (min(dates), max(dates)) if dates else None
+
+    def _window_clause(column: str, *, keyword: str = "AND") -> str:
+        return (
+            f"{keyword} {column} BETWEEN ? AND ?"
+            if bounds is not None
+            else ""
+        )
+
+    def _window_params() -> list[str]:
+        return list(bounds) if bounds is not None else []
+
     try:
         v2_path = resolve_v2_duckdb_path(config)
         with AshareDB(v2_path, read_only=True) as v2db:
             margin = v2db.query(
                 "SELECT ts_code, available_date, rzye, rzmre FROM margin_detail_pit "
-                f"WHERE ts_code IN ({quoted}) AND available_date IS NOT NULL"
+                f"WHERE ts_code IN ({quoted}) AND available_date IS NOT NULL "
+                f"{_window_clause('available_date')}",
+                _window_params(),
             )
     except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
         # The v2 margin source is expected to be absent in pre-D3 /
@@ -527,7 +546,9 @@ def build_capital_frames(
         with AshareDB(v2_path, read_only=True) as v2db:
             basics = v2db.query(
                 "SELECT ts_code, trade_date, circ_mv FROM daily_basic_pit "
-                f"WHERE ts_code IN ({quoted})"
+                f"WHERE ts_code IN ({quoted}) "
+                f"{_window_clause('trade_date')}",
+                _window_params(),
             )
     except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
         logger.debug(f" daily_basic circ_mv unavailable: {exc}")
@@ -535,7 +556,9 @@ def build_capital_frames(
     try:
         with AshareDB(config.duckdb_path, read_only=True) as db:
             sw_index = db.query(
-                f"SELECT index_code, trade_date, close FROM {config.sw_index_table}"
+                f"SELECT index_code, trade_date, close FROM {config.sw_index_table} "
+                f"{_window_clause('trade_date', keyword='WHERE')}",
+                _window_params(),
             )
     except Exception as exc:  # noqa: BLE001 - tables may not exist yet.
         logger.warning(f"Industry index closes unavailable: {exc}")

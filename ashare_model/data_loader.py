@@ -74,7 +74,7 @@ from ashare_data.universe import (
 )
 
 from .factors import compute_factor_tensor
-from .load_cache import factor_cache_for, loader_factor_cache_identity
+from .load_cache import factor_cache_for, loader_factor_cache_identity_with_reason
 
 
 class V2PriceSourceError(RuntimeError):
@@ -186,8 +186,15 @@ class AshareDataLoader:
         self.factor_tensor: torch.Tensor | None = None
         # p21 §3: how the E2 factor-tensor cache fared on the last load —
         # "miss" (computed + stored), "hit" (restored), "disabled"
-        # (identity underivable; pre-wiring path) or None (not loaded).
+        # (identity underivable; pre-wiring path), "invalidated" (B04 p33
+        # I2: an entry existed under the requested key but was rejected —
+        # unreadable / stored-identity mismatch — so it was recomputed,
+        # never reused) or None (not loaded).
         self.factor_cache_outcome: str | None = None
+        # B04 (p33 I2): WHY the cache fared that way — "hit" /
+        # "miss:no_entry" / "invalidated:unreadable" /
+        # "invalidated:identity_mismatch" / "disabled:<identity reason>".
+        self.factor_cache_reason: str | None = None
         self.industry_codes: torch.Tensor | None = None
         self.raw_data_cache: dict[str, torch.Tensor] = {}
         self.adjusted_data_cache: dict[str, torch.Tensor] = {}
@@ -639,19 +646,6 @@ class AshareDataLoader:
             )
         self.adjusted_data_cache = adjusted_map
 
-        # Announce-date-aligned point-in-time fundamentals and capital-flow
-        # frames; any failure (e.g. the tables do not exist yet) degrades
-        # to neutral frames.
-        close_wide = pivot_wide(df, self.ts_codes, self.dates, "close")
-        pit = build_pit_frames(self.config, self.ts_codes, self.dates, close_wide)
-        capital = build_capital_frames(self.config, self.ts_codes, self.dates)
-        apply_cross_sectional_z(
-            capital,
-            ("MARGIN_BALANCE_TO_CIRC_MV", "MARGIN_BUY_PRESSURE_5"),
-        )
-        industry_frame = build_industry_member_frame(
-            self.config, self.ts_codes, self.dates
-        )
         # p17 §12 qualification input for the D7 per-formula gate: the
         # Shenwan index close source may lag at most 3 open sessions; a
         # stale source is recorded as degraded (never silently healthy).
@@ -671,32 +665,70 @@ class AshareDataLoader:
             )
 
         # p21 §3 (amended 2026-09-08, captain-approved): the E2
-        # content-addressed factor-tensor cache.  The identity is derived
-        # fail-closed from the store state (``load_cache``); a disabled
-        # identity leaves this path byte-identical to pre-wiring
-        # behavior, and a hit returns the exact float32 tensor the miss
-        # path would have computed (the cast is deterministic).
-        # A02 (p26 I2/I6) + A03 (p27 I6): the FORMAL path consumes the
-        # *content-confirmed composite snapshot identity* — one string
-        # derived through the single composite authority
-        # (``runspec.confirm_composite_snapshot``).  The block is
-        # extracted into :meth:`confirm_input_snapshot` (A03: a formal
-        # entry calls it before the heavy load to freeze the RunSpec);
-        # load_data re-runs it here so direct callers keep identical
-        # behavior and the identity is re-verified at load time.
+        # content-addressed factor-tensor cache.  B04 (p33 I1, F07 fix):
+        # the identity confirmation and the hit judgment now run BEFORE
+        # the expensive PIT/capital frame builds, so a hit no longer pays
+        # for frames it never consumes.  The confirm stays after the v2
+        # bar read (a missing v2 source keeps raising V2PriceSourceError
+        # first) and its full uncached re-hash is NOT skipped on the hot
+        # path (A02 semantics unchanged).  A02 (p26 I2/I6) + A03 (p27 I6):
+        # the FORMAL path consumes the *content-confirmed composite
+        # snapshot identity* — one string derived through the single
+        # composite authority (``runspec.confirm_composite_snapshot``).
+        # The block is extracted into :meth:`confirm_input_snapshot` (A03:
+        # a formal entry calls it before the heavy load to freeze the
+        # RunSpec); load_data re-runs it here so direct callers keep
+        # identical behavior and the identity is re-verified at load time.
         self.confirm_input_snapshot()
         cache = factor_cache_for(self.config.data_dir)
-        identity = loader_factor_cache_identity(
+        identity, identity_reason = loader_factor_cache_identity_with_reason(
             resolve_v2_duckdb_path(self.config),
             self.dataset_id,
             self.dates,
             self.ts_codes,
         )
         cached = cache.get(identity) if identity is not None else None
-        self.factor_cache_outcome = (
-            "disabled" if identity is None else "miss"
+        if identity is None:
+            self.factor_cache_outcome = "disabled"
+            self.factor_cache_reason = f"disabled:{identity_reason}"
+        elif cached is not None:
+            self.factor_cache_outcome = "hit"
+            self.factor_cache_reason = "hit"
+        elif cache.last_outcome == "no_entry":
+            self.factor_cache_outcome = "miss"
+            self.factor_cache_reason = "miss:no_entry"
+        else:
+            # An entry existed under the requested key but was rejected
+            # (unreadable / stored-identity mismatch): recomputed, never
+            # reused (B04 p33 I2 — the "invalidated" state and its reason).
+            self.factor_cache_outcome = "invalidated"
+            self.factor_cache_reason = f"invalidated:{cache.last_outcome}"
+        logger.info(
+            "factor cache outcome={} reason={}",
+            self.factor_cache_outcome,
+            self.factor_cache_reason,
+        )
+
+        # The industry membership frame feeds both the factor computation
+        # (miss path) and the VM's dense industry group ids (every path) —
+        # built once and shared (B04 p33 I1).
+        industry_frame = build_industry_member_frame(
+            self.config, self.ts_codes, self.dates
         )
         if cached is None:
+            # Skipped entirely on a cache hit: the restored tensor already
+            # embodies the PIT/capital inputs for this identity (B04 p33
+            # I1 — the hit path must not rebuild the expensive frames).
+            # Announce-date-aligned point-in-time fundamentals and
+            # capital-flow frames; any failure (e.g. the tables do not
+            # exist yet) degrades to neutral frames.
+            close_wide = pivot_wide(df, self.ts_codes, self.dates, "close")
+            pit = build_pit_frames(self.config, self.ts_codes, self.dates, close_wide)
+            capital = build_capital_frames(self.config, self.ts_codes, self.dates)
+            apply_cross_sectional_z(
+                capital,
+                ("MARGIN_BALANCE_TO_CIRC_MV", "MARGIN_BUY_PRESSURE_5"),
+            )
             # Factors consume the ADJUSTED continuous basis (p19 §2.3);
             # volume, amount and turnover_rate stay raw (nominal shares /
             # yuan).  The exact-limit event family additionally reads the
@@ -720,8 +752,9 @@ class AshareDataLoader:
                     identity, np.asarray(factors, dtype=np.float32)
                 )
         else:
+            # Cache hit: the exact float32 tensor the miss path would have
+            # computed (the cast is deterministic; R1/R2 pin the equality).
             self.factor_tensor = torch.tensor(cached, dtype=torch.float32)
-            self.factor_cache_outcome = "hit"
         # Dense industry group ids for the VM's CS_NEUTRALIZE operator
         # (unmapped stocks stay NaN so no group is fabricated for them).
         self.industry_codes = torch.tensor(
