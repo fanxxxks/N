@@ -62,6 +62,20 @@ def _mini_dates() -> list[str]:
     )
 
 
+def _contract_sha() -> str:
+    """The real committed p34 contract file's sha256 — the value the
+    driver must self-verify against (C5 hardening)."""
+
+    import hashlib
+
+    repo = Path(__file__).resolve().parents[1]
+    return hashlib.sha256(
+        (
+            repo / "docs" / "p34_r01_fixed_baseline_diagnostic_draft.md"
+        ).read_bytes()
+    ).hexdigest()
+
+
 def _mini_close(code_index: int, session_index: int) -> float:
     """Deterministic price ladder: 0 rises fast, 1 slow, 2 slower, the
     rest stay flat — a momentum signal ranks 0 > 1 > 2 > rest by
@@ -126,7 +140,7 @@ def build_mini_db(tmp_path: Path) -> DataConfig:
         start_date=MINI_START,
         end_date="2024-12-31",
         index_codes=["000300.SH"],
-        index_names=["娌繁300"],
+        index_names=["濞岊亝绻?00"],
         min_listed_sessions=1,
     )
     bars = _mini_bars()
@@ -367,6 +381,45 @@ def test_r1_loader_frame_status_clean_and_degraded(mini_env):
     status = loader.loader_frame_status()
     assert status["status"] == "degraded"
     assert any("industry" in reason for reason in status["reasons"])
+
+
+def test_r1b_degraded_universe_contract_disclosed_not_crash(mini_env):
+    """R1b (dual-review repair): a degraded universe contract must surface
+    as a typed degradation reason — the status carries `warnings` (there
+    is no `reason_codes` field), and the disclosure path must not crash
+    exactly when a degradation has to be reported."""
+
+    import dataclasses
+
+    from ashare_data.universe import UniverseContractStatus
+    from ashare_model.data_loader import AshareDataLoader
+
+    _, data_config, _ = mini_env
+    loader = AshareDataLoader(data_config, ModelConfig())
+    loader.confirm_input_snapshot()
+    loader.load_data()
+    assert loader.loader_frame_status()["status"] == "clean"
+    contract = loader._contract()
+    degraded_status = UniverseContractStatus(
+        mode=contract.status.mode,
+        strict=contract.status.strict,
+        degraded=True,
+        membership_source=contract.status.membership_source,
+        session_source=contract.status.session_source,
+        warnings=("synthetic degraded universe contract",),
+        constituent_rows=contract.status.constituent_rows,
+        stock_rows=contract.status.stock_rows,
+        open_sessions=contract.status.open_sessions,
+    )
+    loader._universe_contract = dataclasses.replace(
+        contract, status=degraded_status
+    )
+    status = loader.loader_frame_status()
+    assert status["status"] == "degraded"
+    assert any(
+        "universe_contract_degraded" in reason for reason in status["reasons"]
+    )
+    assert any("synthetic degraded" in reason for reason in status["reasons"])
 
 
 # --- R2: typed DataQualificationReport ---------------------------------------
@@ -623,6 +676,9 @@ def test_r7_adjudication_paths():
     assert verdict["worth_search"] is True
     assert verdict["qualified_arms"] == ["baseline:X"]
     assert verdict["flags"]["baseline:X"] == []
+    # The recorded net-space field is the ex-holdings statistic (p34 搂3.7
+    # keeps the holdings floor in thin_book); the field name says so.
+    assert verdict["arm_details"]["baseline:X"]["net_space_ex_holdings"] is True
 
     # Negative path: every arm below water — legal negative result.
     verdict = decide_adjudication(
@@ -659,45 +715,153 @@ def test_r7_adjudication_paths():
     assert verdict["worth_search"] is False
     assert "thin_book" in verdict["flags"]["baseline:X"]
 
+    # p34 §3.5: unreliable is the >= 2 failed-folds marker; a single
+    # failed fold is an informational fold_failure, not disqualification.
+    verdict = decide_adjudication(
+        {"baseline:X": _arm(failed_folds=1)}, R01_ADJUDICATION_RULES
+    )
+    flags = verdict["flags"]["baseline:X"]
+    assert "fold_failure" in flags
+    assert "unreliable" not in flags
+    verdict = decide_adjudication(
+        {"baseline:X": _arm(failed_folds=2)}, R01_ADJUDICATION_RULES
+    )
+    assert "unreliable" in verdict["flags"]["baseline:X"]
+    assert verdict["worth_search"] is False
+
 
 # --- R8: the mini end-to-end driver -------------------------------------------
+#
+# Dual-review repair (T8): the e2e drives the REAL decide_adjudication —
+# the park path through the driver's explicit adjudication_rules seam
+# (relaxed thresholds, documented as test-only), the retire path through
+# the honest frozen-rules outcome on this canary scale (a single fold of
+# a 13-stock universe cannot pass min_positive_folds/min_avg_holdings,
+# which is the rules working as designed). No decision-function mocks.
 
 
-def test_r8_end_to_end_driver_parks_on_positive(
+def test_r8_contract_sha_mismatch_refused(mini_env, gate_run_asof):
+    """C5 hardening: a supplied contract sha256 that does not match the
+    committed contract file is a fail-closed refusal before anything
+    expensive runs."""
+
+    import pytest as _pytest
+
+    import ashare_model.r01_baseline as r01
+
+    tmp_path, _data_config, cfg_path = mini_env
+    gate_run_asof(_mini_dates()[-1])
+    with _pytest.raises(r01.R01Refusal, match="contract sha256 mismatch"):
+        r01.run_r01_baseline(
+            cfg_path,
+            contract_sha256="0" * 64,
+            out_root=tmp_path / "r01_out_sha",
+            require_clean_tree=False,
+            min_eligible=3,
+        )
+
+
+def test_r8_budget_exhaustion_marks_failed(
     mini_env, gate_run_asof, monkeypatch
 ):
-    """The park path, forced through the adjudication seam: with the
-    frozen verdict overridden to positive the run stays NON-TERMINAL at
-    FACTOR_SET_QUALIFIED (round 2 needs its own explicit authorization).
-    The unforced canary outcome is honestly negative — a single fold of a
-    13-stock universe cannot pass the frozen min_positive_folds /
-    min_avg_holdings rules, which is the rules working as designed; the
-    honest rule paths are unit-tested in R7."""
+    """T2a: a wall-clock overrun after run creation leaves the run at the
+    honest FAILED terminal (p34 §3.6 超限即停止并记 FAILED), not dangling
+    non-terminal."""
 
     import ashare_model.r01_baseline as r01
     from ashare_model.lifecycle import replay_run
     from ashare_model.run_store import RunStore
 
     tmp_path, data_config, cfg_path = mini_env
-    dates = _mini_dates()
-    gate_run_asof(dates[-1])
-    real_decide = r01.decide_adjudication
-
-    def forced_positive(arm_summaries, rules=None):
-        verdict = real_decide(
-            arm_summaries, rules or r01.R01_ADJUDICATION_RULES
+    gate_run_asof(_mini_dates()[-1])
+    with pytest.raises(r01.R01Refusal, match="wall-clock budget"):
+        r01.run_r01_baseline(
+            cfg_path,
+            contract_sha256=_contract_sha(),
+            out_root=tmp_path / "r01_out_budget",
+            require_clean_tree=False,
+            min_eligible=3,
+            wall_clock_budget_s=0.0,
         )
-        verdict["worth_search"] = True
-        verdict["qualified_arms"] = ["baseline:MOMENTUM_20"]
-        return verdict
+    # The spec/run exist (the run opened) and the chain is FAILED.
+    store = RunStore(data_config.data_dir)
+    runs = list((data_config.data_dir / "runs").iterdir())
+    assert runs, "expected the opened run directory"
+    spec_dirs = list(runs[0].iterdir())
+    run_dirs = list(spec_dirs[0].iterdir())
+    state = replay_run(
+        store.root,
+        spec_dirs[0].name,
+        run_dirs[0].name,
+    )
+    assert state == "FAILED"
 
-    monkeypatch.setattr(r01, "decide_adjudication", forced_positive)
+
+def test_r8_data_gate_refusal_rejected(
+    mini_env, gate_run_asof, monkeypatch
+):
+    """T4: a COMPLETED §5.1 gate verdict that fails validation terminates
+    the run REJECTED (the machine discriminator), not FAILED.  The refusal
+    is produced honestly: the loader reports a degraded frame status and
+    the registered report is refused by the validator."""
+
+    from ashare_model.data_loader import AshareDataLoader
+    from ashare_model.lifecycle import replay_run
+    from ashare_model.run_store import RunStore
+
+    import ashare_model.r01_baseline as r01
+
+    tmp_path, data_config, cfg_path = mini_env
+    gate_run_asof(_mini_dates()[-1])
+
+    def degraded_status(self):
+        return {
+            "status": "degraded",
+            "reasons": ["price_semantics_degraded=['000001.SZ'] (test)"],
+        }
+
+    monkeypatch.setattr(AshareDataLoader, "loader_frame_status", degraded_status)
+    with pytest.raises(r01.R01Refusal, match="data qualification refused"):
+        r01.run_r01_baseline(
+            cfg_path,
+            contract_sha256=_contract_sha(),
+            out_root=tmp_path / "r01_out_rej",
+            require_clean_tree=False,
+            min_eligible=3,
+        )
+    store = RunStore(data_config.data_dir)
+    runs = sorted((data_config.data_dir / "runs").iterdir())
+    spec_dirs = sorted(runs[-1].iterdir())
+    run_dirs = sorted(spec_dirs[0].iterdir())
+    assert replay_run(store.root, spec_dirs[0].name, run_dirs[0].name) == (
+        "REJECTED"
+    )
+
+
+def test_r8_end_to_end_driver_parks_on_positive(mini_env, gate_run_asof):
+    """The park path through the REAL adjudicator: relaxed canary-scale
+    rules (explicit adjudication_rules seam) let the momentum arms
+    qualify, so the run stays NON-TERMINAL at FACTOR_SET_QUALIFIED —
+    round 2 needs its own explicit authorization and this code never
+    admits a search plan."""
+
+    import ashare_model.r01_baseline as r01
+    from ashare_model.lifecycle import replay_run
+    from ashare_model.run_store import RunStore
+
+    tmp_path, data_config, cfg_path = mini_env
+    gate_run_asof(_mini_dates()[-1])
     summary = r01.run_r01_baseline(
         cfg_path,
-        contract_sha256="a" * 64,
+        contract_sha256=_contract_sha(),
         out_root=tmp_path / "r01_out",
         require_clean_tree=False,
         min_eligible=3,  # the canary-scale deployment knob (canary C3 seam)
+        adjudication_rules={
+            "min_positive_folds": 1,
+            "min_avg_holdings": 2.0,
+            "min_invested_ratio": 0.5,
+        },
     )
     store = RunStore(data_config.data_dir)
     state = replay_run(store.root, summary["spec_id"], summary["run_id"])
@@ -708,7 +872,7 @@ def test_r8_end_to_end_driver_parks_on_positive(
     report_path = tmp_path / "r01_out" / "r01_baseline_report.json"
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["r01_report_schema_version"] == 1
-    assert payload["provenance"]["contract_sha256"] == "a" * 64
+    assert payload["provenance"]["contract_sha256"] == _contract_sha()
     assert payload["provenance"]["dataset_id"] == summary["dataset_id"]
     assert payload["provenance"]["consumed_semantic_evaluations"] == 0
     assert payload["adjudication"] == summary["adjudication"]
@@ -718,8 +882,14 @@ def test_r8_end_to_end_driver_parks_on_positive(
         "baseline:MOMENTUM_20", "baseline:RSQ_60", "baseline:REVERSAL_60",
         "combo:all3", "combo:momentum_reversal", "control:cash",
     } <= arms
+    # The cost-free benchmark is the reference, not a ladder member (T7).
+    bench_levels = {
+        row["cost_level"] for row in payload["rows"]
+        if row["candidate"] == "benchmark:equal_weight"
+    }
+    assert bench_levels == {"ref"}
     levels = {row["cost_level"] for row in payload["rows"]}
-    assert levels == {"0x", "1x", "2x"}
+    assert levels == {"0x", "1x", "2x", "ref"}
     # Every cost-bearing arm discloses every fold (full-arm reporting).
     for arm in ("baseline:MOMENTUM_20", "combo:all3", "control:cash"):
         n_rows = sum(
@@ -729,35 +899,20 @@ def test_r8_end_to_end_driver_parks_on_positive(
         assert n_rows == 1
 
 
-def test_r8_end_to_end_driver_negative_retires(
-    mini_env, gate_run_asof, monkeypatch
-):
-    """The negative path: with the adjudication forced negative the run
-    terminates RETIRED with the report hash in the reason (the machine
-    discriminator: administrative stop, not a gate failure)."""
+def test_r8_end_to_end_driver_negative_retires(mini_env, gate_run_asof):
+    """The negative path through the REAL frozen rules: on this canary
+    scale every arm is thin_book-flagged, so the honest verdict retires
+    the run (administrative stop with the report hash in the reason)."""
 
     import ashare_model.r01_baseline as r01
     from ashare_model.lifecycle import replay_run
     from ashare_model.run_store import RunStore
 
     tmp_path, data_config, cfg_path = mini_env
-    dates = _mini_dates()
-    gate_run_asof(dates[-1])
-    real_decide = r01.decide_adjudication
-
-    def forced_negative(arm_summaries, rules=None):
-        verdict = real_decide(
-            arm_summaries, rules or r01.R01_ADJUDICATION_RULES
-        )
-        verdict["worth_search"] = False
-        verdict["qualified_arms"] = []
-        verdict["bottleneck"] = "forced_negative_for_test"
-        return verdict
-
-    monkeypatch.setattr(r01, "decide_adjudication", forced_negative)
+    gate_run_asof(_mini_dates()[-1])
     summary = r01.run_r01_baseline(
         cfg_path,
-        contract_sha256="b" * 64,
+        contract_sha256=_contract_sha(),
         out_root=tmp_path / "r01_out_neg",
         require_clean_tree=False,
         min_eligible=3,
@@ -766,3 +921,5 @@ def test_r8_end_to_end_driver_negative_retires(
     state = replay_run(store.root, summary["spec_id"], summary["run_id"])
     assert summary["adjudication"]["worth_search"] is False
     assert state == "RETIRED"
+
+
