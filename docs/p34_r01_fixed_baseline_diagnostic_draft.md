@@ -165,6 +165,33 @@ check-4 存在潜伏缺陷——`in_domain_execution` 用
 本包将该检查改为直接调用权威 `is_legal_execution`，属缺陷修复
 （裁决语义与契约原文一致），连同本节修订一并进入实现 commit。
 
+**Rev 2（双审修复轮，先于修复 commit）**：双审（合规 PASS；技术
+NEEDS_REVISION）裁定的修复全部在本契约冻结语义内，无研究语义变化：
+
+- **T1** `loader_frame_status` 降级契约分支改用 `UniverseContractStatus.warnings`
+  （原引用的 `reason_codes` 字段不存在——恰在必须披露降级时崩溃；R1b RED）。
+- **T2** run 打开后的一切失败路径收敛到诚实终态：预算超限、漂移、运行时异常
+  一律 `writer.fail`（FAILED），由幂等的 `_mark_failed` 守卫防双转移；兑现
+  §3.6「超限即停止并记 FAILED」。
+- **T4** 机器判别器归位：**已完成裁决但验证失败**的 §5.1/§5.2 门禁 →
+  `writer.reject`（REJECTED，携带已登记证据 artifact）；**未完成**的评估 →
+  FAILED。REJECTED 边已全图激活（lifecycle.py ACTIVATED_EDGES = 全 §4 图）。
+- **T3** 引擎调用按 (臂,折,档) 捕获失败并记 `failed` 行 + 原因（§3.5 原文
+  要求的逐 (臂,折) 失败记账；`summarize_arms` 消费）。
+- **T5** `unreliable` = ≥2 失败折（§3.5 原文）；单折失败记 `fold_failure`
+  信息标记，不取消资格（修复代码偏离冻结规则之处）。
+- **T6** 报告字段更名 `net_space_ex_holdings`（§3.7 的持仓下限在 `thin_book`
+  旗标中执行，字段名不再夸大语义）。
+- **T7** benchmark 臂 `cost_level="ref"`（§3.3：零成本参考不参与阶梯）。
+- **T8** e2e 经显式 `adjudication_rules` 测试缝驱动**真实**裁决器
+  （canary 规模放宽阈值），不再 mock 裁决函数；负路径用冻结规则的真实负结果。
+- **T9** 消融子集为空（单族因子集）→ fail-closed 拒绝，不对空列表出证据哈希。
+- **C5**（合规审建议采纳）驱动对 `--contract-sha256` 与已提交契约文件自校验，
+  不匹配先于昂贵计算拒绝——provenance 从自证变为自验。
+
+报告 schema v1 的字段修正发生在无任何真实消费者阶段（与 §4 数据报告同理由）。
+版本影响表其余行不变。
+
 本包工程改动（不改任何既有研究语义默认值）：
 
 1. `ashare_model/data_loader.py`：新增 `loader_frame_status()` 类型化降级状态

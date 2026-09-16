@@ -103,3 +103,26 @@ mtime 2026-09-11 与该事实一致。
 - 按整改方案 R01 的裁决语义，本轮当前结论为：**瓶颈 = 数据新鲜度（G8），
   阻断所有正式研究入口**；是否值得搜索的裁决保持「无证据」状态，等待数据
   解锁后重跑。负结果/阻断均是合法交付形态（AGENTS §1 原则 1）。
+
+## 4 双审与修复轮（2026-09-16）
+
+两个独立审核子 agent（用户指令恰两个，只读审查）：
+
+| 审 | 结论 | 要点 |
+|---|---|---|
+| 合规审 | **PASS** | 受控闭环/RED 证据/G8 fail-closed 无绕行/版本表/白名单/契约登记/不同步决定全部核过；3 项文档精度缺陷（C1 拒绝文本出处误标 .log（实为 stderr 捕获）、C2 日历缺口断言（勘误 2 已撤回）、C3 全量分解算术（勘误 3 已修））+ 2 项 low 观察（C4 契约 rev 1 随实现 commit 可接受、C5 建议驱动自校验契约哈希） |
+| 技术审 | **NEEDS_REVISION** | T1(HIGH) loader_frame_status 引用不存在的 `reason_codes` 字段（降级契约披露路径必崩，R1b RED）；T2(HIGH) run 打开后失败路径不完整（预算/异常可留非终态悬挂）；T3(MED) 缺 §3.5 逐 (臂,折) 失败记账；T4(MED) 已完成裁决的门禁拒绝误记 FAILED（应为 REJECTED）；T5-T9(LOW) 规则/字段/标签/测试缝/空消融守卫 |
+
+处置（修复 commit，契约 rev 2 已先记）：
+
+- **已修复**：T1、T2、T3、T4、T5、T6、T7、T8、T9、C5 —— 详见契约 §4 Rev 2
+  逐条；RED（commit `0edbb12`，6 处失败恰为修复点）→ 修复 →
+  **聚焦 14 passed**（122.03s）+ 相邻 **207 passed**（482.56s）+
+  compileall 0 错 + 分片 107/107 + diff-check 干净 + 全量结果见下。
+- **C1/C3**：勘误 3（commit `5537ade`）。
+- **C2**：勘误 2（commit `2a3459a`）已覆盖。
+- **C4**：无需修复（合规审已裁可接受；未来实现期缺陷修复优先独立契约修订
+  commit）。
+- 技术审 NOT COVERED 项（ProtocolConfig dataclass 形态、conftest helpers、
+  RunStore 严格 JSON、formal entry 门禁次序原文）不影响本包结论：其中
+  ProtocolConfig 已被实现实际消费并经全量验证，其余与修复无关。

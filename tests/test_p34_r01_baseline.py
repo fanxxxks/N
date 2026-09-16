@@ -785,15 +785,15 @@ def test_r8_budget_exhaustion_marks_failed(
         )
     # The spec/run exist (the run opened) and the chain is FAILED.
     store = RunStore(data_config.data_dir)
-    runs = list((data_config.data_dir / "runs").iterdir())
-    assert runs, "expected the opened run directory"
-    spec_dirs = list(runs[0].iterdir())
-    run_dirs = list(spec_dirs[0].iterdir())
-    state = replay_run(
-        store.root,
-        spec_dirs[0].name,
-        run_dirs[0].name,
+    spec_dir = next(
+        p for p in (data_config.data_dir / "runs").iterdir() if p.is_dir()
     )
+    run_dir = next(
+        p
+        for p in spec_dir.iterdir()
+        if p.is_dir() and p.name != "artifacts"
+    )
+    state = replay_run(store.root, spec_dir.name, run_dir.name)
     assert state == "FAILED"
 
 
@@ -830,12 +830,15 @@ def test_r8_data_gate_refusal_rejected(
             min_eligible=3,
         )
     store = RunStore(data_config.data_dir)
-    runs = sorted((data_config.data_dir / "runs").iterdir())
-    spec_dirs = sorted(runs[-1].iterdir())
-    run_dirs = sorted(spec_dirs[0].iterdir())
-    assert replay_run(store.root, spec_dirs[0].name, run_dirs[0].name) == (
-        "REJECTED"
+    spec_dir = sorted(
+        p for p in (data_config.data_dir / "runs").iterdir() if p.is_dir()
+    )[-1]
+    run_dir = next(
+        p
+        for p in spec_dir.iterdir()
+        if p.is_dir() and p.name != "artifacts"
     )
+    assert replay_run(store.root, spec_dir.name, run_dir.name) == "REJECTED"
 
 
 def test_r8_end_to_end_driver_parks_on_positive(mini_env, gate_run_asof):

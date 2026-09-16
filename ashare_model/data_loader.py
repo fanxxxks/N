@@ -535,9 +535,13 @@ class AshareDataLoader:
             reasons.append(f"universe_contract_unresolvable={exc}")
         else:
             if contract.status.degraded:
+                # UniverseContractStatus carries `warnings` (there is no
+                # `reason_codes` field — the dual-review repair): the
+                # disclosure path must never crash exactly when a
+                # degradation has to be reported.
                 reasons.append(
                     "universe_contract_degraded="
-                    f"{contract.status.reason_codes!r}"
+                    f"{list(contract.status.warnings)!r}"
                 )
         if self.price_degraded:
             reasons.append(

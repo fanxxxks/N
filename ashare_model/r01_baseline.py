@@ -202,28 +202,6 @@ def rows_to_jsonable(obj: Any) -> Any:
 # --- baseline arms --------------------------------------------------------------
 
 
-def baseline_directions_and_rows(
-    loader,
-    proto_cfg,
-    fold,
-    backtest_config,
-    model_config,
-    reward_config,
-) -> list[dict]:
-    """The 1x single-factor rows of one fold via the existing
-    ``baseline_candidates`` path; their ``direction`` values are the
-    frozen train-window rule every cost level reuses."""
-
-    from .eval_search import baseline_candidates
-
-    rows = baseline_candidates(
-        loader, proto_cfg, fold, backtest_config, model_config, reward_config
-    )
-    for row in rows:
-        row["cost_level"] = "1x"
-    return rows
-
-
 def run_baseline_arms(
     loader,
     proto_cfg,
@@ -239,11 +217,19 @@ def run_baseline_arms(
     Returns ``(rows, directions_by_fold)`` where directions map
     ``fold_test_end -> {factor_name: direction}`` (the train-window rule
     outputs, decided once at 1x and reused verbatim).  ``on_fold`` is a
-    progress callback receiving ``(index, total, fold)``.
+    progress/budget callback receiving ``(index, total, fold)``; an
+    exception from it propagates (the budget guard must fail the run, not
+    one fold).
+
+    p34 §3.5 failure accounting: every engine invocation is captured per
+    (arm, fold, level) — a failure appends a ``failed`` row with its
+    reason instead of aborting the round; ``summarize_arms`` consumes
+    those rows through the failed_folds/unreliable counters.
     """
 
     from .eval_folds import epoch_slice
     from .eval_metrics import benchmark_row, evaluate_signal
+    from .eval_search import baseline_candidates
     from .vocab import FEATURE_NAMES
 
     rows: list[dict] = []
@@ -252,64 +238,113 @@ def run_baseline_arms(
     for index, fold in enumerate(folds):
         if on_fold is not None:
             on_fold(index, total, fold)
+
+        def _ok(candidate: str, level: str, payload: dict) -> dict:
+            payload.update(
+                {
+                    "candidate": candidate,
+                    "formula_text": candidate,
+                    "fold_train_end": fold.train_end,
+                    "fold_test_end": fold.test_end,
+                    "seed": None,
+                    "cost_level": level,
+                    "failed": False,
+                }
+            )
+            return payload
+
+        def _failed_row(candidate: str, level: str, exc: Exception) -> dict:
+            return {
+                "candidate": candidate,
+                "formula_text": candidate,
+                "fold_train_end": fold.train_end,
+                "fold_test_end": fold.test_end,
+                "seed": None,
+                "cost_level": level,
+                "failed": True,
+                "failure_reason": f"{type(exc).__name__}: {exc}",
+            }
+
         # The cost-free equal-weight reference (once — it is the common
-        # benchmark every cost level is measured against).
-        row = benchmark_row(loader, fold)
-        row["cost_level"] = "1x"
-        rows.append(row)
-        singles = baseline_directions_and_rows(
-            loader, proto_cfg, fold, backtest_config, model_config,
-            reward_config,
-        )
-        directions = {
-            str(r["candidate"]).split(":", 1)[1]: int(r["direction"])
-            for r in singles
-        }
-        directions_by_fold[str(fold.test_end)] = directions
-        rows.extend(singles)
+        # benchmark every cost level is measured against; tagged "ref"
+        # because it does not participate in the cost ladder, p34 §3.3).
+        try:
+            row = benchmark_row(loader, fold)
+            rows.append(_ok("benchmark:equal_weight", "ref", row))
+        except Exception as exc:  # noqa: BLE001 — recorded per §3.5
+            rows.append(
+                _failed_row("benchmark:equal_weight", "ref", exc)
+            )
+
+        # 1x single-factor rows + the frozen train-window directions.
+        singles_failed: Exception | None = None
+        singles: list[dict] = []
+        try:
+            singles = baseline_candidates(
+                loader, proto_cfg, fold, backtest_config, model_config,
+                reward_config,
+            )
+        except Exception as exc:  # noqa: BLE001 — recorded per §3.5
+            singles_failed = exc
+        directions: dict[str, int] = {}
+        for r in singles:
+            _ok(str(r["candidate"]), "1x", r)
+            rows.append(r)
+            directions[str(r["candidate"]).split(":", 1)[1]] = int(
+                r["direction"]
+            )
+        if singles_failed is not None:
+            for name in proto_cfg.baseline_signals:
+                rows.append(
+                    _failed_row(f"baseline:{name}", "1x", singles_failed)
+                )
+        directions_by_fold[str(fold.test_end)] = dict(directions)
+
         fold_data = epoch_slice(loader, fold)
         factors = fold_data.factors
         mask = fold_data.universe_mask
-
-        def _tag(payload: dict, candidate: str, level: str) -> dict:
-            payload["candidate"] = candidate
-            payload["formula_text"] = candidate
-            payload["fold_train_end"] = fold.train_end
-            payload["fold_test_end"] = fold.test_end
-            payload["seed"] = None
-            payload["cost_level"] = level
-            payload["failed"] = False
-            return payload
 
         for level in COST_LEVELS:
             if level == "1x":
                 continue  # singles already measured on the 1x path above
             variant = cost_variant(backtest_config, level)
-            for name, direction in directions.items():
-                idx = FEATURE_NAMES.index(name)
-                signal = float(direction) * np.asarray(
-                    factors[idx], dtype=np.float64
-                )
-                metrics = evaluate_signal(signal, loader, fold, variant)
-                rows.append(_tag(metrics, f"baseline:{name}", level))
+            for name in proto_cfg.baseline_signals:
+                candidate = f"baseline:{name}"
+                try:
+                    direction = directions[name]
+                    idx = FEATURE_NAMES.index(name)
+                    signal = float(direction) * np.asarray(
+                        factors[idx], dtype=np.float64
+                    )
+                    metrics = evaluate_signal(signal, loader, fold, variant)
+                    rows.append(_ok(candidate, level, metrics))
+                except Exception as exc:  # noqa: BLE001 — per §3.5
+                    rows.append(_failed_row(candidate, level, exc))
         # Combos: the frozen construction, evaluated at every cost level.
         for level in COST_LEVELS:
             variant = cost_variant(backtest_config, level)
             for combo_name, member_names in R01_COMBO_ARMS:
-                members = [
-                    (directions[name], factors[FEATURE_NAMES.index(name)])
-                    for name in member_names
-                ]
-                signal = combo_signal(members, mask)
-                metrics = evaluate_signal(signal, loader, fold, variant)
-                rows.append(_tag(metrics, combo_name, level))
+                try:
+                    members = []
+                    for name in member_names:
+                        members.append(
+                            (directions[name], factors[FEATURE_NAMES.index(name)])
+                        )
+                    signal = combo_signal(members, mask)
+                    metrics = evaluate_signal(signal, loader, fold, variant)
+                    rows.append(_ok(combo_name, level, metrics))
+                except Exception as exc:  # noqa: BLE001 — per §3.5
+                    rows.append(_failed_row(combo_name, level, exc))
         # The cash control at every level (definitionally identical; run
         # mechanically instead of special-casing it).
         cash = cash_signal(len(loader.ts_codes), len(fold_data.dates))
         for level in COST_LEVELS:
             variant = cost_variant(backtest_config, level)
-            metrics = evaluate_signal(cash, loader, fold, variant)
-            rows.append(_tag(metrics, "control:cash", level))
+            try:
+                metrics = evaluate_signal(cash, loader, fold, variant)
+                rows.append(_ok("control:cash", level, metrics))
+            except Exception as exc:  # noqa: BLE001 — per §3.5
+                rows.append(_failed_row("control:cash", level, exc))
     return rows, directions_by_fold
 
 
@@ -330,21 +365,29 @@ def summarize_arms(rows: list[dict]) -> dict[str, dict[str, Any]]:
             by_fold.setdefault(str(row["fold_test_end"]), {})[
                 str(row["cost_level"])
             ] = row
+        # p34 §3.5: a fold fails for an arm when ANY of its levels failed.
         failed_folds = sum(
             1
             for per_level in by_fold.values()
-            if per_level.get("1x", {}).get("failed")
+            if any(bool(r.get("failed")) for r in per_level.values())
         )
+
+        def _usable(per_level: dict, level: str, key: str):
+            row = per_level.get(level)
+            if row is None or row.get("failed"):
+                return None
+            value = row.get(key)
+            return None if value is None else value
+
         excess_1x = [
-            per_level["1x"]["excess_return"]
+            value
             for per_level in by_fold.values()
-            if "1x" in per_level
-            and per_level["1x"].get("excess_return") is not None
+            if (value := _usable(per_level, "1x", "excess_return")) is not None
         ]
         active_irs = []
         for per_level in by_fold.values():
             row_1x = per_level.get("1x")
-            if row_1x is None:
+            if row_1x is None or row_1x.get("failed"):
                 continue
             active_irs.append(
                 oos_active_ir(
@@ -371,17 +414,19 @@ def summarize_arms(rows: list[dict]) -> dict[str, dict[str, Any]]:
                 float(
                     np.mean(
                         [
-                            per_level["1x"]["holdings_mean"]
+                            value
                             for per_level in by_fold.values()
-                            if "1x" in per_level
-                            and per_level["1x"].get("holdings_mean")
+                            if (
+                                value := _usable(
+                                    per_level, "1x", "holdings_mean"
+                                )
+                            )
                             is not None
                         ]
                     )
                 )
                 if any(
-                    "1x" in per_level
-                    and per_level["1x"].get("holdings_mean") is not None
+                    _usable(per_level, "1x", "holdings_mean") is not None
                     for per_level in by_fold.values()
                 )
                 else None
@@ -390,17 +435,19 @@ def summarize_arms(rows: list[dict]) -> dict[str, dict[str, Any]]:
                 float(
                     np.mean(
                         [
-                            per_level["1x"]["invested_ratio_mean"]
+                            value
                             for per_level in by_fold.values()
-                            if "1x" in per_level
-                            and per_level["1x"].get("invested_ratio_mean")
+                            if (
+                                value := _usable(
+                                    per_level, "1x", "invested_ratio_mean"
+                                )
+                            )
                             is not None
                         ]
                     )
                 )
                 if any(
-                    "1x" in per_level
-                    and per_level["1x"].get("invested_ratio_mean") is not None
+                    _usable(per_level, "1x", "invested_ratio_mean") is not None
                     for per_level in by_fold.values()
                 )
                 else None
@@ -409,17 +456,19 @@ def summarize_arms(rows: list[dict]) -> dict[str, dict[str, Any]]:
                 float(
                     np.mean(
                         [
-                            per_level["2x"]["excess_return"]
+                            value
                             for per_level in by_fold.values()
-                            if "2x" in per_level
-                            and per_level["2x"].get("excess_return")
+                            if (
+                                value := _usable(
+                                    per_level, "2x", "excess_return"
+                                )
+                            )
                             is not None
                         ]
                     )
                 )
                 if any(
-                    "2x" in per_level
-                    and per_level["2x"].get("excess_return") is not None
+                    _usable(per_level, "2x", "excess_return") is not None
                     for per_level in by_fold.values()
                 )
                 else None
@@ -446,21 +495,28 @@ def decide_adjudication(
         if candidate in ("benchmark:equal_weight", "control:cash"):
             continue
         arm_flags: list[str] = []
-        shows_net_space = (
+        # p34 §3.7 net-space statistic (ex-holdings: the holdings floor
+        # lives in the thin_book flag — the field name records that).
+        net_space_ex_holdings = (
             summary["mean_net_excess_1x"] is not None
             and summary["active_ir_1x"] is not None
             and summary["mean_net_excess_1x"] > 0
             and summary["active_ir_1x"] > 0
         )
-        if summary["unreliable"] or summary["failed_folds"]:
+        # p34 §3.5: `unreliable` is the >= 2 failed-folds marker; a single
+        # failed fold is an informational flag, not a disqualification.
+        failed_folds = int(summary.get("failed_folds") or 0)
+        if failed_folds >= 2:
             arm_flags.append("unreliable")
+        elif failed_folds:
+            arm_flags.append("fold_failure")
         invested = summary["invested_ratio_mean_1x"]
         if invested is None or invested < rules["min_invested_ratio"]:
             arm_flags.append("low_activity")
         holdings = summary["mean_holdings_1x"]
         if holdings is None or holdings < rules["min_avg_holdings"]:
             arm_flags.append("thin_book")
-        if shows_net_space:
+        if net_space_ex_holdings:
             if summary["positive_folds_1x"] < rules["min_positive_folds"]:
                 arm_flags.append("single_year_dependence")
             if (summary["mean_net_excess_2x"] or 0.0) <= 0:
@@ -477,7 +533,7 @@ def decide_adjudication(
                 qualified.append(candidate)
         flags[candidate] = arm_flags
         details[candidate] = {
-            "shows_net_space": bool(shows_net_space),
+            "net_space_ex_holdings": bool(net_space_ex_holdings),
             "flags": list(arm_flags),
         }
     worth_search = bool(qualified)
@@ -559,16 +615,23 @@ def run_r01_baseline(
     require_clean_tree: bool = True,
     wall_clock_budget_s: float = 6 * 3600,
     min_eligible: int | None = None,
+    adjudication_rules: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """The p34 round-1 run (see the module docstring).  Returns the run
     summary; a fail-closed refusal raises :class:`R01Refusal` with the
     run left at its honest terminal state.  ``min_eligible`` is the
     ProductionGateRunner deployment tuning knob (the same seam the
-    formal entries expose); production callers keep the default."""
+    formal entries expose); production callers keep the default.
+    ``adjudication_rules`` defaults to the frozen :data:`R01_ADJUDICATION_RULES`
+    (the test-only override seam runs the REAL adjudicator with relaxed
+    canary-scale thresholds — it never touches production defaults)."""
 
     from .data_loader import AshareDataLoader
     from .identity import content_hash
     from .lifecycle import (
+        TERMINAL_STATUSES,
+        DataQualificationError,
+        FactorQualificationError,
         LifecycleWriter,
         build_data_qualification_report,
         build_factor_qualification_report,
@@ -595,6 +658,21 @@ def run_r01_baseline(
     out_root = Path(out_root) if out_root is not None else (
         root / "data" / "r1" / "r01_baseline"
     )
+
+    # -- C5 hardening: the supplied contract sha256 must match the
+    # committed contract file (the provenance stamp is self-verified, not
+    # self-attested).  Refuses before anything expensive runs.
+    contract_path = (
+        root / "docs" / "p34_r01_fixed_baseline_diagnostic_draft.md"
+    )
+    actual_contract_sha = _sha256_file(contract_path)
+    if str(contract_sha256).lower() != actual_contract_sha:
+        raise R01Refusal(
+            "contract sha256 mismatch: supplied "
+            f"{contract_sha256!r} != committed contract file {actual_contract_sha} "
+            f"({contract_path.name}); a formal run never stamps unverified "
+            "provenance"
+        )
 
     from ashare_data.config import (
         make_backtest_config,
@@ -651,6 +729,22 @@ def run_r01_baseline(
     handle = store.open_run(spec)
     run_id = handle.run_id
     writer = LifecycleWriter(handle)
+
+    def _mark_failed(reason: str) -> None:
+        """Honest-terminal guard: mark FAILED unless the run already sits
+        in a terminal state (REJECTED/FAILED/RETIRED have no out-edges —
+        a double transition is itself a machine error)."""
+
+        if writer.current_state not in TERMINAL_STATUSES:
+            writer.fail(reason=reason)
+
+    def _latest_artifact(artifact_type: str):
+        index = handle.load_index()
+        for entry in reversed(index.get("artifacts", [])):
+            if entry.get("artifact_type") == artifact_type:
+                return entry
+        return None
+
     try:
         idea = {
             "idea_record_schema_version": 1,
@@ -687,12 +781,10 @@ def run_r01_baseline(
         # -- load, drift guard, typed §5.1 report.
         loader.load_data()
         if loader.dataset_id != spec.dataset_id:
-            writer.fail(
-                reason=(
-                    "the database content drifted between identity freeze "
-                    "and load (A02 I2/p27 I6); the frozen spec no longer "
-                    "matches the confirmed composite snapshot"
-                )
+            _mark_failed(
+                "the database content drifted between identity freeze "
+                "and load (A02 I2/p27 I6); the frozen spec no longer "
+                "matches the confirmed composite snapshot"
             )
             raise R01Refusal(
                 "dataset identity drifted between spec freeze and load"
@@ -713,10 +805,30 @@ def run_r01_baseline(
         )
         try:
             writer.qualify_data(data_report)
-        except Exception as exc:  # noqa: BLE001 — evidence preserved, honest terminal
-            writer.fail(
-                reason=f"§5.1 data qualification gate refused the report: {exc}"
+        except DataQualificationError as exc:
+            # The machine discriminator (p8 §4): a COMPLETED gate verdict
+            # that fails validation is REJECTED (its registered report is
+            # the complete evidence); an evaluation that did not complete
+            # is FAILED.  The meanings are not interchangeable.
+            entry = _latest_artifact("data_qualification_report")
+            completed = (
+                bool(
+                    handle.read_artifact(entry["artifact_id"]).get("completed")
+                )
+                if entry is not None
+                else False
             )
+            if entry is not None and completed:
+                writer.reject(
+                    evidence={
+                        "artifact_id": entry["artifact_id"],
+                        "artifact_type": "data_qualification_report",
+                    }
+                )
+            else:
+                _mark_failed(
+                    f"§5.1 data qualification gate did not complete: {exc}"
+                )
             raise R01Refusal(f"data qualification refused: {exc}") from exc
 
         # -- the frozen baseline arms (p34 §3.2/§3.3).
@@ -728,12 +840,18 @@ def run_r01_baseline(
             backtest_config,
             model_config,
             reward_config,
+            on_fold=lambda i, total, fold: _budget_check(
+                f"fold {fold.test_end} ({i + 1}/{total})"
+            ),
         )
         _budget_check("baseline arms")
 
         # -- the report artifact (strict JSON inside the run store).
         safe_rows = rows_to_jsonable(rows)
-        adjudication = decide_adjudication(summarize_arms(rows))
+        adjudication = decide_adjudication(
+            summarize_arms(rows),
+            adjudication_rules or R01_ADJUDICATION_RULES,
+        )
         report = {
             "r01_report_schema_version": R01_REPORT_SCHEMA_VERSION,
             "provenance": {
@@ -790,6 +908,20 @@ def run_r01_baseline(
             loader, proto_cfg, folds, backtest_config, model_config,
             reward_config,
         )
+        if not ablation_rows:
+            # p34 §3.5 / §5.2 check 6: an ablation with no producible
+            # subset (single-family factor set) cannot be completed — a
+            # fail-closed refusal, never a hash over an empty list.
+            _mark_failed(
+                "leave-family-out ablation produced no subsets: the §5.2 "
+                "check-6 evidence cannot be produced for a single-family "
+                "factor set"
+            )
+            raise R01Refusal(
+                "leave-family-out ablation produced no subsets; the §5.2 "
+                "check-6 evidence cannot be produced for a single-family "
+                "factor set"
+            )
         ablation_evidence = {
             "completed": True,
             "result_hash": content_hash(
@@ -813,12 +945,29 @@ def run_r01_baseline(
         )
         try:
             writer.qualify_factor_set(factor_report)
-        except Exception as exc:  # noqa: BLE001 — evidence preserved, honest terminal
-            writer.fail(
-                reason=(
-                    f"§5.2 factor qualification gate refused the report: {exc}"
+        except FactorQualificationError as exc:
+            # Machine discriminator (p8 §4): the builder emits completed
+            # reports, so a refusal here is a completed verdict failing
+            # validation → REJECTED with the registered evidence.
+            entry = _latest_artifact("factor_qualification_report")
+            completed = (
+                bool(
+                    handle.read_artifact(entry["artifact_id"]).get("completed")
                 )
+                if entry is not None
+                else False
             )
+            if entry is not None and completed:
+                writer.reject(
+                    evidence={
+                        "artifact_id": entry["artifact_id"],
+                        "artifact_type": "factor_qualification_report",
+                    }
+                )
+            else:
+                _mark_failed(
+                    f"§5.2 factor qualification gate did not complete: {exc}"
+                )
             raise R01Refusal(f"factor qualification refused: {exc}") from exc
 
         # -- frozen adjudication (p34 §3.7): park or retire.
@@ -845,6 +994,17 @@ def run_r01_baseline(
             "row_count": len(rows),
             "wall_seconds": round(time.monotonic() - started, 1),
         }
+    except R01Refusal as exc:
+        # p34 §3.6/§7: any post-open refusal (budget overrun, drift,
+        # gate refusal re-raised here) leaves the run at its honest
+        # terminal — never dangling non-terminal.
+        _mark_failed(str(exc))
+        raise
+    except Exception as exc:  # noqa: BLE001 — the honest-terminal catch-all
+        _mark_failed(
+            f"R01 round-1 runtime failure: {type(exc).__name__}: {exc}"
+        )
+        raise R01Refusal(f"runtime failure: {exc}") from exc
     finally:
         handle.close()
 
