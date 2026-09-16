@@ -1,0 +1,90 @@
+# P34 R01 固定基线诊断测量日志（evidence-only）
+
+契约：`docs/p34_r01_fixed_baseline_diagnostic_draft.md`（rev 1，APPROVED，用户
+2026-09-16 直接指令「完成R01」）。本文件只记录实际发生什么；计划在契约，二者
+不混写（AGENTS §11.1）。
+
+## 1 软件交付（受控变更闭环）
+
+| 项 | 值 |
+|---|---|
+| 分支 / base | `codex/b04-load-cache-performance`（A01→B04 叠层链 tip = `faad2f4`）；未 push、未合并（无授权） |
+| 提交链 | 契约 `96c901e`（+ CONTRACTS.md 登记）→ RED `4c9b317`（tests/test_p34_r01_baseline.py + shard-model-2 注册，10 用例）→ 实现 `2805847` |
+| 环境 | Windows 16 GB 主机；Python 3.13（`D:\minequant\.venv\Scripts\python.exe`）；torch 2.11.0+cpu；DuckDB（锁文件版本） |
+| 实现内容 | `AshareDataLoader.loader_frame_status()`（p8 §5.1 类型化降级源单一出口）；`build_data_qualification_report` 接入类型化 loader_frames（验证器拒净语义不变；v1 payload 升级，从未有真实通过消费者）；`evaluate_signal` 附加可观测字段（rebalance_due_count / holdings_mean / holdings_max / invested_ratio_mean / cost_fraction_sum；既有字段零变化）；`ashare_model/r01_baseline.py` 驱动 + `scripts/r01_baseline.py` CLI；§5.2 check-4 潜伏缺陷修复（改用 `ResearchDomain.is_legal_execution` 区间权威——旧 `in horizon_range` 成员测试拒绝一切合法内部视界，因既有消费者全为 unified 而未暴露；契约 rev 1 已记录） |
+| 版本 | 无研究语义版本变更（PROTOCOL 27 / reward 15 / grammar 9 / registry 14 / LIFECYCLE_CONTRACT 2 均未动；数据报告 payload 字段升级在契约 §4 预注册） |
+
+### 1.1 验证结果（均在精确候选 commit `2805847` 上）
+
+| 验证 | 结果 |
+|---|---|
+| RED（commit `4c9b317` 树上） | `tests/test_p34_r01_baseline.py` 首证 `AttributeError: loader_frame_status`（契约钉 API 缺位）；R8 端到端经 mini 双库逐项逼出 G6 门禁形态、D7 manifest 依赖、§5.2 check-4 区间缺陷、tensor 首轴布局四类真实边界 |
+| 聚焦 | `python -m pytest -q tests/test_p34_r01_baseline.py` → **10 passed**（88.84s） |
+| 相邻契约 | `test_p27_a03_lifecycle_runcontext test_p31_b02_entry_canary test_run_store test_evaluation test_data_loader test_baseline_harness test_p29_b01_data_quality` → **207 passed**（515.53s） |
+| compileall | exit 0 |
+| 分片权威 | `python scripts/check_test_shards.py --check` → 107 files across 4 shards cover all 107 test files |
+| 全量 | `python -m pytest -q tests -n auto` → **1964 passed, 1 skipped, 0 failed**，908.82s（p33 基线 1953P/1S + 新增 11P，严格对齐；1 skip 为既有环境 skip，无净新增 warning/skip） |
+| `git diff --check` | 干净 |
+
+## 2 正式运行：被 G8 数据新鲜度门禁 fail-closed 阻断
+
+命令（2026-09-16 19:08:08，工作树干净 @ `2805847`，无并发重载进程）：
+
+```
+D:\minequant\.venv\Scripts\python.exe scripts\r01_baseline.py \
+  --contract-sha256 177953908aecf9b0060e9ad59f73327a340aa2322e48e44115f1dd79ad94a8b9 \
+  --out-root data/r1/r01_baseline
+```
+
+结果：**refused（exit 非零，R01Refusal），无任何 run/run-store/报告产物落盘**
+（门禁在 run 创建之前拒绝——与 evaluation 入口的 `require_production` 同一边界
+次序；`data/r1/r01_baseline` 与 `data/r1/medium_a/runs` 均不存在）。
+
+门禁原文（logs/r01_baseline_20260916_190808.log）：
+
+```
+r01_baseline: refused: production gate check failed (p34 §7): G8 daily bars
+fresh within the open-session tolerance (daily 20260907 vs reference 20260915,
+lag=6 > N=3, today=20260916)
+```
+
+判读：主库 `daily_bar` 最新交易日 2026-09-07；G8 参考日（评估日前最后一个开市
+会话）2026-09-15；其后开市会话数 lag=6 > 容差 3（`FRESHNESS_TOLERANCE_SESSIONS`，
+p16 预注册常量，非可调旋钮）。数据落后 6 个开市会话（09-08…09-15），主库文件
+mtime 2026-09-11 与该事实一致。
+
+### 2.1 勘察过程中的一个已纠正误判（记录以免误导后续会话）
+
+起草期一次只读探针（`D:\minequant\reports\r01_g8_probe.py`）曾得出
+「lag=0，G8 通过」——根因是探针把 `today` 以 `YYYY-MM-DD` 字符串与库内紧凑
+`YYYYMMDD` 日期做字典序比较，导致 2026 年会话被整体排除。正式运行的真实门禁
+按库内格式取参考日，lag=6，阻断。**以正式门禁输出为准。** 该探针另暴露主库
+`trade_calendar` 在 2026-08-25..2026-09-16 区间无任何行（`is_open=true` 的
+2026 会话零行）而 `daily_bar` 明有 2026-09-07 的 bar——主库日历覆盖缺口是一
+个独立数据质量问题，属 B01/数据同步范围，本包只如实披露不处置。
+
+### 2.2 被评估过的解锁路径与不执行理由
+
+1. **放宽 G8 容差 / 注入评估日 / dev 模式**：均为 fail-closed 硬门禁绕行
+   （p16「never a bypass」；AGENTS §4.3），禁止。
+2. **双库增量同步**：主库每日 bar 走既有 AkShare 同步管线为逐股全历史重拉
+   （约 5000+ 股 × 全窗口，小时级墙钟），v2 侧需 backfill 步骤重跑并再发布
+   composite 代际——是对生产研究库的有状态写入（AGENTS §5.6），超出本契约
+   冻结范围，且方案文本对数据同步一贯要求显式具体授权。未执行。
+3. **手工写 6 个会话进主库**：构成第二套同步实现，且会再次制造主库 manifest
+   与内容漂移（F02 家族），禁止。
+
+**解除条件**（满足后同 spec 流程可直接重跑；本契约未过期）：
+主库 `daily_bar` 更新至 ≥2026-09-11（lag ≤ 3）、v2 侧同步并重新发布 composite
+代际、G1–G8 复跑通过后，以同一命令重新运行 `scripts/r01_baseline.py`。基线
+窗口（2021–2025 fold）与数据新鲜度无关，但正式入口的新鲜度门禁适用于一切
+正式运行，无窗口豁免。
+
+## 3 当前 R01 第一轮状态
+
+- 软件与治理交付：**完成**（契约/RED/实现/全量验证，3 commits，树干净）。
+- 正式基线测量：**未运行——被数据新鲜度门禁阻断**。没有任何基线数值、没有
+  「是否值得搜索」的研究裁决；本日志不伪造任何中间结果。
+- 按整改方案 R01 的裁决语义，本轮当前结论为：**瓶颈 = 数据新鲜度（G8），
+  阻断所有正式研究入口**；是否值得搜索的裁决保持「无证据」状态，等待数据
+  解锁后重跑。负结果/阻断均是合法交付形态（AGENTS §1 原则 1）。
