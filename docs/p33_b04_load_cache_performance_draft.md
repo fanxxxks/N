@@ -24,8 +24,10 @@ F07（方案 §2.3）：loader 在缓存查询前已构建 PIT、capital、indus
   `build_pit_frames`（L646）→ `build_capital_frames` + 截面 z（L647–651）→
   `build_industry_member_frame`（L652）→ `industry_index_freshness`（L658）→
   `confirm_input_snapshot`（L687）→ `loader_factor_cache_identity`（L689）→
-  `cache.get`（L695）→ miss 分支 `compute_factor_tensor` + `put`。**PIT、capital 与
-  因子计算全部先于缓存命中判定执行**——命中路径白白支付这三段（F07 实锤）。
+  `cache.get`（L695）→ miss 分支 `compute_factor_tensor` + `put`。**PIT 与 capital
+  帧构建（以及身份确认/推导本身）先于缓存命中判定执行**——命中路径白白支付这两段
+  与 `close_wide` 透视（F07 实锤；因子计算本身已在 miss 分支内，行为级 RED 探针：
+  命中后 pit/capital 计数 ×2、factor 保持 ×1）。
 * `confirm_input_snapshot`（`runspec.confirm_composite_snapshot`）每次调用对两库做
   **全量未缓存重哈希**（A02 I2 语义）——它是每次装载的固定身份成本，热/冷路径同样
   支付；本包不得弱化该检查（热加载仍必须执行身份/资格检查，方案 B04 step 2）。
@@ -88,9 +90,10 @@ commit 登记本契约）。
    不豁免——A02 语义不变）；
 5. miss/disabled 分支：`close_wide` → `build_pit_frames` → `build_capital_frames` +
    截面 z（与 hit 共享的 `build_industry_member_frame` 移到分支之后、单次构建）→
-   `compute_factor_tensor` → `cache.put`（identity 非 None 时）；
-6. **hit 分支：跳过 `close_wide`/`build_pit_frames`/`build_capital_frames`/截面 z/
-   `compute_factor_tensor`**；仍执行 `build_industry_member_frame` 与
+   `compute_factor_tensor` → `cache.put`（identity 非 None 时；因子计算保持在
+   miss 分支内，与现状一致）；
+6. **hit 分支：跳过 `close_wide`/`build_pit_frames`/`build_capital_frames`/截面 z**
+   （因子计算本就不在 hit 路径）；仍执行 `build_industry_member_frame` 与
    `encode_industry_frame`；
 7. `industry_codes`、`target_ret` 与返回值组装不变；`factor_cache_outcome`、
    `dataset_identity_status` 等既有字段语义不变。
@@ -199,4 +202,7 @@ commit 登记本契约）。
 
 ## 9 修订记录
 
-（暂无）
+* **rev 1（2026-09-16，勘察勘误，实现前更正——APPROVED 状态不变）**：§1 与 §3.1
+  的基线事实更正：`compute_factor_tensor` 本就位于 miss 分支内（p21 §3 现状），
+  F07 的命中路径重复工作是 PIT/capital 帧构建（行为级 RED 探针实测：命中后
+  pit/capital 调用 ×2、factor 保持 ×1）；§3.1 第 5/6 条据此更正。修复范围不变。
