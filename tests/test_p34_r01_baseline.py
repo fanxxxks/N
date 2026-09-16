@@ -422,6 +422,43 @@ def test_r1b_degraded_universe_contract_disclosed_not_crash(mini_env):
     assert any("synthetic degraded" in reason for reason in status["reasons"])
 
 
+def test_r1c_expected_sessions_capped_at_data_cutoff():
+    """The §5.1 calendar reconciliation counts sessions the data should
+    cover BY THE CONFIRMED CUTOFF — future pre-listed calendar sessions
+    are never 'missing trading days' (dual-review repair: the first real
+    run counted 20260917..20261231 as missing and refused)."""
+
+    import ashare_model.r01_baseline as r01
+
+    class _Status:
+        degraded = False
+        warnings: tuple[str, ...] = ()
+
+    class _Contract:
+        sessions = [
+            "20260914", "20260915", "20260916",
+            "20260917", "20260918",  # future pre-listed sessions
+        ]
+
+    class _Loader:
+        ts_codes = ["000001.SZ"]
+        dates = ["20260914", "20260915", "20260916"]
+
+        def _contract(self):
+            return _Contract()
+
+    class _DataConfig:
+        start_date = "20260101"
+        end_date = "20261231"
+
+    expected, actual, missing = r01._expected_and_missing_sessions(
+        _Loader(), _DataConfig(), cutoff="20260916"
+    )
+    assert expected == 3
+    assert actual == 3
+    assert missing == []
+
+
 # --- R2: typed DataQualificationReport ---------------------------------------
 
 

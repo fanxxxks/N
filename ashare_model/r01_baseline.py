@@ -568,13 +568,21 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _expected_and_missing_sessions(loader, data_config) -> tuple[int, int, list[str]]:
-    """Expected open sessions inside the configured window vs the loaded
-    axis (the §5.1 calendar reconciliation, computed from the single
-    calendar authority the loader already resolved)."""
+def _expected_and_missing_sessions(
+    loader, data_config, *, cutoff: str
+) -> tuple[int, int, list[str]]:
+    """Expected open sessions inside the configured window **up to the
+    confirmed data cutoff** vs the loaded axis (the §5.1 calendar
+    reconciliation, computed from the single calendar authority the
+    loader already resolved).  Future pre-listed sessions after the
+    cutoff are never 'missing trading days' — the dual-review repair:
+    the first real run counted 20260917..20261231 as missing because the
+    production calendar pre-lists the whole year."""
 
     start = str(data_config.start_date).replace("-", "")
-    end = str(data_config.end_date).replace("-", "")
+    end = min(
+        str(data_config.end_date).replace("-", ""), str(cutoff).replace("-", "")
+    )
     sessions = [
         str(session)
         for session in loader._contract().sessions
@@ -792,7 +800,9 @@ def run_r01_baseline(
         _budget_check("load")
         frame_status = loader.loader_frame_status()
         expected_days, actual_days, missing_days = (
-            _expected_and_missing_sessions(loader, data_config)
+            _expected_and_missing_sessions(
+                loader, data_config, cutoff=spec.data_cutoff
+            )
         )
         data_report = build_data_qualification_report(
             spec,
