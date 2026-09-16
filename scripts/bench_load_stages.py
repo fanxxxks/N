@@ -123,50 +123,56 @@ class StageClock:
     def __enter__(self) -> "StageClock":
         if self._installed:
             return self
-        # Class methods (the loader's internal stages).
-        self.wrap_method(
-            data_loader_module.AshareDataLoader,
-            "confirm_input_snapshot",
-            "confirm",
-        )
-        self.wrap_method(
-            data_loader_module.AshareDataLoader, "_load_v2_bars", "read"
-        )
-        # Module-level stage functions as the loader sees them.
-        self.wrap_module_fn(
-            data_loader_module,
-            "loader_factor_cache_identity_with_reason",
-            "identity",
-        )
-        self.wrap_module_fn(
-            data_loader_module, "adjusted_price_scale", "normalize_scale"
-        )
-        self.wrap_module_fn(
-            data_loader_module, "normalize_daily_bars", "normalize_scale"
-        )
-        self.wrap_module_fn(
-            data_loader_module, "apply_adjusted_scale", "normalize_scale"
-        )
-        self.wrap_module_fn(
-            data_loader_module, "build_universe_mask", "universe"
-        )
-        self.wrap_module_fn(data_loader_module, "pivot_wide", "tensor_maps")
-        self.wrap_module_fn(
-            data_loader_module, "industry_index_freshness", "freshness"
-        )
-        self.wrap_module_fn(
-            data_loader_module, "build_pit_frames", "pit"
-        )
-        self.wrap_module_fn(
-            data_loader_module, "build_capital_frames", "capital"
-        )
-        self.wrap_module_fn(
-            data_loader_module, "build_industry_member_frame", "industry"
-        )
-        self.wrap_module_fn(
-            data_loader_module, "compute_factor_tensor", "factor"
-        )
-        self.wrap_torch_tensor()
+        try:
+            # Class methods (the loader's internal stages).
+            self.wrap_method(
+                data_loader_module.AshareDataLoader,
+                "confirm_input_snapshot",
+                "confirm",
+            )
+            self.wrap_method(
+                data_loader_module.AshareDataLoader, "_load_v2_bars", "read"
+            )
+            # Module-level stage functions as the loader sees them.
+            self.wrap_module_fn(
+                data_loader_module,
+                "loader_factor_cache_identity_with_reason",
+                "identity",
+            )
+            self.wrap_module_fn(
+                data_loader_module, "adjusted_price_scale", "normalize_scale"
+            )
+            self.wrap_module_fn(
+                data_loader_module, "normalize_daily_bars", "normalize_scale"
+            )
+            self.wrap_module_fn(
+                data_loader_module, "apply_adjusted_scale", "normalize_scale"
+            )
+            self.wrap_module_fn(
+                data_loader_module, "build_universe_mask", "universe"
+            )
+            self.wrap_module_fn(data_loader_module, "pivot_wide", "tensor_maps")
+            self.wrap_module_fn(
+                data_loader_module, "industry_index_freshness", "freshness"
+            )
+            self.wrap_module_fn(
+                data_loader_module, "build_pit_frames", "pit"
+            )
+            self.wrap_module_fn(
+                data_loader_module, "build_capital_frames", "capital"
+            )
+            self.wrap_module_fn(
+                data_loader_module, "build_industry_member_frame", "industry"
+            )
+            self.wrap_module_fn(
+                data_loader_module, "compute_factor_tensor", "factor"
+            )
+            self.wrap_torch_tensor()
+        except BaseException:
+            # Dual-review F3: a partial install must never leak wrappers —
+            # unwind everything applied so far before propagating.
+            self.__exit__(None, None, None)
+            raise
         self._installed = True
         return self
 

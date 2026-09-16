@@ -158,13 +158,15 @@ commit 登记本契约）。
 | R3 | invalidated 两态 | (a) 篡改条目文件字节 → outcome=invalidated、reason=invalidated:unreadable、张量重算且等于冷载；(b) 键位置放身份载荷错配的条目 → outcome=invalidated、reason=invalidated:identity_mismatch |
 | R4 | 依赖变化不误命中 | miss 存储后 v2 追加 ingest 行 + 重新发布（dataset_id 变）→ 重载 outcome=miss、reason=miss:no_entry、张量重算等于冷载、旧条目保留不删除 |
 | R5 | 身份查询前置 | 调用次序记录：身份推导先于 `build_pit_frames`（现状相反 → RED） |
-| R6 | reason 词汇完备 | identity_inputs_missing / ingest_source_missing / ingest_source_empty / marker_tables_missing / identity_derivation_failed 五类 disabled 原因逐一触发并断言 `factor_cache_reason` |
-| R7 | capital 下推 golden parity | 含窗口外 margin/basic/sw 行的 fixture，帧输出与手工推导期望逐值一致（行为不变优化的等价守卫——按 AGENTS §2.2-3 预注册：无法产生有意义 RED，以 golden/parity 守卫替代并在此说明） |
+| R6 | reason 词汇完备 | identity_inputs_missing / ingest_source_missing / ingest_source_empty / marker_tables_missing / identity_derivation_failed 五类 disabled 原因逐一触发；其中经 loader 自身配置面可达的四类在 **loader 级**断言 `factor_cache_reason`（rev 2），identity_derivation_failed 在推导函数级断言（见 rev 2 理由） |
+| R7 | capital 下推 golden parity | 含窗口外 margin/basic/sw 行的 fixture（**24 会话 ≥ `_INDUSTRY_WINDOW`+1，rev 2**——INDUSTRY_MOMENTUM 与 MARGIN_BALANCE_CHG 产生非 NaN 手算单元格，sw 下推腿具备回归牙齿），帧输出与手工推导期望逐值一致（行为不变优化的等价守卫——按 AGENTS §2.2-3 预注册：无法产生有意义 RED，以 golden/parity 守卫替代并在此说明） |
 | R8 | disabled 路径不变 | 既有 `test_loader_cache_disabled_without_identity_sources` 保持绿（outcome=disabled、无 cache 目录、无 put） |
 
-等价性验收（方案 B04「等价性验收」条目）：同一 fixture 与固定真实窗口，冷/热输出在
-**bitwise（float32，equal_nan=True）** 一致——NaN 掩码、日期轴、股票顺序、因子顺序
-一致；任何实际依赖（八元组任一元素）变化不得误命中（R4 + 既有身份维度测试）。
+等价性验收（方案 B04「等价性验收」条目）：同一 fixture 与固定真实窗口，冷/热输出
+在约定精度一致——操作性定义为 **NaN 感知的逐值相等**（`np.array_equal(...,
+equal_nan=True)`，float32；rev 2 措辞澄清：缓存条目经 np.savez 无损 float32 容器
+往返，位保持由容器结构保证，验收以该逐值比较为准）——NaN 掩码、日期轴、股票顺序、
+因子顺序一致；任何实际依赖（八元组任一元素）变化不得误命中（R4 + 既有身份维度测试）。
 
 ## 5 资源与运行上限
 
@@ -206,3 +208,16 @@ commit 登记本契约）。
   的基线事实更正：`compute_factor_tensor` 本就位于 miss 分支内（p21 §3 现状），
   F07 的命中路径重复工作是 PIT/capital 帧构建（行为级 RED 探针实测：命中后
   pit/capital 调用 ×2、factor 保持 ×1）；§3.1 第 5/6 条据此更正。修复范围不变。
+* **rev 2（2026-09-16，双审处置修订，approval 不变）**：
+  - R7（技术审 F1，medium）：窗口从 6 会话延长到 24 会话（≥ `_INDUSTRY_WINDOW`+1），
+    INDUSTRY_MOMENTUM 与 MARGIN_BALANCE_CHG 增加非 NaN 手算单元格——原 6 会话窗口
+    下 sw 下推腿在任何结局都是全 NaN，守卫无回归牙齿（降级探针实证）。
+  - R6（技术审 F2，low）：loader 级 `factor_cache_reason` 断言覆盖经 loader 配置面
+    可达的四类原因（identity_inputs_missing / ingest_source_missing /
+    ingest_source_empty / marker_tables_missing）；identity_derivation_failed 保持在
+    推导函数级——其 loader 级触发（v2 库能打开读 bar 却在身份查询时失败）无法在不
+    mock 数据库层的情况下构造（AGENTS §10.1 禁止 mock 核心路径），loader 消费的
+    reason 来自该单一实现，映射由函数级测试锚定。
+  - §4 等价性措辞（技术审 F4，low）：「bitwise」的操作性定义澄清为
+    `np.array_equal(..., equal_nan=True)` 的 NaN 感知逐值相等（np.savez 为无损
+    float32 容器，位保持由结构保证；验收以逐值比较为准）。

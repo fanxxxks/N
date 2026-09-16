@@ -423,12 +423,58 @@ def test_r6c_loader_records_disabled_reason(populated_db_without_manifest):
     assert loader.factor_cache_reason == "disabled:identity_inputs_missing"
 
 
+def test_r6d_loader_records_disabled_reasons_per_cause(populated_db):
+    """Dual-review F2: the disabled causes reachable through the loader's
+    own config surface are asserted on the loader's factor_cache_reason.
+    (identity_derivation_failed stays derivation-function-level — contract
+    rev 2: its loader-level trigger, a v2 store that opens for the bar
+    read but then fails identity queries, is not constructible without
+    mocking the DB layer, which AGENTS §10.1 forbids on core paths.)"""
+
+    cfg = populated_db
+    v2_path = str(resolve_v2_duckdb_path(cfg))
+
+    # The published v2 store carries the publication schema with an empty
+    # ingest ledger.
+    loader = AshareDataLoader(
+        cfg, ModelConfig(), dataset_identity_mode="query"
+    ).load_data()
+    assert loader.dataset_id is not None
+    assert loader.factor_cache_reason == "disabled:ingest_source_empty"
+
+    con = duckdb.connect(v2_path)
+    con.execute("DROP TABLE source_ingest_runs")
+    con.close()
+    loader = AshareDataLoader(
+        cfg, ModelConfig(), dataset_identity_mode="query"
+    ).load_data()
+    assert loader.factor_cache_reason == "disabled:ingest_source_missing"
+
+    con = duckdb.connect(v2_path)
+    con.execute("CREATE TABLE source_ingest_runs (ingest_id VARCHAR)")
+    con.execute("INSERT INTO source_ingest_runs VALUES ('i1')")
+    con.execute("DROP TABLE industry_membership_pit")
+    con.close()
+    loader = AshareDataLoader(
+        cfg, ModelConfig(), dataset_identity_mode="query"
+    ).load_data()
+    assert loader.factor_cache_reason == "disabled:marker_tables_missing"
+
+
 # --- R7: capital-frame date pushdown parity (behavior-invariant guard) ---------
+#
+# 24 window sessions: >= _INDUSTRY_WINDOW + 1 so INDUSTRY_MOMENTUM (and
+# MARGIN_BALANCE_CHG) produce non-NaN hand-computed cells — the guard must
+# have teeth on EVERY pushed-down leg (a 6-session window made the sw leg
+# NaN under any outcome, per the dual-review F1 finding).
 
 
-_WINDOW = ["20240102", "20240103", "20240104", "20240105", "20240108", "20240109"]
+_WINDOW = [
+    date.strftime("%Y%m%d")
+    for date in pd.bdate_range("2024-01-02", periods=24)
+]
 _OUT_PRE = "20231229"
-_OUT_POST = "20240110"
+_OUT_POST = "20240207"
 _CODES = ["000001.SZ", "600000.SH", "000002.SZ"]
 _SW = "801010"
 
@@ -469,15 +515,25 @@ def _margin_rows() -> list[dict]:
 
 
 def _sw_rows(window_only: bool) -> list[dict]:
-    sessions = _WINDOW if window_only else [_OUT_PRE] + _WINDOW + [_OUT_POST]
+    # Window-session closes depend on the WINDOW position — identical in
+    # the full and the windowed store (the same fixture-asymmetry lesson
+    # as _circ_mv); out-of-window rows are exclusion probes with distinct
+    # arbitrary values.
+    closes = {
+        session: 50.0 + 0.1 * index
+        for index, session in enumerate(_WINDOW)
+    }
+    if not window_only:
+        closes[_OUT_PRE] = 11.0
+        closes[_OUT_POST] = 12.0
     return [
         {
             "index_code": _SW,
             "industry_name": "probe",
             "trade_date": session,
-            "close": 50.0 + index,
+            "close": close,
         }
-        for index, session in enumerate(sessions)
+        for session, close in closes.items()
     ]
 
 
@@ -608,14 +664,34 @@ def test_r7_capital_frames_window_pushdown_parity(tmp_path):
         assert np.isnan(pressure.loc[first, _WINDOW[index]])
     expected_p5 = (10.0 + 20.0 + 30.0 + 40.0 + 50.0) / (10000.0 + 4)
     assert pressure.loc[first, _WINDOW[4]] == expected_p5
+    expected_p23 = (200.0 + 210.0 + 220.0 + 230.0 + 240.0) / (10000.0 + 23)
+    assert pressure.loc[first, _WINDOW[23]] == expected_p23
 
-    # Out-of-window rows must never leak into the window columns.
-    assert full["MARGIN_BALANCE_CHG"].isna().to_numpy().all(), (
-        "a 6-session window cannot produce a 20-session change"
-    )
+    # 20-session change: NaN through column 19, hand values from column 20
+    # (dual-review F1: the CHG leg carries non-NaN teeth on this window).
+    change = full["MARGIN_BALANCE_CHG"]
+    for index in range(_MARGIN_WINDOW):
+        assert np.isnan(change.loc[first, _WINDOW[index]])
+    assert change.loc[first, _WINDOW[20]] == 21000.0 / 1000.0 - 1.0
+    assert change.loc[first, _WINDOW[23]] == 24000.0 / 4000.0 - 1.0
+
+    # 60-session crowding stays NaN on a 24-session window.
     assert full["MARGIN_CROWD_60"].isna().to_numpy().all()
-    assert _MARGIN_WINDOW > len(_WINDOW)
-    assert _INDUSTRY_WINDOW > len(_WINDOW)
     assert _MARGIN_CROWD_WINDOW > len(_WINDOW)
+    # The sw pushdown leg's teeth: the window is long enough for the
+    # 20-session industry momentum to produce non-NaN hand values.
+    assert len(_WINDOW) >= _INDUSTRY_WINDOW + 1
+
+    # 20-session industry momentum from the sw close source: NaN through
+    # column 19, hand values from column 20 (dual-review F1: a missing
+    # WHERE or a wrong window on the sw pushdown must fail HERE — the
+    # source would degrade to an all-NaN momentum frame).
     momentum = full["INDUSTRY_MOMENTUM"]
-    assert momentum.isna().to_numpy().all()
+    for index in range(_INDUSTRY_WINDOW):
+        assert np.isnan(momentum.loc[first, _WINDOW[index]])
+    # All three codes belong to the single _SW industry in this fixture.
+    for code in _CODES:
+        expected_m20 = (50.0 + 0.1 * 20) / 50.0 - 1.0
+        assert momentum.loc[code, _WINDOW[20]] == expected_m20, code
+        expected_m23 = (50.0 + 0.1 * 23) / (50.0 + 0.1 * 3) - 1.0
+        assert momentum.loc[code, _WINDOW[23]] == expected_m23, code

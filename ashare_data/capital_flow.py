@@ -511,6 +511,11 @@ def build_capital_frames(
     # them at the source is output-equivalent (the shift/rolling windows
     # operate on the reindexed frame's window columns only).
     bounds = (min(dates), max(dates)) if dates else None
+    # The pivots' `aggfunc="last"` tie-breaking rests on the sources'
+    # PRIMARY KEY (ts_code, trade_date): duplicate (code, key) rows cannot
+    # occur in the production tables (p17 §4.1 DDL authority), and the
+    # filter column below is a member of that key — a pivot group can
+    # never be partially filtered (dual-review F6 note).
 
     def _window_clause(column: str, *, keyword: str = "AND") -> str:
         return (
