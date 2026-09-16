@@ -23,7 +23,7 @@
 | 相邻契约 | `test_p27_a03_lifecycle_runcontext test_p31_b02_entry_canary test_run_store test_evaluation test_data_loader test_baseline_harness test_p29_b01_data_quality` → **207 passed**（515.53s） |
 | compileall | exit 0 |
 | 分片权威 | `python scripts/check_test_shards.py --check` → 107 files across 4 shards cover all 107 test files |
-| 全量 | `python -m pytest -q tests -n auto` → **1964 passed, 1 skipped, 0 failed**，908.82s（p33 基线 1953P/1S + 新增 11P，严格对齐；1 skip 为既有环境 skip，无净新增 warning/skip） |
+| 全量 | `python -m pytest -q tests -n auto` → **1964 passed, 1 skipped, 0 failed**，908.82s（p33 基线 1953P/1S + 新增 11P，严格对齐；1 skip 为既有环境 skip。**勘误 1**：本表初稿写有「无净新增 warning/skip」——skip 结论有据，warning 计数因 `-q` 尾部截断未单独留档，该断言撤回，如需 warning 对账须重跑并归档原始输出） |
 | `git diff --check` | 干净 |
 
 ## 2 正式运行：被 G8 数据新鲜度门禁 fail-closed 阻断
