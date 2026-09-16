@@ -126,3 +126,18 @@ mtime 2026-09-11 与该事实一致。
 - 技术审 NOT COVERED 项（ProtocolConfig dataclass 形态、conftest helpers、
   RunStore 严格 JSON、formal entry 门禁次序原文）不影响本包结论：其中
   ProtocolConfig 已被实现实际消费并经全量验证，其余与修复无关。
+
+### 4.1 修复后正式入口复核（2026-09-16 20:21）
+
+修复 commit `4f25abf` 后以当前命令重跑正式入口两次：
+
+1. 旧哈希 `1779539…` → **被 C5 自校验拒绝**（"contract sha256 mismatch"）——
+   契约经 rev 2 演进后旧印签不再被接受，provenance 自验按设计生效。
+2. 当前契约哈希 `8264362761698befd447b44c5b4008a366870f7e3aa7529d2c22b0d678fd5d37`
+   → 自校验通过 → G1–G7 通过 → **G8 同样拒绝**（daily 20260907 vs reference
+   20260915, lag=6 > N=3, today=20260916），exit 2，`data/r1/medium_a/runs`
+   不存在（无部分状态）。
+
+结论维持 §3：阻断 = G8 数据新鲜度；修复未改变边界行为，仅完成诚实终态与
+判别器归位。**注意：后续重跑必须印签当时已提交契约文件的实时 sha256**
+（`Get-FileHash docs/p34_...md`），契约每次修订都会使旧印签失效（设计如此）。
