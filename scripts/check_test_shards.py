@@ -32,6 +32,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
     "shard-data": (
         "test_agents_md_budget.py",
         "test_akshare_client.py",
+        "test_b04_load_cache_performance.py",
         "test_capital_flow.py",
         "test_ci_sharding.py",
         "test_config.py",
