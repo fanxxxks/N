@@ -141,3 +141,81 @@ mtime 2026-09-11 与该事实一致。
 结论维持 §3：阻断 = G8 数据新鲜度；修复未改变边界行为，仅完成诚实终态与
 判别器归位。**注意：后续重跑必须印签当时已提交契约文件的实时 sha256**
 （`Get-FileHash docs/p34_...md`），契约每次修订都会使旧印签失效（设计如此）。
+
+## 5 用户授权后的双库同步与正式运行（2026-09-16 深夜 – 09-17 凌晨）
+
+用户指示「全部授权」（授权本节全部有状态数据操作）+「完成后自动关机」。
+按 AGENTS §5.6 顺序执行：只读审计 → 备份 → 执行 → 复核。
+
+### 5.1 预同步审计与备份（只读留档）
+
+- 审计脚本/输出：`D:\minequant\reports\r01_presync_audit.py` /
+  `r01_presync_audit_20260916.txt`。主库 daily_bar 4,919,070 行
+  （20150105..20260907）、calendar 8,797、constituents 2,574、stocks 5,542；
+  v2 各价格表 max 20260907（suspension 0904、margin 0903）；
+  `snapshot_publication` 仅一组完整 composite（publication 1）。
+- 主库备份：`data/backup_20260916_r01/ashare.duckdb`（1,015,296,000 字节）。
+
+### 5.2 v2 增量回填（scripts/backfill_v2.py --steps 2,3,4,8）
+
+2.8 分钟完成：44 批次、182,604 行（逐日端点账本去重，仅拉 09-07..09-16 新
+会话；margin 至 09-15 T+1）；新 v2 manifest `67ee0b32…`（19 表 57,339,133 行，
+range 20140102..20260916）。**范围收缩记录**：跳过 steps 5–7（行业/财报/
+事件族）——R01 Tier-A 价格+margin 因子集不消费其新鲜度；此决定的后果见
+§5.4(b)。
+
+### 5.3 主库 AkShare 同步（python -m ashare_data.sync）
+
+- 第一遍（`--no-fundamentals --no-capital-flow`）：约 55 分钟，universe
+  2,118 码，failures 0，管线自清理 14,102 行界外旧行；daily_bar →
+  **20260916**；主库 manifest generation 2（`281cbb24…`）。
+- 第二遍（`--no-fundamentals`，capital-flow 愈合）：margin 2,846 日
+  （5,719,773 行）、申万行业 141,378 行入主库；主库 manifest generation 4
+  （`8c700f61…`）。**申万指数收盘源未前进**（仍 20260907，见 §5.4(b)）；
+  另观察到本地 akshare 包解析错误（"Length mismatch … 13 elements"，
+  margin sse 20260916）——疑似本地包版本与上游 API 不兼容（依赖治理范围）。
+
+### 5.4 诊断出的残余降级集合（类型化，全部如实入证据）
+
+(a) **价格语义（001914.SZ 1,370 会话——结构性）**：其 2014 起的 bar 历史
+    挂在改名前代码下，tushare stk_limit 按现码只能取回 1,627 行，前身时段
+    限额不可寻址。另有 000022.SZ（2）/688033.SH（1）零星缺口：按码补拉已
+    入库（TushareStore 权威，账本 `daily_price_limit_20260916T154352Z_*`）
+    但单元格仍缺（疑似停牌会话源无行，保留披露）。
+(b) **行业源滞后 7 会话**：主库/ v2 申万指数收盘均止于 20260907——AkShare
+    源本身未更新（capital-flow 重跑无前进）+ 本地包解析错误。**系统性阻断**：
+    依赖升级或换源属 p17/D5 与依赖治理决策，不在本次授权内。
+(c) **全格网 missing_limit 披露语义**：loader 对全 (码×会话) 格网判定，
+    post-2014 上市的 pre-listing 空格也计入 → **1,630 码** price_degraded
+    （同步前后两次运行计数一致 =1,630，与本次同步无关，为 loader 既有形态；
+    我构建的类型化接线首次使其可见）。p19 §2.4 的最严读法支持现状；
+    收窄属 p19 契约修订决策。
+
+### 5.5 正式运行记录（三次尝试，全部诚实终态）
+
+1. 22:49（同步前复核后）：进程在冷载中途被操作者终止（发现类型化降级，
+   先修数据）——run `e0d7da37/35e41920` 留于 SPEC_LOCKED；事后经
+   `clear_stale_lock`（存活校验通过）+ `writer.fail` 诚实收口为 **FAILED**。
+2. 23:49：冷载完成（factor cache put `fe96090e`）→ 数据报告被拒——暴露
+   驱动 bug：日历对账把未来预挂会话 20260917..20261231 计为缺失 →
+   **REJECTED**（run `2983d61d/ac445541`）。修复：预期会话按确认数据截止日
+   封口（RED `test_r1c`，commit `a6689a1`）。
+3. 01:16（cutoff 修复后，factor cache hit）：G1–G8 全过 → composite
+   `767d955b…` 确认 → 装载 → 数据报告被 §5.1 拒绝（1,630 码价格语义 +
+   行业滞后 7，类型化全披露）→ **REJECTED**
+   （run `f80e042e/31d16c7c`；证据 artifact：idea_record / spec_lock /
+   data_qualification_report 均已登记）。
+
+### 5.6 当前结论
+
+- 数据底座已恢复新鲜（双库至 09-16/09-15，composite `767d955b…` 确认通过），
+  G1–G8 门禁全过；G8 新鲜度阻断解除。
+- **R01 正式基线测量仍未能执行**：DATA_QUALIFIED 因 §5.4 的三类未消除降级
+  fail-closed 拒绝（p8 §5.1「任何降级未消除 ⇒ 拒绝转换」按契约执行）。
+  这是门禁栈对「当前数据底座不可达标」的正确回答，不是故障。
+- 解除条件（均属契约治理决策，超出本次授权）：
+  1. 申万指数收盘源新鲜度恢复（本地 akshare 升级或 D5 换源，p17 范围）；
+  2. pre-listing 限额格网的披露语义裁决（p19 契约修订）或 001914 前身历史
+     限额的数据修复。
+- 两个 REJECTED 运行与一个 FAILED 运行的全部证据保留于
+  `data/r1/medium_a/runs/`；未删除、未改写。
