@@ -655,33 +655,87 @@ def test_canary_hand_computed_execution_on_real_loader(tmp_path):
     assert dates[4] == "20240105" and dates[5] == "20240108"
 
     # Weights: equal-weight top-2 of the hand-ranked signal; the book is
-    # stable, so every period holds the same two codes at 0.5/0.5.
+    # stable, so every period holds the same two codes.
+    # P35 (v4): the funding session buys floor-lotted shares at the
+    # day-1 opens (stock 0: floor(0.5*100000/10.1/100)*100 = 4900 shares
+    # x 10.1 = 49,490 yuan; stock 1: 2400 x 20.05 = 48,120) with
+    # per-order fees (commission max(0.00025*N, 5) + transfer 0.00001*N
+    # + slippage 0.0005*N) totalling 74.1836, so the achieved first
+    # snapshot is exactly 49490/99925.8164 = 0.495267 and
+    # 48120/99925.8164 = 0.481557.  From session 1 on the daily
+    # rebalance pushes the DRIFTED book back toward 0.5/0.5 with
+    # floor-lotted top-ups, so every later snapshot sits within one lot
+    # grain of the equal-weight target (a full per-session hand chain
+    # would re-derive each day's orders — the p35 invariant suite covers
+    # that recursion on synthetic paths; here the snapshot bound plus
+    # the ledger reconciliation below carry the claim).
+    def open_of(i: int, t: int) -> float:
+        return _canary_close(i, t)
+
     assert len(result.positions) == CANARY_SESSIONS - 2
+    _notional0 = 4900.0 * open_of(0, 1)
+    _notional1 = 2400.0 * open_of(1, 1)
+    _fees0 = (
+        max(0.00025 * _notional0, 5.0) + 0.00001 * _notional0 + 0.0005 * _notional0
+        + max(0.00025 * _notional1, 5.0) + 0.00001 * _notional1 + 0.0005 * _notional1
+    )
+    assert result.positions[0]["weights"] == pytest.approx(
+        [
+            round(_notional0 / (100000.0 - _fees0), 6),
+            round(_notional1 / (100000.0 - _fees0), 6),
+        ],
+        abs=2e-6,
+    )
+    _lot_grain = 100.0 * max(open_of(0, 1), open_of(1, 1)) / 100000.0
     for position in result.positions:
         assert set(position["ts_codes"]) == {
             CANARY_CODES[0],
             CANARY_CODES[1],
         }
-        assert position["weights"] == [0.5, 0.5]
+        w0, w1 = position["weights"]
+        assert sum(position["weights"]) <= 1.0 + 1e-9
+        # stock 0 rises ~1%/session: its weight drifts up until the
+        # (w - 0.5) gap reaches one board lot's notional, then a
+        # floor-lotted reduction sells that lot back — a drift/band
+        # oscillation around the equal-weight target whose width is the
+        # one-lot grain (~0.010 at the stock-0 price).  Stock 1 drifts
+        # down relatively and gets floor-lotted top-ups, staying under
+        # the target by the same grain.
+        assert 0.49 <= w0 <= 0.52
+        assert 0.44 <= w1 <= 0.5 + _lot_grain
     assert result.turnover[0] == pytest.approx(1.0)
-    assert result.turnover[1] == pytest.approx(0.0)
+    # session 1 re-trades the drift back toward the target: the weight
+    # delta (0.5 - drifted prev) sums to ~0.023 (hand: the stock-1 leg
+    # drifts down to 0.4798, its 0.0202 gap buys 100 shares at 20.1)
+    assert result.turnover[1] == pytest.approx(0.023176, abs=1e-3)
 
-    # Money: gross = mean of the two constructed open-to-open returns;
-    # net = gross − documented buy-fee fraction (76/100000).
-    def open_of(i: int, t: int) -> float:
-        return _canary_close(i, t)
-
-    gross1 = 0.5 * (open_of(0, 2) / open_of(0, 1) - 1) + 0.5 * (
-        open_of(1, 2) / open_of(1, 1) - 1
+    # Money: the first session's net is the exact equity ratio on the
+    # fee-debited book (p35 §2): net1 = (1 - 74.1836/100000) * (1 +
+    # gross1) - 1 with gross1 on the ACHIEVED 0.495267/0.481557 book.
+    _w1 = np.array([_notional0, _notional1]) / (100000.0 - _fees0)
+    gross1 = float(
+        np.dot(
+            _w1,
+            np.array(
+                [
+                    open_of(0, 2) / open_of(0, 1) - 1.0,
+                    open_of(1, 2) / open_of(1, 1) - 1.0,
+                ]
+            ),
+        )
     )
-    net1 = gross1 - (2 * 38.0) / 100000.0
+    net1 = (1.0 - _fees0 / 100000.0) * (1.0 + gross1) - 1.0
     assert result.equity_curve[0] == pytest.approx(1.0)
-    assert result.equity_curve[1] == pytest.approx(1.0 + net1, rel=1e-9)
-    gross2 = 0.5 * (open_of(0, 3) / open_of(0, 2) - 1) + 0.5 * (
-        open_of(1, 3) / open_of(1, 2) - 1
-    )
-    assert result.equity_curve[2] == pytest.approx(
-        (1.0 + net1) * (1.0 + gross2), rel=1e-9
+    assert result.equity_curve[1] == pytest.approx(1.0 + net1, rel=1e-5)
+    # Ledger reconciliation (p35 §2 identity E = C + sum(s*p)): the
+    # final equity (marked at the LAST exit open) equals the recorded
+    # cash plus the share book marked at that same open.
+    _last_exit = len(result.positions) + 1
+    _final_mark = result.final_cash + result.final_shares[0] * open_of(
+        0, _last_exit
+    ) + result.final_shares[1] * open_of(1, _last_exit)
+    assert result.equity_curve[-1] * 100000.0 == pytest.approx(
+        _final_mark, rel=1e-6
     )
     assert len(result.equity_curve) == len(result.positions) + 1
 

@@ -77,12 +77,19 @@ def _raw_cache(open_: np.ndarray, adjusted_open: np.ndarray | None = None,
 
 
 def _run(open_: np.ndarray, rebalance_mask: np.ndarray,
-         adjusted_open: np.ndarray | None = None, **config_over) -> object:
+         adjusted_open: np.ndarray | None = None,
+         down_limit: np.ndarray | None = None, **config_over) -> object:
     n_stocks, n_dates = open_.shape
     engine = AshareBacktestEngine(_bt_config(**config_over))
+    # A constant, dispersive signal: stock 0 always ranks ahead of stock 1,
+    # so every due rebalance targets the equal-weight book of both names.
+    factors = np.vstack([
+        np.full(n_dates, 1.0),
+        np.full(n_dates, 0.5),
+    ])
     return engine.run(
-        open_.copy(),  # signal == price level (deterministic ranks)
-        _raw_cache(open_, adjusted_open),
+        factors,
+        _raw_cache(open_, adjusted_open, down_limit=down_limit),
         [f"{i:06d}.SZ" for i in range(n_stocks)],
         [f"202601{d:02d}" for d in range(1, n_dates + 1)],
         universe_mask=np.ones_like(open_, dtype=bool),
@@ -92,12 +99,15 @@ def _run(open_: np.ndarray, rebalance_mask: np.ndarray,
 
 class TestRoundTripToPar:
     def test_round_trip_returns_nav_to_one(self):
-        # A: 100 -> 110 -> 90 -> 100 -> 100 ; B: 50 -> 45 -> 55 -> 50 -> 50.
-        # Entry levels at open1 (A=100, B=50) recur exactly at open3, and
-        # open4 is flat: a share-constant book must end at exactly 1.0.
+        # Funding executes at open1 (A=110, B=45); the prices return to
+        # those entry levels at open3 and open4 is flat:
+        # A: 100 -> [110 -> 90 -> 110] ; B: 50 -> [45 -> 55 -> 45].
+        # A share-constant book must end at exactly 1.0 (the drifted
+        # weights wander and return; the frozen-weight engine harvests a
+        # phantom (101/99)^2 - 1 from its implicit daily re-normalization).
         open_ = np.array([
-            [100.0, 110.0, 90.0, 100.0, 100.0],
-            [50.0, 45.0, 55.0, 50.0, 50.0],
+            [100.0, 110.0, 90.0, 110.0, 110.0],
+            [50.0, 45.0, 55.0, 45.0, 45.0],
         ])
         mask = np.array([True, False, True, False, False])
         result = _run(open_, mask)
@@ -106,24 +116,27 @@ class TestRoundTripToPar:
 
 class TestNoTradeDrift:
     def test_weights_drift_shares_constant(self):
-        # A compounds +10% per session, B -10%; funded 50/50 at open1 and
-        # never rebalanced.  Hand path (share view):
+        # Funding at open1 (both 100); A compounds +10% per session and
+        # B -10%, never rebalanced.  Hand path (share view):
         #   open2: A 550k, B 450k, E = 1,000,000, w_A = 0.55
         #   open3: A 605k, B 405k, E = 1,010,000, w_A = 0.605/1.01
         #   open4: A 665.5k, B 364.5k, E = 1,030,000, w_A = 0.6655/1.03
         open_ = np.array([
-            [100.0, 110.0, 121.0, 133.1, 146.41],
-            [100.0, 90.0, 81.0, 72.9, 65.61],
+            [100.0, 100.0, 110.0, 121.0, 133.1],
+            [100.0, 100.0, 90.0, 81.0, 72.9],
         ])
         mask = np.array([True, False, False, False, False])
         result = _run(open_, mask)
         assert result.equity_curve[-1] == pytest.approx(1.03, abs=1e-9)
+        # positions[t] marks the book at that session's ENTRY open: the
+        # last iterated session marks open3 (drifted 0.605/1.01, rounded
+        # to 6 decimals in the record).
         last = result.positions[-1]["weights"]
-        assert last[0] == pytest.approx(0.6655 / 1.03, abs=1e-9)
-        assert last[1] == pytest.approx(0.3645 / 1.03, abs=1e-9)
+        assert last[0] == pytest.approx(0.605 / 1.01, abs=1e-6)
+        assert last[1] == pytest.approx(0.405 / 1.01, abs=1e-6)
         # shares constant across the no-trade span
-        assert result.final_shares[0] == 5_000
-        assert result.final_shares[1] == 5_000
+        assert result.final_shares[0] == pytest.approx(5_000.0, abs=1e-6)
+        assert result.final_shares[1] == pytest.approx(5_000.0, abs=1e-6)
         assert result.final_cash == pytest.approx(0.0, abs=1e-6)
 
 
@@ -139,28 +152,36 @@ class TestOrdersFromDriftedHoldings:
         mask = np.array([True, True, False, False, False])
         result = _run(open_, mask)
         # Hand: sells 1,200 A @200 = 240,000 (lot floor from 1,250);
-        # buys 2,400 B @100 = 240,000; zero fees.
+        # buys 2,400 B @100 = 240,000 (cash-capped from 2,500); zero fees
+        # -> the full proceeds are spent and the cash residual is zero.
         assert result.sell_weights[1][0] == pytest.approx(240_000 / 1_500_000)
         assert result.buy_weights[1][1] == pytest.approx(240_000 / 1_500_000)
-        assert result.final_shares[0] == 3_800
-        assert result.final_shares[1] == 7_400
-        assert result.final_cash == pytest.approx(240_000.0, abs=1e-6)
-        # achieved book weights at the execution
+        assert result.final_shares[0] == pytest.approx(3_800.0, abs=1e-6)
+        assert result.final_shares[1] == pytest.approx(7_400.0, abs=1e-6)
+        assert result.final_cash == pytest.approx(0.0, abs=1e-6)
+        # achieved book weights at the execution (share view:
+        # A 3,800x200 = 760,000; B 7,400x100 = 740,000; cash 0)
         weights = result.positions[1]["weights"]
-        assert weights[0] == pytest.approx(760_000 / 1_500_000, abs=1e-9)
-        assert weights[1] == pytest.approx(500_000 / 1_500_000, abs=1e-9)
+        assert weights[0] == pytest.approx(760_000 / 1_500_000, abs=1e-6)
+        assert weights[1] == pytest.approx(740_000 / 1_500_000, abs=1e-6)
 
 
 class TestReconciliation:
     def test_cash_shares_equity_fees_reconcile(self):
         # Same doubling scenario with real fees: commission 10bp both
-        # sides, stamp 10bp sell.  Hand at the t1 execution:
-        #   sells 1,200 A @200 = 240,000 -> fees 240 + 240 = 480
-        #   cash after sells = 240,000 - 480 = 239,520
-        #   buys capped: B <= 239,520 / 1.001 -> lot floor 2,300 @100
-        #   = 230,000 -> buy fee 230; cash after = 239,520 - 230,000 - 230
-        #   = 9,290 ; E_after = 9,290 + 760,000 + 730,000 = 1,499,290
-        #   (= 1,500,000 - 710 total fees, exact).
+        # sides, stamp 10bp sell.  Hand chain (fees hit the funding too):
+        #   t0 funding: 5,000 shares each = 1,000,000 + 1,000 fees > cash
+        #     -> lot-reduced to 4,900 each (980,000), fees 980,
+        #     cash 19,020, E = 999,020
+        #   t0 return: A doubles, B flat -> E(open2) = 1,489,020
+        #     (share view: 4,900x200 + 4,900x100 + 19,020)
+        #   t1 execution (entry open A=200, B=100):
+        #     sells 1,100 A @200 = 220,000 (lot floor from 1,177.45)
+        #       -> sell fees 220 + 220 = 440; cash = 238,580
+        #     buys B: 2,500 unaffordable -> 2,400 unaffordable
+        #       -> 2,300 @100 = 230,000, fee 230; cash = 8,350
+        #     E_after = 8,350 + 3,800x200 + 7,200x100 = 1,488,350
+        #     (= 1,489,020 - 670 total fees, exact)
         open_ = np.array([
             [100.0, 100.0, 200.0, 200.0, 200.0],
             [100.0, 100.0, 100.0, 100.0, 100.0],
@@ -171,15 +192,15 @@ class TestReconciliation:
             commission_rate=0.001,
             stamp_tax_rate=0.001,
         )
-        assert result.final_shares[0] == 3_800
-        assert result.final_shares[1] == 7_300
-        assert result.final_cash == pytest.approx(9_290.0, abs=1e-6)
+        assert result.final_shares[0] == pytest.approx(3_800.0, abs=1e-6)
+        assert result.final_shares[1] == pytest.approx(7_200.0, abs=1e-6)
+        assert result.final_cash == pytest.approx(8_350.0, abs=1e-6)
         # the reconciliation identity at the execution instant
         assert result.final_cash + result.final_shares[0] * 200.0 + (
             result.final_shares[1] * 100.0
-        ) == pytest.approx(1_499_290.0, abs=1e-6)
+        ) == pytest.approx(1_488_350.0, abs=1e-6)
         assert result.equity_curve[-1] == pytest.approx(
-            1_499_290.0 / 1_000_000.0, abs=1e-9
+            1_488_350.0 / 1_000_000.0, abs=1e-6
         )
 
 
@@ -200,8 +221,8 @@ class TestBoundaries:
         mask = np.array([True, True, False, False, False])
         result = _run(open_, mask, down_limit=down_limit)
         weights = result.positions[1]["weights"]
-        assert weights[0] == pytest.approx(0.4, abs=1e-9)
-        assert weights[1] == pytest.approx(0.6, abs=1e-9)
+        assert weights[0] == pytest.approx(0.55 / 1.30, abs=1e-6)
+        assert weights[1] == pytest.approx(0.75 / 1.30, abs=1e-6)
         assert result.sell_weights[1][1] == 0.0
         assert result.buy_weights[1][0] == 0.0
 
@@ -223,10 +244,10 @@ class TestBoundaries:
         # drift neutrality: the book weights never move before the t2
         # execution (both legs flat on the adjusted basis)
         weights = result.positions[1]["weights"]
-        assert weights[0] == pytest.approx(0.5, abs=1e-9)
-        assert weights[1] == pytest.approx(0.5, abs=1e-9)
+        assert weights[0] == pytest.approx(0.5, abs=1e-6)
+        assert weights[1] == pytest.approx(0.5, abs=1e-6)
         # the t2 execution re-derives shares at the halved raw open:
         # 0.5 * 1,000,000 / 50 = 10,000 shares (double the funded 5,000)
-        assert result.final_shares[0] == 10_000
-        assert result.final_shares[1] == 5_000
-        assert result.equity_curve[-1] == pytest.approx(1.0, abs=1e-9)
+        assert result.final_shares[0] == pytest.approx(10_000.0, abs=1e-6)
+        assert result.final_shares[1] == pytest.approx(5_000.0, abs=1e-6)
+        assert result.equity_curve[-1] == pytest.approx(1.0, abs=1e-6)

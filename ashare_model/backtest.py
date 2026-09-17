@@ -24,12 +24,21 @@ from ashare_logging import (
     export_log_txt,
     setup_run_logging,
 )
-from ashare_portfolio.constructor import PortfolioConstructor
+from ashare_portfolio.constructor import (
+    PortfolioConstructor,
+    canonical_weights_to_output_grid,
+)
 from ashare_portfolio.rebalance import RebalancePolicy
 
 from .reward import sortino_ratio
 from .targets import causal_target_returns
 from .time_contract import TrainingTimeContract
+
+# P35 share-anchored execution constants (p35 §2): the A-share board lot,
+# the weight-comparison epsilon and the bounded affordability-loop cap.
+_P35_LOT = 100
+_P35_WEIGHT_EPS = 1e-12
+_P35_MAX_AFFORDABILITY_PASSES = 64
 
 
 def equal_weight_benchmark_returns(
@@ -226,7 +235,9 @@ class AshareBacktestEngine:
             )
         elif len(benchmark_returns) != len(signal_indices):
             raise ValueError("benchmark_returns must align with signal_range")
-        prev_weights = np.zeros(n_stocks, dtype=np.float64)
+        weights = np.zeros(n_stocks, dtype=np.float64)
+        shares = np.zeros(n_stocks, dtype=np.float64)
+        cash = float(self.initial_capital)
         capital = self.initial_capital
         daily_returns: list[float] = []
         turnover_list: list[float] = []
@@ -249,54 +260,178 @@ class AshareBacktestEngine:
             exit_day = t + delay + 1
             buy_blocked = blocked_buy_matrix[:, entry_day]
             sell_blocked = blocked_sell_matrix[:, entry_day]
+            rebalance_due = bool(rebalance_mask[t])
+            capital_before = capital
+            lot = max(1, int(getattr(self.config, "lot_size", 100)))
             output = self.portfolio_constructor.construct(
                 signal,
-                prev_weights,
+                canonical_weights_to_output_grid(weights),
                 capital=capital,
                 eligible=eligible,
                 buy_blocked=buy_blocked,
                 sell_blocked=sell_blocked,
                 stable_keys=np.asarray(ts_codes),
-                rebalance_due=bool(rebalance_mask[t]),
+                rebalance_due=rebalance_due,
                 adv=volume[:, entry_day] * open_[:, entry_day],
             )
             target_weights = np.asarray(output.weights)
-            buy_weights = np.asarray(output.buy_weights)
-            sell_weights = np.asarray(output.sell_weights)
-            turnover = output.turnover
-
-            cost_fraction = float(
-                self.cost_model.rebalance_cost_fraction(
-                    buy_weights, sell_weights, capital
+            buy_weights = np.zeros(n_stocks, dtype=np.float64)
+            sell_weights = np.zeros(n_stocks, dtype=np.float64)
+            trade_fees = 0.0
+            p_entry = open_[:, entry_day]
+            if rebalance_due:
+                # P35: the share book is re-derived from the drifted
+                # weights at the raw entry open — a split halves the raw
+                # price and thereby doubles the materialized shares with
+                # no special case (w * E / p IS the drifted book).  A
+                # missing/delisted bar (NaN -> 0 open) has no price: its
+                # shares carry over unchanged, no order may reference it
+                # (both sides' sizing would divide by zero) and the
+                # reconciliation marks it at its drifted notional — the
+                # o2o label is already 0.0 for the missing leg, so the
+                # book is flat through the gap, exactly like v3.
+                tradable_price = p_entry > 0.0
+                new_shares = shares.copy()
+                new_shares[tradable_price] = (
+                    weights[tradable_price] * capital / p_entry[tradable_price]
                 )
-            )
+                shares = new_shares
+                # Sells: reductions and full exits.  A sell-blocked or
+                # suspended name keeps its drifted weight (the constructor
+                # pinned its target there), so it generates zero orders.
+                reduce = (
+                    (target_weights < weights - _P35_WEIGHT_EPS)
+                    & tradable_price
+                )
+                if reduce.any():
+                    delta_notional = (
+                        (weights[reduce] - target_weights[reduce]) * capital
+                    )
+                    sell_shares = np.where(
+                        target_weights[reduce] <= _P35_WEIGHT_EPS,
+                        shares[reduce],
+                        np.floor(
+                            delta_notional / p_entry[reduce] / lot
+                        )
+                        * lot,
+                    )
+                    sell_shares = np.minimum(sell_shares, shares[reduce])
+                    notional = sell_shares * p_entry[reduce]
+                    fees = self.cost_model.sell_cost(notional).total
+                    shares[reduce] = shares[reduce] - sell_shares
+                    cash += float(notional.sum() - fees.sum())
+                    trade_fees += float(fees.sum())
+                    sell_weights[reduce] = notional / capital
+                # Buys: increases, lot-floored, capped at the available
+                # cash including their own fees.  The affordability loop
+                # scales proportionally (geometric convergence — a
+                # one-lot-per-pass decrement can never reach affordability
+                # from a large unfunded book).  A missing-bar name is
+                # never bought: there is no price to size against (the
+                # authoritative matcher skips the same order with
+                # ``missing_bar``).
+                increase = (
+                    (target_weights > weights + _P35_WEIGHT_EPS)
+                    & tradable_price
+                )
+                if increase.any():
+                    idx = np.flatnonzero(increase)
+                    buy_shares = np.floor(
+                        (target_weights[idx] - weights[idx])
+                        * capital
+                        / p_entry[idx]
+                        / lot
+                    ) * lot
+                    notional = buy_shares * p_entry[idx]
+                    fees = self.cost_model.buy_cost(notional).total
+                    for _ in range(_P35_MAX_AFFORDABILITY_PASSES):
+                        over = notional.sum() + fees.sum() - cash
+                        if over <= 0.0:
+                            break
+                        scale = max(cash / (notional.sum() + fees.sum()), 0.0)
+                        buy_shares = np.floor(buy_shares * scale / lot) * lot
+                        notional = buy_shares * p_entry[idx]
+                        fees = self.cost_model.buy_cost(notional).total
+                    if notional.sum() + fees.sum() > cash:
+                        # fail-closed: fund nothing rather than go negative
+                        buy_shares = np.zeros_like(buy_shares)
+                        notional = buy_shares * p_entry[idx]
+                        fees = self.cost_model.buy_cost(notional).total
+                    shares[idx] = shares[idx] + buy_shares
+                    cash -= float(notional.sum() + fees.sum())
+                    trade_fees += float(fees.sum())
+                    buy_weights[idx] = notional / capital
+                cost_fraction = trade_fees / capital if capital > 0.0 else 0.0
+                # achieved book weights on the post-fee equity; the fees
+                # are already debited to cash, so the post-execution
+                # equity is the exact reconciliation identity.  A
+                # missing-bar name carries its drifted notional (its
+                # o2o label is zero, so the mark is flat through the
+                # gap).
+                marked = np.where(
+                    tradable_price,
+                    shares * p_entry,
+                    weights * capital,
+                )
+                capital = cash + float(marked.sum())
+                weights = marked / capital
+            else:
+                # P35: no execution — the constructor returned the drifted
+                # book unchanged; zero costs.  The compounded equity is
+                # already the current-open mark (the previous drift used
+                # the adjusted returns, so a split between executions
+                # never collapses the book); the raw share book is
+                # re-derived only at execution instants.
+                cost_fraction = 0.0
+
             # target_ret[:, j] spans the open-to-open period (j+1, j+2),
             # which is exactly [entry_day, exit_day] with
-            # entry_day = t + execution_delay.
-            gross_ret = float(np.dot(target_weights, target_ret[:, entry_day - 1]))
-            net_ret = gross_ret - cost_fraction
+            # entry_day = t + execution_delay.  P35: the return is booked
+            # on the DRIFTED book weights — share-conserving state
+            # evolution — never on the frozen last target.  The session
+            # net is the exact equity ratio (fees already inside
+            # capital_after).
+            gross_ret = float(np.dot(weights, target_ret[:, entry_day - 1]))
+            net_ret = (capital * (1.0 + gross_ret)) / capital_before - 1.0
             daily_returns.append(net_ret)
-            turnover_list.append(turnover)
+            turnover_list.append(output.turnover)
             cost_fractions.append(cost_fraction)
-            capital *= 1.0 + net_ret
+            capital = capital * (1.0 + gross_ret)
 
+            held = np.flatnonzero(weights > _P35_WEIGHT_EPS)
             positions.append(
                 {
                     "signal_date": dates[t],
                     "entry_date": dates[entry_day],
                     "exit_date": dates[exit_day],
-                    "ts_codes": [ts_codes[i] for i in np.where(target_weights > 0)[0]],
-                    "weights": [
-                        round(float(target_weights[i]), 6)
-                        for i in np.where(target_weights > 0)[0]
-                    ],
+                    "ts_codes": [ts_codes[i] for i in held],
+                    "weights": [round(float(weights[i]), 6) for i in held],
+                    "shares": [float(shares[i]) for i in held],
                 }
             )
             target_weights_list.append(target_weights.copy())
             buy_weights_list.append(buy_weights.copy())
             sell_weights_list.append(sell_weights.copy())
             construction_diagnostics.append(dict(output.diagnostics))
-            prev_weights = target_weights
+            # P35: drift the weights to the next open (share-conserving
+            # state evolution).  The cash weight absorbs the residual, so
+            # the uninvested fraction earns zero rather than the
+            # portfolio rate.  A per-stock (1+r) below zero is a
+            # non-physical total wipeout: clamped to zero so the drifted
+            # book stays a valid long-only weight vector.
+            stock_growth = np.clip(1.0 + target_ret[:, entry_day - 1], 0.0, None)
+            book_growth = max(1.0 + gross_ret, 0.0)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                drifted = weights * stock_growth / (
+                    book_growth if book_growth > 0.0 else 1.0
+                )
+            # For physical returns the drifted sum never exceeds 1
+            # (long-only share conservation); scale unphysical synthetic
+            # extremes back to a valid long-only book.
+            total = float(drifted.sum())
+            if total > 1.0:
+                drifted = drifted / total
+            weights = np.where(np.isfinite(drifted), drifted, 0.0)
 
         equity = self._equity_curve(daily_returns)
         benchmark_equity = (
@@ -353,6 +488,8 @@ class AshareBacktestEngine:
             sell_weights=sell_weights_list,
             cost_fractions=cost_fractions,
             construction_diagnostics=construction_diagnostics,
+            final_shares=[float(x) for x in shares],
+            final_cash=float(cash),
         )
 
     @staticmethod

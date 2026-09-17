@@ -168,7 +168,9 @@ def test_current_semantic_versions_are_pinned():
     # and artifact fields bump PROTOCOL_VERSION "26" -> "27"; v26 payloads
     # stay legacy (version mismatch, never converted).
     assert PROTOCOL_VERSION == "27"
-    assert EXECUTION_SPEC_VERSION == 3
+    # p35 (APPROVED 2026-09-17): share-level execution with drifted non-due
+    # weights bumps the execution spec 3 -> 4.
+    assert EXECUTION_SPEC_VERSION == 4
     assert BARE_FACTOR_BACKTEST_VERSION == 4
     # p17/D5 (t16 F1): the industry membership PIT switch bumps
     # FACTOR_COMPUTE to 3.

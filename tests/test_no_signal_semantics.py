@@ -140,14 +140,32 @@ def test_engine_underfilled_keeps_cash_and_never_breaks_cap():
     result = AshareBacktestEngine(cfg).run(
         signal, raw, codes, dates, universe_mask=mask
     )
+    # P35 (p35 §2): fees debit from cash, so the achieved stock weight is
+    # notional / (capital - fees) — the min-commission floor dominates a
+    # 10,000-yuan leg (commission 5 + transfer 0.1 + slippage 5), two
+    # legs = 20.2, inflating the achieved weight to
+    # 10000 / (100000 - 20.2) = 0.1000202... above the 0.1 TARGET.  The
+    # target itself never breaks the cap; constant prices keep the book
+    # flat afterwards (the daily re-derive delta rounds to zero shares).
+    _fees = 2.0 * (5.0 + 10000.0 * 0.00001 + 10000.0 * 0.0005)
+    _achieved = 10000.0 / (100000.0 - _fees)
     for snapshot in result.positions:
         assert len(snapshot["weights"]) <= 2
-        assert all(weight <= 0.1 + 1e-12 for weight in snapshot["weights"])
-        assert sum(snapshot["weights"]) <= 1.0 + 1e-12
-        # Under-filled day: exactly min(1/top_n, cap) per name, cash rest.
-        assert sum(snapshot["weights"]) == pytest.approx(
-            2 * min(1.0 / 5, 0.1), abs=1e-12
+        # positions round weights to 6 decimals in the record
+        assert all(
+            weight == pytest.approx(_achieved, abs=1e-6)
+            for weight in snapshot["weights"]
         )
+        assert sum(snapshot["weights"]) == pytest.approx(
+            2.0 * _achieved, abs=1e-6
+        )
+        assert sum(snapshot["weights"]) <= 1.0 + 1e-12
+    # exact ledger reconciliation of the hand chain
+    assert result.final_shares[0] == pytest.approx(1000.0, abs=1e-9)
+    assert result.final_shares[1] == pytest.approx(1000.0, abs=1e-9)
+    assert result.final_cash == pytest.approx(
+        100000.0 - 20000.0 - _fees, abs=1e-9
+    )
 
 
 def test_engine_force_hold_never_renormalizes_above_cap():
@@ -170,9 +188,17 @@ def test_engine_force_hold_never_renormalizes_above_cap():
     result = AshareBacktestEngine(cfg).run(
         signal, raw, codes, dates, universe_mask=mask
     )
-    for snapshot in result.positions:
-        assert all(weight <= 0.4 + 1e-12 for weight in snapshot["weights"])
+    # P35 (p35 §2): the cap binds the constructor TARGET — achieved
+    # weights may exceed it by the recorded fee inflation (fees debit
+    # from cash, so w -> w * E_before / E_after on every execution) plus
+    # the one-lot grain.  Two funded sessions compound to ~0.40056 here;
+    # the bound covers the mechanism, not the exact digit.  The key
+    # claim survives unchanged: no name is ever RENORMALIZED above the
+    # cap — the constructor targets never exceed 0.4.
+    for snapshot, target_w in zip(result.positions, result.target_weights):
+        assert all(weight <= 0.4 * 1.002 for weight in snapshot["weights"])
         assert sum(snapshot["weights"]) <= 1.0 + 1e-12
+        assert all(w <= 0.4 + 1e-12 for w in target_w)
 
 
 def test_engine_permutation_invariance():
@@ -263,17 +289,25 @@ def test_basket_force_hold_never_renormalizes_above_cap():
     sim = simulate_basket_daily_returns(
         signal, target, cfg, universe_mask=mask, blocked_sell=blocked_sell
     )
-    # P3 contract section 3: the blocked 0.4 position consumes budget and
-    # only the fresh buy may shrink.  The surviving 0.4 incumbent cannot be
-    # sold merely to make room, so the exact target is [0.4, 0.4, 0.2].
-    np.testing.assert_array_equal(
-        sim.target_weights[1], np.array([0.4, 0.4, 0.2])
+    # P3 contract section 3: the blocked position consumes budget and
+    # only the fresh buy may shrink.  P35 (p35 §2): the session-0
+    # funding fees (buy rate 0.00076 on the invested 0.8) debit from
+    # cash, so the drifted incumbent inflates to 0.4/(1-0.000608) =
+    # 0.40024335...; the sell-blocked name is pinned THERE (not at the
+    # v3-frozen 0.4) and the fresh buy shrinks into the remaining
+    # budget.
+    _cost0 = 0.8 * 0.00076
+    _pinned = 0.4 / (1.0 - _cost0)
+    _entrant = 1.0 - _pinned - 0.4
+    np.testing.assert_allclose(
+        sim.target_weights[1], np.array([_pinned, 0.4, _entrant]), atol=1e-12
     )
-    assert sim.turnover[1] == 0.2
-    assert sim.daily_gross_returns[1] == (
-        0.4 * float(target[0, 1])
+    assert sim.turnover[1] == pytest.approx(0.2, abs=1e-12)  # the pinned leg's fee-inflation sell (0.0002434) plus the entrant's capped buy (0.1997567) sum back to exactly the 0.2 budget swap
+    assert sim.daily_gross_returns[1] == pytest.approx(
+        _pinned * float(target[0, 1])
         + 0.4 * float(target[1, 1])
-        + 0.2 * float(target[2, 1])
+        + _entrant * float(target[2, 1]),
+        abs=1e-12,
     )
 
 

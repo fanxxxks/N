@@ -128,8 +128,13 @@ def test_basket_aligns_entry_day_universe_like_engine():
     sim = simulate_basket_daily_returns(
         signal, target, cfg, universe_mask=mask
     )
+    # P35 (v4): the engine executes whole lots against a cash-capped
+    # affordability loop while the basket is the continuous-weight
+    # limit, so the daily nets agree only to the execution friction
+    # (one-lot grain + fee financing, order 1e-4 per session — the same
+    # bound the golden parity contract uses).
     assert sim.daily_net_returns == pytest.approx(
-        np.asarray(engine.daily_returns), abs=1e-12
+        np.asarray(engine.daily_returns), abs=5e-4
     )
     # The engine buys the second-best stock instead of the exited one.
     assert engine.positions[0]["ts_codes"] == [codes[1]]
@@ -146,10 +151,16 @@ def test_basket_engine_parity_on_entry_day_exits():
         signal, raw, codes, dates, universe_mask=mask
     )
     sim = simulate_basket_daily_returns(signal, target, cfg, universe_mask=mask)
+    # P35 (v4): daily nets agree to the whole-lot execution friction
+    # (see test_basket_aligns_entry_day_universe_like_engine).  Turnover
+    # also drifts apart by one round of that friction: the engine feeds
+    # the constructor its ACHIEVED (lot-rounded) book as the next prev
+    # while the basket compounds the continuous weights, so the next
+    # session's weight deltas differ by the carried lot residual.
     assert sim.daily_net_returns == pytest.approx(
-        np.asarray(engine.daily_returns), abs=1e-12
+        np.asarray(engine.daily_returns), abs=5e-4
     )
-    assert sim.turnover == pytest.approx(np.asarray(engine.turnover), abs=1e-12)
+    assert sim.turnover == pytest.approx(np.asarray(engine.turnover), abs=5e-2)
 
 
 # --- reward v13: active IR as the primary term ------------------------------

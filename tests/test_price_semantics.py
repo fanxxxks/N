@@ -523,9 +523,20 @@ def test_raw_prices_drive_lots_cash_and_commission_floor(tmp_path: Path):
     signal = np.zeros((len(CODES), len(DATES)))
     signal[0, :] = 3.0
     signal[1, :] = 2.0
+    # P35 (v4): the mid-window adj_factor step is a cash-dividend
+    # equivalent (raw flat, adjusted x10 -> a +900% o2o label on the
+    # step day).  The engine re-derives its share book at RAW entry
+    # prices, so it books the dividend into capital and then trades the
+    # excess shares back at the next rebalance; the continuous free
+    # reference keeps compounding the adjusted series without a raw
+    # re-mark.  The two diverge structurally across the corporate action
+    # (the recorded-residual attribution case the golden contract
+    # documents) — the friction bound is widened accordingly; the lot
+    # assertions below are the point of this test.
     harness = GoldenParity(
         BacktestConfig(top_n=2, initial_capital=100_000.0),
         lot_size=100,
+        engine_friction_tol=5e-3,
     )
     report = harness.run(
         signal,
@@ -703,7 +714,7 @@ def test_version_impact_table_bumps_are_in_place():
     from ashare_model.versions import PROTOCOL_VERSION
     from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
 
-    assert EXECUTION_SPEC_VERSION == 3
+    assert EXECUTION_SPEC_VERSION == 4  # p35 share-accounting (drifted non-due weights + share-level execution)
     # p21 §8 (APPROVED 2026-09-06): PROTOCOL 26 -> 27 (tier_set additive).
     assert str(PROTOCOL_VERSION) == "27"
     # p17/D5 (t16 F1): bumped 2 -> 3 for the industry membership PIT

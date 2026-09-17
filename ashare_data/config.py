@@ -447,6 +447,9 @@ class BacktestConfig:
     stamp_tax_rate: float = 0.0005
     transfer_fee_rate: float = 0.00001
     slippage_rate: float = 0.0005
+    # P35: A-share board lot for share-level execution (orders are
+    # lot-floored; full exits are exact).  100 = the A-share board lot.
+    lot_size: int = 100
     benchmark: str = "全市场等权"
 
 

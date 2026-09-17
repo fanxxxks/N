@@ -13,7 +13,15 @@ import numpy as np
 
 from ashare_data.config import BacktestConfig, RewardConfig
 from ashare_execution import ExecutionCostModel
-from ashare_portfolio.constructor import PortfolioConstructor
+from ashare_portfolio.constructor import (
+    PortfolioConstructor,
+    canonical_weights_to_output_grid,
+)
+
+# P35: floor for the (1 - cost) drift divisor — the weight-space analogue
+# of the engine's structural cost < 1 (its cash cap).  Only synthetic
+# collapse fixtures ever reach it.
+_P35_DRIFT_DIVISOR_FLOOR = 1e-12
 
 @dataclass(frozen=True)
 class BasketSimulation:
@@ -317,8 +325,15 @@ def simulate_basket_daily_returns_batch(
             dtype=np.float64,
         )
         rets = target_clean[:, t][None, :]
+        # P35: `target` is the post-trade book on due sessions and the
+        # drifted book on non-due sessions (the constructor returns prev
+        # unchanged there) — either way it is the book the session's
+        # return applies to.  The session net is the exact equity ratio:
+        # the fees debit at execution, then the post-fee book compounds
+        # by the gross return ((1 - cost) * (1 + gross) - 1) — the same
+        # exact form the p35 engine books.
         gross = (target * rets).sum(axis=1)
-        net = gross - cost
+        net = (1.0 - cost) * (1.0 + gross) - 1.0
         turnover = buy.sum(axis=1) + sell.sum(axis=1)
         gross_full[:, output_col] = gross
         cost_full[:, output_col] = cost
@@ -353,7 +368,40 @@ def simulate_basket_daily_returns_batch(
                 )
             capacity_full[:, output_col] = day_capacity
         capital *= 1.0 + net
-        prev = target
+        # P35: drift the book to the next session (share-conserving state
+        # evolution).  The engine debits the fees from CASH, so the stock
+        # weights inflate by 1/(1 - cost) on due sessions (the book is
+        # more fully invested after the fee drag); the drifted book then
+        # moves by the per-stock adjusted returns.  On non-due sessions
+        # target == prev and cost == 0, so the same formula is the drift.
+        # cost >= 1 (fees at or beyond the whole book) is unreachable in
+        # the engine, whose cash cap structurally keeps cost < 1; in the
+        # weight-space basket it only occurs in synthetic collapse
+        # fixtures (normal(0,1) targets crushing capital into the
+        # min-commission floor).  Clamping the divisor to eps keeps the
+        # drift non-negative there; the >1 scale-back below then restores
+        # a valid long-only book (physical-region values are unchanged:
+        # 1 - cost sits orders of magnitude above eps).
+        with np.errstate(divide="ignore", invalid="ignore"):
+            drifted = (
+                target
+                / np.maximum(1.0 - cost, _P35_DRIFT_DIVISOR_FLOOR)[:, None]
+                * np.clip(1.0 + rets, 0.0, None)
+                / np.clip(1.0 + gross, 0.0, None)[:, None]
+            )
+        # For physical returns the drifted sum stays bounded; unphysical
+        # synthetic extremes (r < -100%) are scaled back to a valid
+        # long-only book.
+        total = drifted.sum(axis=1)
+        scale = np.where(total > 1.0, 1.0 / np.where(total > 0, total, 1.0), 1.0)
+        drifted = drifted * scale[:, None]
+        # P35: hand the constructor its prev on the constructor output
+        # grid (round-12 + sub-eps zeroing), or a not-due session
+        # re-rounds into ~1e-13 phantom turnover dust — the same
+        # projection the engine applies to its drifted book.
+        prev = canonical_weights_to_output_grid(
+            np.where(np.isfinite(drifted), drifted, 0.0)
+        )
 
     return BatchBasketSimulation(
         gross_full,

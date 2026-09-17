@@ -155,7 +155,9 @@ def _run(
 
 
 def test_execution_spec_is_versioned():
-    assert EXECUTION_SPEC_VERSION == 3
+    # v4 (p35): share-level execution with drifted non-due weights —
+    # the version the golden parity contract below is defined against.
+    assert EXECUTION_SPEC_VERSION == 4
 
 
 def test_external_weights_without_constructor_provenance_are_rejected():
@@ -185,12 +187,18 @@ def test_lot_free_matches_engine_exactly():
     assert report.weights_source == "portfolio_constructor"
     for free, lot_free in zip(report.free_equity, report.lot_free_equity):
         assert free == pytest.approx(lot_free, rel=1e-9)
-    # The weight-based free path reproduces the engine's own daily returns.
+    # P35 (v4): the free path is the continuous limit of the share-level
+    # engine.  The engine executes whole lots against a cash-capped
+    # affordability loop (the first funding scales 50,000-share orders
+    # down one lot each to fund their own fees), so engine vs free differ
+    # by the one-lot grain plus fee financing — order 1e-5 per session
+    # on this 1e6-capital scenario (hand-derived in the p35 measurement
+    # log), bounded here instead of the v3 bit-equality.
     assert report.engine_daily_returns is not None
     for free_ret, engine_ret in zip(
         [r.free_return for r in report.records], report.engine_daily_returns
     ):
-        assert free_ret == pytest.approx(engine_ret, rel=1e-9)
+        assert free_ret == pytest.approx(engine_ret, abs=1e-4)
     harness = GoldenParity(_cfg(), lot_size=0)
     harness.verify(report)  # must not raise
 
@@ -405,13 +413,19 @@ def test_fees_charged_in_both_paths():
 def test_insufficient_cash_recorded_in_lot_mode():
     # A small account with the 5-yuan commission floor: lot-mode buys are
     # affordability-capped, the skip/under-fill is recorded, cash never
-    # goes negative, and the identity still holds.
+    # goes negative, and the identity still holds.  At 2e4 capital one
+    # board lot (~1,040 yuan) is ~5% of the book, so the engine-vs-free
+    # execution friction is proportionally larger (measured worst ~2.4e-4
+    # on the first funding) — the friction bound is widened for this
+    # scenario only.
     signal, raw, ts_codes, dates, mask = _market(n_dates=14)
     _, report = _run(
         signal, raw, ts_codes, dates, mask, lot_size=100,
         cfg=_cfg(initial_capital=20000.0),
     )
-    GoldenParity(_cfg(initial_capital=20000.0), lot_size=100).verify(report)
+    GoldenParity(
+        _cfg(initial_capital=20000.0), lot_size=100, engine_friction_tol=1e-3
+    ).verify(report)
     assert any(abs(r.carry) > 1e-6 for r in report.records)
 
 

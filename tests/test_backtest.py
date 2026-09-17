@@ -180,7 +180,9 @@ def test_run_includes_benchmark_positions_and_aligned_dates(populated_db: DataCo
     assert len(result.benchmark_equity) == len(result.equity_curve)
     # Dates and equity curves align 1:1 for plotting.
     assert len(result.dates) == len(result.equity_curve)
-    # Position snapshots for the dashboard selection tab.
+    # Position snapshots for the dashboard selection tab.  P35 adds the
+    # share-anchored book: each snapshot carries the raw share counts
+    # (contract docs/p35_share_accounting_draft.md §2/§4).
     assert result.positions
     assert set(result.positions[0]) == {
         "signal_date",
@@ -188,6 +190,7 @@ def test_run_includes_benchmark_positions_and_aligned_dates(populated_db: DataCo
         "exit_date",
         "ts_codes",
         "weights",
+        "shares",
     }
     assert result.positions[0]["entry_date"] == dates[1]
     assert result.positions[0]["exit_date"] == dates[2]
@@ -326,7 +329,14 @@ def test_engine_exit_day_sells_position_with_cost():
     assert names[1] == [codes[0]]
     assert names[exit_day - 1] == [codes[1]]
     assert names[exit_day] == [codes[1]]
-    assert result.turnover[exit_day - 1] == pytest.approx(2.0)
+    # P35 (p35 §2): the turnover is weight-difference based on the DRIFTED
+    # book.  Hand-derived: the t=0 entry buys floor(100000/10/100)*100
+    # = 10000 shares unfundable once its 76.0 buy fee (0.00076 * 100000)
+    # lands; one proportional affordability pass floors the order to 9900
+    # shares for a 75.24 fee, so the drifted book weight is 99000/99924.76.
+    # The exit-day rebalance sells that entire weight and buys the fresh
+    # top name at 1.0 — the full-exit + fresh-buy double leg.
+    assert result.turnover[exit_day - 1] == pytest.approx(99000.0 / 99924.76 + 1.0)
     # Zero targets: the exit day's net return is exactly the rebalance cost.
     assert result.daily_returns[exit_day - 1] < 0.0
     assert result.daily_returns[1] == pytest.approx(0.0, abs=1e-15)
@@ -442,5 +452,19 @@ def test_engine_survives_busted_book_end_to_end():
         universe_mask=np.ones((2, 4), dtype=bool),
     )
     assert all(np.isfinite(value) for value in result.metrics.values())
-    assert result.metrics["total_return"] == -1.0
+    # P35 (p35 §2): the share-based book can never lose more than the
+    # holding value, so equity stays positive and the -100% clamp is
+    # unreachable for a single-position wipeout.  Hand-derived: t=0 buys
+    # 9900 shares at 10 (fee 75.24, weight 99000/99924.76); the
+    # entry->exit session wipes the holding at -100% o2o, leaving the
+    # 924.76 cash book; t=1 re-buys the still-top-ranked name at the 1e-9
+    # open where the board lot is negligible — the affordability loop
+    # spends the cash down to the min-commission floor, a fee of
+    # 5 + 0.00051 * 919.29 = 5.4688, so the final equity is
+    # 924.76 - 5.4688 = 919.2911714 / 100000.
+    assert result.metrics["total_return"] == pytest.approx(
+        -0.9908070882859237, rel=1e-9
+    )
+    # (0.0091929...) ** (252/2) underflows to 0, so the annualized figure
+    # is exactly the -1.0 floor.
     assert result.metrics["annual_return"] == -1.0

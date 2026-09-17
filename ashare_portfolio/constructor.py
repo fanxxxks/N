@@ -24,6 +24,24 @@ PORTFOLIO_CONSTRUCTOR_VERSION = 1
 _WEIGHT_EPSILON = 1e-12
 
 
+def canonical_weights_to_output_grid(values: np.ndarray) -> np.ndarray:
+    """Project book weights onto the constructor's output grid.
+
+    ``_output`` rounds its target to 12 decimals and zeroes sub-eps
+    components; a caller that passes a drifted/achieved book back as the
+    next ``prev`` must hand over the SAME projection, or a not-due
+    session (target == prev) re-rounds into ~1e-13 phantom sell dust and
+    reports nonzero turnover for a session that traded nothing.  Pure
+    projection helper — zero constructor semantics change (p35 §3 keeps
+    the constructor version frozen; consumers of the prev source are
+    engine/basket side).
+    """
+
+    out = np.round(np.maximum(np.asarray(values, dtype=np.float64), 0.0), 12)
+    out[np.abs(out) <= _WEIGHT_EPSILON] = 0.0
+    return out
+
+
 def _readonly(values: np.ndarray) -> np.ndarray:
     out = np.asarray(values, dtype=np.float64).copy()
     out.setflags(write=False)
@@ -78,6 +96,8 @@ def validate_portfolio_config(config: "BacktestConfig") -> None:
     threshold = float(config.target_weight_change_threshold)
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("target_weight_change_threshold must be in [0, 1]")
+    if int(getattr(config, "lot_size", 100)) < 1:
+        raise ValueError("lot_size must be >= 1")
 
 
 @dataclass(frozen=True)
@@ -307,7 +327,16 @@ class PortfolioConstructor:
                 lower = np.zeros_like(prev)
                 if survivors:
                     survivor_indices = np.asarray(survivors, dtype=np.int64)
-                    lower[survivor_indices] = prev[survivor_indices]
+                    # A survivor's floor is its current weight, capped at
+                    # the constraint: a DRIFTED prev can ride above the
+                    # cap between executions (p35 §2), and the floor only
+                    # ever protects held value, never a cap breach.  For
+                    # constructor-produced prev (always <= cap) this clip
+                    # is a no-op — zero semantic change.
+                    lower[survivor_indices] = np.minimum(
+                        prev[survivor_indices],
+                        float(self.config.single_weight_cap),
+                    )
                 solution = self.optimizer.solve(
                     alpha,
                     prev,

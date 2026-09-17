@@ -6,11 +6,14 @@ contract:
 
 * **Free path** — the vectorized engine (``AshareBacktestEngine``) when
   target weights come from the engine's own selection, or the exact
-  mirror of externally supplied weights (T3-01 optimizer output).  The
-  engine's convention is a *frictionless-rebalanced* book: positions are
-  re-marked at the target weights of the compounded equity at every
-  entry, only weight deltas are traded, and fees are charged on the
-  weight-delta notionals.
+  mirror of externally supplied weights (T3-01 optimizer output).  Under
+  the v4 share-level engine (p35) the free ledger is the *continuous
+  limit* of the engine's bookkeeping: session net = (1 - cost) * (1 +
+  gross) - 1, only weight deltas are traded, fees charge on the
+  weight-delta notionals.  The share-level engine itself executes whole
+  lots against a cash-capped affordability loop, so engine vs free
+  diverge only by the recorded execution friction (one-lot grain plus
+  fee financing) — asserted against an explicit bound, not bit-equality.
 * **Lot-free matcher path** — the authoritative ``SimBroker`` in
   continuous-share mode (``lot_size=0``) executing exactly those weight
   deltas against the same re-marked book.  Its equity must reproduce the
@@ -220,6 +223,7 @@ class GoldenParity:
         lot_size: int = 100,
         execution_delay: int = 1,
         atol: float = 1e-9,
+        engine_friction_tol: float = 1e-4,
     ) -> None:
         if lot_size < 0:
             raise ValueError(f"lot_size must be >= 0, got {lot_size}")
@@ -227,10 +231,15 @@ class GoldenParity:
             raise ValueError(f"execution_delay must be >= 1, got {execution_delay}")
         if atol <= 0.0:
             raise ValueError(f"atol must be > 0, got {atol}")
+        if engine_friction_tol <= 0.0:
+            raise ValueError(
+                f"engine_friction_tol must be > 0, got {engine_friction_tol}"
+            )
         self.config = config
         self.lot_size = int(lot_size)
         self.execution_delay = int(execution_delay)
         self.atol = float(atol)
+        self.engine_friction_tol = float(engine_friction_tol)
         self.cost_model = ExecutionCostModel.from_config(config)
 
     def run(
@@ -342,6 +351,10 @@ class GoldenParity:
             prev = executed[-1]
 
         # --- free ledger: exact continuous-share mirror -------------------
+        # P35 (v4): the session net is the exact equity ratio — fees debit
+        # from cash, the post-fee book compounds by the gross return —
+        # the same (1 - cost) * (1 + gross) - 1 form the engine and the
+        # reward baskets book (single semantic path).
         capital = float(self.config.initial_capital)
         free_equity = [capital]
         free_returns: list[float] = []
@@ -353,7 +366,8 @@ class GoldenParity:
             sell = np.maximum(prev - w, 0.0)
             fees = float(self.cost_model.rebalance_cost(buy, sell, equity_before).total)
             gross = float(np.dot(w, target_ret[:, k + delay - 1]))
-            ret = gross - fees / equity_before
+            cost = fees / equity_before
+            ret = (1.0 - cost) * (1.0 + gross) - 1.0
             free_returns.append(ret)
             free_fees.append(fees)
             free_equity.append(equity_before * (1.0 + ret))
@@ -445,8 +459,14 @@ class GoldenParity:
         """Assert the spec contract; raise ``GoldenParityViolation``.
 
         Checks: (1) the lot-free matcher reproduces the free path exactly;
-        (2) the free path reproduces the engine's own daily returns when
-        the engine produced the weights; (3) the per-day residual equals
+        (2) the free path (the continuous reference) stays within the
+        recorded execution friction of the engine's own daily returns —
+        under the v4 share-level engine the two no longer coincide
+        bit-for-bit because the engine executes whole lots against a
+        cash-capped affordability loop while the free ledger is the
+        continuous limit (the residual is the one-lot grain plus fee
+        financing, order 1e-5 on the golden scenarios, hand-checked in
+        the p35 measurement log); (3) the per-day residual equals
         its recorded attribution and the bookkeeping identity
         ``sum(residual) == lot_equity(T) - free_equity(T)`` holds; (4) a
         lot-free run carries no residual at all.
@@ -474,10 +494,11 @@ class GoldenParity:
         if report.engine_daily_returns is not None:
             for k, record in enumerate(report.records):
                 engine_ret = report.engine_daily_returns[k]
-                if abs(record.free_return - engine_ret) > self.atol:
+                if abs(record.free_return - engine_ret) > self.engine_friction_tol:
                     violations.append(
                         f"free path diverges from engine at period {k}: "
-                        f"free={record.free_return:.10g} engine={engine_ret:.10g}"
+                        f"free={record.free_return:.10g} engine={engine_ret:.10g} "
+                        f"beyond the execution-friction bound"
                     )
         total_residual = sum(r.residual for r in report.records)
         if abs(report.lot_equity[-1] - report.free_equity[-1] - total_residual) > tol:
@@ -634,7 +655,13 @@ class GoldenParity:
             )
             fees_by_day.append(fees)
             if lot_free:
-                ret = float(np.dot(w, target_ret[:, entry - 1])) - fees / equity_before
+                # P35 (v4): the identical exact-equity-ratio net the free
+                # ledger books — (1 - cost) * (1 + gross) - 1 with the
+                # fills' real fees — so the lot-free matcher keeps
+                # reproducing the free path exactly.
+                gross = float(np.dot(w, target_ret[:, entry - 1]))
+                cost = fees / equity_before
+                ret = (1.0 - cost) * (1.0 + gross) - 1.0
                 equity_after = equity_before * (1.0 + ret)
             else:
                 equity_after = portfolio.cash

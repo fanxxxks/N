@@ -359,8 +359,17 @@ def test_completion_gate_single_weight_cap_never_broken():
                 [f"202401{i:02d}" for i in range(n_dates)],
                 universe_mask=mask,
             )
+            # P35 (p35 §2): the cap binds the constructor TARGET.  The
+            # achieved/drifted book weights may exceed it by fee
+            # inflation plus price drift between executions (a
+            # sell-blocked name rides its drift with no renormalization)
+            # — that is the share-conserving semantics, not a cap break;
+            # the "no path pushes a name above the cap" claim is asserted
+            # where the cap actually applies.
+            for target_w in engine.target_weights:
+                assert all(w <= cap + 1e-12 for w in target_w)
+                assert sum(target_w) <= 1.0 + 1e-12
             for snapshot in engine.positions:
-                assert all(w <= cap + 1e-12 for w in snapshot["weights"])
                 assert sum(snapshot["weights"]) <= 1.0 + 1e-12
 
 

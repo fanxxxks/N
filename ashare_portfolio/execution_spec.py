@@ -23,7 +23,11 @@ from .rebalance import RebalancePolicy
 # prices (whole lots, cash, commission floor, min trade amount, dollar
 # volume) with the exact daily_price_limit/daily_suspension constraint
 # tables replacing the approximate board-rate inference.
-EXECUTION_SPEC_VERSION = 3
+# p35 §3: bumped 3 -> 4 — the book state evolution switched from frozen
+# last-target weights (an implicit daily zero-cost re-normalization) to
+# share-conserving drift between executions plus share-level execution
+# (lot-floor orders, full exits, cash + fees reconciliation identity).
+EXECUTION_SPEC_VERSION = 4
 
 _PORTFOLIO_CONFIG_FIELDS = (
     "rebalance_frequency",

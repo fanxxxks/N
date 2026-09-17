@@ -29,6 +29,10 @@ class BacktestResult:
     sell_weights: list[np.ndarray] | None = None
     cost_fractions: list[float] | None = None
     construction_diagnostics: list[dict[str, Any]] | None = None
+    # P35: the share-anchored book at the end of the run (raw shares per
+    # stock and the residual cash).  None for legacy producers.
+    final_shares: list[float] | None = None
+    final_cash: float | None = None
 
 
 @dataclass

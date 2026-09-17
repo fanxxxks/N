@@ -73,25 +73,39 @@ def _assert_reward_backtest_parity(
     assert backtest.buy_weights is not None
     assert backtest.sell_weights is not None
     assert backtest.cost_fractions is not None
-    np.testing.assert_array_equal(
-        np.asarray(backtest.target_weights), reward.target_weights
+    # P35 (v4): both paths share the SAME constructor, drift math and
+    # (1 - cost) * (1 + gross) - 1 net form; they diverge only in ledger
+    # precision — the engine books achieved (lot-rounded, cash-capped)
+    # weights as the next constructor prev while the basket compounds
+    # continuous weights.  Every constructor output therefore agrees to
+    # the carried whole-lot friction rather than bit-for-bit (the v3
+    # bit-equality held only because both paths were pure weight
+    # arithmetic); the per-session bound matches the golden parity
+    # contract's execution-friction scale.
+    np.testing.assert_allclose(
+        np.asarray(backtest.target_weights), reward.target_weights,
+        rtol=0.0, atol=5e-2,
     )
-    np.testing.assert_array_equal(
-        np.asarray(backtest.buy_weights), reward.buy_weights
+    np.testing.assert_allclose(
+        np.asarray(backtest.buy_weights), reward.buy_weights,
+        rtol=0.0, atol=5e-2,
     )
-    np.testing.assert_array_equal(
-        np.asarray(backtest.sell_weights), reward.sell_weights
+    np.testing.assert_allclose(
+        np.asarray(backtest.sell_weights), reward.sell_weights,
+        rtol=0.0, atol=5e-2,
     )
-    np.testing.assert_array_equal(
-        np.asarray(backtest.turnover), reward.turnover
+    np.testing.assert_allclose(
+        np.asarray(backtest.turnover), reward.turnover,
+        rtol=0.0, atol=5e-2,
     )
-    np.testing.assert_array_equal(
-        np.asarray(backtest.cost_fractions), reward.daily_cost_fractions
+    np.testing.assert_allclose(
+        np.asarray(backtest.cost_fractions), reward.daily_cost_fractions,
+        rtol=0.0, atol=5e-3,
     )
     np.testing.assert_allclose(
         np.asarray(backtest.daily_returns), reward.daily_net_returns,
         rtol=0.0,
-        atol=1e-15,
+        atol=5e-4,
     )
     return backtest, reward
 
@@ -142,10 +156,16 @@ def test_weekly_non_rebalance_days_hold_with_zero_cost_and_turnover():
     executable_due = rebalance_mask[: reward.turnover.size]
     assert np.count_nonzero(reward.turnover[~executable_due]) == 0
     assert np.count_nonzero(reward.daily_cost_fractions[~executable_due]) == 0
+    # P35 (v4): a not-due session's "target" is its DRIFTED book (the
+    # constructor returns prev unchanged), so consecutive non-due
+    # sessions differ by one session of price drift instead of being
+    # bit-frozen at the last due target — the drift is bounded by the
+    # session return, never a re-selection.
     for t in np.flatnonzero(~executable_due):
         if t > 0:
-            np.testing.assert_array_equal(
-                reward.target_weights[t], reward.target_weights[t - 1]
+            np.testing.assert_allclose(
+                reward.target_weights[t], reward.target_weights[t - 1],
+                rtol=0.0, atol=5e-3,
             )
 
 
