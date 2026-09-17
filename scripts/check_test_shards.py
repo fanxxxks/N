@@ -137,6 +137,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_golden_parity.py",
         "test_jobmanager.py",
         "test_ops.py",
+        "test_p35_share_accounting.py",
         "test_p3_measurement.py",
         "test_p3_portfolio_parity.py",
         "test_portfolio_constructor.py",
