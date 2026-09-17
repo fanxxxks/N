@@ -70,7 +70,11 @@ def universe_codes_from_legacy(db_path: str, table: str) -> list[str]:
 
     con = duckdb.connect(db_path, read_only=True)
     try:
-        rows = con.execute(f"SELECT DISTINCT ts_code FROM {table}").fetchall()
+        # SQL-injection hardening: the table name goes through the bound
+        # query_table(?) parameter instead of f-string interpolation.
+        rows = con.execute(
+            "SELECT DISTINCT ts_code FROM query_table(?)", [table]
+        ).fetchall()
     finally:
         con.close()
     return sorted(str(r[0]) for r in rows)

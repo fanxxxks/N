@@ -469,15 +469,16 @@ def test_factor_cache_rejects_cross_dataset_reuse(tmp_path: Path):
     # Direct rejection: a file sitting at the requested key's path whose
     # embedded identity belongs to another dataset is rejected, never
     # served — cross-key reuse must not happen even via a mislabeled file.
-    other_key = factor_cache_key(other)
-    target = cache.root / f"{other_key}.npz"
+    # (path resolved through the cache's own entry_path layout authority;
+    # np.savez writes straight to the Path — the .npz suffix is already
+    # present so numpy appends nothing)
+    target = cache.entry_path(other)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "wb") as handle:
-        np.savez(
-            handle,
-            tensor=tensor_a,
-            identity=json.dumps(factor_cache_payload(_identity())),
-        )
+    np.savez(
+        target,
+        tensor=tensor_a,
+        identity=json.dumps(factor_cache_payload(_identity())),
+    )
     rejections_before = cache.n_rejected
     assert cache.get(other) is None
     assert cache.n_rejected == rejections_before + 1

@@ -729,14 +729,22 @@ class TushareStore:
         prod = duckdb.connect(prod_db_path, read_only=True)
         try:
             # Copy reference tables from production (read-only source).
-            for table in ("stocks", "trade_calendar"):
-                self.db.execute(f"DROP TABLE IF EXISTS _gate_{table}")
-                ref = prod.execute(f"SELECT * FROM {table}").fetchdf()
-                self.db.register(f"_ref_gate_{table}", ref)
-                self.db.execute(
-                    f"CREATE TABLE _gate_{table} AS "
-                    f"SELECT * FROM _ref_gate_{table}"
-                )
+            # SQL-injection hardening: the statements are written out
+            # VERBATIM (DuckDB cannot bind DDL identifiers, so no dynamic
+            # table name may enter SQL text).
+            self.db.execute("DROP TABLE IF EXISTS _gate_stocks")
+            ref = prod.execute("SELECT * FROM stocks").fetchdf()
+            self.db.register("_ref_gate_stocks", ref)
+            self.db.execute(
+                "CREATE TABLE _gate_stocks AS SELECT * FROM _ref_gate_stocks"
+            )
+            self.db.execute("DROP TABLE IF EXISTS _gate_trade_calendar")
+            ref = prod.execute("SELECT * FROM trade_calendar").fetchdf()
+            self.db.register("_ref_gate_trade_calendar", ref)
+            self.db.execute(
+                "CREATE TABLE _gate_trade_calendar AS "
+                "SELECT * FROM _ref_gate_trade_calendar"
+            )
         finally:
             prod.close()
 
@@ -782,9 +790,12 @@ class TushareStore:
     def cleanup_gate_tables(self) -> None:
         """Drop the temporary gate tables created by prepare_gate_tables."""
 
-        for table in ("_gate_constituents", "_gate_daily_bar",
-                      "_gate_stocks", "_gate_trade_calendar"):
-            self.db.execute(f"DROP TABLE IF EXISTS {table}")
+        # SQL-injection hardening: verbatim DROP statements (no dynamic
+        # table name in SQL text).
+        self.db.execute("DROP TABLE IF EXISTS _gate_constituents")
+        self.db.execute("DROP TABLE IF EXISTS _gate_daily_bar")
+        self.db.execute("DROP TABLE IF EXISTS _gate_stocks")
+        self.db.execute("DROP TABLE IF EXISTS _gate_trade_calendar")
 
     # -- ingest ------------------------------------------------------------
 

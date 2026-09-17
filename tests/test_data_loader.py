@@ -457,8 +457,11 @@ def test_industry_codes_all_nan_without_membership(populated_db: DataConfig):
     loader.load_data()
     assert torch.isnan(loader.industry_codes).all()
     # Without any membership table the same factor stays fully neutral.
+    # SQL-injection hardening: verbatim statement for the fixture's
+    # default table name (DuckDB cannot bind DDL identifiers).
+    assert populated_db.sw_member_table == "sw_industry_member"
     with AshareDB(populated_db.duckdb_path) as db:
-        db.execute(f"DROP TABLE IF EXISTS {populated_db.sw_member_table}")
+        db.execute("DROP TABLE IF EXISTS sw_industry_member")
     # A02 (p26 I2): a manifest-covered table that no longer exists leaves the
     # database *unconfirmable*, so the formal path must refuse it (§4.3
     # fail-closed) rather than degrade silently.

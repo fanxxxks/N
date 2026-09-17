@@ -263,6 +263,57 @@ V2_STATEMENT_TABLES = {
 }
 
 
+def _assert_v2_statement_ddl_matches_columns() -> None:
+    """Drift guard for the verbatim DDL below (SQL-injection hardening:
+    no dynamic table/column names may enter SQL text, so the CREATE
+    statements are spelled out literally; this asserts the literal
+    spellings against V2_STATEMENT_COLUMNS)."""
+
+    varchar_columns = {
+        "ts_code", "end_date", "ann_date", "f_ann_date",
+        "available_date", "report_type", "comp_type", "update_flag",
+        "end_type", "ingest_id",
+    }
+    for table, columns in V2_STATEMENT_COLUMNS.items():
+        expected = ", ".join(
+            f"{col} VARCHAR" if col in varchar_columns else f"{col} DOUBLE"
+            for col in columns
+        )
+        assert table in _V2_STATEMENT_DDL, table
+        assert _V2_STATEMENT_DDL[table].endswith(f"({expected})"), table
+
+
+_V2_STATEMENT_DDL: dict[str, str] = {
+    "income_statement_pit": (
+        "CREATE TABLE IF NOT EXISTS income_statement_pit ("
+        "ts_code VARCHAR, end_date VARCHAR, ann_date VARCHAR, "
+        "f_ann_date VARCHAR, available_date VARCHAR, report_type VARCHAR, "
+        "comp_type VARCHAR, update_flag VARCHAR, end_type VARCHAR, "
+        "total_revenue DOUBLE, revenue DOUBLE, oper_cost DOUBLE, "
+        "total_profit DOUBLE, n_income DOUBLE, n_income_attr_p DOUBLE, "
+        "ingest_id VARCHAR)"
+    ),
+    "balance_sheet_pit": (
+        "CREATE TABLE IF NOT EXISTS balance_sheet_pit ("
+        "ts_code VARCHAR, end_date VARCHAR, ann_date VARCHAR, "
+        "f_ann_date VARCHAR, available_date VARCHAR, report_type VARCHAR, "
+        "comp_type VARCHAR, update_flag VARCHAR, end_type VARCHAR, "
+        "total_assets DOUBLE, total_liab DOUBLE, "
+        "total_hldr_eqy_exc_min_int DOUBLE, "
+        "total_hldr_eqy_inc_min_int DOUBLE, ingest_id VARCHAR)"
+    ),
+    "cashflow_statement_pit": (
+        "CREATE TABLE IF NOT EXISTS cashflow_statement_pit ("
+        "ts_code VARCHAR, end_date VARCHAR, ann_date VARCHAR, "
+        "f_ann_date VARCHAR, available_date VARCHAR, report_type VARCHAR, "
+        "comp_type VARCHAR, update_flag VARCHAR, end_type VARCHAR, "
+        "n_cashflow_act DOUBLE, n_cashflow_inv_act DOUBLE, "
+        "n_cash_flows_fnc_act DOUBLE, c_cash_equ_end_period DOUBLE, "
+        "ingest_id VARCHAR)"
+    ),
+}
+
+
 def populate_v2_statement_tables(
     v2_path: Path,
     income_rows: list[dict] | None = None,
@@ -275,33 +326,69 @@ def populate_v2_statement_tables(
 
     v2_path = Path(v2_path)
     v2_path.parent.mkdir(parents=True, exist_ok=True)
-    ddl = {
-        table: (
-            f"CREATE TABLE IF NOT EXISTS {table} ("
-            + ", ".join(f"{col} DOUBLE" if col not in (
-                "ts_code", "end_date", "ann_date", "f_ann_date",
-                "available_date", "report_type", "comp_type", "update_flag",
-                "end_type", "ingest_id",
-            ) else f"{col} VARCHAR" for col in V2_STATEMENT_COLUMNS[table])
-            + ")"
-        )
-        for table in V2_STATEMENT_TABLES.values()
-    }
-    by_table = {
-        "income_statement_pit": list(income_rows or []),
-        "balance_sheet_pit": list(balance_rows or []),
-        "cashflow_statement_pit": list(cashflow_rows or []),
-    }
+    _assert_v2_statement_ddl_matches_columns()
+    income = list(income_rows or [])
+    balance = list(balance_rows or [])
+    cashflow = list(cashflow_rows or [])
     with AshareDB(v2_path) as db:
-        for statement in ddl.values():
-            db.execute(statement)
-        for table, cols in V2_STATEMENT_COLUMNS.items():
-            db.execute(f"DELETE FROM {table}")
-            rows = by_table[table]
-            if rows:
-                frame = pd.DataFrame(rows).reindex(columns=cols)
-                db.register(f"_{table}_rows", frame)
-                db.execute(f"INSERT INTO {table} SELECT * FROM _{table}_rows")
+        # SQL-injection hardening: verbatim statements only — no dynamic
+        # table name ever enters SQL text (the drift guard above pins the
+        # literal column spellings to V2_STATEMENT_COLUMNS).
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS income_statement_pit ("
+            "ts_code VARCHAR, end_date VARCHAR, ann_date VARCHAR, "
+            "f_ann_date VARCHAR, available_date VARCHAR, report_type VARCHAR, "
+            "comp_type VARCHAR, update_flag VARCHAR, end_type VARCHAR, "
+            "total_revenue DOUBLE, revenue DOUBLE, oper_cost DOUBLE, "
+            "total_profit DOUBLE, n_income DOUBLE, n_income_attr_p DOUBLE, "
+            "ingest_id VARCHAR)"
+        )
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS balance_sheet_pit ("
+            "ts_code VARCHAR, end_date VARCHAR, ann_date VARCHAR, "
+            "f_ann_date VARCHAR, available_date VARCHAR, report_type VARCHAR, "
+            "comp_type VARCHAR, update_flag VARCHAR, end_type VARCHAR, "
+            "total_assets DOUBLE, total_liab DOUBLE, "
+            "total_hldr_eqy_exc_min_int DOUBLE, "
+            "total_hldr_eqy_inc_min_int DOUBLE, ingest_id VARCHAR)"
+        )
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS cashflow_statement_pit ("
+            "ts_code VARCHAR, end_date VARCHAR, ann_date VARCHAR, "
+            "f_ann_date VARCHAR, available_date VARCHAR, report_type VARCHAR, "
+            "comp_type VARCHAR, update_flag VARCHAR, end_type VARCHAR, "
+            "n_cashflow_act DOUBLE, n_cashflow_inv_act DOUBLE, "
+            "n_cash_flows_fnc_act DOUBLE, c_cash_equ_end_period DOUBLE, "
+            "ingest_id VARCHAR)"
+        )
+        db.execute("DELETE FROM income_statement_pit")
+        db.execute("DELETE FROM balance_sheet_pit")
+        db.execute("DELETE FROM cashflow_statement_pit")
+        if income:
+            frame = pd.DataFrame(income).reindex(
+                columns=V2_STATEMENT_COLUMNS["income_statement_pit"]
+            )
+            db.register("_income_rows", frame)
+            db.execute(
+                "INSERT INTO income_statement_pit SELECT * FROM _income_rows"
+            )
+        if balance:
+            frame = pd.DataFrame(balance).reindex(
+                columns=V2_STATEMENT_COLUMNS["balance_sheet_pit"]
+            )
+            db.register("_balance_rows", frame)
+            db.execute(
+                "INSERT INTO balance_sheet_pit SELECT * FROM _balance_rows"
+            )
+        if cashflow:
+            frame = pd.DataFrame(cashflow).reindex(
+                columns=V2_STATEMENT_COLUMNS["cashflow_statement_pit"]
+            )
+            db.register("_cashflow_rows", frame)
+            db.execute(
+                "INSERT INTO cashflow_statement_pit "
+                "SELECT * FROM _cashflow_rows"
+            )
     return v2_path
 
 

@@ -317,13 +317,22 @@ class AshareDB:
         if current == expected:
             return
 
-        migration_table = f"{table}__pit_pk_migration"
+        # SQL-injection hardening: DuckDB cannot bind DDL identifiers, so
+        # the migration statements are written out VERBATIM below instead
+        # of interpolating the configured table name into SQL text.  Only
+        # the registered default name is migratable; any other configured
+        # name fails closed here.
+        if table != "constituents":
+            raise ValueError(
+                f"no literal PIT-PK migration statements for table {table!r}: "
+                "extend _ensure_constituents_primary_key with verbatim SQL"
+            )
         self.execute("BEGIN TRANSACTION")
         try:
-            self.execute(f"DROP TABLE IF EXISTS {migration_table}")
+            self.execute("DROP TABLE IF EXISTS constituents__pit_pk_migration")
             self.execute(
-                f"""
-                CREATE TABLE {migration_table} (
+                """
+                CREATE TABLE constituents__pit_pk_migration (
                     index_code VARCHAR,
                     ts_code VARCHAR,
                     in_date VARCHAR,
@@ -333,13 +342,16 @@ class AshareDB:
                 """
             )
             self.execute(
-                f"""
-                INSERT INTO {migration_table}
-                SELECT index_code, ts_code, in_date, out_date FROM {table}
+                """
+                INSERT INTO constituents__pit_pk_migration
+                SELECT index_code, ts_code, in_date, out_date FROM constituents
                 """
             )
-            self.execute(f"DROP TABLE {table}")
-            self.execute(f"ALTER TABLE {migration_table} RENAME TO {table}")
+            self.execute("DROP TABLE constituents")
+            self.execute(
+                "ALTER TABLE constituents__pit_pk_migration "
+                "RENAME TO constituents"
+            )
             self.execute("COMMIT")
         except Exception:
             self.execute("ROLLBACK")

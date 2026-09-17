@@ -463,10 +463,12 @@ def _seed_contract(
 def test_strict_contract_reports_missing_interval_columns(data_config: DataConfig):
     with AshareDB(data_config.duckdb_path) as db:
         db.create_schema(data_config)
-        db.execute(f"DROP TABLE {data_config.constituents_table}")
+        # SQL-injection hardening: verbatim statements for the fixture's
+        # default table name (DuckDB cannot bind DDL identifiers).
+        assert data_config.constituents_table == "constituents"
+        db.execute("DROP TABLE constituents")
         db.execute(
-            f"CREATE TABLE {data_config.constituents_table} "
-            "(index_code VARCHAR, ts_code VARCHAR)"
+            "CREATE TABLE constituents (index_code VARCHAR, ts_code VARCHAR)"
         )
         db.upsert_calendar(
             [{"trade_date": "20240102", "is_open": True}], data_config
@@ -1002,10 +1004,15 @@ def test_sentinel_differences_allowed_from_join_day(tmp_path):
     n_dates = 14
     join_day = 7
     # F's return jumps massively exactly on the join day, so its final
-    # signal ranks top the moment it becomes eligible.
+    # signal ranks top the moment it becomes eligible.  P35 (v4): the
+    # price LEVEL is kept at a one-lot-affordable scale (a 2e6-yuan
+    # open would put a single board lot at 2e8 yuan — beyond the 1e5
+    # test capital — and the share-level engine could then never buy
+    # F, which is lot semantics, not a mask failure); the +100% join
+    # return is ratio-preserved so F still ranks top.
     full, minus, dates, _, _, _ = _sentinel_setup(
         tmp_path, join_day=join_day, n_dates=n_dates,
-        future_opens=[1e6] * join_day + [2e6] * (n_dates - join_day),
+        future_opens=[40.0] * join_day + [80.0] * (n_dates - join_day),
     )
     f_row = _future_row(full)
     base_full = _base_rows(full)

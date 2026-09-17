@@ -224,7 +224,11 @@ def data_end_date(root, config_path):
             return None
         con = duckdb.connect(str(db_path), read_only=True)
         try:
-            row = con.execute("SELECT MAX(trade_date) FROM %s" % table).fetchone()
+            # SQL-injection hardening: the table name goes through the
+            # bound query_table(?) parameter instead of %-interpolation.
+            row = con.execute(
+                "SELECT MAX(trade_date) FROM query_table(?)", [table]
+            ).fetchone()
             return str(row[0]) if row and row[0] else None
         finally:
             con.close()

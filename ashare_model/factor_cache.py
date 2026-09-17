@@ -45,8 +45,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -165,6 +165,16 @@ class FactorCache:
 
     # --- entries -------------------------------------------------------------
 
+    def entry_path(self, identity: FactorCacheIdentity) -> Path:
+        """The store path for ``identity``'s entry — the single layout
+        authority (``<root>/<content-hash>.npz``; put, get and external
+        probes all resolve through this one pathlib construction, no
+        string concatenation into a path component)."""
+
+        return self.root.joinpath(factor_cache_key(identity)).with_suffix(
+            ".npz"
+        )
+
     def put(self, identity: FactorCacheIdentity, tensor: np.ndarray) -> str:
         """Atomically store ``tensor`` under ``identity``'s key and
         return the key.  Concurrent writers converge: each writes its own
@@ -174,12 +184,16 @@ class FactorCache:
         key = factor_cache_key(identity)
         payload = factor_cache_payload(identity)
         self.root.mkdir(parents=True, exist_ok=True)
-        final = self.root / f"{key}.npz"
-        tmp = self.root / (
-            f"{key}.npz.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        # Path-traversal hardening: the cache key is a content hash, the
+        # entry path is built purely through pathlib (see entry_path),
+        # and the write-temp name comes from tempfile's own safe
+        # generator (consumed through the already-open fd).
+        final = self.entry_path(identity)
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            dir=self.root, suffix=".npz.tmp"
         )
         try:
-            with open(tmp, "wb") as handle:
+            with os.fdopen(tmp_fd, "wb") as handle:
                 np.savez(
                     handle,
                     tensor=array,
@@ -190,7 +204,7 @@ class FactorCache:
             # the tmp file keeps every attempt complete and isolated).
             for attempt in range(6):
                 try:
-                    os.replace(tmp, final)
+                    os.replace(tmp_name, final)
                     break
                 except PermissionError:
                     if attempt == 5:
@@ -198,7 +212,7 @@ class FactorCache:
                     time.sleep(0.05 * (attempt + 1))
         except Exception:
             try:
-                tmp.unlink()
+                os.unlink(tmp_name)
             except OSError:
                 pass
             raise
@@ -217,7 +231,7 @@ class FactorCache:
         mismatch, or a rejected cross-key file — the caller recomputes)."""
 
         key = factor_cache_key(identity)
-        path = self.root / f"{key}.npz"
+        path = self.entry_path(identity)
         if not path.is_file():
             self._n_misses += 1
             self.last_outcome = "no_entry"

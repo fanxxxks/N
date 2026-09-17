@@ -236,7 +236,14 @@ def sync_all(
         dates = client.get_trade_calendar()
         # Calendar is a snapshot for the configured range: replace it so
         # stale rows (e.g. a previous business-day fallback) disappear.
-        db.execute(f"DELETE FROM {config.calendar_table}")
+        # SQL-injection hardening: verbatim statement for the registered
+        # default table (any other configured name fails closed).
+        if config.calendar_table != "trade_calendar":
+            raise ValueError(
+                "no literal calendar purge statement for table "
+                f"{config.calendar_table!r}"
+            )
+        db.execute("DELETE FROM trade_calendar")
         db.upsert_calendar(_calendar_rows(dates), config)
         logger.info(f"Trade calendar synced: {len(dates)} days")
         # Latest trade date up to today: future entries in the calendar must

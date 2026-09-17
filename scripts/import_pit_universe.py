@@ -193,7 +193,14 @@ def import_constituents(config) -> dict[str, int]:
         db.create_schema(config)
         # Replace (not merge) the whole table: leftover snapshot rows would
         # overlap the imported intervals and fail the contract.
-        db.execute(f"DELETE FROM {config.constituents_table}")
+        # SQL-injection hardening: verbatim statement for the registered
+        # default table (any other configured name fails closed).
+        if config.constituents_table != "constituents":
+            raise ValueError(
+                "no literal constituents purge statement for table "
+                f"{config.constituents_table!r}"
+            )
+        db.execute("DELETE FROM constituents")
         db.upsert_constituents(frame.to_dict("records"), config)
     print(f"constituents table rebuilt: {len(rows)} intervals")
     return {

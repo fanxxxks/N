@@ -996,19 +996,29 @@ def purge_out_of_scope_fundamentals(db: AshareDB, config) -> dict[str, int]:
     removes nothing.  Returns measured before/after counts.
     """
 
+    # SQL-injection hardening: DuckDB cannot bind DDL/DML table names, so
+    # the statements below are verbatim for the registered default table
+    # (any other configured name fails closed) and the scope list goes
+    # through a bound parameter instead of string quoting.
+    if config.fundamentals_table != "fundamental_pit":
+        raise ValueError(
+            "no literal purge statements for fundamentals table "
+            f"{config.fundamentals_table!r}"
+        )
     scope = persisted_scope_codes(db, config)
     before = int(
-        db.query(f"SELECT count(*) AS n FROM {config.fundamentals_table}")["n"].iloc[0]
+        db.query("SELECT count(*) AS n FROM fundamental_pit")["n"].iloc[0]
     )
     if scope:
         db.execute(
-            f"DELETE FROM {config.fundamentals_table} "
-            f"WHERE ts_code NOT IN ({sql_quoted_list(sorted(scope))})"
+            "DELETE FROM fundamental_pit "
+            "WHERE ts_code NOT IN (SELECT unnest(?))",
+            [sorted(scope)],
         )
     else:
-        db.execute(f"DELETE FROM {config.fundamentals_table}")
+        db.execute("DELETE FROM fundamental_pit")
     after = int(
-        db.query(f"SELECT count(*) AS n FROM {config.fundamentals_table}")["n"].iloc[0]
+        db.query("SELECT count(*) AS n FROM fundamental_pit")["n"].iloc[0]
     )
     return {"removed_rows": before - after, "rows_before": before, "rows_after": after}
 

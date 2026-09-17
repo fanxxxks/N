@@ -31,15 +31,14 @@ def identity_store(tmp_path):
         "CREATE TABLE industry_membership_pit (available_date VARCHAR)"
     )
     con.execute("INSERT INTO industry_membership_pit VALUES ('20260821')")
-    for table in (
-        "income_statement_pit",
-        "balance_sheet_pit",
-        "cashflow_statement_pit",
-    ):
-        con.execute(
-            f"CREATE TABLE {table} (available_date VARCHAR)"
-        )
-        con.execute(f"INSERT INTO {table} VALUES ('20260630')")
+    # SQL-injection hardening: verbatim statements (no dynamic table
+    # name in SQL text).
+    con.execute("CREATE TABLE income_statement_pit (available_date VARCHAR)")
+    con.execute("INSERT INTO income_statement_pit VALUES ('20260630')")
+    con.execute("CREATE TABLE balance_sheet_pit (available_date VARCHAR)")
+    con.execute("INSERT INTO balance_sheet_pit VALUES ('20260630')")
+    con.execute("CREATE TABLE cashflow_statement_pit (available_date VARCHAR)")
+    con.execute("INSERT INTO cashflow_statement_pit VALUES ('20260630')")
     con.close()
     return path
 
@@ -143,18 +142,41 @@ def test_loader_load_reuses_cached_tensor(populated_db):
     def ensure_marker_table(table: str) -> None:
         """Create a minimal marker table only when the fixture's v2 store
         does not already carry the real one (the derivation reads
-        COUNT/MAX(available_date), so an existing table needs no rows)."""
+        COUNT/MAX(available_date), so an existing table needs no rows).
+        SQL-injection hardening: verbatim statements per allowed name
+        (DuckDB cannot bind DDL identifiers)."""
 
         exists = con.execute(
             "SELECT COUNT(*) FROM information_schema.tables "
             "WHERE table_schema='main' AND table_name = ?",
             [table],
         ).fetchone()[0]
-        if not exists:
+        if exists:
+            return
+        if table == "industry_membership_pit":
             con.execute(
-                f"CREATE TABLE {table} (available_date VARCHAR)"
+                "CREATE TABLE industry_membership_pit (available_date VARCHAR)"
             )
-            con.execute(f"INSERT INTO {table} VALUES ('20260101')")
+            con.execute(
+                "INSERT INTO industry_membership_pit VALUES ('20260101')"
+            )
+        elif table == "income_statement_pit":
+            con.execute(
+                "CREATE TABLE income_statement_pit (available_date VARCHAR)"
+            )
+            con.execute("INSERT INTO income_statement_pit VALUES ('20260101')")
+        elif table == "balance_sheet_pit":
+            con.execute(
+                "CREATE TABLE balance_sheet_pit (available_date VARCHAR)"
+            )
+            con.execute("INSERT INTO balance_sheet_pit VALUES ('20260101')")
+        elif table == "cashflow_statement_pit":
+            con.execute(
+                "CREATE TABLE cashflow_statement_pit (available_date VARCHAR)"
+            )
+            con.execute("INSERT INTO cashflow_statement_pit VALUES ('20260101')")
+        else:
+            raise ValueError(f"unknown marker table: {table!r}")
 
     for table in (
         "industry_membership_pit",
