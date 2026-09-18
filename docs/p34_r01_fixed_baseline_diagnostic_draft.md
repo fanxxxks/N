@@ -189,6 +189,48 @@ NEEDS_REVISION）裁定的修复全部在本契约冻结语义内，无研究语
 - **C5**（合规审建议采纳）驱动对 `--contract-sha256` 与已提交契约文件自校验，
   不匹配先于昂贵计算拒绝——provenance 从自证变为自验。
 
+**Rev 3（WP3 报告补齐，先于实现 commit）**：用户 2026-09-18 直接指令「完成
+工作包 3：补齐 R01 报告，并按修正后的执行版本重跑固定基线。范围：
+r01_baseline.py、eval_metrics.py、报告与相关测试」批准。**全部为报告与
+可观测性扩展，研究语义零变化**：
+
+- §3.2 臂、方向规则、§3.3 成本档、§3.7 裁决规则与阈值**逐字冻结**；
+  `summarize_arms` 既有字段（裁决消费的 fold 均值统计）保持原名原义。
+  组合构造保持**原始截面秩**（`reward._rankdata`）：不同成员覆盖数产生
+  不同秩尺度是已披露的既有形态；百分位标准化属新定义，另立包独立验证，
+  本包禁止实施。
+- 报告必含缺口补齐（§3.4 原文已要求、实现缺失的部分）：逐 fold 年度分解
+  与跨折中位数/最小/最大；**跨折拼接指标**——每 (臂,档) 按时间序拼接
+  daily 序列后计算 total/annual/Sharpe/maxDD/超额/**active IR**（拼接
+  IR 不得用平均年度 IR 代替；两种统计并列呈现、分别命名，§3.7 裁决继续
+  消费冻结的 fold 均值统计）。拼接复用 `eval_metrics.stitch_oos_series`
+  唯一权威（按档过滤行集，无第二套拼接实现）。
+- 行级附加可观测字段（`evaluate_signal` additive，既有字段逐位不变）：
+  `oos_active_ir`（测试窗 active IR，区别于 scorer 的训练窗 `active_ir`）
+  与执行漏斗计数——应调仓中信号退化/目标稳定/全额抑制/部分抑制会话数、
+  计划订单数 vs 引擎成交订单数（含买卖拆分）、计划 vs 成交换手、
+  抑制原因拆分（threshold vs min_trade）、持仓状态（最小持仓、零持仓
+  会话数、最小投入比例）。目的：**正常低换手**（目标≈当前，无需订单）
+  与**订单被抑制**（需要交易但被阈值/最小交易额/现金上限/涨跌停/停牌
+  挡下）可区分。数据源为既有构造器诊断与引擎结果，零引擎改动。
+- 报告级新增块：`data_completeness`（loader 帧类型化状态、缺失交易日、
+  完整/不完整状态与原因）；每臂**描述性四向诊断**
+  （`measurement_incomplete` / `weak_signal`（0x 拼接超额≤0 或 0x 拼接
+  active IR≤0）/ `execution_blocked`（漏斗证据：全额抑制占比>10% 或
+  订单未成交率>10% 或 有毛超额而投入比例<0.5）/ `cost_swallowed`
+  （0x 为正而 1x 拼接超额≤0）），阈值冻结于报告 `diagnostic_rules` 内
+  自描述；该分类是**描述性归因**，不是 §3.7 裁决，二者并列不互替。
+- `engine_version_attribution` 块：记录 EXECUTION_SPEC_VERSION（=4，
+  p35 股数基记账）与构造器版本；如实记录「不存在旧执行版本基线数字」
+  （WP0 收口 §6.3：p35 前引擎数字不可作参数选择依据且从未产出），因此
+  无旧版-新版数值归因可计算——记录该事实而非伪造对比。
+- `R01_REPORT_SCHEMA_VERSION` 1→2（测量产物内部版本，非 artifact_schemas
+  消费者；v1 报告从未产出，无迁移面）。基准行失败时该折标记
+  `benchmark_missing` 并计入 measurement_incomplete。
+- 重跑：以本 Rev 3 契约实时 sha 印签，按当前数据身份与 exec v4 重跑
+  固定基线；若 §5.1 数据资格仍因类型化降级 fail-closed 拒绝，按契约
+  §7 落 REJECTED 诚实终态——「测量不完整」即四向诊断之一的真实落点。
+
 报告 schema v1 的字段修正发生在无任何真实消费者阶段（与 §4 数据报告同理由）。
 版本影响表其余行不变。
 
@@ -215,7 +257,7 @@ NEEDS_REVISION）裁定的修复全部在本契约冻结语义内，无研究语
 | `RUNSPEC_SCHEMA_VERSION` | 2 | 不变 | 无新 spec 字段 |
 | `LIFECYCLE_CONTRACT_VERSION` | 2 | 不变 | 状态集/边/裁决规则零变化；§5.1 类型化字段是契约原文要求的补全，验证器裁决规则不变 |
 | 数据报告 `report_schema_version` | 1 | 1（payload 字段升级） | v1 从无真实通过者；实现 commit 举证 |
-| R01 报告 artifact | — | `r01_report_schema_version=1`（新测量产物，非 artifact_schemas 消费者） | 属测量目录产物（tier_report/p3_measurement 同型）；不进入晋级证据链，兼容性权威不适用，特此说明 |
+| R01 报告 artifact | — | `r01_report_schema_version=1`（新测量产物，非 artifact_schemas 消费者） | 属测量目录产物（tier_report/p3_measurement 同型）；不进入晋级证据链，兼容性权威不适用，特此说明。**Rev 3（WP3）：1→2**——报告补齐（拼接指标/年度分布/漏斗/状态/四向诊断/版本归因）；v1 从未产出，无迁移面 |
 
 ## 5 预期 RED 测试（实现前失败）
 
