@@ -39,7 +39,10 @@ from typing import Any
 
 import numpy as np
 
-from ashare_data.gates import ProductionGateRunner
+from ashare_data.gates import (
+    ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+    ProductionGateRunner,
+)
 
 #: Report artifact schema (measurement artifact; not an
 #: ``artifact_schemas`` consumer — see p34 §4 version impact table).
@@ -697,20 +700,6 @@ def run_r01_baseline(
     reward_config = make_reward_config(raw)
     proto_cfg = make_protocol_config(raw)
 
-    # -- formal gates BEFORE anything expensive (evaluation-entry order).
-    gate_result = ProductionGateRunner(
-        data_config, min_eligible=min_eligible
-    ).run(mode="formal")
-    if not gate_result.ok:
-        failed = [
-            f"{check.name} ({check.detail})"
-            for check in gate_result.checks
-            if not check.ok
-        ]
-        raise R01Refusal(
-            "production gate check failed (p34 §7): " + "; ".join(failed)
-        )
-
     # -- A02/A03: identity confirm → frozen spec → open run.
     loader = AshareDataLoader(data_config, model_config)
     loader.confirm_input_snapshot()
@@ -722,6 +711,7 @@ def run_r01_baseline(
     spec = resolve_runtime_runspec(
         dataset_id=loader.dataset_id,
         data_cutoff=loader.frozen_data_cutoff(),
+        purpose="historical_research",
         data_config=data_config,
         backtest_config=backtest_config,
         requested_budget=max(1, proto_cfg.screening.steps * proto_cfg.screening.batch_size),
@@ -733,6 +723,28 @@ def run_r01_baseline(
         repo_root=root,
         require_clean_tree=require_clean_tree,
     )
+
+    # -- formal gates on the frozen snapshot's own timeline (P36): the
+    # G1–G7 audit is unchanged; G8 measures the primary daily window
+    # against the snapshot cutoff, so the same confirmed snapshot
+    # qualifies identically on any run day.  Missing bars at the snapshot
+    # window end still refuse (p34 §7 refusal semantics preserved).
+    gate_result = ProductionGateRunner(
+        data_config, min_eligible=min_eligible
+    ).run(
+        mode="formal",
+        purpose=ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+        snapshot_cutoff=spec.data_cutoff,
+    )
+    if not gate_result.ok:
+        failed = [
+            f"{check.name} ({check.detail})"
+            for check in gate_result.checks
+            if not check.ok
+        ]
+        raise R01Refusal(
+            "production gate check failed (p34 §7): " + "; ".join(failed)
+        )
     store = RunStore(data_config.data_dir)
     handle = store.open_run(spec)
     run_id = handle.run_id

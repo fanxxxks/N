@@ -587,7 +587,10 @@ def main() -> None:
         make_model_config,
         make_sim_config,
     )
-    from ashare_data.gates import ProductionGateRunner
+    from ashare_data.gates import (
+        ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+        ProductionGateRunner,
+    )
     from ashare_data.manifest import check_dataset_id
     from .artifact_schemas import BacktestResultArtifact
     from .artifact_writer import write_boundary_artifact
@@ -660,7 +663,6 @@ def main() -> None:
             },
         )
         data_config = make_data_config(raw, root)
-        ProductionGateRunner(data_config, min_eligible=args.min_eligible).require_production()
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         sim_config = make_sim_config(raw, root)
@@ -682,6 +684,15 @@ def main() -> None:
             from .lifecycle import RunStoreError
             from .artifact_writer import assert_registered_boundary_artifact
 
+            # P36: the formal backtest gates on the source spec's frozen
+            # snapshot timeline — same snapshot, same eligibility, any run
+            # day; missing bars at the snapshot window end still refuse.
+            ProductionGateRunner(
+                data_config, min_eligible=args.min_eligible
+            ).require_production(
+                purpose=ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+                snapshot_cutoff=source_spec.data_cutoff,
+            )
             try:
                 # A03 (p27 I7 read side): the convenience mirror is a
                 # cache — the consumed strategy must be the source run's
@@ -703,6 +714,12 @@ def main() -> None:
                 )
             except (LifecycleError, RunStoreError) as exc:
                 raise SystemExit(f"backtest: {exc}")
+        else:
+            # P36: the non-formal paths keep the online (wall-clock) gate —
+            # no frozen snapshot identity to derive a historical basis from.
+            ProductionGateRunner(
+                data_config, min_eligible=args.min_eligible
+            ).require_production()
         loader = AshareDataLoader(data_config, model_config)
         loader.load_data()
 

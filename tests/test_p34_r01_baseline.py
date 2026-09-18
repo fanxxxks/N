@@ -314,15 +314,41 @@ def gate_run_asof(monkeypatch):
     """Inject the G8 evaluation day through the p16-reserved ``today=``
     seam (the same pattern as the conftest ``production_gate_asof``
     fixture, applied to ``run`` — the driver is a production caller and
-    never passes ``today`` itself)."""
+    never passes ``today`` itself).  P36: only the ONLINE basis is
+    era-injected; historical basis calls keep their snapshot-derived day
+    (their determinism comes from the frozen cutoff)."""
 
     def _install(era: str):
-        from ashare_data.gates import ProductionGateRunner
+        from ashare_data.gates import (
+            ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+            ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION,
+            ProductionGateRunner,
+        )
 
         real = ProductionGateRunner.run
 
-        def patched(self, *, mode="dev", today=None):
-            return real(self, mode=mode, today=today or era)
+        def patched(
+            self,
+            *,
+            mode="dev",
+            today=None,
+            purpose=ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION,
+            snapshot_cutoff=None,
+        ):
+            if purpose == ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH:
+                return real(
+                    self,
+                    mode=mode,
+                    purpose=purpose,
+                    snapshot_cutoff=snapshot_cutoff,
+                )
+            return real(
+                self,
+                mode=mode,
+                today=today or era,
+                purpose=purpose,
+                snapshot_cutoff=snapshot_cutoff,
+            )
 
         monkeypatch.setattr(ProductionGateRunner, "run", patched)
 
@@ -343,6 +369,8 @@ def _mini_spec(mini_env, require_clean_tree=False):
     spec = resolve_runtime_runspec(
         dataset_id=loader.dataset_id,
         data_cutoff=loader.frozen_data_cutoff(),
+        # P36: mirrors the R01 driver's declared purpose.
+        purpose="historical_research",
         data_config=data_config,
         backtest_config=backtest_config,
         requested_budget=512,

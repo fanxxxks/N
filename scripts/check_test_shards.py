@@ -112,6 +112,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_p27_a03_lifecycle_runcontext.py",
         "test_p30_a05_doctor_eligibility.py",
         "test_p34_r01_baseline.py",
+        "test_p36_purpose_eligibility_separation.py",
         "test_p4_admission_diagnostics.py",
         "test_p4_elite_imitation.py",
         "test_p4_search_contract.py",

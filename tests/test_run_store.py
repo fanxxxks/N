@@ -54,6 +54,7 @@ def _spec() -> "object":
     return build_runspec(
         dataset_id="ds-store-0001",
         data_cutoff="20241231",
+        purpose="historical_research",
         frequency="daily",
         target="forward_return",
         horizon=1,

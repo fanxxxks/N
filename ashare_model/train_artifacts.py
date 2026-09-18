@@ -179,6 +179,34 @@ def _artifact_output(
     return _json_telemetry_value(output)
 
 
+def _nonformal_strategy_spec(trainer, *, searcher: str, seed: int, requested_budget: int):
+    """The P8-05 frozen RunSpec for the explicitly declared non-formal
+    modes (the context-less writer path): a training preregistration is
+    a historical-window research plan, so its declared eligibility
+    purpose is ``historical_research`` (P36) — judged on the snapshot's
+    own timeline."""
+
+    return resolve_runtime_runspec(
+        dataset_id=trainer.loader.dataset_id,
+        data_cutoff=trainer.loader.dates[-1],
+        purpose="historical_research",
+        data_config=trainer.data_config,
+        backtest_config=trainer.backtest_config,
+        requested_budget=int(requested_budget),
+        # Training evaluates a single validation tail; the campaign's
+        # fold plan is carried by the protocol run's own spec.
+        n_folds=1,
+        research_domain=trainer.domain_id,
+        seeds=tuple(sorted({int(trainer.init_seed), int(seed)})),
+        searcher=searcher,
+        max_formula_len=int(trainer.model_config.max_formula_len),
+        # The clean-tree SPEC_LOCKED evidence gate activates with the
+        # lifecycle stages (P8-06+); the spec still records the exact
+        # git commit and dependency-lock hash.
+        require_clean_tree=False,
+    )
+
+
 def _persist_strategy_artifact(
     trainer,
     output: dict,
@@ -218,23 +246,11 @@ def _persist_strategy_artifact(
     else:
         # P8-05 path for the explicitly declared non-formal modes:
         # resolve the frozen RunSpec here and open a fresh run.
-        spec = resolve_runtime_runspec(
-            dataset_id=trainer.loader.dataset_id,
-            data_cutoff=trainer.loader.dates[-1],
-            data_config=trainer.data_config,
-            backtest_config=trainer.backtest_config,
-            requested_budget=int(requested_budget),
-            # Training evaluates a single validation tail; the campaign's
-            # fold plan is carried by the protocol run's own spec.
-            n_folds=1,
-            research_domain=trainer.domain_id,
-            seeds=tuple(sorted({int(trainer.init_seed), int(seed)})),
+        spec = _nonformal_strategy_spec(
+            trainer,
             searcher=searcher,
-            max_formula_len=int(trainer.model_config.max_formula_len),
-            # The clean-tree SPEC_LOCKED evidence gate activates with the
-            # lifecycle stages (P8-06+); the spec still records the exact
-            # git commit and dependency-lock hash.
-            require_clean_tree=False,
+            seed=seed,
+            requested_budget=requested_budget,
         )
         store_handle = RunStore(trainer.data_config.data_dir).open_run(spec)
     cand = candidate_id(spec.spec_id, trainer.best_tokens, output["direction"])

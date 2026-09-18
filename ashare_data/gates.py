@@ -19,7 +19,13 @@ gates with the strict PIT universe contract into one auditable check list:
 * G8  daily bars are fresh: the bar window ends within
        ``FRESHNESS_TOLERANCE_SESSIONS`` open sessions of the most recent
        completed open session (p16 data-freshness contract; lag counts
-       open sessions, never calendar days)
+       open sessions, never calendar days).  P36: the evaluation day —
+       and therefore "the most recent completed open session" — follows
+       the declared eligibility purpose: online observation (default)
+       evaluates against the wall clock; historical research evaluates
+       against the run identity's frozen ``data_cutoff``
+       (``snapshot_as_of_day``), so the same snapshot earns the same
+       eligibility on any run day.
 
 Modes:
 
@@ -35,6 +41,7 @@ Modes:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -55,6 +62,48 @@ from .universe import (
 )
 
 MIN_ELIGIBLE_DEFAULT = 100
+
+# p36 §3.1: the two data-eligibility purposes and the snapshot as-of
+# derivation — the single authority both gates (G8) and the model layer's
+# D7 checks consume; no second copy anywhere else.
+ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH = "historical_research"
+ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION = "online_observation"
+ELIGIBILITY_PURPOSES = frozenset(
+    {
+        ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+        ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION,
+    }
+)
+
+# G8 detail tokens (p36 §2.6 — the recorded basis is auditable evidence).
+_BASIS_ONLINE_WALL_CLOCK = "online_wall_clock"
+_BASIS_HISTORICAL_SNAPSHOT = "historical_snapshot"
+
+
+def _shanghai_today() -> str:
+    """The online basis's evaluation day (p16 §2.1, unchanged)."""
+
+    return pd.Timestamp.now(tz=_SHANGHAI).strftime("%Y%m%d")
+
+
+def snapshot_as_of_day(data_cutoff: str) -> str:
+    """The historical basis's evaluation day (p36 §1): the calendar day
+    after the run identity's frozen ``data_cutoff``.  ``data_cutoff`` is
+    itself an open session (the loader freezes it as the last calendar
+    session at or before the confirmed v2 bar max), so the G8 reference —
+    the last open session strictly before this day — is exactly the
+    cutoff session and an internally consistent snapshot measures
+    lag 0."""
+
+    text = str(data_cutoff)
+    try:
+        day = datetime.strptime(text, "%Y%m%d")
+    except ValueError as exc:
+        raise ValueError(
+            f"snapshot_cutoff {data_cutoff!r} must be a valid YYYYMMDD "
+            f"date (p36 §3.2): {exc}"
+        ) from exc
+    return (day + timedelta(days=1)).strftime("%Y%m%d")
 
 # p16 §2.1: how many open sessions the daily-bar window may lag behind the
 # most recent completed open session.  Deployment tuning knob (constructor
@@ -209,26 +258,66 @@ class ProductionGateRunner:
             else int(freshness_tolerance)
         )
 
-    def run(self, mode: str = "formal", *, today: str | None = None) -> GateResult:
+    def run(
+        self,
+        mode: str = "formal",
+        *,
+        today: str | None = None,
+        purpose: str = ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION,
+        snapshot_cutoff: str | None = None,
+    ) -> GateResult:
         """Execute all gates and return the auditable result.
 
         ``run`` itself never raises: formal callers inspect ``result.ok``
         (or use :meth:`require_production`, which raises on failure); dev
         callers get a degraded result instead of an exception.
 
-        ``today`` is a test-only injection of the G8 evaluation day (p16
-        §2.1); production callers never pass it, and no config surface
-        can override it — that would be a bypass, not an injection.
+        G8's evaluation day follows the declared eligibility purpose
+        (p36 §3.2).  ``purpose="online_observation"`` (the default — the
+        stricter, rejecting direction) evaluates against the wall clock;
+        ``today`` remains its test-only injection seam (p16 §2.1) and
+        production callers never pass it.  ``purpose="historical_research"``
+        requires ``snapshot_cutoff`` (the run identity's frozen
+        ``data_cutoff``) and derives the evaluation day through
+        :func:`snapshot_as_of_day` — never reading the wall clock, so the
+        same snapshot earns the same eligibility on any run day.  Mixing
+        the two bases is refused, and no config surface can override the
+        evaluation day — that would be a bypass, not an injection.
         """
 
         if mode not in ("formal", "dev"):
             raise ValueError(f"unknown gate mode {mode!r}; expected 'formal' or 'dev'")
+        if purpose not in ELIGIBILITY_PURPOSES:
+            raise ValueError(
+                f"unknown eligibility purpose {purpose!r}; expected one of "
+                f"{sorted(ELIGIBILITY_PURPOSES)} (p36 §3.2)"
+            )
+        if purpose == ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH:
+            if snapshot_cutoff is None:
+                raise ValueError(
+                    "purpose='historical_research' requires snapshot_cutoff: "
+                    "the run identity's frozen data cutoff (p36 §2.5)"
+                )
+            if today is not None:
+                raise ValueError(
+                    "the today injection belongs to the online basis; the "
+                    "historical basis derives its evaluation day from "
+                    "snapshot_cutoff (p36 §2.5)"
+                )
+            evaluation_day = snapshot_as_of_day(snapshot_cutoff)
+            basis = _BASIS_HISTORICAL_SNAPSHOT
+        else:
+            if snapshot_cutoff is not None:
+                raise ValueError(
+                    "purpose='online_observation' takes no snapshot_cutoff: "
+                    "online freshness is judged against the wall clock "
+                    "(p36 §2.5)"
+                )
+            evaluation_day = today if today is not None else _shanghai_today()
+            basis = _BASIS_ONLINE_WALL_CLOCK
         dev = mode == "dev"
         checks: list[GateCheck] = []
         status: UniverseContractStatus | None = None
-        evaluation_day = (
-            today if today is not None else pd.Timestamp.now(tz=_SHANGHAI).strftime("%Y%m%d")
-        )
 
         with AshareDB(self.config.duckdb_path, read_only=True) as db:
             constituents = db.query(f"SELECT * FROM {self.config.constituents_table}")
@@ -386,12 +475,17 @@ class ProductionGateRunner:
             ),
         ))
 
-        # G8: data freshness (p16) — the daily-bar window must end within
-        # the open-session tolerance of the most recent completed open
-        # session.  Sources: daily_bar max(trade_date), trade_calendar
-        # open sessions strictly before the evaluation day, and the
-        # evaluation day itself.  Fail-closed boundaries (no daily rows,
-        # no reference session, exhausted calendar horizon) never pass.
+        # G8: data freshness (p16; evaluation day by purpose, p36 §3) —
+        # the daily-bar window must end within the open-session tolerance
+        # of the most recent completed open session.  Sources: daily_bar
+        # max(trade_date), trade_calendar open sessions strictly before
+        # the evaluation day, and the evaluation day itself.  Fail-closed
+        # boundaries (no daily rows, no reference session, exhausted
+        # calendar horizon) never pass; the horizon-exhaustion guard is
+        # an online-basis defense only (p36 §3.3) — the historical
+        # reference is the cutoff session, interior to the calendar by
+        # construction, so a cutoff at the calendar's last pre-listed
+        # session is a legitimate snapshot.
         with AshareDB(self.config.duckdb_path, read_only=True) as db:
             open_sessions = db.query(
                 f"SELECT trade_date FROM {self.config.calendar_table} "
@@ -417,7 +511,10 @@ class ProductionGateRunner:
                 f"no open calendar session strictly before today "
                 f"{evaluation_day}: no usable reference"
             )
-        elif calendar_max_open is None or calendar_max_open < evaluation_day:
+        elif calendar_max_open is None or (
+            basis == _BASIS_ONLINE_WALL_CLOCK
+            and calendar_max_open < evaluation_day
+        ):
             g8_reason = (
                 f"calendar pre-listed horizon exhausted: max open session "
                 f"{calendar_max_open} < today {evaluation_day}"
@@ -429,13 +526,21 @@ class ProductionGateRunner:
         g8_ok = (
             g8_reason is None and lag is not None and lag <= self.freshness_tolerance
         )
+        basis_detail = (
+            f"basis={_BASIS_HISTORICAL_SNAPSHOT}, data_cutoff={snapshot_cutoff}"
+            if basis == _BASIS_HISTORICAL_SNAPSHOT
+            else f"basis={_BASIS_ONLINE_WALL_CLOCK}"
+        )
         if g8_reason is not None:
-            g8_detail = f"{g8_reason}; today={evaluation_day}"
+            g8_detail = (
+                f"{g8_reason}; today={evaluation_day}; {basis_detail}"
+            )
         else:
             g8_detail = (
                 f"daily {daily_max} vs reference {reference}, "
                 f"lag={lag} {'<=' if g8_ok else '>'} "
-                f"N={self.freshness_tolerance}, today={evaluation_day}"
+                f"N={self.freshness_tolerance}, today={evaluation_day}; "
+                f"{basis_detail}"
             )
         checks.append(GateCheck(
             "G8 daily bars fresh within the open-session tolerance",
@@ -458,14 +563,25 @@ class ProductionGateRunner:
         return result
 
     def require_production(
-        self, *, today: str | None = None
+        self,
+        *,
+        today: str | None = None,
+        purpose: str = ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION,
+        snapshot_cutoff: str | None = None,
     ) -> UniverseContractStatus:
         """Formal entry: run every gate and raise on any failure.
 
-        ``today`` mirrors :meth:`run` — test-only injection of the G8
-        evaluation day; production callers never pass it.
+        ``today``/``purpose``/``snapshot_cutoff`` mirror :meth:`run` —
+        ``today`` is the online basis's test-only injection seam; the
+        historical basis comes from the run identity's frozen
+        ``data_cutoff`` via ``snapshot_cutoff`` (p36 §3.2).
         """
-        result = self.run(mode="formal", today=today)
+        result = self.run(
+            mode="formal",
+            today=today,
+            purpose=purpose,
+            snapshot_cutoff=snapshot_cutoff,
+        )
         if not result.ok:
             failures = [
                 f"{check.name} ({check.detail})" for check in result.checks if not check.ok

@@ -36,6 +36,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ashare_data.gates import (
+    ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+    ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION,
+    ELIGIBILITY_PURPOSES,
+)
 from ashare_model.identity import content_hash, sha256_hex
 
 # A02 (p26 §4.2, captain ruling 1): 1 -> 2. The dataset identity carried by
@@ -44,7 +49,13 @@ from ashare_model.identity import content_hash, sha256_hex
 # generation), so a v1 spec and a v2 spec are not interchangeable evidence.
 # Old specs stay readable for audit but are refused as lineage sources
 # (``require_current_schema`` + exact round-trip), never silently reused.
-RUNSPEC_SCHEMA_VERSION = 2
+# P36: 2 -> 3. The data-eligibility purpose becomes a required, identity-
+# bearing field (``RunSpec.purpose``): the eligibility evaluation basis is
+# derived from the frozen identity instead of the ambient wall clock, so
+# v2 and v3 specs are different evidence generations — a v2 payload (no
+# purpose) fails validation and is refused as a lineage source under the
+# same audit-only policy (p27 §8 anticipated the spec_id change).
+RUNSPEC_SCHEMA_VERSION = 3
 
 _SPEC_ID_KIND = "runspec"
 _KNOWN_SEARCHERS = ("gp", "tpe", "random", "rl")
@@ -358,6 +369,7 @@ def resolve_runtime_runspec(
     *,
     dataset_id: str,
     data_cutoff: str,
+    purpose: str,
     data_config,
     backtest_config,
     requested_budget: int,
@@ -378,7 +390,8 @@ def resolve_runtime_runspec(
     authority, thresholds from the promotion/gate authorities, and the
     governing contract hash from the lifecycle contract document. Formal
     entry points call this once per run and open their RunStore run with
-    the result.
+    the result.  ``purpose`` (P36) is required and never defaulted — the
+    caller declares which eligibility timeline the run is judged on.
     """
 
     from ashare_portfolio.execution_spec import portfolio_config_provenance
@@ -393,6 +406,7 @@ def resolve_runtime_runspec(
     return build_runspec(
         dataset_id=dataset_id,
         data_cutoff=_d8(data_cutoff),
+        purpose=purpose,
         research_domain=research_domain,
         frequency=str(backtest_config.rebalance_frequency),
         target=target,
@@ -453,7 +467,7 @@ class RunSpec(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    runspec_schema_version: Literal[2] = RUNSPEC_SCHEMA_VERSION
+    runspec_schema_version: Literal[3] = RUNSPEC_SCHEMA_VERSION
 
     # data identity
     dataset_id: str = Field(min_length=1)
@@ -485,6 +499,16 @@ class RunSpec(BaseModel):
     snapshot_publication_version: str | None = None
 
     # research semantics
+    # P36: the data-eligibility purpose — which timeline the run's G8/D7
+    # eligibility is judged on (the snapshot's own for historical
+    # research; the wall clock for online observation).  Required and
+    # identity-bearing: a wrong silent default would be a wrong
+    # eligibility basis.  Values come from the single authority
+    # ``ashare_data.gates.ELIGIBILITY_PURPOSES``.
+    purpose: Literal[
+        ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+        ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION,
+    ]
     research_domain: str = Field(min_length=1)
     frequency: str = Field(min_length=1)
     target: str = Field(min_length=1)
@@ -592,6 +616,7 @@ def build_runspec(
     *,
     dataset_id: str,
     data_cutoff: str,
+    purpose: str,
     frequency: str,
     target: str,
     horizon: int,
@@ -615,7 +640,9 @@ def build_runspec(
     """Resolve every default explicitly and freeze the pre-registered spec.
 
     All semantic fields end up with a concrete resolved value — no field
-    may enter the spec_id as an unresolved default. Provenance (git
+    may enter the spec_id as an unresolved default; ``purpose`` (P36) is
+    required and validated against the closed purpose vocabulary — the
+    eligibility basis must be declared, never defaulted. Provenance (git
     commit, dependency-lock hash) is captured from ``repo_root`` (default:
     this repository); a dirty *tracked* tree is rejected fail-closed while
     untracked files are tolerated.
@@ -628,6 +655,11 @@ def build_runspec(
 
     if not isinstance(dataset_id, str) or not dataset_id.strip():
         raise ValueError("dataset_id must be a non-empty string")
+    if purpose not in ELIGIBILITY_PURPOSES:
+        raise ValueError(
+            f"unknown purpose {purpose!r}; the data-eligibility purpose "
+            f"must be one of {sorted(ELIGIBILITY_PURPOSES)} (p36 §2.1)"
+        )
     if not isinstance(research_domain, str) or not research_domain.strip():
         raise ValueError("research_domain must be a non-empty string")
     if research_domain != UNIFIED_DOMAIN_ID:
@@ -709,6 +741,7 @@ def build_runspec(
         data_cutoff=data_cutoff,
         universe_policy=universe_policy,
         **versions,
+        purpose=purpose,
         research_domain=research_domain,
         frequency=str(frequency),
         target=str(target),

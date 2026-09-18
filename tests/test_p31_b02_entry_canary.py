@@ -327,6 +327,8 @@ def _freeze_spec(data_config, model_config, backtest_config):
     spec = resolve_runtime_runspec(
         dataset_id=loader.dataset_id,
         data_cutoff=loader.frozen_data_cutoff(),
+        # P36: mirrors establish_formal_run_context's declared purpose.
+        purpose="historical_research",
         data_config=data_config,
         backtest_config=backtest_config,
         requested_budget=max(1, 2 * 8),

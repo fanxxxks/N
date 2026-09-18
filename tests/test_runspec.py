@@ -41,6 +41,8 @@ CANONICAL_PORTFOLIO = portfolio_config_provenance(BacktestConfig())
 BASE_KWARGS = dict(
     dataset_id="ds-test-0001",
     data_cutoff="20241231",
+    # P36: the required identity purpose (tests build research specs).
+    purpose="historical_research",
     research_domain="unified",
     frequency="daily",
     target="forward_return",
@@ -88,9 +90,11 @@ def _build(**overrides):
 def test_schema_version_is_pinned():
     # A02 (p26 §4.2, captain ruling 1): 1 -> 2 — the dataset identity a frozen
     # spec carries changed meaning (latest saved id -> content-confirmed
-    # composite snapshot identity). Literal pin by design: the next bump must
-    # be an explicit, reviewed act.
-    assert RUNSPEC_SCHEMA_VERSION == 2
+    # composite snapshot identity). P36: 2 -> 3 — the required identity
+    # purpose (data-eligibility timeline) joins the spec_id; a v2 payload
+    # no longer validates (audit-only). Literal pin by design: the next bump
+    # must be an explicit, reviewed act.
+    assert RUNSPEC_SCHEMA_VERSION == 3
     assert _build().runspec_schema_version == RUNSPEC_SCHEMA_VERSION
 
 
@@ -339,10 +343,11 @@ def test_a02_version_chain_wired_into_the_version_registry():
         "SNAPSHOT_PUBLICATION_VERSION",
     )
     # Deliberate pins: bumping either generation must be an explicit,
-    # reviewed act (AGENTS §3.2), never a silent re-index.
+    # reviewed act (AGENTS §3.2), never a silent re-index.  RUNSPEC pins 3
+    # since P36 (the required purpose field; v2 payloads are audit-only).
     assert MANIFEST_VERSION == "2"
     assert SNAPSHOT_PUBLICATION_VERSION == "1"
-    assert RUNSPEC_SCHEMA_VERSION == 2
+    assert RUNSPEC_SCHEMA_VERSION == 3
 
     assert "manifest_version" in RunSpec.model_fields
     assert "snapshot_publication_version" in RunSpec.model_fields

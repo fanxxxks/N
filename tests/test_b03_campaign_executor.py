@@ -851,6 +851,7 @@ def test_g4_executor_records_phase_file_into_result_and_ledger(tmp_path):
     spec = build_runspec(
         dataset_id="ds-b03-exec-0001",
         data_cutoff="20241231",
+        purpose="historical_research",
         frequency="daily",
         target="forward_return",
         horizon=1,

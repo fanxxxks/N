@@ -46,6 +46,7 @@ def _spec(tmp_path: Path):
     return build_runspec(
         dataset_id="ds-v2-0001",
         data_cutoff="20241231",
+        purpose="historical_research",
         frequency="daily",
         target="forward_return",
         horizon=1,
@@ -83,6 +84,7 @@ def handle(tmp_path: Path):
     spec = build_runspec(
         dataset_id="ds-v2-0001",
         data_cutoff="20241231",
+        purpose="historical_research",
         frequency="daily",
         target="forward_return",
         horizon=1,

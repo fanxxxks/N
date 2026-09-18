@@ -814,16 +814,39 @@ def production_gate_asof(monkeypatch, bars_data) -> str:
     production callers never pass it and no config surface can override
     it).  The injected day is the fixture bars' max session, so the gates
     evaluate the synthetic era deterministically — no real wall clock
-    anywhere.  Subprocess-entry tests must use ``fresh_populated_db``
-    instead (monkeypatch cannot cross process boundaries)."""
+    anywhere.  P36: only the ONLINE basis is era-injected; historical
+    basis calls keep their snapshot-derived day (their determinism comes
+    from the frozen cutoff, and converting them to an era day would be a
+    basis mix the real gate refuses).  Subprocess-entry tests must use
+    ``fresh_populated_db`` instead (monkeypatch cannot cross process
+    boundaries)."""
 
-    from ashare_data.gates import ProductionGateRunner
+    from ashare_data.gates import (
+        ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+        ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION,
+        ProductionGateRunner,
+    )
 
     era = bars_data[0][-1]
     real = ProductionGateRunner.require_production
 
-    def _asof(self, *, today: str | None = None):
-        return real(self, today=today or era)
+    def _asof(
+        self,
+        *,
+        today: str | None = None,
+        purpose: str = ELIGIBILITY_PURPOSE_ONLINE_OBSERVATION,
+        snapshot_cutoff: str | None = None,
+    ):
+        if purpose == ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH:
+            return real(
+                self, purpose=purpose, snapshot_cutoff=snapshot_cutoff
+            )
+        return real(
+            self,
+            today=today or era,
+            purpose=purpose,
+            snapshot_cutoff=snapshot_cutoff,
+        )
 
     monkeypatch.setattr(ProductionGateRunner, "require_production", _asof)
     return era
@@ -854,6 +877,10 @@ def make_test_spec(**overrides):
     kwargs = dict(
         dataset_id="ds-test",
         data_cutoff="20241231",
+        # P36: research fixtures default to the historical-research
+        # purpose (the fixture window is historical by construction);
+        # purpose-sensitive tests override it explicitly.
+        purpose="historical_research",
         frequency="daily",
         target="forward_return",
         horizon=1,

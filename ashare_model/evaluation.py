@@ -220,7 +220,10 @@ from ashare_data.config import (
     make_reward_config,
     validate_baseline_signals,
 )
-from ashare_data.gates import ProductionGateRunner
+from ashare_data.gates import (
+    ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+    ProductionGateRunner,
+)
 from ashare_data.manifest import DatasetIdMismatch, check_dataset_id
 from ashare_logging import export_log_txt, setup_run_logging
 
@@ -769,7 +772,6 @@ def main(argv=None) -> int:
         root = Path(__file__).resolve().parents[1]
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
-        ProductionGateRunner(data_config, min_eligible=args.min_eligible).require_production()
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         reward_config = make_reward_config(raw)
@@ -805,6 +807,7 @@ def main(argv=None) -> int:
                 spec = resolve_runtime_runspec(
                     dataset_id=loader.dataset_id,
                     data_cutoff=loader.frozen_data_cutoff(),
+                    purpose="historical_research",
                     data_config=data_config,
                     backtest_config=backtest_config,
                     requested_budget=requested_budget,
@@ -814,9 +817,19 @@ def main(argv=None) -> int:
                     searcher=model_config.searcher,
                     max_formula_len=model_config.max_formula_len,
                     # SPEC_LOCKED clean-tree evidence activates in P8-06+;
-                    # this schema-v2 run still records the exact commit and
+                    # this schema-v3 run still records the exact commit and
                     # lock hash.
                     require_clean_tree=False,
+                )
+                # P36: the formal protocol gates on the frozen snapshot's
+                # own timeline — the same snapshot qualifies identically
+                # on any run day; missing bars at the snapshot window end
+                # still refuse.
+                ProductionGateRunner(
+                    data_config, min_eligible=args.min_eligible
+                ).require_production(
+                    purpose=ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+                    snapshot_cutoff=spec.data_cutoff,
                 )
                 run_context = RunContext.attach(
                     RunStore(data_config.data_dir),
@@ -840,6 +853,12 @@ def main(argv=None) -> int:
                 # reason (p27 I11 — nothing has been loaded or written yet).
                 raise SystemExit(f"evaluation: {exc}")
         else:
+            # P36: the non-formal paths keep the online (wall-clock) gate —
+            # they run against the live database and carry no frozen
+            # snapshot identity to derive a historical basis from.
+            ProductionGateRunner(
+                data_config, min_eligible=args.min_eligible
+            ).require_production()
             assert_formal_run_lifecycle(
                 "evaluation",
                 data_config.data_dir,
@@ -872,6 +891,7 @@ def main(argv=None) -> int:
             spec = resolve_runtime_runspec(
                 dataset_id=loader.dataset_id,
                 data_cutoff=loader.dates[-1],
+                purpose="historical_research",
                 data_config=data_config,
                 backtest_config=backtest_config,
                 requested_budget=requested_budget,
@@ -881,7 +901,7 @@ def main(argv=None) -> int:
                 searcher=model_config.searcher,
                 max_formula_len=model_config.max_formula_len,
                 # SPEC_LOCKED clean-tree evidence activates in P8-06+; this
-                # schema-v2 run still records the exact commit and lock hash.
+                # schema-v3 run still records the exact commit and lock hash.
                 require_clean_tree=False,
             )
         out_path = root / args.output

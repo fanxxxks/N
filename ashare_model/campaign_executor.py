@@ -438,6 +438,7 @@ class CampaignRunner:
             return resolve_runtime_runspec(
                 dataset_id=self._dataset_id,
                 data_cutoff=self._data_cutoff,
+                purpose="historical_research",
                 data_config=data_config,
                 backtest_config=backtest_config,
                 requested_budget=requested_budget,

@@ -25,7 +25,10 @@ from ashare_data.config import (
     make_model_config,
     make_reward_config,
 )
-from ashare_data.gates import ProductionGateRunner
+from ashare_data.gates import (
+    ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+    ProductionGateRunner,
+)
 from ashare_logging import export_log_txt, setup_run_logging
 
 from .data_loader import AshareDataLoader
@@ -88,10 +91,17 @@ def establish_formal_run_context(
     run_id: str,
     steps: int,
     batch_size: int,
+    min_eligible: int | None = None,
 ):
     """Freeze the plan and attach the preregistered run BEFORE the heavy
     load (p27 I6): composite identity confirm → RunSpec freeze → run
     attach → entry gate → search-action gate → loader load → drift check.
+
+    P36: the production gate fires between the spec freeze and the run
+    attach, on the frozen snapshot's own timeline
+    (``snapshot_cutoff=spec.data_cutoff``) — the same snapshot earns the
+    same historical-research eligibility on any run day; missing bars at
+    the snapshot window end still refuse.
 
     Returns ``(loader, run_context)`` with the loader already loaded.
     """
@@ -105,6 +115,7 @@ def establish_formal_run_context(
     spec = resolve_runtime_runspec(
         dataset_id=loader.dataset_id,
         data_cutoff=loader.frozen_data_cutoff(),
+        purpose="historical_research",
         data_config=data_config,
         backtest_config=backtest_config,
         requested_budget=max(1, steps * batch_size),
@@ -119,6 +130,14 @@ def establish_formal_run_context(
         searcher=model_config.searcher,
         max_formula_len=int(model_config.max_formula_len),
         require_clean_tree=False,
+    )
+    # P36: gate on the snapshot timeline — after the identity freeze the
+    # cutoff is bound to, before any run write or the expensive load.
+    ProductionGateRunner(
+        data_config, min_eligible=min_eligible
+    ).require_production(
+        purpose=ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
+        snapshot_cutoff=spec.data_cutoff,
     )
     run_context = RunContext.attach(
         RunStore(data_config.data_dir),
@@ -141,6 +160,27 @@ def establish_formal_run_context(
             "(A02 I2, p27 I6)"
         )
     return loader, run_context
+
+
+def _refuse_ambiguous_mode_declaration(args) -> None:
+    """A03 (p27 I2): boundary action-mode declaration — refuse before any
+    expensive work, never silently downgrade (R1/R9).  Formal mode needs
+    the preregistered identity; the identity arguments may never ride
+    along an explicitly declared non-formal mode."""
+
+    if args.lifecycle_mode != "formal" and (args.spec_id or args.run_id):
+        raise SystemExit(
+            "train: --spec-id/--run-id are formal-mode identity "
+            "arguments and cannot be combined with an explicit "
+            "non-formal --lifecycle-mode (p27 I2)"
+        )
+    if args.lifecycle_mode == "formal" and not (args.spec_id and args.run_id):
+        raise SystemExit(
+            "train: formal mode requires --spec-id and --run-id of a "
+            "preregistered run (create one with `python -m "
+            "ashare_model.lifecycle start`); declare --lifecycle-mode "
+            "engineering for an explicit non-formal probe (p27 I2/I5)"
+        )
 
 
 def main(trainer_cls) -> None:
@@ -172,30 +212,11 @@ def main(trainer_cls) -> None:
         root = _project_root()
         raw = load_config(args.config, project_root=root)
         data_config = make_data_config(raw, root)
-        ProductionGateRunner(
-            data_config, min_eligible=args.min_eligible
-        ).require_production()
         model_config = make_model_config(raw)
         backtest_config = make_backtest_config(raw)
         reward_config = make_reward_config(raw)
 
-        # A03 (p27 I2): boundary action-mode declaration — refuse before
-        # any expensive work, never silently downgrade (R1/R9).
-        if args.lifecycle_mode != "formal" and (args.spec_id or args.run_id):
-            raise SystemExit(
-                "train: --spec-id/--run-id are formal-mode identity "
-                "arguments and cannot be combined with an explicit "
-                "non-formal --lifecycle-mode (p27 I2)"
-            )
-        if args.lifecycle_mode == "formal" and not (
-            args.spec_id and args.run_id
-        ):
-            raise SystemExit(
-                "train: formal mode requires --spec-id and --run-id of a "
-                "preregistered run (create one with `python -m "
-                "ashare_model.lifecycle start`); declare --lifecycle-mode "
-                "engineering for an explicit non-formal probe (p27 I2/I5)"
-            )
+        _refuse_ambiguous_mode_declaration(args)
 
         # (run_context is hoisted above the entry's try for the finally.)
         if args.lifecycle_mode == "formal":
@@ -210,12 +231,19 @@ def main(trainer_cls) -> None:
                     run_id=args.run_id,
                     steps=steps,
                     batch_size=batch_size,
+                    min_eligible=args.min_eligible,
                 )
             except (LifecycleError, RunStoreError) as exc:
                 # CLI boundary: a lifecycle/store refusal exits with its
                 # reason (p27 I11 — nothing has been loaded or written yet).
                 raise SystemExit(f"train: {exc}")
         else:
+            # P36: the non-formal paths keep the online (wall-clock) gate —
+            # they run against the live database and carry no frozen
+            # snapshot identity to derive a historical basis from.
+            ProductionGateRunner(
+                data_config, min_eligible=args.min_eligible
+            ).require_production()
             loader = AshareDataLoader(data_config, model_config)
 
         trainer = trainer_cls(

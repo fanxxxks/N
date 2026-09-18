@@ -74,11 +74,13 @@ from ashare_data.db import AshareDB, sql_quoted_list
 from ashare_data.fundamentals import FINANCIAL_VERSION_TIME_SEMANTICS
 from ashare_data.gates import (
     DAILY_ELIGIBILITY_MAX_LAG_SESSIONS,
+    ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
     FINANCIAL_REPORT_COVERAGE_MIN,
     INDUSTRY_INDEX_MAX_LAG_SESSIONS,
     INDUSTRY_MEMBERSHIP_MIN_COVERAGE,
     MARGIN_MAX_LAG_SESSIONS,
     PRICE_LIMIT_MAX_LAG_SESSIONS,
+    snapshot_as_of_day,
 )
 from ashare_data.manifest import (
     TUSHARE_V2_CONFIG,
@@ -218,6 +220,18 @@ def required_source_families(feature_names: Iterable[str]) -> frozenset[str]:
 
 def _shanghai_today() -> str:
     return datetime.now(_SHANGHAI).date().strftime("%Y%m%d")
+
+
+def _default_evaluation_day(spec) -> str:
+    """P36 §5: the D7 lag axis's evaluation day follows the spec's
+    declared purpose — the snapshot's own timeline for historical
+    research (a pure function of the frozen identity, so the same spec
+    earns the same FACTOR_SET_QUALIFIED data verdict on any run day),
+    the wall clock for online observation."""
+
+    if spec.purpose == ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH:
+        return snapshot_as_of_day(spec.data_cutoff)
+    return _shanghai_today()
 
 
 def _is_missing(value) -> bool:
@@ -480,8 +494,10 @@ def check_runspec_data_eligibility(
     ``feature_names`` are vocabulary feature names (the factor set's
     resolved features); ``universe_codes`` are the PIT-eligible codes the
     DATA_QUALIFIED stage established (the financial coverage universe);
-    ``evaluation_day`` defaults to the real Shanghai clock (tests inject
-    it, mirroring the p16 seam)."""
+    ``evaluation_day`` defaults to the spec-purpose-derived day (P36 §5:
+    ``historical_research`` → ``snapshot_as_of_day(spec.data_cutoff)``,
+    ``online_observation`` → the real Shanghai clock; tests inject it,
+    mirroring the p16 seam)."""
 
     if not universe_codes:
         raise DataEligibilityError(
@@ -498,7 +514,7 @@ def check_runspec_data_eligibility(
         SOURCE_DATASET_MANIFEST,
     }
 
-    day = evaluation_day or _shanghai_today()
+    day = evaluation_day or _default_evaluation_day(spec)
     axis = _open_sessions_before(config, day)
     try:
         v2_db: AshareDB | None = AshareDB(
