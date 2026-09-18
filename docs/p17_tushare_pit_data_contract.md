@@ -542,6 +542,10 @@ CREATE TABLE IF NOT EXISTS holder_number_pit (
 | 一切源 | 来源不可计算一律 **fail 不得 pass** | fail-closed（无豁免） |
 
 - 滞后 = 最近会话 − 该源最新 available_session（按 §6.1 映射）。
+  - **P36 修订（2026-09-17）**：「最近会话」按用途解读——在线观察 = 墙钟
+    最近完成会话；历史研究 = 快照 cutoff 会话（`snapshot_as_of_day`，
+    D7 缺省评估日从 `RunSpec.purpose` 推导）。详见
+    `docs/p36_purpose_eligibility_separation_draft.md` §5。
 - D7 的资格门是**按公式依赖**的检查（P8 FACTOR_SET_QUALIFIED 用），不是全局
   新鲜度门（禁止实现"所有可选数据都必须新鲜"的全局 G9——t19 非目标已预注册，
   本表数值供其直接引用）。

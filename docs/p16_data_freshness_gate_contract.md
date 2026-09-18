@@ -62,6 +62,11 @@ expected vs actual 比对，与 G8 的"now 对比"正交）；不实现 broker �
   一次 run 内取一次并写入 G8 detail（可审计）。runner 增加仅测试用的
   显式注入参数（默认墙钟）；生产调用方不传。禁止用配置项覆盖评估日
   ——那是 bypass，不是注入。
+  - **P36 修订（2026-09-17）**：自 P36 起评估日按用途推导——在线观察
+    = 本条原文墙钟（缺省）；历史研究 = `snapshot_as_of_day(data_cutoff)`
+    （运行身份的冻结字段，非配置项），且该基准不读墙钟、「日历预列视界
+    耗尽」守卫仅属在线基准。详见 `docs/p36_purpose_eligibility_separation_draft.md`
+    §2–§3。
 - **参考会话 `reference`**：`trade_calendar` 中 `is_open=true` 且
   `trade_date < today` 的最大 `trade_date`。严格早于 today：当日节
   （无论是否已收盘）不计入预期，与 p15 日志"至最近已完成开市日"口径
