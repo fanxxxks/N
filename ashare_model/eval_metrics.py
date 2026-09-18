@@ -159,6 +159,115 @@ def evaluate_signal(
     if result.benchmark_equity and len(result.benchmark_equity) >= 2:
         eq = result.benchmark_equity
         bench_daily = [float(eq[i + 1] / eq[i] - 1.0) for i in range(len(eq) - 1)]
+
+    # Test-window active IR (p34 rev 3): the authority formula on this
+    # row's own daily series.  Named ``oos_active_ir`` so it can never be
+    # confused with the scorer's train-window ``active_ir`` that the
+    # baseline rows already carry.
+    from .baseline_harness import oos_active_ir
+
+    # P34 rev 3 execution funnel (additive observability): per-row counters
+    # separating "no order was needed" from "an order was needed and
+    # blocked".  Due sessions partition into no_signal (degenerate signal),
+    # executed_clean / partial_suppressed (orders resulted), fully_suppressed
+    # (every planned trade dropped by threshold/min-trade) and target_stable
+    # (the rank target equals the drifted book — normal low turnover).
+    # The constructor's diagnostics carry the order/suppression counts; the
+    # signal-degeneracy discriminator recomputes the constructor's own
+    # has-signal test from the same mask matrices and the same dispersion
+    # authority (``has_cross_sectional_dispersion``), so an empty book (no
+    # selectable names) never masquerades as quiet.  Planned counts come
+    # from the constructor diagnostics; filled counts from the engine's
+    # executed buy/sell weights — their gap is the cash-capped /
+    # missing-bar unfilled share.
+    from ashare_data.processor import has_cross_sectional_dispersion
+
+    diag = result.construction_diagnostics
+    blocked_slice = blocked_buy[
+        :,
+        fold.contract.test_signal_start : fold.contract.test_price_end,
+    ]
+    no_signal_sessions = 0
+    target_stable_sessions = 0
+    fully_supp_sessions = 0
+    partial_supp_sessions = 0
+    executed_clean_sessions = 0
+    # ``local_signal_range`` is ``range(signal_count)``: diagnostics row j
+    # is fold-window session j, its entry session j+1.
+    for t, session in enumerate(diag):
+        if not session.get("rebalance_due"):
+            continue
+        orders = int(session.get("order_count", 0))
+        supp = int(session.get("suppressed_trade_count", 0))
+        if orders == 0 and supp == 0:
+            eligible_t = (
+                fold_data.universe_mask[:, t]
+                & fold_data.universe_mask[:, t + 1]
+            )
+            selectable = (
+                np.isfinite(signal[:, t])
+                & eligible_t
+                & ~blocked_slice[:, t + 1]
+            )
+            if has_cross_sectional_dispersion(signal[:, t][selectable]):
+                target_stable_sessions += 1
+            else:
+                no_signal_sessions += 1
+        elif orders == 0:
+            fully_supp_sessions += 1
+        elif supp > 0:
+            partial_supp_sessions += 1
+        else:
+            executed_clean_sessions += 1
+    filled_buy = filled_sell = 0
+    executed_turnover = 0.0
+    for buy_w, sell_w in zip(result.buy_weights, result.sell_weights):
+        buy_arr = np.asarray(buy_w, dtype=np.float64)
+        sell_arr = np.asarray(sell_w, dtype=np.float64)
+        filled_buy += int(np.count_nonzero(buy_arr > 1e-12))
+        filled_sell += int(np.count_nonzero(sell_arr > 1e-12))
+        executed_turnover += float(buy_arr.sum() + sell_arr.sum())
+    holdings_counts = [len(p["ts_codes"]) for p in result.positions]
+    invested_ratios = [
+        float(np.sum(w)) for w in result.target_weights
+    ] if result.target_weights else []
+    funnel = {
+        "funnel_sessions_total": len(diag),
+        "funnel_not_due_sessions": sum(
+            1 for d in diag if not d.get("rebalance_due")
+        ),
+        "funnel_due_sessions": sum(
+            1 for d in diag if d.get("rebalance_due")
+        ),
+        "funnel_due_no_signal_sessions": no_signal_sessions,
+        "funnel_due_target_stable_sessions": target_stable_sessions,
+        "funnel_due_fully_suppressed_sessions": fully_supp_sessions,
+        "funnel_due_partial_suppressed_sessions": partial_supp_sessions,
+        "funnel_due_executed_clean_sessions": executed_clean_sessions,
+        "funnel_planned_order_count": sum(
+            int(d.get("order_count", 0)) for d in diag
+        ),
+        "funnel_filled_order_count": filled_buy + filled_sell,
+        "funnel_filled_buy_count": filled_buy,
+        "funnel_filled_sell_count": filled_sell,
+        "funnel_planned_turnover_sum": sum(
+            float(d.get("turnover", 0.0)) for d in diag
+        ),
+        "funnel_executed_turnover_sum": executed_turnover,
+        "funnel_suppressed_threshold_count": sum(
+            len(d.get("threshold_dropped", ())) for d in diag
+        ),
+        "funnel_suppressed_min_trade_count": sum(
+            len(d.get("min_trade_dropped", ())) for d in diag
+        ),
+        "funnel_holdings_min": int(min(holdings_counts)) if holdings_counts else 0,
+        "funnel_invested_ratio_min": (
+            float(min(invested_ratios)) if invested_ratios else 0.0
+        ),
+        "funnel_sessions_zero_holdings": sum(
+            1 for count in holdings_counts if count == 0
+        ),
+    }
     return {
         "n_dates": signal_count,
         "total_return": float(m["total_return"]),
@@ -170,6 +279,10 @@ def evaluate_signal(
         "average_turnover": float(m["average_turnover"]),
         "benchmark_return": bench_total,
         "excess_return": excess,
+        "oos_active_ir": oos_active_ir(
+            np.asarray(result.daily_returns, dtype=np.float64),
+            np.asarray(bench_daily, dtype=np.float64),
+        ),
         "ic_mean": float(ic["ic_mean"]),
         "ic_abs_mean": float(ic["ic_abs_mean"]),
         "icir": float(ic["icir"]),
@@ -206,6 +319,7 @@ def evaluate_signal(
         "cost_fraction_sum": (
             float(np.sum(result.cost_fractions)) if result.cost_fractions else 0.0
         ),
+        **funnel,
         # Raw per-day series: kept in every row so the DS / max-t corrections
         # and later analysis never have to reconstruct them from aggregates.
         "daily_returns": [float(x) for x in result.daily_returns],
@@ -299,6 +413,7 @@ def benchmark_row(
         "n_ic_dates": 0,
         "ic_mean_tradable": 0.0,
         "icir_tradable": 0.0,
+        "oos_active_ir": 0.0,
         "daily_returns": [float(x) for x in daily],
         "benchmark_daily_returns": [float(x) for x in daily],
     }

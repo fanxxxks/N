@@ -939,7 +939,10 @@ def test_r8_end_to_end_driver_parks_on_positive(mini_env, gate_run_asof):
     # directory, json-safe, with full provenance.
     report_path = tmp_path / "r01_out" / "r01_baseline_report.json"
     payload = json.loads(report_path.read_text(encoding="utf-8"))
-    assert payload["r01_report_schema_version"] == 1
+    # WP3 (p34 contract rev 3): report schema 1->2 — stitched
+    # statistics, annual distribution, funnel, statuses and the
+    # descriptive diagnostics; pinned by test_p34_r01_report_wp3.
+    assert payload["r01_report_schema_version"] == 2
     assert payload["provenance"]["contract_sha256"] == _contract_sha()
     assert payload["provenance"]["dataset_id"] == summary["dataset_id"]
     assert payload["provenance"]["consumed_semantic_evaluations"] == 0

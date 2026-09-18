@@ -43,16 +43,39 @@ from ashare_data.gates import (
     ELIGIBILITY_PURPOSE_HISTORICAL_RESEARCH,
     ProductionGateRunner,
 )
+from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
+from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
 
 #: Report artifact schema (measurement artifact; not an
 #: ``artifact_schemas`` consumer — see p34 §4 version impact table).
-R01_REPORT_SCHEMA_VERSION = 1
+#: v2 (WP3, contract rev 3): stitched cross-fold statistics, the annual
+#: distribution, the execution funnel, explicit statuses and the
+#: descriptive four-way diagnostic.  v1 was never produced.
+R01_REPORT_SCHEMA_VERSION = 2
 
 #: p34 §3.7 frozen adjudication thresholds (never tuned after seeing data).
 R01_ADJUDICATION_RULES: dict[str, float] = {
     "min_positive_folds": 3,
     "min_avg_holdings": 5.0,
     "min_invested_ratio": 0.5,
+}
+
+#: p34 §4 Rev 3 descriptive diagnostic thresholds (WP3).  These classify
+#: the REPORTED evidence (weak signal / execution blocked / cost
+#: swallowed / measurement incomplete); they are not the §3.7
+#: adjudication and never decide worth_search.  Carried verbatim inside
+#: every report so the classification is self-describing.
+R01_DIAGNOSTIC_RULES: dict[str, object] = {
+    "fully_suppressed_share_max": 0.10,
+    "unfilled_order_rate_max": 0.10,
+    "min_invested_ratio": 0.5,
+    "priority": [
+        "measurement_incomplete",
+        "weak_signal",
+        "execution_blocked",
+        "cost_swallowed",
+        "net_space_shown",
+    ],
 }
 
 #: p34 §3.2 frozen combo construction (members ⊆ the config's preregistered
@@ -351,16 +374,86 @@ def run_baseline_arms(
     return rows, directions_by_fold
 
 
-def summarize_arms(rows: list[dict]) -> dict[str, dict[str, Any]]:
-    """Per-arm round-1 summary (p34 §3.4/§3.7): every arm, every fold —
-    medians of the field distributions are the report's job; the
-    adjudication consumes these means/counters verbatim."""
+#: Funnel count fields summed into ``funnel_totals_1x`` (p34 rev 3): the
+#: per-row additive counters that aggregate by summation across folds.
+_FUNNEL_SUM_KEYS = (
+    "funnel_sessions_total",
+    "funnel_not_due_sessions",
+    "funnel_due_sessions",
+    "funnel_due_no_signal_sessions",
+    "funnel_due_target_stable_sessions",
+    "funnel_due_fully_suppressed_sessions",
+    "funnel_due_partial_suppressed_sessions",
+    "funnel_due_executed_clean_sessions",
+    "funnel_planned_order_count",
+    "funnel_filled_order_count",
+    "funnel_filled_buy_count",
+    "funnel_filled_sell_count",
+    "funnel_suppressed_threshold_count",
+    "funnel_suppressed_min_trade_count",
+    "funnel_sessions_zero_holdings",
+)
+
+
+def _stitched_level_metrics(arm_rows: list[dict], level: str) -> dict:
+    """Stitched statistics for one (arm, cost level): the concatenated
+    cross-fold daily series through the single stitching authority
+    (``eval_metrics.stitch_oos_series``), metrics via ``stitched_metrics``
+    and the active IR recomputed on the concatenated series (never the
+    mean of per-fold IRs).  Failed folds contribute no returns and are
+    recorded."""
 
     from .baseline_harness import oos_active_ir
+    from .eval_metrics import stitch_oos_series, stitched_metrics
+
+    level_rows = [
+        row for row in arm_rows if str(row.get("cost_level")) == level
+    ]
+    failed = [
+        {
+            "fold_test_end": row.get("fold_test_end"),
+            "reason": row.get("failure_reason"),
+        }
+        for row in level_rows
+        if row.get("failed")
+    ]
+    trials = stitch_oos_series(level_rows)
+    if not trials:
+        return {
+            "n_days": 0,
+            "n_segments": 0,
+            "failed_folds": failed,
+            "note": "no succeeded folds at this level",
+        }
+    trial = trials[0]
+    out = dict(stitched_metrics(trial))
+    out["oos_active_ir"] = float(
+        oos_active_ir(
+            np.asarray(trial["daily_returns"], dtype=np.float64),
+            np.asarray(trial["benchmark_daily_returns"], dtype=np.float64),
+        )
+    )
+    out["n_segments"] = len(trial["segments"])
+    out["failed_folds"] = failed
+    return out
+
+
+def summarize_arms(rows: list[dict]) -> dict[str, dict[str, Any]]:
+    """Per-arm round-1 summary (p34 §3.4/§3.7 + rev 3): every arm, every
+    fold — the frozen adjudication consumes the fold-mean statistics
+    verbatim; the rev 3 additions (annual distribution, cross-fold
+    median/min/max, stitched statistics, statuses, funnel totals) report
+    alongside them without ever substituting for them."""
 
     arms: dict[str, list[dict]] = {}
     for row in rows:
         arms.setdefault(str(row["candidate"]), []).append(row)
+    benchmark_rows = arms.get("benchmark:equal_weight", [])
+    benchmark_failed_folds = {
+        str(row["fold_test_end"])
+        for row in benchmark_rows
+        if row.get("failed")
+    }
     summaries: dict[str, dict[str, Any]] = {}
     for candidate, arm_rows in arms.items():
         by_fold: dict[str, dict[str, dict]] = {}
@@ -382,24 +475,108 @@ def summarize_arms(rows: list[dict]) -> dict[str, dict[str, Any]]:
             value = row.get(key)
             return None if value is None else value
 
+        # --- rev 3: per-fold annual decomposition + statuses (§3.4). ---
+        annual: dict[str, dict[str, Any]] = {}
+        for fold_end, per_level in by_fold.items():
+            any_failed = any(
+                bool(r.get("failed")) for r in per_level.values()
+            )
+            levels: dict[str, dict[str, Any]] = {}
+            for level, row in per_level.items():
+                levels[level] = {
+                    "excess_return": None
+                    if row.get("failed")
+                    else row.get("excess_return"),
+                    "oos_active_ir": None
+                    if row.get("failed")
+                    else row.get("oos_active_ir"),
+                    "total_return": None
+                    if row.get("failed")
+                    else row.get("total_return"),
+                }
+            if any_failed:
+                status, reason = "failed", "; ".join(
+                    f"{level}: {r.get('failure_reason')}"
+                    for level, r in sorted(per_level.items())
+                    if r.get("failed")
+                )
+            elif fold_end in benchmark_failed_folds:
+                status, reason = "benchmark_missing", (
+                    "the equal-weight benchmark reference row failed on "
+                    "this fold"
+                )
+            else:
+                status, reason = "ok", None
+            annual[fold_end] = {
+                "status": status,
+                "failure_reason": reason,
+                "levels": levels,
+            }
+
         excess_1x = [
             value
             for per_level in by_fold.values()
             if (value := _usable(per_level, "1x", "excess_return")) is not None
         ]
-        active_irs = []
-        for per_level in by_fold.values():
-            row_1x = per_level.get("1x")
-            if row_1x is None or row_1x.get("failed"):
-                continue
-            active_irs.append(
-                oos_active_ir(
-                    np.asarray(row_1x["daily_returns"], dtype=np.float64),
-                    np.asarray(
-                        row_1x["benchmark_daily_returns"], dtype=np.float64
-                    ),
-                )
+        # Rev 3: the per-fold active IR comes from the row's own test-window
+        # field (evaluate_signal computes it from the row's daily series —
+        # one computation, consumed; the mean over folds stays the frozen
+        # §3.7 statistic under its own name).
+        active_irs = [
+            value
+            for per_level in by_fold.values()
+            if (value := _usable(per_level, "1x", "oos_active_ir")) is not None
+        ]
+        fold_excess_values = excess_1x
+        fold_ir_values = active_irs
+
+        def _dist(values: list[float]) -> dict[str, Any] | None:
+            if not values:
+                return None
+            arr = np.asarray(values, dtype=np.float64)
+            return {
+                "median": float(np.median(arr)),
+                "min": float(arr.min()),
+                "max": float(arr.max()),
+                "n": int(arr.size),
+            }
+
+        # --- rev 3: stitched statistics per level (concatenated series). ---
+        levels_present = sorted(
+            {str(row.get("cost_level")) for row in arm_rows}
+        )
+        stitched = {
+            level: _stitched_level_metrics(arm_rows, level)
+            for level in levels_present
+        }
+        # --- rev 3: funnel totals over the succeeded 1x folds. ---
+        funnel_totals: dict[str, Any] = {}
+        ok_1x_rows = [
+            per_level["1x"]
+            for per_level in by_fold.values()
+            if per_level.get("1x") is not None
+            and not per_level["1x"].get("failed")
+        ]
+        for key in _FUNNEL_SUM_KEYS:
+            funnel_totals[key] = int(
+                sum(int(r.get(key) or 0) for r in ok_1x_rows)
             )
+        invested_minima = [
+            float(r["funnel_invested_ratio_min"])
+            for r in ok_1x_rows
+            if r.get("funnel_invested_ratio_min") is not None
+        ]
+        funnel_totals["funnel_invested_ratio_min"] = (
+            float(min(invested_minima)) if invested_minima else None
+        )
+        holdings_minima = [
+            int(r["funnel_holdings_min"])
+            for r in ok_1x_rows
+            if r.get("funnel_holdings_min") is not None
+        ]
+        funnel_totals["funnel_holdings_min"] = (
+            int(min(holdings_minima)) if holdings_minima else None
+        )
         summaries[candidate] = {
             "n_folds": len(by_fold),
             "failed_folds": failed_folds,
@@ -476,8 +653,125 @@ def summarize_arms(rows: list[dict]) -> dict[str, dict[str, Any]]:
                 )
                 else None
             ),
+            # --- rev 3 additions (reported, never substituted for the
+            # frozen fold-mean statistics above). ---
+            "annual": annual,
+            "fold_stats_1x": {
+                "excess_return": _dist(fold_excess_values),
+                "oos_active_ir": _dist(fold_ir_values),
+            },
+            "stitched": stitched,
+            "benchmark_missing_folds": sorted(benchmark_failed_folds),
+            "funnel_totals_1x": funnel_totals,
         }
     return summaries
+
+
+def classify_arm_diagnostics(
+    arm_summaries: dict[str, dict[str, Any]],
+    rules: dict[str, object] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """The p34 §4 Rev 3 descriptive four-way diagnostic (pure function).
+
+    Separates — per cost-bearing arm — ``measurement_incomplete`` (failed
+    folds / a missing benchmark reference), ``weak_signal`` (no GROSS
+    space at 0x), ``execution_blocked`` (suppression/unfill/deployment
+    funnel evidence) and ``cost_swallowed`` (gross space alive, net space
+    dead at 1x).  This DESCRIBES the reported evidence; it is not the
+    frozen §3.7 adjudication and never decides worth_search.  The
+    benchmark reference and the cash control are references/controls and
+    are never classified."""
+
+    merged = dict(R01_DIAGNOSTIC_RULES)
+    merged.update(rules or {})
+    out: dict[str, dict[str, Any]] = {}
+    for candidate, summary in arm_summaries.items():
+        if candidate in ("benchmark:equal_weight", "control:cash"):
+            continue
+        stitched = summary.get("stitched") or {}
+        s0 = stitched.get("0x") or {}
+        s1 = stitched.get("1x") or {}
+        s2 = stitched.get("2x") or {}
+        funnel = summary.get("funnel_totals_1x") or {}
+        due = int(funnel.get("funnel_due_sessions") or 0)
+        fully = int(
+            funnel.get("funnel_due_fully_suppressed_sessions") or 0
+        )
+        planned = int(funnel.get("funnel_planned_order_count") or 0)
+        filled = int(funnel.get("funnel_filled_order_count") or 0)
+        invested = summary.get("invested_ratio_mean_1x")
+        failed = int(summary.get("failed_folds") or 0)
+        bench_missing = list(summary.get("benchmark_missing_folds") or [])
+        supp_share = (fully / due) if due > 0 else 0.0
+        unfill_rate = ((planned - filled) / planned) if planned > 0 else 0.0
+        flags: list[str] = []
+        if failed >= 2:
+            flags.append("unreliable")
+        elif failed >= 1:
+            flags.append("fold_failure")
+        if bench_missing:
+            flags.append("benchmark_missing")
+        measurement_incomplete = failed >= 1 or bool(bench_missing)
+        gross_excess = s0.get("excess_return")
+        gross_ir = s0.get("oos_active_ir")
+        weak = (gross_excess is not None and gross_excess <= 0.0) or (
+            gross_ir is not None and gross_ir <= 0.0
+        )
+        if weak:
+            flags.append("weak_signal")
+        blocked_reasons: list[str] = []
+        if supp_share > float(merged["fully_suppressed_share_max"]):
+            blocked_reasons.append("blocked_by_suppressed_trades")
+        if unfill_rate > float(merged["unfilled_order_rate_max"]):
+            blocked_reasons.append("blocked_by_unfilled_orders")
+        if (
+            invested is not None
+            and invested < float(merged["min_invested_ratio"])
+            and (gross_excess is not None and gross_excess > 0.0)
+        ):
+            blocked_reasons.append("blocked_uninvested")
+        flags.extend(blocked_reasons)
+        net_1x = s1.get("excess_return")
+        net_2x = s2.get("excess_return")
+        cost_swallowed = (
+            not weak and net_1x is not None and net_1x <= 0.0
+        )
+        if cost_swallowed:
+            flags.append("cost_swallowed_1x")
+        if (
+            not weak
+            and net_1x is not None
+            and net_1x > 0.0
+            and net_2x is not None
+            and net_2x <= 0.0
+        ):
+            flags.append("cost_fragile_2x")
+        if measurement_incomplete:
+            headline = "measurement_incomplete"
+        elif weak:
+            headline = "weak_signal"
+        elif blocked_reasons:
+            headline = "execution_blocked"
+        elif cost_swallowed:
+            headline = "cost_swallowed"
+        else:
+            headline = "net_space_shown"
+        out[candidate] = {
+            "headline": headline,
+            "flags": flags,
+            "evidence": {
+                "gross_excess_0x": gross_excess,
+                "gross_active_ir_0x": gross_ir,
+                "net_excess_1x": net_1x,
+                "net_excess_2x": net_2x,
+                "fully_suppressed_share": round(supp_share, 6),
+                "unfilled_order_rate": round(unfill_rate, 6),
+                "invested_ratio_mean_1x": invested,
+                "failed_folds": failed,
+                "benchmark_missing_folds": bench_missing,
+            },
+        }
+    return out
 
 
 # --- frozen adjudication --------------------------------------------------------
@@ -870,10 +1164,74 @@ def run_r01_baseline(
 
         # -- the report artifact (strict JSON inside the run store).
         safe_rows = rows_to_jsonable(rows)
+        arm_summaries = summarize_arms(rows)
         adjudication = decide_adjudication(
-            summarize_arms(rows),
+            arm_summaries,
             adjudication_rules or R01_ADJUDICATION_RULES,
         )
+        arm_diagnostics = classify_arm_diagnostics(arm_summaries)
+        benchmark_status = {
+            str(row["fold_test_end"]): {
+                "status": "failed" if row.get("failed") else "ok",
+                "failure_reason": row.get("failure_reason"),
+            }
+            for row in rows
+            if str(row["candidate"]) == "benchmark:equal_weight"
+        }
+        completeness_reasons = list(frame_status["reasons"])
+        if missing_days:
+            completeness_reasons.append(
+                f"missing trading days: {missing_days}"
+            )
+        data_completeness = {
+            "status": (
+                "complete"
+                if frame_status["status"] == "clean" and not missing_days
+                else "incomplete"
+            ),
+            "loader_frames": frame_status,
+            "expected_trading_days": int(expected_days),
+            "actual_trading_days": int(actual_days),
+            "missing_trading_days": [str(day) for day in missing_days],
+            "reasons": completeness_reasons,
+        }
+        engine_version_attribution = {
+            "execution_spec_version": int(EXECUTION_SPEC_VERSION),
+            "portfolio_constructor_version": int(
+                PORTFOLIO_CONSTRUCTOR_VERSION
+            ),
+            "prior_version_numbers_exist": False,
+            "prior_version_note": (
+                "no pre-p35 (frozen-weight accounting) baseline numbers "
+                "exist: the WP0 close-out (p34 measurement log section 6.3) "
+                "marked every pre-p35 engine number inadmissible for "
+                "parameter selection and no R01 arm ever executed, so no "
+                "old-vs-new numeric attribution is computable — recorded, "
+                "not fabricated"
+            ),
+            "semantic_delta_reference": (
+                "p35 share-level accounting (EXECUTION_SPEC_VERSION 3->4): "
+                "non-due sessions drift weights by the adjusted o2o return; "
+                "due sessions execute at share level on the raw entry open "
+                "with lot floors and full exits"
+            ),
+        }
+        reporting_notes = {
+            "combo_rank_scale": (
+                "combos average raw per-date cross-sectional ranks "
+                "(reward._rankdata); members with different finite-coverage "
+                "counts produce different rank scales — the frozen "
+                "construction, disclosed here; percentile standardization "
+                "is a new definition reserved for its own package"
+            ),
+            "stitched_vs_fold_mean": (
+                "stitched statistics are computed on the cross-fold "
+                "concatenated daily series (never the mean of per-fold "
+                "IRs standing in for the stitched IR); the frozen section "
+                "3.7 adjudication consumes the fold-mean statistics under "
+                "their own names — both are reported, never substituted"
+            ),
+        }
         report = {
             "r01_report_schema_version": R01_REPORT_SCHEMA_VERSION,
             "provenance": {
@@ -903,6 +1261,13 @@ def run_r01_baseline(
                 },
             },
             "adjudication": adjudication,
+            "data_completeness": data_completeness,
+            "benchmark_status": benchmark_status,
+            "arm_summaries": arm_summaries,
+            "arm_diagnostics": arm_diagnostics,
+            "diagnostic_rules": dict(R01_DIAGNOSTIC_RULES),
+            "engine_version_attribution": engine_version_attribution,
+            "reporting_notes": reporting_notes,
             "rows": safe_rows,
             "completed": True,
         }
