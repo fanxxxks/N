@@ -646,6 +646,26 @@ def load_trial_rows(
             payload, artifact="protocol", model=ProtocolResultArtifact
         )
         check_dataset_id(payload.get("dataset_id"), expected_dataset_id)
+        # p40 R2: stitched trials must carry their real mark dates, so a
+        # succeeded row from a pre-p40 artifact cannot join the correction
+        # pool — it could never be aligned on the joint date axis.  Fail at
+        # load time with the migration named, instead of crashing later
+        # inside the stitcher.
+        undated = [
+            r.get("candidate")
+            for r in payload.get("rows", [])
+            if not r.get("failed")
+            and r.get("daily_returns")
+            and not r.get("daily_dates")
+        ]
+        if undated:
+            raise ValueError(
+                f"artifact {path} predates p40 (succeeded rows without "
+                f"daily_dates, first: {undated[0]!r}): its trial rows "
+                "cannot be date-aligned into the correction pool — "
+                "re-measure it under p40+ or drop it from --trials "
+                "(docs/p40_statistical_resampling_draft.md §2 R2)"
+            )
         rows.extend(payload.get("rows", []))
     return rows
 

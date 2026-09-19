@@ -390,6 +390,11 @@ def evaluate_signal(
         # and later analysis never have to reconstruct them from aggregates.
         "daily_returns": [float(x) for x in result.daily_returns],
         "benchmark_daily_returns": bench_daily,
+        # p40 R1: the real mark dates of the daily series — the engine's own
+        # date axis, one mark date per net return — so downstream stitching
+        # and the corrections align trials by real trading dates instead of
+        # array position.
+        "daily_dates": list(result.dates[1:]),
     }
 
 
@@ -449,6 +454,13 @@ def benchmark_row(
         list(fold_data.local_signal_range),
         fold_data.universe_mask,
     )
+    # p40 R1: the benchmark row carries the same real mark dates as the
+    # engine-scored rows (next-open execution, delay=1: the return of
+    # signal session t is marked at dates[t+2]); the agreement with
+    # evaluate_signal's own date axis is pinned by test
+    # test_n5_evaluate_signal_and_benchmark_row_carry_mark_dates.
+    mark_dates = [dates[t + 2] for t in fold_data.local_signal_range]
+    assert len(mark_dates) == len(daily)
     equity = [1.0]
     for ret in daily:
         equity.append(equity[-1] * (1.0 + ret))
@@ -482,6 +494,7 @@ def benchmark_row(
         "oos_active_ir": 0.0,
         "daily_returns": [float(x) for x in daily],
         "benchmark_daily_returns": [float(x) for x in daily],
+        "daily_dates": mark_dates,
     }
 
 
@@ -545,12 +558,16 @@ def stitch_oos_series(rows: list[dict]) -> list[dict]:
     """Stitch the outer OOS returns of every (candidate, seed) across folds.
 
     Returns JSON-friendly trial dicts: concatenated daily / benchmark /
-    excess series in chronological fold order, per-segment provenance,
-    recorded failed folds, and fold-level portfolio statistics aggregated
-    over the succeeded segments (mean turnover, max capacity utilization).
-    Two succeeded rows for the same (candidate, seed, fold) raise
+    excess series in chronological fold order with their real mark-date
+    axis (``dates``, p40 R2), per-segment provenance, recorded failed
+    folds, and fold-level portfolio statistics aggregated over the
+    succeeded segments (mean turnover, max capacity utilization).  Two
+    succeeded rows for the same (candidate, seed, fold) raise
     ``ValueError``: a fold measured twice is an integrity error, not a
-    stitchable observation.
+    stitchable observation.  A succeeded row whose ``daily_dates`` are
+    missing or mismatched with its series raises ``ValueError`` (p40: a
+    row that cannot be placed on a real date axis cannot be stitched),
+    as does a duplicated mark date inside one trial.
     """
 
     groups: dict[tuple, list[dict]] = {}
@@ -594,12 +611,38 @@ def stitch_oos_series(rows: list[dict]) -> list[dict]:
 
         daily: list[float] = []
         bench: list[float] = []
+        mark_dates: list[str] = []
         for row in segments:
             d = [float(x) for x in row["daily_returns"]]
             b = row.get("benchmark_daily_returns")
             b = [float(x) for x in b] if b and len(b) == len(d) else [0.0] * len(d)
+            # p40 R2: every stitched segment must carry its real mark dates,
+            # 1:1 with its daily series.  A succeeded row without them is a
+            # pre-p40 artifact row: it cannot be aligned with anything, so
+            # stitching it is an integrity error, never a silent position
+            # concatenation (docs/p40_statistical_resampling_draft.md §2).
+            dd = row.get("daily_dates")
+            if not dd or len(dd) != len(d):
+                raise ValueError(
+                    f"candidate={candidate} seed={seed} fold="
+                    f"{(row.get('fold_train_end'), row.get('fold_test_end'))}: "
+                    "succeeded row carries no daily_dates aligned with its "
+                    "daily_returns (pre-p40 artifact rows cannot be "
+                    "stitched; re-measure the source run under p40+)"
+                )
             daily.extend(d)
             bench.extend(b)
+            mark_dates.extend(str(x) for x in dd)
+        if len(mark_dates) != len(daily):
+            raise ValueError(
+                f"candidate={candidate} seed={seed}: stitched date axis "
+                f"length {len(mark_dates)} != series length {len(daily)}"
+            )
+        if len(set(mark_dates)) != len(mark_dates):
+            raise ValueError(
+                f"candidate={candidate} seed={seed}: duplicate date on the "
+                "stitched mark-date axis"
+            )
         excess = [a - b for a, b in zip(daily, bench)]
         turnovers = [
             float(r["average_turnover"])
@@ -636,6 +679,8 @@ def stitch_oos_series(rows: list[dict]) -> list[dict]:
                 "daily_returns": daily,
                 "benchmark_daily_returns": bench,
                 "excess_returns": excess,
+                # p40 R2: the trial's real mark-date axis, in fold order.
+                "dates": mark_dates,
                 "formula_text": last.get("formula_text"),
                 "fold_test_end": last.get("fold_test_end"),
                 "average_turnover_mean": (

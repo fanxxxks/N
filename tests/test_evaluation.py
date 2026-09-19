@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import math
 
@@ -549,7 +550,7 @@ def test_run_protocol_records_universe_policy(
 ):
     loader = _loader(populated_db)
     proto = ProtocolConfig(
-        folds=[FoldConfig("2024-01-10", "2024-01-25")],
+        folds=[FoldConfig("2024-01-10", "2024-02-23")],
         seeds=[42],
         random_samples=0,
     )
@@ -665,6 +666,7 @@ def test_top_trial_ignores_val_reward(monkeypatch):
             "failed": False,
             "daily_returns": [0.001, 0.001, 0.001],
             "benchmark_daily_returns": [0.0, 0.0, 0.0],
+            "daily_dates": _iso_dates(3),
         },
         {
             "candidate": "B",
@@ -675,6 +677,7 @@ def test_top_trial_ignores_val_reward(monkeypatch):
             "failed": False,
             "daily_returns": [-0.001, -0.001, -0.001],
             "benchmark_daily_returns": [0.0, 0.0, 0.0],
+            "daily_dates": _iso_dates(3),
         },
     ]
     assert top_trial(rows)["candidate"] == "A"
@@ -908,7 +911,7 @@ def test_random_search_disabled_by_zero_budget(populated_db: DataConfig):
 def test_run_protocol_rows_and_determinism(populated_db: DataConfig, monkeypatch):
     loader = _loader(populated_db)
     proto = ProtocolConfig(
-        folds=[FoldConfig("2024-01-10", "2024-01-25")],
+        folds=[FoldConfig("2024-01-10", "2024-02-23")],
         seeds=[42, 7],
         random_samples=64,
         random_match_budget=False,
@@ -1039,7 +1042,7 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig, production_gate_asof):
                 "model": {"max_formula_len": 6},
                 "protocol": {
                     "folds": [
-                        {"train_end": "2024-01-10", "test_end": "2024-01-25"}
+                        {"train_end": "2024-01-10", "test_end": "2024-02-23"}
                     ],
                     "seeds": [42],
                     "screening": {"steps": 1, "batch_size": 256},
@@ -1099,6 +1102,12 @@ def test_cli_smoke(tmp_path, populated_db: DataConfig, production_gate_asof):
 # --- P1b: Deflated Sharpe and max-t -----------------------------------------
 
 
+def _iso_dates(n: int, start: str = "2024-01-01") -> list[str]:
+    """Mark dates for hand-built row fixtures (p40 R1/R2)."""
+    day = dt.date.fromisoformat(start)
+    return [(day + dt.timedelta(days=i)).isoformat() for i in range(n)]
+
+
 def _noise_rows(n=30, t=100, seed=0):
     rng = np.random.default_rng(seed)
     rows = []
@@ -1113,6 +1122,7 @@ def _noise_rows(n=30, t=100, seed=0):
                 "val_reward": float(i),
                 "daily_returns": [float(x) for x in daily],
                 "benchmark_daily_returns": [0.0] * t,
+                "daily_dates": _iso_dates(t),
             }
         )
     return rows
@@ -1128,6 +1138,7 @@ def _strong_row(t=100, seed=1):
         "fold_test_end": "2024-01-25",
         "daily_returns": [float(x) for x in daily],
         "benchmark_daily_returns": [0.0] * t,
+        "daily_dates": _iso_dates(t),
     }
 
 
@@ -1234,8 +1245,8 @@ def test_selfcheck_rows_insignificant_on_synthetic(populated_db: DataConfig):
     loader = _loader(populated_db)
     proto = ProtocolConfig(
         folds=[
-            FoldConfig("2024-01-10", "2024-01-25"),
-            FoldConfig("2024-01-25", "2024-02-10"),
+            FoldConfig("2024-01-05", "2024-02-09"),
+            FoldConfig("2024-02-09", "2024-02-23"),
         ]
     )
     rows = selfcheck_rows(loader, proto, BacktestConfig())
@@ -1305,7 +1316,7 @@ def test_cli_confirmation_smoke(
                 "model": {"max_formula_len": 6},
                 "protocol": {
                     "folds": [
-                        {"train_end": "2024-01-10", "test_end": "2024-01-25"}
+                        {"train_end": "2024-01-10", "test_end": "2024-02-23"}
                     ],
                     "seeds": [42],
                     "confirmation": {"steps": 1, "batch_size": 256},
@@ -1356,8 +1367,8 @@ def test_cli_selfcheck_smoke(
                     "min_listed_sessions": 1,
                 "protocol": {
                     "folds": [
-                        {"train_end": "2024-01-10", "test_end": "2024-01-25"},
-                        {"train_end": "2024-01-25", "test_end": "2024-02-10"},
+                        {"train_end": "2024-01-05", "test_end": "2024-02-09"},
+                        {"train_end": "2024-02-09", "test_end": "2024-02-23"},
                     ],
                 },
             }

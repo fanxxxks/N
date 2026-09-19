@@ -771,14 +771,17 @@ def _write_protocol_artifact(store: RunStore, spec, handle) -> Path:
         random_samples=0,
     )
     rows = [
+        # p40: >= 30 stitched mark dates so build_result's max-t runs.
         _row(
             "challenger", 42, "2026-01-01", "2026-06-30",
+            daily=[0.001] * 16,
             formula_text="RET_1", eligible=True, rejection_reasons=[],
             direction=1, formula=[1],
             average_turnover=0.05, capacity_utilization=0.05,
         ),
         _row(
             "challenger", 42, "2026-06-30", "2026-12-31",
+            daily=[0.001] * 16,
             formula_text="RET_1", eligible=True, rejection_reasons=[],
             direction=1, formula=[1],
             average_turnover=0.05, capacity_utilization=0.05,

@@ -167,7 +167,10 @@ def test_current_semantic_versions_are_pinned():
     # p21 §8 (APPROVED 2026-09-06): the additive protocol.tier_set semantics
     # and artifact fields bump PROTOCOL_VERSION "26" -> "27"; v26 payloads
     # stay legacy (version mismatch, never converted).
-    assert PROTOCOL_VERSION == "27"
+    # p40 §4 (APPROVED 2026-09-19): the statistical resampling semantics
+    # (real-date joint matrix, jointly drawn date blocks, window floor)
+    # bump PROTOCOL_VERSION "27" -> "28"; v27 payloads stay legacy.
+    assert PROTOCOL_VERSION == "28"
     # p35 (APPROVED 2026-09-17): share-level execution with drifted non-due
     # weights bumps the execution spec 3 -> 4.
     assert EXECUTION_SPEC_VERSION == 4

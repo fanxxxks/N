@@ -217,13 +217,33 @@ def test_n3_disjoint_current_trials_are_an_integrity_error():
         max_t_from_rows(rows, n_perms=100, seed=0, block_size=5)
 
 
-# --- N4: the full-rotation degeneracy is gone ----------------------------------
+# --- N4: the small-sample degeneracy is gone (fail closed below the floor) ---
 
 
-def test_n4_series_shorter_than_block_are_not_automatically_significant():
+def test_n4_window_below_minimum_refuses_instead_of_garbage_p():
     t = 6
-    for seed in range(12):
-        rng = np.random.default_rng(100 + seed)
+    rng = np.random.default_rng(100)
+    rows = [
+        _noise_trial_row(
+            f"s{i}", rng.normal(0.0, 0.01, size=t), _iso_dates(t), i,
+            "2024-01-01",
+        )
+        for i in range(4)
+    ]
+    # Old behaviour: block degenerates to n, every bootstrap mean is the
+    # centered mean and p == 1/(n_perms+1) on any noise pool.  p40: a
+    # window this small cannot calibrate the max-t tail, so the test
+    # refuses outright (no p-value at all).
+    with pytest.raises(ValueError, match="P40_MIN_WINDOW_DATES"):
+        max_t_from_rows(rows, n_perms=500, seed=0, block_size=10)
+
+
+def test_n4_minimum_window_noise_is_mostly_insignificant():
+    t = 30
+    insignificant = 0
+    reps = 60
+    for seed in range(reps):
+        rng = np.random.default_rng(200 + seed)
         rows = [
             _noise_trial_row(
                 f"s{i}", rng.normal(0.0, 0.01, size=t), _iso_dates(t), i,
@@ -231,11 +251,13 @@ def test_n4_series_shorter_than_block_are_not_automatically_significant():
             )
             for i in range(4)
         ]
-        mt = max_t_from_rows(rows, n_perms=500, seed=0, block_size=10)
-        # Old behaviour: block degenerates to n, every bootstrap mean is
-        # the centered mean and p == 1/(n_perms+1) on any noise pool.
-        assert mt["p_value"] > 0.05, (seed, mt["p_value"])
-        assert mt["block_size"] <= max(1, t // 2)
+        mt = max_t_from_rows(rows, n_perms=300, seed=0, block_size=10)
+        assert mt["block_size"] <= max(1, t // 6)
+        insignificant += mt["p_value"] > 0.05
+    # At the minimum legal window the measured size is ~0.08-0.13
+    # (contract §2 R4 erratum 2); a rate below 0.75 would signal the old
+    # always-significant degeneracy returning.
+    assert insignificant >= int(reps * 0.75), insignificant
 
 
 # --- N5: the two row producers agree on the real mark dates --------------------

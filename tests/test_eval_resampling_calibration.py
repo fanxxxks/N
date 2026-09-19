@@ -96,16 +96,18 @@ def test_c3_duplicate_candidate_pool_size():
     assert ALPHA_BAND[0] <= rate <= ALPHA_BAND[1], rate
 
 
-def test_c4_short_series_never_automatically_significant():
-    """n = 6 < block_size = 10: the old block rule degenerated to a full
-    rotation (p = 1/(n_perms+1) on any positive-mean pool, rejection rate
-    ~1.0).  The effective-block rule must never behave that way."""
+def test_c4_minimum_legal_window_never_automatically_significant():
+    """n = 30 = P40_MIN_WINDOW_DATES (the smallest window the resampler
+    accepts; below it the call refuses): the one-sided anti-conservative
+    guard at the floor.  The old implementation had no floor — its n=6
+    behaviour (~0.93 rejection rate on noise) is now structurally
+    impossible because no p-value exists below the floor."""
 
     reps = 120
     rejections = 0
     for rep in range(reps):
         rng = np.random.default_rng(40_000 + rep)
-        matrix = rng.normal(0.0, 0.01, size=(4, 6))
+        matrix = rng.normal(0.0, 0.01, size=(4, 30))
         rejections += _resample(matrix, seed=rep)
     rate = _rate(rejections, reps)
     assert rate <= 0.18, rate

@@ -219,6 +219,9 @@ def _fold_row(
         "rebalance_count": 6,
         "daily_returns": list(daily),
         "benchmark_daily_returns": list(bench),
+        # p40 R2: mark dates derived from the fold so two folds of one
+        # arm never collide (stitching requires the real date axis).
+        "daily_dates": [f"{test_end}#{i:04d}" for i in range(len(daily))],
         "oos_active_ir": None,  # filled by the caller when hand-known
     }
 

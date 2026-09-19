@@ -23,6 +23,17 @@ APPROVED 2026-09-06): "26" -> "27" — the protocol gains the additive
 ``tier_restricted_features`` in the artifact; ``tier_set=None`` is
 byte-identical to v26 behavior and v26 payloads stay legacy (version
 mismatch, never converted).
+
+p40 (``docs/p40_statistical_resampling_draft.md`` §4, WP 5A, APPROVED
+2026-09-19): "27" -> "28" — the statistical adjudication semantics
+changed: rows/stitches carry the real mark-date axis (``daily_dates`` /
+``dates``), the max-t null is built by jointly drawing one date-block
+index per permutation over the date-aligned trial matrix (adjudication
+window = current-run date intersection; non-covering historical trials
+are matrix-excluded but stay in the DSR multiplicity count), and the
+block degeneracy that made any short positive-mean pool significant is
+gone.  v27 artifacts are legacy for promotion (version mismatch) and
+their rows are rejected as ``--trials`` extras for lacking dates.
 """
 
-PROTOCOL_VERSION = "27"
+PROTOCOL_VERSION = "28"

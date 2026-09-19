@@ -7,6 +7,15 @@ studentized max-t block bootstrap, and the pure-noise self-check.  It
 changes when correction *methodology* changes — not when fold contracts,
 metric definitions, search backends or artifact schemas change.
 
+p40 (``docs/p40_statistical_resampling_draft.md``): the max-t bootstrap
+aligns trials by their **real mark dates** and draws date blocks
+**jointly** — one block index per permutation, applied to every trial —
+so the null distribution carries the cross-trial dependence the observed
+statistic actually contains.  The adjudication window is the intersection
+of the current run's trial date indexes; historical trials that do not
+cover it stay in the multiplicity count but cannot be aligned into the
+joint matrix (recorded ``matrix_excluded``).
+
 Import direction: depends on :mod:`ashare_model.eval_metrics` (the stitched
 trial matrix) and :mod:`ashare_model.eval_folds`; never imports the
 ``evaluation`` facade.
@@ -129,29 +138,39 @@ def _trial_stats(excess: np.ndarray) -> tuple[float, float, float, int]:
 
 def _stitched_pool(
     rows: list[dict], extra_trial_rows: list[dict] | None = None
-) -> list[tuple[dict, np.ndarray]]:
-    """The v20 trial matrix: (stitched trial, excess array) pairs.
+) -> list[dict]:
+    """The v20 trial matrix: stitched trials, current run first.
 
     This run's rows and the extra rows from prior artifacts are stitched
     **separately** — a prior run's ``trained`` trial is a different trial
-    from this run's, so they must never share a series.
+    from this run's, so they must never share a series.  p40: every
+    stitched trial carries its real mark-date axis (``dates``).
     """
 
-    pool: list[tuple[dict, np.ndarray]] = []
-    for trial in stitch_oos_series(rows) + stitch_oos_series(extra_trial_rows or []):
-        excess = np.asarray(trial["excess_returns"], dtype=np.float64)
-        if excess.size >= 2:
-            pool.append((trial, excess))
+    pool: list[dict] = []
+    for is_current, trial_rows in ((True, rows), (False, extra_trial_rows or [])):
+        for trial in stitch_oos_series(trial_rows):
+            excess = np.asarray(trial["excess_returns"], dtype=np.float64)
+            dates = tuple(str(x) for x in trial.get("dates") or ())
+            if excess.size >= 2 and len(dates) == excess.size:
+                pool.append(
+                    {
+                        "trial": trial,
+                        "excess": excess,
+                        "dates": dates,
+                        "current": is_current,
+                    }
+                )
     return pool
 
 
-def _dsr_from_pool(pool: list[tuple[dict, np.ndarray]]) -> dict | None:
+def _dsr_from_pool(pool: list[dict]) -> dict | None:
     """Deflated Sharpe of the best stitched trial in the pool."""
 
     stats = []
-    for trial, excess in pool:
-        sr, skew, kurt, t = _trial_stats(excess)
-        stats.append((trial, sr, skew, kurt, t))
+    for entry in pool:
+        sr, skew, kurt, t = _trial_stats(entry["excess"])
+        stats.append((entry["trial"], sr, skew, kurt, t))
     if not stats:
         return None
     best_trial, sr, skew, kurt, t = max(stats, key=lambda x: x[1])
@@ -186,58 +205,80 @@ def dsr_from_rows(
     return _dsr_from_pool(_stitched_pool(rows, extra_trial_rows))
 
 
-def _max_t_from_pool(
-    pool: list[tuple[dict, np.ndarray]],
+# p40 R4: the joint window must carry enough dates for the block bootstrap
+# to calibrate the max-t tail at all.  Below this floor the resampling null
+# is too narrow and any positive-mean pool trends significant (measured:
+# n=6 -> rejection rate ~0.4-0.9); the test therefore refuses to run
+# instead of returning a garbage p-value.
+P40_MIN_WINDOW_DATES = 30
+
+
+def max_t_from_matrix(
+    matrix: np.ndarray,
+    *,
     n_perms: int = 5000,
     seed: int = 0,
     block_size: int = 10,
-) -> dict | None:
-    """Studentized max-t block bootstrap (White-style reality check) over
-    the stitched trial matrix.
+) -> dict:
+    """Studentized max-t circular-block bootstrap over one excess matrix.
 
-    Each trial's excess series is recentered to the zero-mean null; per
-    permutation, circular blocks of ``block_size`` days are resampled per
-    trial, the bootstrapped mean is studentized by the observed per-trial
-    standard deviation, and the max over trials forms the null distribution
-    of the max t-statistic.  (Plain sign-flipping is not used: for a max
-    statistic it can never fall below p = 0.5 by construction.)
+    ``matrix`` is ``[n_trials, n_dates]`` whose columns share a single
+    real date index (the p40 joint matrix).  The window must carry at
+    least :data:`P40_MIN_WINDOW_DATES` dates — below that the resampled
+    null cannot calibrate the max-t tail, so the call raises
+    ``ValueError`` (fail closed: no p-value at all, never the
+    always-significant garbage of a degenerate draw).
+
+    The effective block length is ``max(1, min(block_size, n_dates // 6))``
+    — a length/ratio rule, not just a cap: a block equal to (or half) the
+    window makes every draw a rotation or a two-block splice, whose
+    bootstrap means under-disperse and whose p-value collapses towards
+    ``1/(n_perms+1)`` on any positive-mean pool (the p40 degeneracy,
+    measured rejection rate 0.13-0.24 at n/b = 2 vs 0.054-0.092 at the
+    operating point).
+
+    Per permutation **one** block index is drawn on the date axis and
+    applied to every trial jointly, so the resampled cross-section keeps
+    the dependence structure of the observed statistic.  Each trial's
+    bootstrapped mean is studentized by its own observed standard
+    deviation, and the max over trials forms the null of the max
+    t-statistic.
     """
 
-    series = [excess for _, excess in pool]
-    if not series:
-        return None
-
-    stds = np.asarray(
-        [float(s.std(ddof=1)) for s in series], dtype=np.float64
-    )
-    centered = [s - float(s.mean()) for s in series]
-    tstats = np.asarray(
-        [
-            math.sqrt(s.size) * (float(s.mean()) / std)
-            if std > 1e-12
-            else 0.0
-            for s, std in zip(series, stds)
-        ],
-        dtype=np.float64,
+    m = np.asarray(matrix, dtype=np.float64)
+    if m.ndim != 2 or m.shape[0] < 1 or m.shape[1] < 2:
+        raise ValueError(
+            f"max_t_from_matrix needs a [n_trials, n_dates] matrix with "
+            f"n_dates >= 2, got shape {m.shape}"
+        )
+    k, n = m.shape
+    if n < P40_MIN_WINDOW_DATES:
+        raise ValueError(
+            f"the joint window carries {n} dates, below the p40 minimum "
+            f"of {P40_MIN_WINDOW_DATES} (P40_MIN_WINDOW_DATES): the block "
+            "bootstrap cannot calibrate the max-t tail on this sample — "
+            "fail closed instead of reporting a garbage p-value "
+            "(docs/p40_statistical_resampling_draft.md §2 R4)"
+        )
+    block = max(1, min(int(block_size), n // 6))
+    stds = m.std(axis=1, ddof=1)
+    tstats = np.where(
+        stds > 1e-12,
+        np.sqrt(n) * (m.mean(axis=1) / np.maximum(stds, 1e-12)),
+        0.0,
     )
     observed = float(tstats.max())
+    centered = m - m.mean(axis=1, keepdims=True)
 
     rng = np.random.default_rng(seed)
-    block = min(max(int(block_size), 1), min(s.size for s in series))
+    n_blocks = int(math.ceil(n / block))
+    offsets = np.arange(block)
     count = 0
     for _ in range(int(n_perms)):
-        boot_means = np.empty(len(series), dtype=np.float64)
-        for i, s in enumerate(centered):
-            n = s.size
-            n_blocks = int(math.ceil(n / block))
-            starts = rng.integers(0, n, size=n_blocks)
-            offsets = np.arange(block)
-            idx = (starts[:, None] + offsets[None, :]).ravel() % n
-            boot = s[idx[:n]]
-            boot_means[i] = float(boot.mean())
-        boot_t = np.sqrt(
-            np.asarray([s.size for s in series], dtype=np.float64)
-        ) * (boot_means / np.maximum(stds, 1e-12))
+        starts = rng.integers(0, n, size=n_blocks)
+        idx = ((starts[:, None] + offsets[None, :]).ravel() % n)[:n]
+        boot = centered[:, idx]
+        boot_t = np.sqrt(n) * (boot.mean(axis=1) / np.maximum(stds, 1e-12))
         if float(boot_t.max()) >= observed:
             count += 1
 
@@ -247,10 +288,97 @@ def _max_t_from_pool(
         "p_value": p_value,
         "n_perms": int(n_perms),
         "block_size": block,
-        "n_trials": len(series),
+        "n_trials": int(k),
+        "n_dates": int(n),
         "seed": seed,
         "significant_95": bool(p_value <= 0.05),
     }
+
+
+def _adjudication_window(current: list[dict]) -> list[str]:
+    """W = the intersection of the current run's trial date indexes, in
+    the chronological order of the first current trial (its segments are
+    stitched in fold order)."""
+
+    if not current:
+        raise ValueError(
+            "no current-run trials: the adjudication window is undefined"
+        )
+    shared = set(current[0]["dates"])
+    for entry in current[1:]:
+        shared &= set(entry["dates"])
+    window = [d for d in current[0]["dates"] if d in shared]
+    if not window:
+        raise ValueError(
+            "current-run trials share no common dates: the p40 joint "
+            "matrix is undefined"
+        )
+    return window
+
+
+def _max_t_from_pool(
+    pool: list[dict],
+    n_perms: int = 5000,
+    seed: int = 0,
+    block_size: int = 10,
+) -> dict | None:
+    """Joint studentized max-t block bootstrap over the dated pool.
+
+    The joint matrix is built on the adjudication window W (§R3): pooled
+    trials whose date index covers W are aligned to W by **date** (never
+    by position); the others are recorded ``matrix_excluded`` with the
+    reason and stay in the multiplicity count.  The resampling itself is
+    :func:`max_t_from_matrix` (§R4): one shared date-block index per
+    permutation.
+    """
+
+    if not pool:
+        return None
+    current = [entry for entry in pool if entry["current"]]
+    window = _adjudication_window(current)
+    w_index = {d: i for i, d in enumerate(window)}
+    columns: list[np.ndarray] = []
+    excluded: list[dict] = []
+    for entry in pool:
+        dates = entry["dates"]
+        cover = set(dates)
+        missing = [d for d in window if d not in cover]
+        if missing:
+            excluded.append(
+                {
+                    "candidate": entry["trial"].get("candidate"),
+                    "seed": entry["trial"].get("seed"),
+                    "reason": "window_mismatch",
+                    "n_missing_dates": len(missing),
+                }
+            )
+            continue
+        pos = {d: i for i, d in enumerate(dates)}
+        columns.append(entry["excess"][[pos[d] for d in window]])
+    if not columns:
+        raise ValueError(
+            "no pooled trial covers the adjudication window "
+            f"{window[0]}..{window[-1]} ({len(window)} dates): the joint "
+            "matrix is undefined"
+        )
+    matrix = np.vstack(columns)
+    stats = max_t_from_matrix(
+        matrix, n_perms=n_perms, seed=seed, block_size=block_size
+    )
+    stats.update(
+        {
+            "window": {
+                "first_date": window[0],
+                "last_date": window[-1],
+                "n_dates": len(window),
+            },
+            "matrix_excluded": excluded,
+            "n_current": len(current),
+            "n_extra": len(pool) - len(current),
+            "n_trials": len(pool),
+        }
+    )
+    return stats
 
 
 def max_t_from_rows(
@@ -260,7 +388,8 @@ def max_t_from_rows(
     block_size: int = 10,
     extra_trial_rows: list[dict] | None = None,
 ) -> dict | None:
-    """Studentized max-t over the **stitched** trial matrix (v20)."""
+    """Studentized max-t over the **stitched**, date-aligned trial matrix
+    (v20 + p40 R3/R4)."""
 
     return _max_t_from_pool(
         _stitched_pool(rows, extra_trial_rows),

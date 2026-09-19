@@ -66,11 +66,18 @@ def _row(
     daily=None,
     bench=None,
     failed=False,
+    dates=None,
     **extra,
 ):
     t = len(daily) if daily is not None else 3
     daily = [float(x) for x in daily] if daily is not None else [0.001] * t
     bench = [float(x) for x in bench] if bench is not None else [0.0] * t
+    # p40 R1/R2: hand-built rows carry their mark dates too (derived from
+    # the fold so two folds of one trial never collide; different trials
+    # intentionally SHARE their dates - they were measured on the same
+    # sessions, which is exactly what the joint matrix aligns on).
+    if dates is None:
+        dates = [f"{fold_test_end}#{i:04d}" for i in range(t)]
     row = {
         "candidate": candidate,
         "seed": seed,
@@ -78,6 +85,7 @@ def _row(
         "fold_test_end": fold_test_end,
         "daily_returns": daily,
         "benchmark_daily_returns": bench,
+        "daily_dates": dates,
         "failed": failed,
         "formula_text": "X",
         "average_turnover": 5.0,
@@ -87,10 +95,16 @@ def _row(
     return row
 
 
-def _two_fold_rows(candidate="trained", seed=42):
+def _two_fold_rows(candidate="trained", seed=42, n_per_fold=2):
+    """Two chronological folds of one trial.  ``n_per_fold=2`` keeps the
+    historical hand-checkable shape; build_result callers pass a larger
+    count because p40 refuses to run max-t below the 30-date window floor
+    (P40_MIN_WINDOW_DATES)."""
+    first = [0.01, 0.02] * ((n_per_fold + 1) // 2)
+    second = [0.03, 0.04] * ((n_per_fold + 1) // 2)
     return [
-        _row(candidate, seed, "2023-12-31", "2024-12-31", [0.01, 0.02]),
-        _row(candidate, seed, "2024-12-31", "2025-12-31", [0.03, 0.04]),
+        _row(candidate, seed, "2023-12-31", "2024-12-31", first[:n_per_fold]),
+        _row(candidate, seed, "2024-12-31", "2025-12-31", second[:n_per_fold]),
     ]
 
 
@@ -239,7 +253,7 @@ def test_top_trial_is_a_stitched_trial():
 
 
 def test_build_result_v20_schema_with_stitched_block():
-    rows = _two_fold_rows("trained", 42)
+    rows = _two_fold_rows("trained", 42, n_per_fold=16)
     result = build_result(
         ProtocolConfig(), "screening", TierConfig(150, 256), rows,
         spec_id=TEST_SPEC_ID,
@@ -264,7 +278,7 @@ def test_build_result_v21_records_data_tiers():
     def _tok(name: str) -> int:
         return FORMULA_VOCAB.feature_offset + FORMULA_VOCAB.feature_names.index(name)
 
-    rows = _two_fold_rows("trained", 42)
+    rows = _two_fold_rows("trained", 42, n_per_fold=16)
     for row in rows:
         row["formula_text"] = "ROE"
         row["formula"] = [_tok("ROE")]
@@ -287,7 +301,7 @@ def test_build_result_v21_records_data_tiers():
 
 
 def test_build_result_untraceable_rows_record_null_tier():
-    rows = _two_fold_rows("trained", 42)
+    rows = _two_fold_rows("trained", 42, n_per_fold=16)
     for row in rows:
         row.pop("formula_text", None)
         row.pop("formula", None)
@@ -303,7 +317,7 @@ def test_build_result_untraceable_rows_record_null_tier():
 
 
 def test_build_result_records_ledger_and_regime():
-    rows = _two_fold_rows()
+    rows = _two_fold_rows(n_per_fold=16)
     regime = RegimeRegistry(
         "n/a", declare_dev_regime("2026-12-31")
     )
@@ -333,7 +347,7 @@ def _small_proto_config() -> ProtocolConfig:
     return ProtocolConfig(
         seeds=[42],
         folds=[
-            FoldConfig("2024-01-10", "2024-01-25"),
+            FoldConfig("2024-01-10", "2024-03-15"),
         ],
         baseline_signals=["MOMENTUM_20"],
         random_samples=0,
@@ -449,8 +463,8 @@ def test_selfcheck_rows_stitch_into_one_trial(populated_db: DataConfig):
     loader = _loader(populated_db)
     proto = ProtocolConfig(
         folds=[
-            FoldConfig("2024-01-10", "2024-01-25"),
-            FoldConfig("2024-01-25", "2024-02-10"),
+            FoldConfig("2024-01-10", "2024-02-09"),
+            FoldConfig("2024-02-09", "2024-02-23"),
         ]
     )
     rows = evaluation.selfcheck_rows(loader, proto, BacktestConfig())

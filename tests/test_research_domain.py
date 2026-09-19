@@ -432,7 +432,7 @@ def test_run_protocol_domain_restricts_tensor_and_rows(
     proto = ProtocolConfig(
         domain="short_price_volume",
         baseline_signals=list(short.baseline_signals),
-        folds=[FoldConfig("2024-01-10", "2024-01-25")],
+        folds=[FoldConfig("2024-01-10", "2024-02-23")],
         seeds=[42],
         random_samples=0,
         random_match_budget=False,
