@@ -632,13 +632,28 @@ class AshareDataLoader:
             )
         up_wide = pivot_wide(df, self.ts_codes, self.dates, "up_limit")
         down_wide = pivot_wide(df, self.ts_codes, self.dates, "down_limit")
-        missing_limit = ~(np.isfinite(up_wide.to_numpy(dtype=float))
-                          & np.isfinite(down_wide.to_numpy(dtype=float)))
+        open_wide = pivot_wide(df, self.ts_codes, self.dates, "open")
+        up = up_wide.to_numpy(dtype=float)
+        down = down_wide.to_numpy(dtype=float)
+        bar_open = open_wide.to_numpy(dtype=float)
+        # p38 (p19 §2.4 amendment): a limit record is REQUIRED exactly on
+        # cells that have a bar row — finite open > 0, the exact matrix's
+        # own dead-bar criterion.  No-bar sessions (pre-listing /
+        # post-delisting / suspension-without-row) are structurally
+        # outside the grid, and "missing" aligns with the exact rule
+        # (non-finite or <= 0).  Disclosure-grid only: the per-day masks
+        # were already blocking these cells on both sides.
+        has_bar = np.isfinite(bar_open) & (bar_open > 0.0)
+        limit_usable = (
+            np.isfinite(up) & np.isfinite(down) & (up > 0.0) & (down > 0.0)
+        )
+        missing_limit = has_bar & ~limit_usable
         for row, code in enumerate(self.ts_codes):
             if missing_limit[row].any() and code not in self.price_degraded:
                 self.price_degraded[code] = (
-                    "daily_price_limit record missing for at least one "
-                    "loaded session; exact constraint fail-closed (p19 §2.4)"
+                    "daily_price_limit record missing on a bar session; "
+                    "exact constraint fail-closed (p19 §2.4 as amended "
+                    "by p38)"
                 )
         if self.price_degraded:
             for code, reason in sorted(self.price_degraded.items()):
