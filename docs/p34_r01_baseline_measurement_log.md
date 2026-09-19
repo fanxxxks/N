@@ -275,3 +275,94 @@ range 20140102..20260916）。**范围收缩记录**：跳过 steps 5–7（行�
 - 本测量日志 §1–§5 与审计/探针脚本：`D:\minequant\reports\r01_*.py|*.txt`。
 - 数据备份：`data/backup_20260916_r01/ashare.duckdb`。
 - 提交链：`96c901e…3ea1c50`（本节随收口 commit 追加）。
+
+## 7 WP3 报告补齐 + 修正执行版本下的正式重跑（2026-09-18，用户直接指令工作包 3）
+
+契约 Rev 3（commit `27f22a8`，用户指令「完成工作包 3：补齐 R01 报告，并按
+修正后的执行版本重跑固定基线」批准）。本节 evidence-only：只记录实际发生
+什么；计划见契约 §4 Rev 3。
+
+### 7.1 软件交付
+
+| 项 | 值 |
+|---|---|
+| 提交链 | 契约 Rev 3 `27f22a8` → RED `0c19f51`（tests/test_p34_r01_report_wp3.py 7 用例 + 分片注册 110 文件）→ 实现 `dcd9291` |
+| RED 证据（实现前树） | 7 failed 全部落在 Rev 3 能力缺口：W1 `KeyError: 'oos_active_ir'`、W2 `KeyError: 'stitched'`、W3 `ImportError: classify_arm_diagnostics`、W5 `assert 2 == 1`（schema 钉 1→2） |
+| 实现 | `evaluate_signal` 附加字段：`oos_active_ir`（行自身日序列上的权威公式，命名避开 scorer 训练窗 `active_ir`）+ 执行漏斗（due 会话五桶精确分割：no_signal/target_stable/fully_suppressed/partial_suppressed/executed_clean；no_signal 用构造器同款 `has_cross_sectional_dispersion` + 同一 mask 矩阵重判，不新增第二语义；计划 vs 成交订单/换手；threshold 与 min_trade 抑制原因拆分；持仓最小值/零持仓会话）——引擎与构造器零改动，既有字段逐位不变。`r01_baseline` 报告 schema 2：`annual`（逐折×逐档 excess/oos_active_ir/total_return + ok/failed/benchmark_missing 状态）、`fold_stats_1x`（中位/最小/最大）、`stitched`（经 `stitch_oos_series` 唯一权威按档拼接，active IR 在拼接序列上重算，失败折计入 failed_folds）、`benchmark_status`、`data_completeness`（类型化 loader 帧 + 会话对账）、`arm_summaries`、`arm_diagnostics`（描述性四向：measurement_incomplete/weak_signal/execution_blocked/cost_swallowed，阈值冻结于报告 `diagnostic_rules` 自描述；与 §3.7 冻结裁决并列、永不互替）、`engine_version_attribution`（EXECUTION_SPEC_VERSION=4 实时常量；`prior_version_numbers_exist=false` 附 WP0 §6.3 理由——exec v3 基线数字从未存在，无可归因差异，记录而非伪造）、`reporting_notes`（组合原始秩尺度披露 + 拼接 vs 折均值的区分声明） |
+| 裁决/方向/成本档 | **逐字未动**（§3.2/§3.3/§3.7 冻结；组合保持原始截面秩，百分位标准化另立包） |
+
+### 7.2 验证矩阵（均在候选树内容 = `dcd9291`）
+
+| 验证 | 结果 |
+|---|---|
+| 聚焦 | `test_p34_r01_report_wp3.py` → **7 passed**（58.38s）；`test_p34_r01_baseline.py` → **15 passed**（155.17s） |
+| 相邻契约 | p27/p35/p36/stitched_oos/baseline_harness → **81 passed**（53.90s）；evaluation/data_loader/run_store/p31 → **133 passed**（539.75s） |
+| compileall | exit 0 |
+| 分片权威 | 110 files across 4 shards（新文件同 commit 注册） |
+| `git diff --check` | 干净（仅 autocrlf 提示） |
+| 全量首轮（`-n auto`，p34 §6 沿用既有 parallel-vs-serial 对账基线） | **1993 passed, 1 failed, 1 skipped, 3 xfailed**（1061.90s）。唯一失败 `test_task_executor.py::test_rows_run_in_independent_subprocesses_with_heartbeat_and_metrics`：与本包零导入交集（task_executor 不触 r01_baseline/eval_metrics，反之亦然）、单测复跑 passed（13.01s）、整文件复跑 9 passed——`-n auto` 负载下子进程收集竞态，非本包回归 |
+| 全量复轮（同树 `-n auto`） | **1994 passed, 0 failed, 1 skipped, 3 xfailed**（1158.98s）——上述失败未复现，确认偶发 |
+
+既有测试修改白名单（AGENTS §10.1）：`tests/test_p34_r01_baseline.py:942` R8
+报告 schema 钉 `1→2`——第 2 类（需求变更，契约 Rev 3 §4 版本表为批准依据），
+断言强度不变（`==` 精确匹配，仅值随 bump 更新）。
+
+### 7.3 正式重跑（EXECUTION_SPEC_VERSION=4；2026-09-18 11:45–11:50 本地）
+
+命令（工作树干净 @ `dcd9291`，无并发重载进程）：
+
+```
+python scripts/r01_baseline.py \
+  --contract-sha256 d5460955ab15dc026592047734bcb419358e303fb9db75374f8da23bf8857f0f \
+  --out-root data/r1/r01_baseline
+```
+
+（sha 为含 Rev 3 的已提交契约文件实时 sha256；C5 自校验通过。）
+
+| 项 | 值 |
+|---|---|
+| run | spec `42d8801fae1044b48d…` / run `93b17c2d8f774ba7bc91677b15501ba1` |
+| 身份 | dataset `767d955b0fd99507fed95b4275a2bdde5bdab177e1e22c8dc156a45c107e21b2`（**重新实时确认**，与 09-17 一致；双库自 09-16 23:47 未变更）；cutoff `20260916`；purpose `historical_research`；`execution_spec_version=4`（RunSpec 内）；git_commit `dcd9291` |
+| 生命周期 | IDEA → SPEC_LOCKED（11:45:12）→ **REJECTED**（11:50:07，诚实终态）；artifacts：idea `0b07fe09…` / spec_lock `c92c9ee8…` / data_qualification_report `a3775451…`（append-only 登记） |
+| 门禁 | G1–G8 全过；G8 `basis=historical_snapshot, daily 20260916 vs reference 20260916, lag=0`（p36 历史基准首次在真实 R01 运行上生效）；日历对账 expected 2846 / loaded 3091 / **missing 0**（a6689a1 修复后形态） |
+| 拒绝点 | §5.1 loader_frames **degraded**：`price_semantics_degraded`（**恰好 1,630 码**，与 §5.4(c) 同步前后两次普查一致——结构性、与同步无关）+ `industry_source_degraded`（申万指数收盘滞后 7 会话，源止于 20260907）。R01Refusal → exit 2，无部分状态、无基线行 |
+| 因子缓存 | hit key `fe96090e…`（与 09-17 相同 dataset 窗口 20140102..20260916:3091），未重算 |
+| 墙钟 | ≈4m55s（confirm+门禁+装载+拒绝） |
+
+**判读**：重跑按契约 §7 走到 fail-closed 诚实终态——这正是 Rev 3 四向诊断中
+`measurement_incomplete` 的真实落点（测试已证明另外三向的判定机能在受控
+fixture 上成立；正式路径因数据资格未过而无法产生臂数值）。阻断集合与
+WP0 收口时**逐项一致**（申万源新鲜度 / 1,630 码 pre-listing 限额格网
+披露语义 / 001914 前身历史），解除条件仍是三个契约治理决策（p17-D5 换源
+或依赖升级、p19 §2.4 语义裁决、001914 数据修复），均超出本包授权，
+未越权处置。基线方向、候选、成本档与裁决规则零变化；worth_search 维持
+「无证据」。
+
+引擎版本归因：exec v3 基线数字从未存在（WP0 §6.3 不可采纳且未产出），
+故无旧版-新版数值差异可归因——该事实已固化为报告字段
+`engine_version_attribution.prior_version_numbers_exist=false`，报告 schema
+v2 的机器验证见 W5。
+
+### 7.4 勘误 4：§5.5/§6.4 两个 REJECTED run 的 ID 归属对调
+
+核对 run store 原始证据（runspec `git_commit` + lifecycle 时间戳 + 数据
+报告内容）发现 §5.5 第 2/3 条与 §6.4 把两个 REJECTED run 的 ID 写反了：
+
+| run | runspec git_commit | SPEC_LOCKED→REJECTED（本地） | 数据报告特征 | 即 §5.5 的 |
+|---|---|---|---|---|
+| `f80e042e…/31d16c7c…` | `7279rc1`（修复**前**） | 09-16 23:53 → 09-17 00:57 | `missing_trading_days` 含 20260917..20261231（未来会话误计） | 第 2 条（23:49 运行，驱动 bug 暴露） |
+| `2983d61d…/ac445541…` | `a6689a1`（修复**后**） | 09-17 01:15 → 01:21 | `missing=[]`，仅 1,630 码价格语义 + 行业滞后 7 | 第 3 条（01:16 收口运行，残余降级全披露） |
+
+修复 commit `a6689a1` 时间戳 09-17 01:11 本地——23:49 的运行不可能在其上。
+原叙事结论（bug 是什么、修复是什么、最终拒绝原因、四类降级清单）全部
+不变，仅两处 run ID 对调；§6.4 的目录对照随之按上表理解。原始产物与
+事件未做任何改写。
+
+### 7.5 当前 R01 第一轮状态（WP3 后）
+
+- 软件与治理：**完成**（报告 schema v2 + 四向诊断 + 执行漏斗 + 版本归因；
+  全量 1994P/0F）。
+- 正式基线测量：**仍被数据资格阻断**（本节 §7.3 的 REJECTED 即当前最新
+  证据）；无基线数值、无 worth_search 裁决——诚实状态。
+- 下一步属于各自独立授权的包：三个数据阻断的契约治理决策（见 §7.3）；
+  数据解锁后以同一命令（印签当时实时契约 sha）重跑即可，本契约未过期。
