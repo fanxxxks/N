@@ -25,6 +25,13 @@ import pytest
 
 from ashare_model.r01_baseline import combo_signal, rank_normalize_signal
 
+# Fixture lineage: the shared mini dual-DB environment and the G8
+# era-injection seam come from the p34 suite (the p37 import pattern).
+from test_p34_r01_baseline import (  # noqa: F401  (pytest fixtures)
+    gate_run_asof,
+    mini_env,
+)
+
 
 def _members():
     """Two direction-signed member signals on a 3-stock x 4-day grid."""
@@ -69,12 +76,18 @@ def test_n1_weighted_mean_and_missing_member_renormalized():
     expected0 = rank_normalize_signal(1.0 * members[0][1], mask)
     np.testing.assert_array_equal(only0, expected0)
 
-    # Day 2 (index 2): member 0 is NaN there, so a 0.5/0.5 combo must fall
-    # back to member 1's own normalized value on that day (the available
-    # member's renormalized weight is 1).
+    # Cell (0, 2): member 0 is NaN there, so a 0.5/0.5 combo falls back
+    # to member 1's own normalized value (the available member's
+    # renormalized weight is 1); the other cells of day 2 have both
+    # members finite and stay weighted means.
     both = weighted_combo_signal(members, mask, [0.5, 0.5])
-    expected1_day2 = rank_normalize_signal(-1.0 * members[1][1], mask)[0:3, 2]
-    np.testing.assert_allclose(both[0:3, 2], expected1_day2)
+    expected1_cell = rank_normalize_signal(-1.0 * members[1][1], mask)[0, 2]
+    assert both[0, 2] == pytest.approx(expected1_cell)
+    expected0_cell = rank_normalize_signal(1.0 * members[0][1], mask)[1, 2]
+    expected1_s1 = rank_normalize_signal(-1.0 * members[1][1], mask)[1, 2]
+    assert both[1, 2] == pytest.approx(
+        0.5 * expected0_cell + 0.5 * expected1_s1
+    )
 
 
 def test_n1_weights_must_be_a_simplex():
@@ -130,7 +143,9 @@ def test_n2_lambda_zero_is_equal_weight_no_fallback():
     out = fit_combo_weights(
         {"MOMENTUM_20": 0.2, "RSQ_60": 0.1, "REVERSAL_60": 0.4}, lam=0.0
     )
-    assert set(out["weights"].values()) == {pytest.approx(1 / 3)}
+    assert all(
+        w == pytest.approx(1 / 3) for w in out["weights"].values()
+    )
     assert out["fallback"] is False
 
 
@@ -216,6 +231,7 @@ def test_n3_mixed_panel_is_no_reliable_info():
 
 def test_n3_arm_rules_are_the_p37_authority():
     from ashare_model import r02_matrix, r03_combos
+    from ashare_model.r03_combos import decide_r03_adjudication
 
     # One implementation, never two: the R03 adjudicator must consume the
     # p37 frozen rules dict, and blocking flags (low_activity) veto

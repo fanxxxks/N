@@ -84,13 +84,17 @@ unreliable/low_activity/thin_book/min_positive 旗标同款；holdings 下限 =
 active IR>0）——同一实现直接调用，不建第二套。
 
 **四路裁决（冻结）**：
-1. `fitted_increment_region`：主臂在三格全部 viable **且** 每格
+1. `fitted_increment_region`：**combo:all3 三格全部 viable（增量以参照存活
+   为前提——对死亡基线的"增量"无意义）** 且主臂三格全部 viable 且每格
    mean_net_excess_1x(主臂) ≥ mean_net_excess_1x(combo:all3) + **0.005**
    （50bp，预注册边际，先于任何结果固定）；
 2. `equal_weight_stands`：非 1 且 combo:all3 三格全部 viable（p37 净空间
    期内复现，等权仍是最好组合）；
 3. `combo_no_net_space`：combo:all3 在 ≥2 格不 viable（p37 净空间未复现）；
 4. `panel_no_reliable_info`：其余混合情形。
+（勘误 1，2026-09-19 实现期、GREEN 前：起草文本的规则 1 未显式声明参照
+存活前提，字面读法允许"等权死亡 + 拟合臂强"判为增量——语义误导；RED
+测试 N3 固化正确语义后补记。裁决次序 1→2→3→4 不变。）
 `execution_blocked`：面板执行前的数据/身份/门禁拒绝（R03Refusal，
 p37 §2 同款前置层，不产生四路 verdict）。
 
