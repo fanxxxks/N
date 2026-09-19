@@ -320,10 +320,10 @@ def test_protocol_version_single_home_is_versions_module():
     evaluation = importlib.import_module("ashare_model.evaluation")
     versions = importlib.import_module("ashare_model.versions")
     # p21 §8 (APPROVED 2026-09-06): tier_set additive semantics bump 26→27;
-    # p40 §4 (APPROVED 2026-09-19): statistical resampling semantics bump
-    # 27→28 (§10.1 case 2 — contract-driven pin update, stronger not
-    # weaker).
-    assert versions.PROTOCOL_VERSION == "28"
+    # p40 §4 (APPROVED 2026-09-19): statistical resampling bump 27→28;
+    # p41 §4 (APPROVED 2026-09-19): candidate-evidence binding bump 28→29
+    # (§10.1 case 2 — contract-driven pin update, stronger not weaker).
+    assert versions.PROTOCOL_VERSION == "29"
     assert evaluation.PROTOCOL_VERSION is versions.PROTOCOL_VERSION
 
 

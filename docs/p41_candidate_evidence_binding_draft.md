@@ -52,9 +52,15 @@
   全池（本次 + 历史）。若历史试验 SR 高于本次最高，记录
   `extra_outranks_current=true`（诚实披露，不改变被裁决对象）；
   `best_candidate` 字段保留为被裁决候选（与 `adjudicated_candidate` 一致）。
-- max-t：**观察统计量只取本次运行试验的 max-t**（被裁决对象）；bootstrap
-  零分布的 max 取**联合矩阵内全部试验**（本次 + 覆盖 W 的历史）——历史试验
-  计入零分布（多重检验范围）但永远不可能成为被裁决统计量的来源。
+- max-t：**观察统计量 = 被裁决试验在 W 上的 t 统计量**（被裁决试验与
+  DSR/top_trial 同一选择规则——拼接 Sharpe；Hansen-SPA 式"被选模型的统计量
+  对 max 零分布"）；bootstrap 零分布的 max 取**联合矩阵内全部试验**（本次 +
+  覆盖 W 的历史）——历史试验计入零分布（多重检验范围）但永远不可能成为被
+  裁决统计量的来源。（勘误 1，2026-09-19 实现期：起草句「观察统计量只取
+  本次运行试验的 max-t」在"按 W 上 t 取 max"字面读法下会选出与 top_trial
+  不同规则的候选，使 B4-2 对合法 artifact 误报；澄清为被裁决试验自身的
+  t 统计量，方向不变——历史永不供应观察值。校准驱动的是矩阵级对称口径
+  （observed_index=None），不受影响。）
 - 本次运行无试验 → `dsr`/`max_t` 返回 `None`（既有行为）。
 
 **B4 promotion G2 绑定**（`evaluate_challenger` significance 门）：

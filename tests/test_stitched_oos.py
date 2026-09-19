@@ -159,11 +159,21 @@ def test_stitch_excess_is_daily_minus_benchmark():
     assert trial["excess_returns"] == pytest.approx([0.04, -0.02, 0.02])
 
 
-def test_stitch_missing_benchmark_uses_zeros():
+def test_stitch_missing_benchmark_fails_closed():
+    """p41 B1 (supersedes the v20 zero-pad behaviour this test used to
+    pin): a succeeded row without a benchmark series is an integrity
+    error — zero-padding would misreport gross returns as excess."""
     row = _row("A", 1, daily=[0.05, 0.01])
     row.pop("benchmark_daily_returns")
-    trial = stitch_oos_series([row])[0]
-    assert trial["excess_returns"] == pytest.approx([0.05, 0.01])
+    with pytest.raises(ValueError, match="benchmark"):
+        stitch_oos_series([row])
+
+
+def test_stitch_mismatched_benchmark_length_fails_closed():
+    row = _row("A", 1, daily=[0.05, 0.01])
+    row["benchmark_daily_returns"] = [0.0]
+    with pytest.raises(ValueError, match="benchmark"):
+        stitch_oos_series([row])
 
 
 def test_stitch_duplicate_fold_row_is_integrity_error():

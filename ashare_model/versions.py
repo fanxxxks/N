@@ -34,6 +34,17 @@ are matrix-excluded but stay in the DSR multiplicity count), and the
 block degeneracy that made any short positive-mean pool significant is
 gone.  v27 artifacts are legacy for promotion (version mismatch) and
 their rows are rejected as ``--trials`` extras for lacking dates.
+
+p41 (``docs/p41_candidate_evidence_binding_draft.md`` §4, WP 5B,
+APPROVED 2026-09-19): "28" -> "29" — the statistical result structure
+changed: dsr/max-t carry the candidate-evidence identity (adjudicated
+candidate/seed from the current run only, run kind, window, benchmark,
+trial set), the adjudicated object is the current run's own best trial
+(history counts towards multiplicity but never lends its significance),
+and stitching refuses missing/length-mismatched benchmark series instead
+of zero-padding them into fake excess returns.  v28 artifacts are legacy
+for promotion (version mismatch; their dsr/max_t also fail the p41 G2
+identity check).
 """
 
-PROTOCOL_VERSION = "28"
+PROTOCOL_VERSION = "29"

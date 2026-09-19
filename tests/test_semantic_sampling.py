@@ -290,8 +290,10 @@ def test_version_pins():
     assert GRAMMAR_VERSION == 9  # v9 (p24, the user-approved F2 batch); prior: 8 = p23 v4-era
     # features (whitelist §10.1 case 2, docs/p13_fundamental_fields_contract.md).
     assert SEARCH_CONTRACT_VERSION == 4
-    # p21 §8 (APPROVED 2026-09-06): PROTOCOL 26 -> 27 (tier_set additive).
-    assert PROTOCOL_VERSION == "27"
+    # p21 §8 (APPROVED 2026-09-06): PROTOCOL 26 -> 27 (tier_set additive);
+    # p40/p41 §4 (APPROVED 2026-09-19): 27 -> 28 -> 29 (statistical
+    # resampling semantics, then candidate-evidence binding).
+    assert PROTOCOL_VERSION == "29"
 
 
 def test_legacy_formula_resolution_unaffected():

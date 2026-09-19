@@ -170,7 +170,10 @@ def test_current_semantic_versions_are_pinned():
     # p40 §4 (APPROVED 2026-09-19): the statistical resampling semantics
     # (real-date joint matrix, jointly drawn date blocks, window floor)
     # bump PROTOCOL_VERSION "27" -> "28"; v27 payloads stay legacy.
-    assert PROTOCOL_VERSION == "28"
+    # p41 §4 (APPROVED 2026-09-19): the candidate-evidence binding
+    # (identity blocks, current-run adjudication, benchmark fail-closed)
+    # bumps "28" -> "29".
+    assert PROTOCOL_VERSION == "29"
     # p35 (APPROVED 2026-09-17): share-level execution with drifted non-due
     # weights bumps the execution spec 3 -> 4.
     assert EXECUTION_SPEC_VERSION == 4

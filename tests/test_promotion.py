@@ -1065,7 +1065,7 @@ def test_g7_passes_registry_promotable_formula(tmp_path):
     assert policy["report"]["per_feature"] == {
         "RET_1": {"promotion_allowed": True, "deprecated": False}
     }
-    assert verdict["promotion_rule_version"] == "2"
+    assert verdict["promotion_rule_version"] == "3"
     assert verdict["promoted"] is True
 
 
@@ -1123,8 +1123,9 @@ def test_g7_rejects_p10_seed7_live_formula(tmp_path):
 
 
 def test_promotion_rule_version_pinned():
-    """P12 §7: the promotion gate set is versioned from v2 (G1-G6 were
-    the unversioned v1 era)."""
+    """P12 §7: the promotion gate set is versioned (G1-G6 were the
+    unversioned v1 era; v3 = p41 §2 B4, G2 consumes the candidate-
+    evidence binding)."""
     from ashare_model.promotion import PROMOTION_RULE_VERSION
 
-    assert PROMOTION_RULE_VERSION == "2"
+    assert PROMOTION_RULE_VERSION == "3"

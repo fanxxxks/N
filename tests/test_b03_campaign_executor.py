@@ -60,7 +60,7 @@ _LEG_YAML = {
         "target_horizon": 1,
     },
     "protocol": {
-        "folds": [{"train_end": "2024-02-06", "test_end": "2024-02-20"}],
+        "folds": [{"train_end": "2024-01-10", "test_end": "2024-02-23"}], # p40: the stitched window must clear P40_MIN_WINDOW_DATES
         "seeds": [42],
         "random_samples": 0,
     },

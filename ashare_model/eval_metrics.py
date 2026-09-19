@@ -567,7 +567,9 @@ def stitch_oos_series(rows: list[dict]) -> list[dict]:
     stitchable observation.  A succeeded row whose ``daily_dates`` are
     missing or mismatched with its series raises ``ValueError`` (p40: a
     row that cannot be placed on a real date axis cannot be stitched),
-    as does a duplicated mark date inside one trial.
+    as does a duplicated mark date inside one trial, and so does a
+    missing or length-mismatched ``benchmark_daily_returns`` series
+    (p41 B1: excess returns are never zero-padded back into existence).
     """
 
     groups: dict[tuple, list[dict]] = {}
@@ -614,8 +616,22 @@ def stitch_oos_series(rows: list[dict]) -> list[dict]:
         mark_dates: list[str] = []
         for row in segments:
             d = [float(x) for x in row["daily_returns"]]
-            b = row.get("benchmark_daily_returns")
-            b = [float(x) for x in b] if b and len(b) == len(d) else [0.0] * len(d)
+            # p41 B1: a succeeded row whose benchmark series is missing or
+            # length-mismatched is an integrity error, never a zero-padded
+            # "excess" series — silent zeros would turn gross returns into
+            # supposed outperformance (docs/p41_candidate_evidence_binding_
+            # draft.md §2 B1).
+            b_raw = row.get("benchmark_daily_returns")
+            if not b_raw or len(b_raw) != len(d):
+                raise ValueError(
+                    f"candidate={candidate} seed={seed} fold="
+                    f"{(row.get('fold_train_end'), row.get('fold_test_end'))}: "
+                    "succeeded row carries no benchmark series aligned "
+                    "with its daily_returns — refusing to zero-pad and "
+                    "misreport gross returns as excess "
+                    "(docs/p41_candidate_evidence_binding_draft.md §2 B1)"
+                )
+            b = [float(x) for x in b_raw]
             # p40 R2: every stitched segment must carry its real mark dates,
             # 1:1 with its daily series.  A succeeded row without them is a
             # pre-p40 artifact row: it cannot be aligned with anything, so

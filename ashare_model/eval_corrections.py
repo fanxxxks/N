@@ -31,7 +31,11 @@ from ashare_data.config import BacktestConfig, ProtocolConfig
 
 from .data_loader import AshareDataLoader
 from .eval_folds import epoch_slice, resolve_folds
-from .eval_metrics import evaluate_signal, stitch_oos_series
+from .eval_metrics import (
+    evaluate_signal,
+    stitch_oos_series,
+    stitched_metrics,
+)
 
 # --- multiple-testing corrections (Bailey & Lopez de Prado 2014) ------------
 #
@@ -136,6 +140,69 @@ def _trial_stats(excess: np.ndarray) -> tuple[float, float, float, int]:
     return sr, skew, kurt, t
 
 
+# p41 B2: the benchmark identity recorded in every statistical result —
+# the engine's equal-weight universe benchmark that evaluate_signal and
+# benchmark_row compute on the same sessions as the strategy series.
+BENCHMARK_DEFINITION = "engine:equal_weight_universe"
+
+
+def _select_adjudicated(current: list[dict]) -> dict | None:
+    """The adjudicated current-run trial, by the artifact's own candidate
+    selection rule: highest stitched Sharpe of the **daily** series
+    (``top_trial``'s exact rule and tie behavior — first best wins), so
+    the corrections' adjudicated candidate and the artifact's ``top_trial``
+    are the same object by construction (p41 B2/B3)."""
+
+    best: dict | None = None
+    best_sharpe = None
+    for entry in current:
+        metrics = stitched_metrics(entry["trial"])
+        if metrics.get("n_days", 0) < 2:
+            continue
+        sharpe = metrics.get("sharpe")
+        if best is None or sharpe > best_sharpe:
+            best, best_sharpe = entry, sharpe
+    return best
+
+
+def _identity_blocks(
+    adjudicated: dict, n_current: int, n_extra: int, matrix_excluded: list[dict],
+    *, window: list[str] | None = None,
+) -> dict:
+    """The p41 B2 identity five-tuple shared by the DSR and max-t results.
+
+    ``window`` overrides the adjudicated trial's own date axis (the max-t
+    result reports the joint-matrix window W instead, with the benchmark
+    span matching that window)."""
+
+    trial = adjudicated["trial"]
+    dates = list(window) if window is not None else list(adjudicated["dates"])
+    bench_n = len(trial.get("benchmark_daily_returns") or [])
+    benchmark_n = len(dates) if window is not None else bench_n
+    return {
+        "adjudicated_candidate": trial.get("candidate"),
+        "adjudicated_seed": trial.get("seed"),
+        "run": {"kind": "current_run"},
+        "window": {
+            "first_date": dates[0] if dates else None,
+            "last_date": dates[-1] if dates else None,
+            "n_dates": len(dates),
+        },
+        "benchmark": {
+            "definition": BENCHMARK_DEFINITION,
+            "n_days": benchmark_n,
+            "first_date": dates[0] if dates else None,
+            "last_date": dates[-1] if dates else None,
+        },
+        "trial_set": {
+            "n_current": n_current,
+            "n_extra": n_extra,
+            "n_trials": n_current + n_extra,
+            "matrix_excluded": matrix_excluded,
+        },
+    }
+
+
 def _stitched_pool(
     rows: list[dict], extra_trial_rows: list[dict] | None = None
 ) -> list[dict]:
@@ -165,31 +232,53 @@ def _stitched_pool(
 
 
 def _dsr_from_pool(pool: list[dict]) -> dict | None:
-    """Deflated Sharpe of the best stitched trial in the pool."""
+    """Deflated Sharpe of the **adjudicated** stitched trial (p41 B3).
 
-    stats = []
-    for entry in pool:
-        sr, skew, kurt, t = _trial_stats(entry["excess"])
-        stats.append((entry["trial"], sr, skew, kurt, t))
-    if not stats:
+    The adjudicated trial is the best **current-run** trial by the
+    artifact's candidate-selection rule (``top_trial``'s stitched-Sharpe
+    rule); the multiplicity count ``n_trials`` covers the whole pool —
+    historical trials enter the multiple-testing scope but can never
+    become the adjudicated object, and if one of them outranks the
+    current best the result discloses ``extra_outranks_current`` instead
+    of granting its significance to another candidate.  With no
+    current-run trial there is nothing to adjudicate: ``None``.
+    """
+
+    current = [entry for entry in pool if entry["current"]]
+    adjudicated = _select_adjudicated(current) if current else None
+    if adjudicated is None:
         return None
-    best_trial, sr, skew, kurt, t = max(stats, key=lambda x: x[1])
-    if len(stats) == 1:
+    sr, skew, kurt, t = _trial_stats(adjudicated["excess"])
+    n_all = len(pool)
+    if n_all == 1:
         # No multiplicity: the corrected benchmark collapses to SR = 0.
         dsr = psr(sr, 0.0, t, skew, kurt)
     else:
-        dsr = deflated_sharpe(sr, len(stats), t, skew, kurt)
-    return {
+        dsr = deflated_sharpe(sr, n_all, t, skew, kurt)
+    extra_outranks = any(
+        _trial_stats(entry["excess"])[0] > sr
+        for entry in pool
+        if not entry["current"]
+    )
+    trial = adjudicated["trial"]
+    result = {
         "dsr": dsr,
-        "n_trials": len(stats),
+        "n_trials": n_all,
         "sr_best": sr,
         "t_best": t,
         "skew_best": skew,
         "kurt_best": kurt,
-        "best_candidate": best_trial.get("candidate"),
-        "best_fold_test_end": best_trial.get("fold_test_end"),
-        "best_seed": best_trial.get("seed"),
+        "best_candidate": trial.get("candidate"),
+        "best_fold_test_end": trial.get("fold_test_end"),
+        "best_seed": trial.get("seed"),
+        "extra_outranks_current": bool(extra_outranks),
     }
+    result.update(
+        _identity_blocks(
+            adjudicated, len(current), n_all - len(current), []
+        )
+    )
+    return result
 
 
 def dsr_from_rows(
@@ -219,6 +308,7 @@ def max_t_from_matrix(
     n_perms: int = 5000,
     seed: int = 0,
     block_size: int = 10,
+    observed_index: int | None = None,
 ) -> dict:
     """Studentized max-t circular-block bootstrap over one excess matrix.
 
@@ -228,6 +318,13 @@ def max_t_from_matrix(
     null cannot calibrate the max-t tail, so the call raises
     ``ValueError`` (fail closed: no p-value at all, never the
     always-significant garbage of a degenerate draw).
+
+    ``observed_index`` (p41 B3) names the **adjudicated** trial: the
+    observed statistic is that trial's studentized mean (the Hansen-SPA
+    shape — the selected model's statistic against the max-null), and the
+    bootstrap null takes the max over **all** columns.  ``None`` keeps
+    the symmetric statistic (observed = max over all columns), which the
+    p40 calibration drives.
 
     The effective block length is ``max(1, min(block_size, n_dates // 6))``
     — a length/ratio rule, not just a cap: a block equal to (or half) the
@@ -260,6 +357,11 @@ def max_t_from_matrix(
             "fail closed instead of reporting a garbage p-value "
             "(docs/p40_statistical_resampling_draft.md §2 R4)"
         )
+    if observed_index is not None and not 0 <= int(observed_index) < k:
+        raise ValueError(
+            f"observed_index {observed_index} outside the matrix's "
+            f"{k} trials"
+        )
     block = max(1, min(int(block_size), n // 6))
     stds = m.std(axis=1, ddof=1)
     tstats = np.where(
@@ -267,7 +369,11 @@ def max_t_from_matrix(
         np.sqrt(n) * (m.mean(axis=1) / np.maximum(stds, 1e-12)),
         0.0,
     )
-    observed = float(tstats.max())
+    observed = (
+        float(tstats[int(observed_index)])
+        if observed_index is not None
+        else float(tstats.max())
+    )
     centered = m - m.mean(axis=1, keepdims=True)
 
     rng = np.random.default_rng(seed)
@@ -330,14 +436,23 @@ def _max_t_from_pool(
     reason and stay in the multiplicity count.  The resampling itself is
     :func:`max_t_from_matrix` (§R4): one shared date-block index per
     permutation.
+
+    p41 B3: the observed statistic is the **adjudicated current trial**'s
+    studentized mean on W (same selection rule as ``top_trial``), while
+    the bootstrap null takes the max over **all** matrix columns —
+    historical trials enter the multiple-testing scope but can never
+    supply the observation.
     """
 
     if not pool:
         return None
     current = [entry for entry in pool if entry["current"]]
+    adjudicated = _select_adjudicated(current) if current else None
+    if adjudicated is None:
+        return None
     window = _adjudication_window(current)
-    w_index = {d: i for i, d in enumerate(window)}
     columns: list[np.ndarray] = []
+    column_entries: list[dict] = []
     excluded: list[dict] = []
     for entry in pool:
         dates = entry["dates"]
@@ -355,6 +470,7 @@ def _max_t_from_pool(
             continue
         pos = {d: i for i, d in enumerate(dates)}
         columns.append(entry["excess"][[pos[d] for d in window]])
+        column_entries.append(entry)
     if not columns:
         raise ValueError(
             "no pooled trial covers the adjudication window "
@@ -362,8 +478,13 @@ def _max_t_from_pool(
             "matrix is undefined"
         )
     matrix = np.vstack(columns)
+    observed_index = column_entries.index(adjudicated)
     stats = max_t_from_matrix(
-        matrix, n_perms=n_perms, seed=seed, block_size=block_size
+        matrix,
+        n_perms=n_perms,
+        seed=seed,
+        block_size=block_size,
+        observed_index=observed_index,
     )
     stats.update(
         {
@@ -377,6 +498,15 @@ def _max_t_from_pool(
             "n_extra": len(pool) - len(current),
             "n_trials": len(pool),
         }
+    )
+    stats.update(
+        _identity_blocks(
+            adjudicated,
+            len(current),
+            len(pool) - len(current),
+            excluded,
+            window=window,
+        )
     )
     return stats
 

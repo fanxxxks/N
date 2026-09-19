@@ -39,9 +39,15 @@ verdict records the thresholds used, so a refusal is auditable.
 Gate-set versions: G1-G6 were the unversioned **v1** era
 (``PROMOTION_RULE_VERSION`` did not exist); **v2** (P12,
 ``docs/p12_promotion_enforcement_contract.md``) adds G7, and v2 verdicts
-record ``promotion_rule_version``.  The promotion-gate numbering
-(G1-G7) is independent of the data-quality gate numbering in
-``ashare_data/gates.py``.
+record ``promotion_rule_version``.  **v3** (P41,
+``docs/p41_candidate_evidence_binding_draft.md`` §2 B4) upgrades G2 from
+value-only to **binding + value** consumption: the artifact's dsr/max-t
+blocks must carry the p41 identity (adjudicated candidate/seed, run,
+window, benchmark, trial set) and must adjudicate the artifact's own top
+trial — statistical evidence belonging to another candidate (e.g. a
+historical trial's significance) is a refusal, never a pass.  The
+promotion-gate numbering (G1-G7) is independent of the data-quality gate
+numbering in ``ashare_data/gates.py``.
 """
 
 from __future__ import annotations
@@ -87,8 +93,11 @@ from ashare_portfolio.execution_spec import (
 # Version of the promotion gate-set semantics.  G1-G6 were the
 # unversioned v1 era (no constant existed); v2 (P12,
 # docs/p12_promotion_enforcement_contract.md) adds the G7
-# feature_registry_status gate.  Recorded in every verdict.
-PROMOTION_RULE_VERSION = "2"
+# feature_registry_status gate; v3 (P41,
+# docs/p41_candidate_evidence_binding_draft.md §2 B4) makes G2 consume
+# the candidate-evidence binding, not just the dsr/max-t values.
+# Recorded in every verdict.
+PROMOTION_RULE_VERSION = "3"
 
 
 @dataclass(frozen=True)
@@ -485,21 +494,53 @@ def evaluate_challenger(
             )
     gates["data_formula_p0"] = _gate(not reasons, reasons)
 
-    # G2 -- statistical significance (stitched matrix).
+    # G2 -- statistical significance (stitched matrix), p41 B4: binding
+    # before values.  The dsr/max-t blocks must carry the p41 identity
+    # (adjudicated candidate/seed, run kind, window, benchmark, trial
+    # set) and must adjudicate the artifact's own top trial — a
+    # historical trial's significance is never granted to the challenger
+    # under review, and pre-p41 value-only blocks fail closed.
     reasons = []
+    top = artifact.get("top_trial")
+    for name, block in (("dsr", artifact.get("dsr") or {}),
+                        ("max_t", artifact.get("max_t") or {})):
+        missing = [
+            field for field in (
+                "adjudicated_candidate", "adjudicated_seed", "run",
+                "window", "benchmark", "trial_set",
+            )
+            if block.get(field) is None
+        ]
+        if missing:
+            reasons.append(
+                f"{name} block lacks the statistical identity ({missing}); "
+                "unbound statistical evidence cannot support promotion "
+                "(p41 §2 B2/B4)"
+            )
+            continue
+        if (block["adjudicated_candidate"] != (top or {}).get("candidate")
+                or block["adjudicated_seed"] != (top or {}).get("seed")):
+            reasons.append(
+                f"{name} adjudicates candidate="
+                f"{block['adjudicated_candidate']!r} seed="
+                f"{block['adjudicated_seed']!r}, not the artifact's top "
+                "trial — statistical evidence bound to another candidate "
+                "is not evidence for this challenger (p41 §2 B3/B4)"
+            )
     dsr = artifact.get("dsr") or {}
-    if dsr.get("dsr") is None:
-        reasons.append("no Deflated Sharpe in the artifact")
-    elif dsr["dsr"] < thresholds.dsr_min:
-        reasons.append(f"dsr {dsr['dsr']:.3f} < {thresholds.dsr_min}")
     mt = artifact.get("max_t") or {}
-    if mt.get("significant_95") is None:
-        reasons.append("no max-t in the artifact")
-    elif not mt["significant_95"]:
-        reasons.append(
-            f"max-t not significant (p={mt.get('p_value')} > "
-            f"{thresholds.max_t_p_max})"
-        )
+    if not reasons:
+        if dsr.get("dsr") is None:
+            reasons.append("no Deflated Sharpe in the artifact")
+        elif dsr["dsr"] < thresholds.dsr_min:
+            reasons.append(f"dsr {dsr['dsr']:.3f} < {thresholds.dsr_min}")
+        if mt.get("significant_95") is None:
+            reasons.append("no max-t in the artifact")
+        elif not mt["significant_95"]:
+            reasons.append(
+                f"max-t not significant (p={mt.get('p_value')} > "
+                f"{thresholds.max_t_p_max})"
+            )
     gates["significance"] = _gate(not reasons, reasons)
 
     # G3 -- excess return & risk constraints on the stitched top trial.
