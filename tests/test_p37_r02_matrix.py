@@ -202,7 +202,8 @@ def test_w3_lot_gap_fields_hand_computed():
     open_ = np.array([[33.0] * 5, [20.0] * 5])
     rebalance_mask = np.array([True, False, False, False, False])
     result = _p37_run(open_, rebalance_mask)
-    fields = lot_gap_fields(result)
+    codes = [f"{i:06d}.SZ" for i in range(2)]
+    fields = lot_gap_fields(result, codes)
     assert fields["lotgap_l1_mean_due"] == pytest.approx(0.01, rel=1e-9)
     assert fields["lotgap_l1_max_due"] == pytest.approx(0.01, rel=1e-9)
     assert fields["lotgap_invested_mean_due"] == pytest.approx(
@@ -222,7 +223,7 @@ def test_w3_lot_gap_fields_null_without_due_sessions():
     open_ = np.array([[33.0] * 5, [20.0] * 5])
     rebalance_mask = np.array([False] * 5)
     result = _p37_run(open_, rebalance_mask)
-    fields = lot_gap_fields(result)
+    fields = lot_gap_fields(result, [f"{i:06d}.SZ" for i in range(2)])
     assert fields["lotgap_l1_mean_due"] is None
     assert fields["lotgap_l1_max_due"] is None
     assert fields["lotgap_invested_mean_due"] is None
@@ -539,20 +540,21 @@ def test_w7_end_to_end_chain_verdict_consistent(mini_env, gate_run_asof):
         },
     )
     verdict = summary["grid_adjudication"]["verdict"]
-    assert verdict in {
-        "stable_region_found",
-        "isolated_single_winner",
-        "gross_info_execution_blocked",
-        "panel_no_reliable_info",
-    }
+    # Deterministic golden pin of the canary verdict (the mini fixture is
+    # fully deterministic): the synthetic closes carry no gross space for
+    # any arm at any cell (0x stitched excess < 0 everywhere), so the
+    # honest four-way verdict is panel_no_reliable_info -> RETIRED.  The
+    # verdict determination itself is covered piecewise by the W4 pure
+    # function tests; this pin guards against silent drift of the real
+    # chain's end-to-end behavior.
+    assert verdict == "panel_no_reliable_info"
     raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     data_config = make_data_config(raw, tmp_path)
     store = RunStore(data_config.data_dir)
     state = replay_run(store.root, summary["spec_id"], summary["run_id"])
-    if verdict in ("stable_region_found", "isolated_single_winner"):
-        assert state == "DATA_QUALIFIED"
-    else:
-        assert state == "RETIRED"
+    # verdicts 1/2 park non-terminal at DATA_QUALIFIED; 3/4 retire —
+    # this canary deterministically lands the retire side.
+    assert state == "RETIRED"
 
     report_path = tmp_path / "r02_out" / "r02_matrix_report.json"
     payload = json.loads(report_path.read_text(encoding="utf-8"))

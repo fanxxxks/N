@@ -79,6 +79,67 @@ def _tradable_ic_mask(
     return tradable
 
 
+def lot_gap_fields(result, ts_codes) -> dict:
+    """P37 R02 additive observability: the continuous-vs-lot gap.
+
+    Per DUE session, the L1 distance between the constructor's continuous
+    target weights and the lot-rounded realized book (the post-execution
+    marked weights the engine records in ``positions``), plus the invested
+    sum gap and the initial-funding order counts.  This is the measurable
+    answer to "how far does the整手 account sit from the ideal weights"
+    — cash leftover, unaffordable lots, fees and blocked names all land
+    in the same deviation.  Read-only over the engine result; the engine
+    and the constructor are untouched.  Fields are ``None`` when the run
+    had no due session.
+    """
+
+    targets = result.target_weights or []
+    positions = result.positions or []
+    diag = result.construction_diagnostics or []
+    buys = result.buy_weights or []
+    sells = result.sell_weights or []
+    index = {str(code): i for i, code in enumerate(ts_codes)}
+    l1_gaps: list[float] = []
+    invested_gaps: list[float] = []
+    init_sessions = 0
+    init_planned = 0
+    init_filled = 0
+    for j, session in enumerate(diag):
+        if not session.get("rebalance_due"):
+            continue
+        target = np.asarray(targets[j], dtype=np.float64)
+        realized = np.zeros(target.shape[0], dtype=np.float64)
+        held = positions[j]
+        for code, weight in zip(held["ts_codes"], held["weights"]):
+            realized[index[str(code)]] = float(weight)
+        l1_gaps.append(float(np.abs(target - realized).sum()))
+        invested_gaps.append(
+            abs(float(target.sum()) - float(realized.sum()))
+        )
+        if session.get("initial_funding"):
+            init_sessions += 1
+            init_planned += int(session.get("order_count", 0))
+            init_filled += int(
+                np.count_nonzero(np.asarray(buys[j], dtype=np.float64) > 1e-12)
+            ) + int(
+                np.count_nonzero(
+                    np.asarray(sells[j], dtype=np.float64) > 1e-12
+                )
+            )
+    return {
+        "lotgap_l1_mean_due": (
+            float(np.mean(l1_gaps)) if l1_gaps else None
+        ),
+        "lotgap_l1_max_due": float(np.max(l1_gaps)) if l1_gaps else None,
+        "lotgap_invested_mean_due": (
+            float(np.mean(invested_gaps)) if invested_gaps else None
+        ),
+        "funnel_initial_funding_sessions": init_sessions,
+        "funnel_initial_funding_planned_orders": init_planned,
+        "funnel_initial_funding_filled_orders": init_filled,
+    }
+
+
 def evaluate_signal(
     signal: np.ndarray,
     loader: AshareDataLoader,
@@ -267,6 +328,11 @@ def evaluate_signal(
         "funnel_sessions_zero_holdings": sum(
             1 for count in holdings_counts if count == 0
         ),
+        # P37 R02 (additive observability): the continuous-vs-lot gap on
+        # due sessions (target weights vs the lot-rounded realized book)
+        # and the initial-funding order counts — read-only over the same
+        # engine result, existing fields bit-for-bit unchanged.
+        **lot_gap_fields(result, list(loader.ts_codes)),
     }
     return {
         "n_dates": signal_count,
