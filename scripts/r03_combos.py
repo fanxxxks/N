@@ -9,10 +9,15 @@ import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from ashare_logging import setup_run_logging
+from ashare_model.r03_combos import R03Refusal, run_r03_matrix
 
 
 def main(argv: list[str] | None = None) -> int:
-    from ashare_model.r03_combos import R03Refusal, run_r03_matrix
+    setup_run_logging(run_name="r03_combos")
 
     parser = argparse.ArgumentParser(
         description=(
