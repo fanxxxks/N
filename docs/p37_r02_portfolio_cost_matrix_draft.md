@@ -155,8 +155,9 @@
 既有字段逐位不变）：
 
 - `lotgap_l1_mean_due` / `lotgap_l1_max_due`：应调仓会话上
-  ½·‖连续目标权重 − 整手实现权重‖₁ 的均值/最大（实现权重 = 引擎执行后账本
-  权重，即 `positions` 记录的书；无应调仓会话时为 null）；
+  ‖连续目标权重 − 整手实现权重‖₁（逐名绝对权重偏差之和，完整 L1）的
+  均值/最大（实现权重 = 引擎执行后账本权重，即 `positions` 记录的书；
+  无应调仓会话时为 null）；
 - `lotgap_invested_mean_due`：应调仓会话上 |Σ目标 − Σ实现| 的均值（现金尾差
   / 买不起整手 / 费用侵蚀的直接度量）；
 - `funnel_initial_funding_sessions` / `funnel_initial_funding_planned_orders` /
@@ -261,6 +262,11 @@ champion/晋级/holdout 声明；「唯一最高格点」永不构成默认参�
    `summarize_arms`/`rows_to_jsonable`/`resolve_folds_for` 单一权威，不复制
    第二套）+ `scripts/r02_matrix.py` CLI shim + 测试。
 3. `scripts/check_test_shards.py`：新测试文件同 commit 注册。
+
+**Rev 1（实现前澄清，先于 RED commit）**：§6 `lotgap_l1_*` 定义澄清为
+**完整 L1**（逐名绝对权重偏差之和），非半 L1——单向解读（总绝对权重偏差）
+更直观，且与「投入差」字段同尺度可比；修订发生于任何测量产出之前，无历史
+数值受影响。
 
 ## 12 预期 RED 测试（实现前失败）
 
