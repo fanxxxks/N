@@ -307,7 +307,7 @@ def run_r02_panel(
             )
 
         for level in R02_COST_LEVELS:
-            for cell in R02_GRID:
+            for cell in (R02_GRID if cells is None else cells):
                 variant = cost_variant(
                     cell_variant(backtest_config, cell.name), level
                 )

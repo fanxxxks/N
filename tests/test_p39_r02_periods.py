@@ -240,6 +240,16 @@ def test_p4_end_to_end_periods_chain(mini_env, gate_run_asof):
         "combo:all3", "combo:momentum_reversal",
     }
     for period in ("every_5_days", "every_10_days"):
+        # The preregistered round-2 scope is the REFERENCE CELL ONLY —
+        # the cell axis must not silently widen back to the six-cell grid
+        # (the strengthened assertion after the first formal run executed
+        # a superset panel through an un-wired cells parameter).
+        cells_in_period = {
+            row["cell"]
+            for row in rows
+            if row["period"] == period and "::" in row["candidate"]
+        }
+        assert cells_in_period == {"n20_m5000"}
         keys = {
             (row["candidate"].split("::", 1)[1], row["cost_level"])
             for row in rows
