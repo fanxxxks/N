@@ -476,7 +476,7 @@ def test_w5_report_v2_blocks_and_rows(mini_env, gate_run_asof, tmp_path):
     report_path = tmp_path / "r01_out_wp3" / "r01_baseline_report.json"
     payload = json.loads(report_path.read_text(encoding="utf-8"))
 
-    assert payload["r01_report_schema_version"] == 2
+    assert payload["r01_report_schema_version"] == 3  # p49 erratum 1: single-family ablation fallback
 
     # Data completeness: typed loader status + session reconciliation +
     # an explicit complete/incomplete verdict.

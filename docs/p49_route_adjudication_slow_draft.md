@@ -71,4 +71,13 @@
 
 ## 7 版本影响
 
-零版本 bump（路线裁决 + 既有机器的正式运行；无代码改动）。
+~~零版本 bump（路线裁决 + 既有机器的正式运行；无代码改动）。~~
+
+**勘误 1（2026-09-21，前瞻性）**：首轮正式运行在因子资格阶段被
+fail-closed 拒绝——check-6 的 leave-family-out 消融对单因子族集
+（slow 五信号全属 fundamental 族）结构上无法产生子集，**运行零 OOS
+行、未见过任何经济结果**，故按仓库勘误先例面向未来修订：单族集的
+消融证据回退为**族内 leave-one-signal-out**（同一 baseline_candidates
+机器、同一哈希纪律、标签 `family:signal`）；单信号集仍为空（拒绝
+维持）。多族集行为逐位不变。`R01_REPORT_SCHEMA_VERSION` 2 → 3。
+本轮 slow 结果按修订后机器产生；medium 历史报告不受影响。

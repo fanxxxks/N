@@ -51,7 +51,11 @@ from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
 #: v2 (WP3, contract rev 3): stitched cross-fold statistics, the annual
 #: distribution, the execution funnel, explicit statuses and the
 #: descriptive four-way diagnostic.  v1 was never produced.
-R01_REPORT_SCHEMA_VERSION = 2
+# p49 erratum 1: bumped 2 -> 3 - the ablation evidence for a
+# SINGLE-family factor set falls back to leave-one-signal-out within
+# the family (the family ablation is structurally impossible there;
+# prospective, preregistered before any economic result existed).
+R01_REPORT_SCHEMA_VERSION = 3
 
 #: p34 §3.7 frozen adjudication thresholds (never tuned after seeing data).
 R01_ADJUDICATION_RULES: dict[str, float] = {
@@ -1463,6 +1467,35 @@ def resolve_folds_for(proto_cfg, loader) -> list:
     )
 
 
+def ablation_subsets(names: list[str]) -> list[tuple[str, list[str]]]:
+    """(left_out_label, subset) pairs for the §5.2 check-6 ablation.
+
+    Multi-family sets leave one FAMILY out (verbatim p34 semantics);
+    a single-family set falls back to leave-one-SIGNAL-out within the
+    family under the label ``family:signal`` (p49 erratum 1 - the family
+    ablation is structurally impossible for a single-family set, and a
+    vacuous evidence hash is never an option); a one-signal set has no
+    non-empty subset under either rule and the driver keeps its refusal.
+    """
+
+    from .feature_registry import family_of
+
+    names = list(names)
+    families = sorted({family_of(name) for name in names})
+    if len(families) > 1:
+        return [
+            (family, [n for n in names if family_of(n) != family])
+            for family in families
+        ]
+    if len(names) <= 1:
+        return []
+    family = families[0]
+    return [
+        (f"{family}:{name}", [n for n in names if n != name])
+        for name in names
+    ]
+
+
 def _leave_family_out_rows(
     loader, proto_cfg, folds, backtest_config, model_config, reward_config
 ) -> list[dict]:
@@ -1476,12 +1509,8 @@ def _leave_family_out_rows(
     from .feature_registry import family_of
 
     names = list(proto_cfg.baseline_signals)
-    families = sorted({family_of(name) for name in names})
     rows: list[dict] = []
-    for family in families:
-        subset = [name for name in names if family_of(name) != family]
-        if not subset:
-            continue
+    for family, subset in ablation_subsets(names):
         subset_cfg = dataclasses.replace(
             proto_cfg, baseline_signals=list(subset)
         )
