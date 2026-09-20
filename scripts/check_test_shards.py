@@ -153,6 +153,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_p44_priority_turnover_allocation.py",
         "test_p45_scoring_parity.py",
         "test_p46_direction_provenance.py",
+        "test_p48_stat_calibration.py",
         "test_portfolio_constructor.py",
         "test_portfolio_objectives.py",
         "test_portfolio_optimizer.py",
