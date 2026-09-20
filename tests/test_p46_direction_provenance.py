@@ -113,6 +113,7 @@ def test_n1_dispatch_rejects_unknown_rule():
     with pytest.raises(ValueError, match="unknown direction rule"):
         decide_direction(
             "astrology",
+            "f",
             signal,
             label,
             universe_mask=mask,

@@ -147,12 +147,60 @@ def baseline_candidates(
     # The selector is invoked even though the protocol reports every bare
     # factor; this keeps ranking/eligibility behavior on the same code path.
     CandidateSelector().select(scores, pareto_objectives=PARETO_OBJECTIVES)
+    # p46 B3: one extra mirrored scoring pass records BOTH orientations'
+    # validation evidence, so every baseline row's direction carries the
+    # five-element provenance (rule / train_cutoff / label / missing
+    # handling / reference config).  Direction VALUES are unchanged — the
+    # decision still comes from the pass above.
+    from .direction import (
+        MISSING_HANDLING,
+        RULE_REFERENCE_RETURN,
+        DirectionDecision,
+        label_definition,
+    )
+    from ashare_portfolio.execution_spec import portfolio_config_provenance
+
+    opposite_scores = scorer.score_many(
+        specs,
+        [-s for s in train_signals],
+        train_target,
+        val_windows,
+        blocked_buy=blocked_buy[:, :train_price_end],
+        blocked_sell=blocked_sell[:, :train_price_end],
+        train_signal_range=(
+            contract.train_signal_start,
+            validation_start(train_signal_end, model_cfg),
+        ),
+        universe_mask=loader.universe_mask[:, :train_price_end],
+        tie_break_keys=np.asarray(loader.ts_codes),
+        adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
+        realized_ret=train_realized_ret,
+        rebalance_mask=train_rebalance_mask,
+    )
+    label_def = label_definition(fold.policy)
     rows: list[dict] = []
-    for name, idx, score in zip(proto_cfg.baseline_signals, indices, scores):
+    for i, (name, idx, score) in enumerate(
+        zip(proto_cfg.baseline_signals, indices, scores)
+    ):
         direction = score.direction
         metrics = evaluate_signal(
             float(direction) * factors[idx], loader, fold, bt_cfg
         )
+        provenance = DirectionDecision(
+            candidate=f"baseline:{name}",
+            direction=int(direction),
+            rule=RULE_REFERENCE_RETURN,
+            train_cutoff=fold.train_end,
+            label=dict(label_def),
+            missing_handling=MISSING_HANDLING,
+            reference_config=portfolio_config_provenance(bt_cfg),
+            evidence={
+                "val_reward": float(score.val_reward),
+                "val_icir": float(score.val_icir),
+                "val_reward_opposite": float(opposite_scores[i].val_reward),
+                "val_icir_opposite": float(opposite_scores[i].val_icir),
+            },
+        ).to_json()
         rows.append(
             {
                 "candidate": f"baseline:{name}",
@@ -175,6 +223,7 @@ def baseline_candidates(
                 "rejection_reasons": list(score.rejection_reasons),
                 "final_avg_reward": None,
                 "direction": direction,
+                "direction_provenance": provenance,
                 "failed": False,
                 **metrics,
             }

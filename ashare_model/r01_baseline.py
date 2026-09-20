@@ -163,6 +163,30 @@ def rank_normalize_signal(
     return out
 
 
+def percentile_normalize_signal(
+    signal: np.ndarray, universe_mask: np.ndarray
+) -> np.ndarray:
+    """Scale-free per-date normalization: ``avg_rank / N_eff`` in (0, 1].
+
+    p46 B5: the raw ranks of :func:`rank_normalize_signal` span
+    ``1..N_eff``, so members with different effective cross-sections
+    contribute at different scales to :func:`combo_signal`'s average.
+    This helper divides by the per-date effective ``N`` so every member
+    contributes on one common percentile scale.  It defines a NEW
+    candidate family (``combo:all3_pct``); it is deliberately NOT wired
+    into ``R01_COMBO_ARMS`` — the raw-rank combination's semantics stay
+    bit-identical (no silent replacement).
+    """
+
+    ranks = rank_normalize_signal(signal, universe_mask)
+    mask = np.asarray(universe_mask, dtype=bool)
+    finite = np.isfinite(np.asarray(signal, dtype=np.float64))
+    n_eff = (mask & finite).sum(axis=0, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = ranks / np.where(n_eff > 0, n_eff, np.nan)
+    return out
+
+
 def combo_signal(
     members: list[tuple[float, np.ndarray]], universe_mask: np.ndarray
 ) -> np.ndarray:
