@@ -20,7 +20,13 @@ if TYPE_CHECKING:
     from ashare_data.config import BacktestConfig
 
 
-PORTFOLIO_CONSTRUCTOR_VERSION = 1
+# p44: bumped 1 -> 2 — a binding turnover_budget is allocated by
+# the deterministic priority rule (exits by signal rank DESC,
+# then entries by rank ASC, one leg at a time, skipped legs never
+# dilute executed ones) instead of proportional scaling that
+# spread the budget into sub-minimum fragments; v1 behaviour is
+# kept verbatim as the versioned "proportional" comparison.
+PORTFOLIO_CONSTRUCTOR_VERSION = 2
 _WEIGHT_EPSILON = 1e-12
 
 
@@ -93,6 +99,12 @@ def validate_portfolio_config(config: "BacktestConfig") -> None:
         raise ValueError("min_trade_amount must be > 0")
     if config.turnover_budget is not None and float(config.turnover_budget) < 0.0:
         raise ValueError("turnover_budget must be >= 0")
+    allocation = str(getattr(config, "turnover_allocation", "priority"))
+    if allocation not in ("proportional", "priority"):
+        raise ValueError(
+            "turnover_allocation must be 'proportional' or 'priority', "
+            f"got {allocation!r}"
+        )
     threshold = float(config.target_weight_change_threshold)
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("target_weight_change_threshold must be in [0, 1]")
@@ -245,6 +257,16 @@ class PortfolioConstructor:
             "threshold_dropped": (),
             "min_trade_dropped": (),
             "turnover_budget_scale": 1.0,
+            # p44 A3: the allocation diagnostics.  mode is set
+            # below ("unbudgeted" | "proportional" | "priority");
+            # the executed tuples keep their PRIORITY order (the
+            # allocation order is the auditable fact).
+            "turnover_budget_mode": None,
+            "budget_exits_executed": (),
+            "budget_buys_executed": (),
+            "budget_skipped_no_viable": (),
+            "budget_cash_capped": (),
+            "turnover_budget_consumed": 0.0,
             "forced_exit_count": 0,
             "legacy_position_wind_down": (),
             "initial_funding": bool(prev.sum() <= _WEIGHT_EPSILON),
@@ -386,7 +408,17 @@ class PortfolioConstructor:
                 target[below] = prev[below]
 
         budget = self.config.turnover_budget
-        if budget is not None and not diagnostics["initial_funding"]:
+        budgeted = budget is not None and not diagnostics["initial_funding"]
+        if not budgeted:
+            diagnostics["turnover_budget_mode"] = "unbudgeted"
+        elif (
+            str(getattr(self.config, "turnover_allocation", "priority"))
+            == "proportional"
+        ):
+            # v1 comparison path (p44 A1): scale every discretionary
+            # leg by budget / discretionary turnover, then re-apply
+            # the minimum filter.
+            diagnostics["turnover_budget_mode"] = "proportional"
             delta = target - prev
             discretionary_turnover = float(np.abs(delta[discretionary]).sum())
             if discretionary_turnover > float(budget) and discretionary_turnover > 0.0:
@@ -395,18 +427,91 @@ class PortfolioConstructor:
                     prev[discretionary] + delta[discretionary] * scale
                 )
                 diagnostics["turnover_budget_scale"] = scale
-
-        # Scaling can turn a previously valid order into a sub-minimum one.
-        delta = target - prev
-        if minimum is not None:
-            below = (
-                discretionary
-                & (np.abs(delta) > 0.0)
-                & (np.abs(delta) * notional_capital < float(minimum))
+            # Scaling can turn a previously valid order into a sub-minimum one.
+            delta = target - prev
+            if minimum is not None:
+                below = (
+                    discretionary
+                    & (np.abs(delta) > 0.0)
+                    & (np.abs(delta) * notional_capital < float(minimum))
+                )
+                if below.any():
+                    min_trade_dropped.update(np.flatnonzero(below).astype(int).tolist())
+                    target[below] = prev[below]
+        else:
+            # p44 A2: the deterministic priority allocation.  The
+            # budget funds the pre-fixed leg order one leg at a
+            # time — exits first (signal rank DESC: the least
+            # wanted leaves first and frees cash), then entries
+            # (rank ASC: the most wanted enters first), ties by
+            # stable_keys.  A leg that cannot form a minimum
+            # order from the remaining budget is skipped WITHOUT
+            # consuming budget or diluting the other legs; the
+            # allocation only ever shrinks an existing planned
+            # delta, so every fill traces back to the signal's
+            # own target and the pre-fixed priority.
+            diagnostics["turnover_budget_mode"] = "priority"
+            delta = target - prev
+            leg_mask = discretionary & (np.abs(delta) > 0.0)
+            exits = sorted(
+                np.flatnonzero(leg_mask & (delta < 0.0)).tolist(),
+                key=lambda i: (-int(rank[i]), str(stable_keys[i])),
             )
-            if below.any():
-                min_trade_dropped.update(np.flatnonzero(below).astype(int).tolist())
-                target[below] = prev[below]
+            entries = sorted(
+                np.flatnonzero(leg_mask & (delta > 0.0)).tolist(),
+                key=lambda i: (int(rank[i]), str(stable_keys[i])),
+            )
+            remaining = float(budget)
+            consumed = 0.0
+            exits_executed: list[int] = []
+            buys_executed: list[int] = []
+            skipped_no_viable: list[int] = []
+            cash_capped: list[int] = []
+            # The allocator re-derives every leg from prev: legs are reset
+            # to prev first (mandatory and non-leg names keep their
+            # targets), so an entry's cash headroom reflects only the
+            # exits already executed above it in the priority order.
+            working = target.copy()
+            working[leg_mask] = prev[leg_mask]
+            for i in exits:
+                want = float(prev[i] - target[i])
+                alloc = min(want, remaining)
+                if (
+                    minimum is not None
+                    and alloc * notional_capital < float(minimum)
+                ):
+                    skipped_no_viable.append(int(i))
+                    working[i] = prev[i]
+                    continue
+                working[i] = prev[i] - alloc
+                remaining -= alloc
+                consumed += alloc
+                exits_executed.append(int(i))
+            for i in entries:
+                want = float(target[i] - prev[i])
+                headroom = max(1.0 - float(working.sum()), 0.0)
+                alloc = min(want, remaining, headroom)
+                if (
+                    minimum is not None
+                    and alloc * notional_capital < float(minimum)
+                ):
+                    skipped_no_viable.append(int(i))
+                    working[i] = prev[i]
+                    continue
+                if headroom < want and headroom <= remaining:
+                    cash_capped.append(int(i))
+                working[i] = prev[i] + alloc
+                remaining -= alloc
+                consumed += alloc
+                buys_executed.append(int(i))
+            target = working
+            diagnostics["budget_exits_executed"] = tuple(exits_executed)
+            diagnostics["budget_buys_executed"] = tuple(buys_executed)
+            diagnostics["budget_skipped_no_viable"] = tuple(
+                sorted(skipped_no_viable)
+            )
+            diagnostics["budget_cash_capped"] = tuple(sorted(cash_capped))
+            diagnostics["turnover_budget_consumed"] = float(consumed)
 
         # Both suppression passes can restore a planned reduction after fresh
         # buys were sized.  Re-apply the same cash boundary so the resulting
@@ -415,7 +520,11 @@ class PortfolioConstructor:
 
         diagnostics["threshold_dropped"] = tuple(sorted(threshold_dropped))
         diagnostics["min_trade_dropped"] = tuple(sorted(min_trade_dropped))
+        # p44 A3: budget skips are suppressed trades too (the
+        # three-state funnel counts them with the same field).
         diagnostics["suppressed_trade_count"] = len(
-            threshold_dropped | min_trade_dropped
+            threshold_dropped
+            | min_trade_dropped
+            | set(diagnostics["budget_skipped_no_viable"])
         )
         return self._output(target, prev, selected, reason, diagnostics)

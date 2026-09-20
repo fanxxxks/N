@@ -440,6 +440,12 @@ class BacktestConfig:
     sell_rank: int | None = None
     min_trade_amount: float | None = None
     turnover_budget: float | None = None
+    # p44 A1: how a binding turnover_budget is allocated across
+    # the planned legs.  "priority" (v2 default) concentrates the
+    # budget on the pre-fixed exit/entry priority one leg at a
+    # time; "proportional" keeps the v1 comparison behaviour
+    # (scale every leg by budget/turnover).
+    turnover_allocation: str = "priority"
     target_weight_change_threshold: float = 0.0
     single_weight_cap: float = 0.05
     commission_rate: float = 0.00025

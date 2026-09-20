@@ -38,6 +38,7 @@ _PORTFOLIO_CONFIG_FIELDS = (
     "sell_rank",
     "min_trade_amount",
     "turnover_budget",
+    "turnover_allocation",
     "target_weight_change_threshold",
     "initial_capital",
     "single_weight_cap",
@@ -71,6 +72,9 @@ def portfolio_config_provenance(config) -> dict[str, Any]:
             None
             if config.turnover_budget is None
             else float(config.turnover_budget)
+        ),
+        "turnover_allocation": str(
+            getattr(config, "turnover_allocation", "priority")
         ),
         "target_weight_change_threshold": float(
             config.target_weight_change_threshold

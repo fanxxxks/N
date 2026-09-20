@@ -730,7 +730,7 @@ def test_version_impact_table_bumps_are_in_place():
     from ashare_portfolio.constructor import PORTFOLIO_CONSTRUCTOR_VERSION
     from ashare_model.cost_matrix import FEE_MATRIX_VERSION
 
-    assert PORTFOLIO_CONSTRUCTOR_VERSION == 1
+    assert PORTFOLIO_CONSTRUCTOR_VERSION == 2  # p44: priority allocation
     assert FEE_MATRIX_VERSION == 1
     # p17 §9 (D6): bumped 1 -> 2 for the revision-tracking B rule.
     assert DATA_TIER_VERSION == 2

@@ -258,8 +258,8 @@ def test_p4_engine_end_to_end_keeps_post_fee_cash_non_negative():
     mask = np.ones(signal.shape, dtype=bool)
 
     cfg = BacktestConfig(
-        rebalance_frequency="every_3_days",
-        target_horizon=3,
+        rebalance_frequency="every_5_days",
+        target_horizon=5,
         initial_capital=CAPITAL,
         top_n=10,
         buy_rank=10,
@@ -276,11 +276,13 @@ def test_p4_engine_end_to_end_keeps_post_fee_cash_non_negative():
     # Post-fee cash never goes negative (engine fail-closed + the
     # constructor's self-financing targets).
     assert result.final_cash >= 0.0
+    # Non-due sessions carry mode None (no allocation happens); due ones
+    # are unbudgeted (initial funding) or priority.
     modes = {
         d["turnover_budget_mode"]
         for d in result.construction_diagnostics
     }
-    assert modes <= {"unbudgeted", "priority"}
+    assert modes <= {None, "unbudgeted", "priority"}
     assert "priority" in modes  # the allocator actually ran
     # Every budgeted session's constructor turnover (its own recorded
     # field, mandatory legs exempt by design) stays within the budget.
@@ -431,8 +433,12 @@ def test_p9_stable_book_trades_nothing_under_the_budget():
 
 
 def test_p10_turnover_allocation_is_validated():
+    # The legality check lives in validate_portfolio_config, which the
+    # constructor runs at init (fixture correction: the RED version
+    # asserted at the dataclass layer, below the validation seam).
+    signal, prev = _replacement_market()
     with pytest.raises(ValueError, match="turnover_allocation"):
-        _cfg(allocation="sometimes")
+        _construct(_cfg(allocation="sometimes"), signal, prev)
 
 
 def test_p10_provenance_records_the_mode():

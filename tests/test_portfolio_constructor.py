@@ -59,7 +59,7 @@ def _construct(
 
 
 def test_constructor_version_and_equal_weight_top20_from_cash():
-    assert PORTFOLIO_CONSTRUCTOR_VERSION == 1
+    assert PORTFOLIO_CONSTRUCTOR_VERSION == 2  # p44: priority allocation
     cfg = BacktestConfig(
         top_n=20,
         buy_rank=20,
@@ -213,12 +213,15 @@ def test_small_rotation_is_suppressed_by_shared_trade_filters(
 
 
 def test_turnover_budget_scales_existing_book_but_not_initial_funding():
+    # p44: the proportional path is the versioned v1 comparison — the
+    # assertions below pin it verbatim (the default is priority since v2).
     cfg = BacktestConfig(
         top_n=20,
         buy_rank=20,
         sell_rank=20,
         single_weight_cap=0.05,
         turnover_budget=0.20,
+        turnover_allocation="proportional",
     )
     first = _construct(cfg, _signal_from_order(list(range(25))))
     assert first.turnover == pytest.approx(1.0)  # initial funding is exempt
@@ -233,6 +236,9 @@ def test_turnover_budget_scales_existing_book_but_not_initial_funding():
 
 
 def test_minimum_amount_is_reapplied_after_turnover_scaling():
+    # p44: the v1 comparison pin — under the default priority mode this
+    # elimination is exactly the bug p44 fixes (tests/test_p44 P1); the
+    # proportional mode keeps the behaviour verbatim for versioned A/B.
     cfg = BacktestConfig(
         top_n=20,
         buy_rank=20,
@@ -240,6 +246,7 @@ def test_minimum_amount_is_reapplied_after_turnover_scaling():
         single_weight_cap=0.05,
         turnover_budget=0.20,
         min_trade_amount=3_000.0,
+        turnover_allocation="proportional",
     )
     # Build the prior book without the minimum; otherwise initial 5k orders
     # still pass, but keeping setup explicit makes the tested stage unambiguous.
