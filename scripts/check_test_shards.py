@@ -119,6 +119,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_p37_r02_matrix.py",
         "test_p41_candidate_evidence_binding.py",
         "test_p42_r03_combos.py",
+        "test_p43_statistical_input_integrity.py",
         "test_p38_limit_requirement_grid.py",
         "test_p39_r02_periods.py",
         "test_p4_admission_diagnostics.py",
