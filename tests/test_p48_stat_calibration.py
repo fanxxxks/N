@@ -39,20 +39,18 @@ from ashare_model.stat_calibration import (
 
 
 def test_n2_wilson_interval_hand_cases():
-    # k=0, n=100: the interval must not touch zero (one-sided knowledge:
-    # zero rejections observed) and centre below 0.05.
+    # k=0, n=100: the two-sided Wilson score interval degenerates to a
+    # lower bound of exactly 0 (fixture correction: the RED version
+    # demanded low > 0, which the score-test inversion never gives);
+    # the upper bound must stay below the nominal 5%.
     low, high = wilson_ci(0, 100)
-    assert low > 0.0
+    assert low == pytest.approx(0.0, abs=1e-12)
     assert high < 0.05
-    assert low == pytest.approx(
-        (0.0 - (1.959963984540054 ** 2) / (2 * 100))
-        / (1 + 0)
-    ) or low > 0.0  # the exact closed form is implementation detail;
-    # the invariant is: excludes zero, below nominal.
-    # k=50, n=100: contains 0.5, tight-ish.
+    # k=50, n=100: contains 0.5; the half-width at p=0.5, n=100 is
+    # ~0.096 so the width is ~0.19 (hand-checked).
     low, high = wilson_ci(50, 100)
     assert low < 0.5 < high
-    assert high - low < 0.14
+    assert high - low == pytest.approx(0.1924, abs=5e-3)
     # Monotone in k at fixed n.
     lo1, hi1 = wilson_ci(3, 100)
     lo2, hi2 = wilson_ci(7, 100)
