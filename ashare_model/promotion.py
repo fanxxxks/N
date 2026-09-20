@@ -63,12 +63,15 @@ import argparse
 import json
 import math
 import sys
+
+import numpy as np
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ashare_data.io_utils import atomic_write_json, read_json_safe
 
+from .eval_corrections import BENCHMARK_DEFINITION, P40_MIN_WINDOW_DATES
 from .identity import formula_hash
 
 from .artifact_versions import version_matches
@@ -127,6 +130,38 @@ class PromotionThresholds:
     paper_min_sessions: int = 60
     stress_cost_multipliers: tuple[float, ...] = (0.5, 1.0, 2.0)
     stress_capital_multipliers: tuple[float, ...] = (0.1, 1.0, 10.0)
+
+
+#: Candidate families whose measurement is deterministic (no RNG in
+#: the measurement path): their identity seed is ``None`` by
+#: construction (p43 B9).  The r02/r03 cell panels prefix the family
+#: with ``<cell>::``; :func:`candidate_seed_class` strips it before
+#: reading the family.  Every other family — ``trained`` / the
+#: ``*_search`` searchers / ``rl:`` / unknown names — is seeded and
+#: demands an integer seed (the stricter default for unknown
+#: families: fail closed towards demanding provenance).
+DETERMINISTIC_CANDIDATE_FAMILIES = frozenset(
+    {"benchmark", "baseline", "selfcheck", "control", "combo"}
+)
+
+
+def candidate_seed_class(candidate) -> str:
+    """``"deterministic"`` or ``"seeded"`` — the seed class a
+    candidate name demands (p43 B9).
+
+    The class decides what a legal identity seed *is*: ``None``
+    for deterministic families, a non-bool integer for seeded
+    ones.  Binding a deterministic arm with a fabricated integer
+    seed, or a seeded candidate with a wiped seed, is a refusal.
+    """
+
+    core = str(candidate).split("::")[-1]
+    family = core.split(":", 1)[0]
+    return (
+        "deterministic"
+        if family in DETERMINISTIC_CANDIDATE_FAMILIES
+        else "seeded"
+    )
 
 
 def validate_allowed_tiers(allowed: tuple[str, ...]) -> tuple[str, ...]:
@@ -389,6 +424,184 @@ def _gate(passed: bool, reasons: list[str]) -> dict:
     return {"passed": bool(passed), "reasons": list(reasons)}
 
 
+def _identity_content_reasons(
+    name: str, block: dict, artifact: dict, seed_class: str
+) -> list[str]:
+    """p43 B5-B9: verify the statistical identity's *content*
+    against the artifact's own evidence.
+
+    The p41 B4 gate checked that the identity fields exist and
+    point at the artifact's top trial; these checks verify what
+    they say — the run kind, the window against the top trial's
+    own stitched date axis, the benchmark definition/span, the
+    trial-set composition against the artifact's stitched and
+    extra-trial counts, and the seed class demanded by the
+    candidate family.
+    """
+
+    reasons: list[str] = []
+    top = artifact.get("top_trial") or {}
+    # B5: only current-run statistics can support promotion.
+    run = block.get("run") or {}
+    if run.get("kind") != "current_run":
+        reasons.append(
+            f"{name} statistical evidence comes from run kind "
+            f"{run.get('kind')!r}, not the current run — only "
+            "current-run statistics can support promotion "
+            "(p43 B5)"
+        )
+    # B9: the seed class demanded by the candidate family —
+    # seed=None on a deterministic family is the expected
+    # identity, a fabricated integer is not; a seeded candidate
+    # with a wiped seed is refused.
+    top_seed = top.get("seed")
+    if seed_class == "deterministic":
+        if top_seed is not None:
+            reasons.append(
+                f"{name}: deterministic candidate "
+                f"{top.get('candidate')!r} must carry seed=None "
+                f"(got {top_seed!r}); a fabricated seed cannot "
+                "satisfy the identity check (p43 B9)"
+            )
+    elif isinstance(top_seed, bool) or not isinstance(
+        top_seed, (int, np.integer)
+    ):
+        reasons.append(
+            f"{name}: seeded candidate {top.get('candidate')!r} "
+            f"requires an integer seed, got {top_seed!r} "
+            "(p43 B9)"
+        )
+    # B6: the window against the top trial's own date axis — the
+    # dsr window IS that axis; the max_t window (the p40 joint
+    # matrix window W, an intersection over current trials)
+    # lies inside it and clears the p40 floor.
+    window = block.get("window") or {}
+    top_dates = top.get("dates")
+    if not top_dates:
+        reasons.append(
+            f"{name}: the artifact's top trial carries no "
+            "stitched date axis; the statistical window cannot "
+            "be verified (p43 B6)"
+        )
+    else:
+        w_first = window.get("first_date")
+        w_last = window.get("last_date")
+        w_n = window.get("n_dates")
+        if name == "dsr":
+            if (
+                w_first != top_dates[0]
+                or w_last != top_dates[-1]
+                or w_n != len(top_dates)
+            ):
+                reasons.append(
+                    f"{name} window {window!r} does not equal the "
+                    f"top trial's own date axis ({top_dates[0]}.."
+                    f"{top_dates[-1]}, n={len(top_dates)}) — "
+                    "statistics measured on another axis are not "
+                    "evidence for this challenger (p43 B6)"
+                )
+        else:
+            if not (
+                isinstance(w_n, int)
+                and not isinstance(w_n, bool)
+                and w_n >= P40_MIN_WINDOW_DATES
+            ):
+                reasons.append(
+                    f"{name} window n_dates {w_n!r} is below "
+                    f"P40_MIN_WINDOW_DATES={P40_MIN_WINDOW_DATES}: "
+                    "the producer refuses such windows, so the "
+                    "block cannot be genuine (p43 B6)"
+                )
+            if not (
+                isinstance(w_first, str)
+                and isinstance(w_last, str)
+                and isinstance(w_n, int)
+                and not isinstance(w_n, bool)
+                and top_dates[0] <= w_first
+                and w_first <= w_last
+                and w_last <= top_dates[-1]
+                and w_n <= len(top_dates)
+            ):
+                reasons.append(
+                    f"{name} window {window!r} does not lie inside "
+                    f"the top trial's date axis ({top_dates[0]}.."
+                    f"{top_dates[-1]}, n={len(top_dates)}) — "
+                    "statistics measured on another axis are not "
+                    "evidence for this challenger (p43 B6)"
+                )
+    # B7: the benchmark is the engine's equal-weight universe on
+    # the same span as the window.
+    bench = block.get("benchmark") or {}
+    if bench.get("definition") != BENCHMARK_DEFINITION:
+        reasons.append(
+            f"{name} benchmark definition "
+            f"{bench.get('definition')!r} != "
+            f"{BENCHMARK_DEFINITION!r} — statistics against "
+            "another benchmark are not comparable evidence "
+            "(p43 B7)"
+        )
+    if (
+        bench.get("n_days") != window.get("n_dates")
+        or bench.get("first_date") != window.get("first_date")
+        or bench.get("last_date") != window.get("last_date")
+    ):
+        reasons.append(
+            f"{name} benchmark span {bench!r} does not match its "
+            f"own window {window!r} (p43 B7)"
+        )
+    # B8: the trial-set composition closes internally and against
+    # the artifact's own stitched / extra-trial counts.
+    ts = block.get("trial_set") or {}
+    n_cur = ts.get("n_current")
+    n_ext = ts.get("n_extra")
+    counts = (n_cur, n_ext, ts.get("n_trials"), block.get("n_trials"))
+    if not all(
+        isinstance(v, int) and not isinstance(v, bool) and v >= 0
+        for v in counts
+    ):
+        reasons.append(
+            f"{name} trial_set counts must be non-negative "
+            f"integers, got n_current={n_cur!r} "
+            f"n_extra={n_ext!r} n_trials={ts.get('n_trials')!r} "
+            "(p43 B8)"
+        )
+    else:
+        if n_cur < 1:
+            reasons.append(
+                f"{name} trial_set carries no current-run trial "
+                f"(n_current={n_cur}) (p43 B8)"
+            )
+        if (
+            n_cur + n_ext != ts.get("n_trials")
+            or block.get("n_trials") != ts.get("n_trials")
+        ):
+            reasons.append(
+                f"{name} trial_set arithmetic is incoherent: "
+                f"n_current {n_cur} + n_extra {n_ext} != n_trials "
+                f"{ts.get('n_trials')}, or the block's own "
+                f"n_trials {block.get('n_trials')!r} disagrees "
+                "(p43 B8)"
+            )
+        stitched = (artifact.get("stitched") or {}).get("n_trials")
+        extra_recorded = artifact.get("dsr_extra_trials")
+        if not isinstance(stitched, int) or not isinstance(
+            extra_recorded, int
+        ):
+            reasons.append(
+                f"{name}: the artifact carries no "
+                "stitched/dsr_extra_trials count to verify the "
+                "trial set against (p43 B8)"
+            )
+        elif n_cur != stitched or n_ext != extra_recorded:
+            reasons.append(
+                f"{name} trial_set (n_current={n_cur}, "
+                f"n_extra={n_ext}) does not match the artifact's "
+                f"own evidence (stitched n_trials={stitched!r}, "
+                f"dsr_extra_trials={extra_recorded!r}) (p43 B8)"
+            )
+    return reasons
+
+
 def _is_finite_number(value) -> bool:
     """True for a real int/float with a finite value (bool excluded).
 
@@ -527,18 +740,27 @@ def evaluate_challenger(
     # (adjudicated candidate/seed, run kind, window, benchmark, trial
     # set) and must adjudicate the artifact's own top trial — a
     # historical trial's significance is never granted to the challenger
-    # under review, and pre-p41 value-only blocks fail closed.
+    # under review, and pre-p41 value-only blocks fail closed.  p43
+    # B5-B9: the identity's CONTENT is verified too (run kind, window
+    # vs the top trial's own date axis, benchmark definition/span,
+    # trial-set composition vs the artifact's own stitched evidence,
+    # and the seed class demanded by the candidate family), and
+    # seed=None is a legal identity value decided by that family —
+    # presence is checked by key, never by None-ness.
     reasons = []
     top = artifact.get("top_trial")
+    seed_class = candidate_seed_class((top or {}).get("candidate"))
     for name, block in (("dsr", artifact.get("dsr") or {}),
                         ("max_t", artifact.get("max_t") or {})):
         missing = [
             field for field in (
-                "adjudicated_candidate", "adjudicated_seed", "run",
+                "adjudicated_candidate", "run",
                 "window", "benchmark", "trial_set",
             )
             if block.get(field) is None
         ]
+        if "adjudicated_seed" not in block:
+            missing.append("adjudicated_seed")
         if missing:
             reasons.append(
                 f"{name} block lacks the statistical identity ({missing}); "
@@ -555,6 +777,10 @@ def evaluate_challenger(
                 "trial — statistical evidence bound to another candidate "
                 "is not evidence for this challenger (p41 §2 B3/B4)"
             )
+            continue
+        reasons.extend(
+            _identity_content_reasons(name, block, artifact, seed_class)
+        )
     dsr = artifact.get("dsr") or {}
     mt = artifact.get("max_t") or {}
     if not reasons:
