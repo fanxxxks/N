@@ -154,6 +154,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_p45_scoring_parity.py",
         "test_p46_direction_provenance.py",
         "test_p48_stat_calibration.py",
+        "test_p49_slow_route.py",
         "test_portfolio_constructor.py",
         "test_portfolio_objectives.py",
         "test_portfolio_optimizer.py",
