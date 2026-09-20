@@ -252,7 +252,9 @@ def test_j5_g2_fails_without_identity_blocks(tmp_path):
     assert any("bound" in r or "identity" in r for r in gate["reasons"])
 
 
-def test_j6_promotion_rule_version_is_3():
+def test_j6_promotion_rule_version_is_4():
+    # p43 §4 (requirement change, §10.1 rule 2): v4 = numeric adjudication
+    # + identity content verification; same assertion strength, new literal.
     from ashare_model.promotion import PROMOTION_RULE_VERSION
 
-    assert PROMOTION_RULE_VERSION == "3"
+    assert PROMOTION_RULE_VERSION == "4"

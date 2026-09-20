@@ -1065,7 +1065,7 @@ def test_g7_passes_registry_promotable_formula(tmp_path):
     assert policy["report"]["per_feature"] == {
         "RET_1": {"promotion_allowed": True, "deprecated": False}
     }
-    assert verdict["promotion_rule_version"] == "3"
+    assert verdict["promotion_rule_version"] == "4"  # p43 §4: v4
     assert verdict["promoted"] is True
 
 
@@ -1128,4 +1128,4 @@ def test_promotion_rule_version_pinned():
     evidence binding)."""
     from ashare_model.promotion import PROMOTION_RULE_VERSION
 
-    assert PROMOTION_RULE_VERSION == "3"
+    assert PROMOTION_RULE_VERSION == "4"  # p43 §4: v4 (numerics + identity)

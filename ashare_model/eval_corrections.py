@@ -313,7 +313,14 @@ def max_t_from_matrix(
     """Studentized max-t circular-block bootstrap over one excess matrix.
 
     ``matrix`` is ``[n_trials, n_dates]`` whose columns share a single
-    real date index (the p40 joint matrix).  The window must carry at
+    real date index (the p40 joint matrix).  The matrix must be
+    entirely finite (p43 N2: a single NaN freezes every bootstrap
+    comparison and returns the minimum p-value 1/(n_perms+1), so a
+    non-finite cell fails closed with ``ValueError``), and the
+    parameters must be non-bool integers with ``n_perms >= 1`` and
+    ``block_size >= 1`` and an integer ``seed`` (p43 N3 — ``int()``
+    silently truncating a float, or ``seed=None`` drawing fresh
+    entropy, are refused).  The window must carry at
     least :data:`P40_MIN_WINDOW_DATES` dates — below that the resampled
     null cannot calibrate the max-t tail, so the call raises
     ``ValueError`` (fail closed: no p-value at all, never the
@@ -342,11 +349,122 @@ def max_t_from_matrix(
     t-statistic.
     """
 
+    # p43 N3: legality-check the resampling parameters before any
+    # work — a silently truncated float, a bool, or a None seed
+    # (fresh entropy, irreproducible p-value) must fail closed.
+    for name, value in (("n_perms", n_perms), ("block_size", block_size)):
+        if isinstance(value, bool) or not isinstance(
+            value, (int, np.integer)
+        ):
+            raise ValueError(
+                f"{name} must be an integer, got "
+                f"{type(value).__name__} {value!r} (p43 N3: int() "
+                "would silently truncate a non-integer into a "
+                "different resampling than the caller asked for)"
+            )
+        if int(value) < 1:
+            raise ValueError(
+                f"{name} must be >= 1, got {value} (p43 N3)"
+            )
+    if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
+        raise ValueError(
+            f"seed must be an integer, got "
+            f"{type(seed).__name__} {seed!r} (p43 N3: seed=None "
+            "draws fresh entropy and makes the p-value irreproducible)"
+        )
+    # p43 N3: legality-check the resampling parameters before any
+    # work — a silently truncated float, a bool, or a None seed
+    # (fresh entropy, irreproducible p-value) must fail closed.
+    for name, value in (("n_perms", n_perms), ("block_size", block_size)):
+        if isinstance(value, bool) or not isinstance(
+            value, (int, np.integer)
+        ):
+            raise ValueError(
+                f"{name} must be an integer, got "
+                f"{type(value).__name__} {value!r} (p43 N3: int() "
+                "would silently truncate a non-integer into a "
+                "different resampling than the caller asked for)"
+            )
+        if int(value) < 1:
+            raise ValueError(
+                f"{name} must be >= 1, got {value} (p43 N3)"
+            )
+    if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
+        raise ValueError(
+            f"seed must be an integer, got "
+            f"{type(seed).__name__} {seed!r} (p43 N3: seed=None "
+            "draws fresh entropy and makes the p-value irreproducible)"
+        )
+    # p43 N3: legality-check the resampling parameters before any
+    # work — a silently truncated float, a bool, or a None seed
+    # (fresh entropy, irreproducible p-value) must fail closed.
+    for name, value in (("n_perms", n_perms), ("block_size", block_size)):
+        if isinstance(value, bool) or not isinstance(
+            value, (int, np.integer)
+        ):
+            raise ValueError(
+                f"{name} must be an integer, got "
+                f"{type(value).__name__} {value!r} (p43 N3: int() "
+                "would silently truncate a non-integer into a "
+                "different resampling than the caller asked for)"
+            )
+        if int(value) < 1:
+            raise ValueError(
+                f"{name} must be >= 1, got {value} (p43 N3)"
+            )
+    if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
+        raise ValueError(
+            f"seed must be an integer, got "
+            f"{type(seed).__name__} {seed!r} (p43 N3: seed=None "
+            "draws fresh entropy and makes the p-value irreproducible)"
+        )
     m = np.asarray(matrix, dtype=np.float64)
     if m.ndim != 2 or m.shape[0] < 1 or m.shape[1] < 2:
         raise ValueError(
             f"max_t_from_matrix needs a [n_trials, n_dates] matrix with "
             f"n_dates >= 2, got shape {m.shape}"
+        )
+    # p43 N2: the joint matrix must be entirely finite — one NaN
+    # cell freezes every bootstrap comparison at False and returns
+    # the minimum p-value, so non-finite input fails closed here
+    # instead (defence in depth behind the p43 N1 stitch check for
+    # callers that build the matrix themselves).
+    if not np.isfinite(m).all():
+        n_nonfinite = int(np.count_nonzero(~np.isfinite(m)))
+        raise ValueError(
+            f"the joint matrix carries {n_nonfinite} non-finite "
+            "cell(s) (NaN/Inf); non-finite returns must fail closed, "
+            "never enter the bootstrap — a single NaN freezes every "
+            "comparison and returns the minimum p-value 1/(n_perms+1) "
+            "(docs/p43_statistical_input_integrity_draft.md §2 N2)"
+        )
+    # p43 N2: the joint matrix must be entirely finite — one NaN
+    # cell freezes every bootstrap comparison at False and returns
+    # the minimum p-value, so non-finite input fails closed here
+    # instead (defence in depth behind the p43 N1 stitch check for
+    # callers that build the matrix themselves).
+    if not np.isfinite(m).all():
+        n_nonfinite = int(np.count_nonzero(~np.isfinite(m)))
+        raise ValueError(
+            f"the joint matrix carries {n_nonfinite} non-finite "
+            "cell(s) (NaN/Inf); non-finite returns must fail closed, "
+            "never enter the bootstrap — a single NaN freezes every "
+            "comparison and returns the minimum p-value 1/(n_perms+1) "
+            "(docs/p43_statistical_input_integrity_draft.md §2 N2)"
+        )
+    # p43 N2: the joint matrix must be entirely finite — one NaN
+    # cell freezes every bootstrap comparison at False and returns
+    # the minimum p-value, so non-finite input fails closed here
+    # instead (defence in depth behind the p43 N1 stitch check for
+    # callers that build the matrix themselves).
+    if not np.isfinite(m).all():
+        n_nonfinite = int(np.count_nonzero(~np.isfinite(m)))
+        raise ValueError(
+            f"the joint matrix carries {n_nonfinite} non-finite "
+            "cell(s) (NaN/Inf); non-finite returns must fail closed, "
+            "never enter the bootstrap — a single NaN freezes every "
+            "comparison and returns the minimum p-value 1/(n_perms+1) "
+            "(docs/p43_statistical_input_integrity_draft.md §2 N2)"
         )
     k, n = m.shape
     if n < P40_MIN_WINDOW_DATES:

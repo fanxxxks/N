@@ -48,12 +48,20 @@ trial — statistical evidence belonging to another candidate (e.g. a
 historical trial's significance) is a refusal, never a pass.  The
 promotion-gate numbering (G1-G7) is independent of the data-quality gate
 numbering in ``ashare_data/gates.py``.
+v4 (P43, ``docs/p43_statistical_input_integrity_draft.md``) tightens
+G2's consumption to **numeric adjudication** (finite in-range
+dsr/p, ``significant_95`` consistent with its own p-value) and to
+**identity content verification** (run kind, window vs the top
+trial's own date axis, benchmark definition and span, trial-set
+composition vs the artifact's own stitched evidence, and the seed
+class demanded by the candidate family).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -96,8 +104,13 @@ from ashare_portfolio.execution_spec import (
 # feature_registry_status gate; v3 (P41,
 # docs/p41_candidate_evidence_binding_draft.md §2 B4) makes G2 consume
 # the candidate-evidence binding, not just the dsr/max-t values.
-# Recorded in every verdict.
-PROMOTION_RULE_VERSION = "3"
+# Recorded in every verdict.  v4 (P43,
+# docs/p43_statistical_input_integrity_draft.md) makes G2
+# adjudicate numerically (finite in-range values, consistent
+# significant_95) and verify the identity content (run kind,
+# window, benchmark, trial set, seed class) against the
+# artifact's own evidence.
+PROMOTION_RULE_VERSION = "4"
 
 
 @dataclass(frozen=True)
@@ -376,6 +389,21 @@ def _gate(passed: bool, reasons: list[str]) -> dict:
     return {"passed": bool(passed), "reasons": list(reasons)}
 
 
+def _is_finite_number(value) -> bool:
+    """True for a real int/float with a finite value (bool excluded).
+
+    p43 N5: a NaN slips past every ``<`` comparison in the gates
+    (``NaN < threshold`` is False), so gate inputs must be checked
+    for finiteness explicitly; booleans are not measurements.
+    """
+
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
 def evaluate_challenger(
     artifact: dict,
     *,
@@ -530,17 +558,59 @@ def evaluate_challenger(
     dsr = artifact.get("dsr") or {}
     mt = artifact.get("max_t") or {}
     if not reasons:
-        if dsr.get("dsr") is None:
+        # p43 N5: the gate adjudicates by the numeric threshold and
+        # requires finite in-range self-consistent values — a NaN
+        # slips past every < comparison, and a bare boolean can
+        # contradict its own p-value, so neither is trusted.
+        dsr_value = dsr.get("dsr")
+        if dsr_value is None:
             reasons.append("no Deflated Sharpe in the artifact")
-        elif dsr["dsr"] < thresholds.dsr_min:
-            reasons.append(f"dsr {dsr['dsr']:.3f} < {thresholds.dsr_min}")
-        if mt.get("significant_95") is None:
-            reasons.append("no max-t in the artifact")
-        elif not mt["significant_95"]:
+        elif not _is_finite_number(dsr_value):
             reasons.append(
-                f"max-t not significant (p={mt.get('p_value')} > "
-                f"{thresholds.max_t_p_max})"
+                f"dsr value {dsr_value!r} is not a finite number; "
+                "non-finite statistics cannot support promotion "
+                "(p43 N5)"
             )
+        elif not 0.0 <= dsr_value <= 1.0:
+            reasons.append(
+                f"dsr {dsr_value} outside its [0, 1] value range "
+                "(p43 N5)"
+            )
+        elif dsr_value < thresholds.dsr_min:
+            reasons.append(
+                f"dsr {dsr_value:.3f} < {thresholds.dsr_min}"
+            )
+        p_value = mt.get("p_value")
+        if p_value is None:
+            reasons.append("no max-t in the artifact")
+        elif not _is_finite_number(p_value):
+            reasons.append(
+                f"max-t p_value {p_value!r} is not a finite number "
+                "(p43 N5)"
+            )
+        elif not 0.0 < p_value <= 1.0:
+            reasons.append(
+                f"max-t p_value {p_value} outside its (0, 1] value "
+                "range (p43 N5)"
+            )
+        else:
+            significant = mt.get("significant_95")
+            if not isinstance(significant, bool):
+                reasons.append(
+                    f"significant_95 must be a boolean, got "
+                    f"{significant!r} (p43 N5)"
+                )
+            elif significant != (p_value <= thresholds.max_t_p_max):
+                reasons.append(
+                    f"significant_95={significant} contradicts "
+                    f"p_value={p_value} against the threshold "
+                    f"{thresholds.max_t_p_max} (p43 N5)"
+                )
+            elif p_value > thresholds.max_t_p_max:
+                reasons.append(
+                    f"max-t not significant (p={p_value} > "
+                    f"{thresholds.max_t_p_max})"
+                )
     gates["significance"] = _gate(not reasons, reasons)
 
     # G3 -- excess return & risk constraints on the stitched top trial.

@@ -569,7 +569,12 @@ def stitch_oos_series(rows: list[dict]) -> list[dict]:
     row that cannot be placed on a real date axis cannot be stitched),
     as does a duplicated mark date inside one trial, and so does a
     missing or length-mismatched ``benchmark_daily_returns`` series
-    (p41 B1: excess returns are never zero-padded back into existence).
+    (p41 B1: excess returns are never zero-padded back into existence),
+    and so does any non-finite value in the daily or benchmark series
+    (p43 N1: a single NaN/Inf must fail closed — stitched into the
+    corrections it freezes every bootstrap comparison into the
+    minimum p-value 1/(n_perms+1) and turns noise into fabricated
+    significance).
     """
 
     groups: dict[tuple, list[dict]] = {}
@@ -632,6 +637,27 @@ def stitch_oos_series(rows: list[dict]) -> list[dict]:
                     "(docs/p41_candidate_evidence_binding_draft.md §2 B1)"
                 )
             b = [float(x) for x in b_raw]
+            # p43 N1: non-finite returns are an integrity error,
+            # never a stitched series — inside the corrections a
+            # single NaN freezes every bootstrap comparison and
+            # returns the minimum p-value 1/(n_perms+1).
+            for label, values in (
+                ("daily_returns", d),
+                ("benchmark_daily_returns", b),
+            ):
+                if not all(math.isfinite(x) for x in values):
+                    n_bad = sum(
+                        1 for x in values if not math.isfinite(x)
+                    )
+                    raise ValueError(
+                        f"candidate={candidate} seed={seed} fold="
+                        f"{(row.get('fold_train_end'), row.get('fold_test_end'))}: "
+                        f"{label} carries {n_bad} non-finite value(s) "
+                        "(NaN/Inf); non-finite returns cannot be "
+                        "stitched into statistical evidence "
+                        "(docs/p43_statistical_input_integrity_"
+                        "draft.md §2 N1)"
+                    )
             # p40 R2: every stitched segment must carry its real mark dates,
             # 1:1 with its daily series.  A succeeded row without them is a
             # pre-p40 artifact row: it cannot be aligned with anything, so
