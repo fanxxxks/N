@@ -177,5 +177,18 @@ def test_n5_generators_have_the_declared_dependence_structure():
     assert m[0].mean() > 3 * m[0].std() / math.sqrt(m.shape[1])
 
 
+def test_n3_power_scenarios_are_reported_not_banded():
+    # B2: power carries no acceptance band - the rate and CI are the
+    # deliverable, so the verdict is descriptive, never a size ruling.
+    assert SCENARIO_SPECS["power_sr05"]["kind"] == "power"
+    # significance_readiness passes power rows through descriptively
+    # (claim_5pct stays a SIZE concept; a power row makes no size claim).
+    ready = significance_readiness(
+        {"power_sr05": {"verdict": "power_reported", "claim": "reported"}}
+    )
+    assert ready["power_sr05"]["claim_5pct"] is False
+    assert ready["power_sr05"]["verdict"] == "power_reported"
+
+
 def test_n1_version():
     assert CALIBRATION_VERSION == 1
