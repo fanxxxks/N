@@ -114,14 +114,15 @@ def test_n4_ranking_comparison_identical_orders():
 
 def test_n4_ranking_comparison_splits_material_and_tie():
     # Proxy: a > b > c; engine: a > c > b  -> one inversion (b, c).
-    # The b-c proxy gap decides material vs tie.
-    proxy = {"a": 0.010, "b": 0.005, "c": 0.001}
+    # The b-c proxy gap (0.002) decides material vs tie against the
+    # threshold (fixture correction: the RED numbers put the gap at 0.004
+    # while claiming a tie at threshold 0.002 - arithmetically inconsistent).
+    proxy = {"a": 0.010, "b": 0.003, "c": 0.001}
     engine = {"a": 0.011, "c": 0.004, "b": 0.0005}
     rho, material, tie = ranking_comparison(proxy, engine, material_gap=0.002)
     assert rho == pytest.approx(0.5)
     assert material == () and tie == (("b", "c"),)
-    rho, material, tie = ranking_comparison(proxy, engine, material_gap=0.002)
-    # with a tighter material gap the same inversion is material
+    # with a tighter threshold the same inversion is material
     rho, material, tie = ranking_comparison(proxy, engine, material_gap=0.001)
     assert material == (("b", "c"),) and tie == ()
 
@@ -129,7 +130,7 @@ def test_n4_ranking_comparison_splits_material_and_tie():
 # --- N3: the reliability gate (fabricated reports) ---------------------------
 
 
-def _row(name, *, net=1e-5, fee=1e-6, turn=1e-3, direction=True):
+def _row(name, *, net=1e-5, fee=1e-6, turn=1e-3, direction=True, total=None):
     from ashare_model.scoring_parity import CandidateParityRow
 
     return CandidateParityRow(
@@ -141,7 +142,7 @@ def _row(name, *, net=1e-5, fee=1e-6, turn=1e-3, direction=True):
         daily_net_error_mean=net / 2,
         fee_fraction_error_max=fee,
         turnover_error_max=turn,
-        total_net_return_error=net * 3,
+        total_net_return_error=net * 3 if total is None else total,
         total_fee_error=fee * 3,
         proxy_total_net=0.01,
         engine_total_net=0.01,
@@ -166,16 +167,17 @@ def test_n3_reliable_when_all_within():
     report = _report([_row("a"), _row("b")], tie=(("a", "b"),))
     verdict = proxy_reliability_verdict(report)
     assert verdict["verdict"] == "reliable"
-    # Tie inversions are disclosed, never silently dropped.
-    assert verdict["inversions_tie"] == (("a", "b"),)
+    # Tie inversions are disclosed (as JSON-friendly lists), never dropped.
+    assert verdict["inversions_tie"] == [["a", "b"]]
     assert verdict["reasons"] == []
 
 
 def test_n3_unreliable_on_each_tolerance_breach():
     cases = [
-        (_row("a", net=0.003), "daily_net"),
-        (_row("a", fee=0.001), "fee_fraction"),
+        (_row("a", net=0.003, total=1e-4), "daily net"),
+        (_row("a", fee=0.001), "fee fraction"),
         (_row("a", turn=0.2), "turnover"),
+        (_row("a", total=0.01), "total net"),
         (_row("a", direction=False), "direction"),
     ]
     for bad_row, needle in cases:

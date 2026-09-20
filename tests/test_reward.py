@@ -11,6 +11,7 @@ from tests.conftest import with_price_semantics
 from ashare_execution import ExecutionCostModel
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.candidates import CandidateScorer, CandidateSpec
+from ashare_model.scoring_parity import granularity, parity_bounds
 from ashare_model.reward import (
     REWARD_VERSION,
     _pearson,
@@ -579,7 +580,6 @@ def test_blocked_mask_shape_validation():
         )
 
 
-@pytest.mark.xfail(strict=False, reason='P35 follow-up: the basket fee settlement is weight-space while the engine settles share-level cash; the drift evolution is unified (p35 s2), the fee bookkeeping alignment is the tracked remaining work')
 def test_blocked_basket_matches_backtest_engine_with_limits():
     # The strongest consistency check: the masked basket simulation must
     # reproduce the engine's daily returns on a market where limit moves
@@ -614,14 +614,36 @@ def test_blocked_basket_matches_backtest_engine_with_limits():
         raw["open"], raw["up_limit"], raw["down_limit"], raw["suspended"],
         "sell",
     )
-    daily, avg_turnover = simulate_basket_daily_returns(
+    sim = simulate_basket_daily_returns(
         signal, target, cfg, blocked_buy, blocked_sell,
         universe_mask=np.ones(signal.shape, dtype=bool),
     )
-    # P35 lot-residual tolerance (whole-lot engine vs continuous basket;
-    # the residual compounds through the drifted book across sessions).
-    assert daily == pytest.approx(np.asarray(result.daily_returns), abs=1e-12)
-    assert avg_turnover == pytest.approx(float(np.mean(result.turnover)), abs=1e-12)
+    daily = sim.daily_net_returns
+    # p45 B4: the parity contract is the mechanism-derived bound of the
+    # lot granularity (one lot ~= 1% of capital here) plus fee financing -
+    # NOT bit equality between a continuous book and a lot-executed one
+    # (the old 1e-12 form demanded exactly that; it was the wrong
+    # contract, superseded per §10.1 rule 2 by docs/p45 §2 B2/B4).
+    bounds = parity_bounds(
+        cfg, price_ref=float(np.median(raw["open"])), n_periods=len(daily)
+    )
+    engine_daily = np.asarray(result.daily_returns)
+    assert len(engine_daily) == len(daily)  # same session axis (exact)
+    np.testing.assert_array_less(
+        np.abs(daily - engine_daily), bounds["daily_net"]
+    )
+    n = min(len(sim.turnover), len(result.turnover))
+    np.testing.assert_array_less(
+        np.abs(np.asarray(sim.turnover[:n]) - np.asarray(result.turnover[:n])),
+        bounds["turnover"],
+    )
+    # Whole-window compounding stays inside the total-return bound.
+    def _total(seq):
+        out = 1.0
+        for r in seq:
+            out *= 1.0 + r
+        return out - 1.0
+    assert abs(_total(daily) - _total(engine_daily)) <= bounds["total_net"]
 
 
 def test_batched_rewards_match_scalar_rewards():
@@ -956,7 +978,6 @@ def test_basket_exit_is_sold_through_cost_path_or_force_held():
     )
 
 
-@pytest.mark.xfail(strict=False, reason='P35 follow-up: the basket fee settlement is weight-space while the engine settles share-level cash; the drift evolution is unified (p35 s2), the fee bookkeeping alignment is the tracked remaining work')
 def test_basket_underfilled_keeps_cash_like_backtest_engine():
     cfg = _cfg(top_n=3, single_weight_cap=1.0, commission_rate=0.0,
                min_commission=0.0, stamp_tax_rate=0.0, transfer_fee_rate=0.0,
@@ -990,10 +1011,32 @@ def test_basket_underfilled_keeps_cash_like_backtest_engine():
     engine = AshareBacktestEngine(cfg).run(
         signal, raw, ts_codes, dates, universe_mask=mask
     )
-    assert sim.turnover == pytest.approx(np.asarray(engine.turnover), abs=1e-12)
+    # p45 B4: with fees zeroed the remaining gap is pure lot flooring
+    # (the engine fills whole lots of a flat 10-yuan open at 1e5 capital,
+    # one lot = 1% of capital); the bounded form supersedes the 1e-12
+    # bit-equality per §10.1 rule 2 (docs/p45 §2 B2/B4).  Structural
+    # facts stay exact: the engine never renormalizes the underfilled
+    # book upward (T1-02) - every achieved weight stays at or below the
+    # 1/3 unit plus one lot of granularity.
+    bounds = parity_bounds(
+        cfg, price_ref=float(np.median(raw["open"])), n_periods=len(sim.turnover)
+    )
+    n = min(len(sim.turnover), len(engine.turnover))
+    np.testing.assert_array_less(
+        np.abs(np.asarray(sim.turnover[:n]) - np.asarray(engine.turnover[:n])),
+        bounds["turnover"],
+    )
+    unit = 1.0 / 3.0
+    g = granularity(
+        lot_size=cfg.lot_size,
+        price_ref=float(np.median(raw["open"])),
+        capital=cfg.initial_capital,
+    )
+    for weights in engine.target_weights:
+        held = np.asarray(weights)
+        assert (held[held > 0.0] <= unit + g + 1e-12).all()
 
 
-@pytest.mark.xfail(strict=False, reason='P35 follow-up: the basket fee settlement is weight-space while the engine settles share-level cash; the drift evolution is unified (p35 s2), the fee bookkeeping alignment is the tracked remaining work')
 def test_masked_basket_matches_backtest_engine_with_universe():
     # Day-by-day parity with the engine when both consume the same PIT
     # universe mask: a permanently ineligible stock with extreme finite
@@ -1007,13 +1050,26 @@ def test_masked_basket_matches_backtest_engine_with_universe():
     result = AshareBacktestEngine(cfg).run(
         signal, raw, ts_codes, dates, universe_mask=mask
     )
-    daily, avg_turnover = simulate_basket_daily_returns(
+    sim = simulate_basket_daily_returns(
         signal, target, cfg, universe_mask=mask
     )
-    # P35 lot-residual tolerance (whole-lot engine vs continuous basket;
-    # the residual compounds through the drifted book across sessions).
-    assert daily == pytest.approx(np.asarray(result.daily_returns), abs=1e-12)
-    assert avg_turnover == pytest.approx(float(np.mean(result.turnover)), abs=1e-12)
+    daily = sim.daily_net_returns
+    # p45 B4: bounded parity at the mechanism-derived granularity bound
+    # (supersedes the 1e-12 bit-equality per §10.1 rule 2,
+    # docs/p45 §2 B2/B4); the structural mask facts stay EXACT: the
+    # ineligible extreme-signalled stock (row 5, signal 1e9) never enters
+    # either path's book.
+    bounds = parity_bounds(
+        cfg, price_ref=float(np.median(raw["open"])), n_periods=len(daily)
+    )
+    engine_daily = np.asarray(result.daily_returns)
+    assert len(engine_daily) == len(daily)
+    np.testing.assert_array_less(
+        np.abs(daily - engine_daily), bounds["daily_net"]
+    )
+    assert np.count_nonzero(np.asarray(sim.target_weights)[:, 5]) == 0
+    for position in result.positions:
+        assert ts_codes[5] not in position["ts_codes"]
 
 
 def test_masked_scalar_and_batched_rewards_agree():
