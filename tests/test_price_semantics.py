@@ -714,7 +714,7 @@ def test_version_impact_table_bumps_are_in_place():
     from ashare_model.versions import PROTOCOL_VERSION
     from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
 
-    assert EXECUTION_SPEC_VERSION == 4  # p35 share-accounting (drifted non-due weights + share-level execution)
+    assert EXECUTION_SPEC_VERSION == 6  # P58 cash/lot execution; p19 price basis remains unchanged
     # p21 §8 (APPROVED 2026-09-06): PROTOCOL 26 -> 27 (tier_set additive);
     # p40/p41 §4 (APPROVED 2026-09-19): 27 -> 28 -> 29 (statistical
     # resampling semantics, then candidate-evidence binding).

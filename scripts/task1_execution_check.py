@@ -97,6 +97,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)  # Never overwrite evidence.
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip())
+    tracked_dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, text=True).strip())
     profiles = []
     for capital in (10000, 30000, 50000, 100000):
         if capital == 10000:
@@ -117,7 +118,7 @@ def main():
         sell_rank=20, turnover_budget=.20, turnover_allocation=mode,
         rebalance_frequency="every_10_days", target_horizon=10), replacement=True))
         for mode in ("priority", "proportional")]
-    payload = dict(kind="engineering", git_commit=sha, dirty_tree=dirty,
+    payload = dict(kind="engineering", git_commit=sha, dirty_tree=dirty, tracked_code_dirty=tracked_dirty,
         price_assumption="所有股票10元，约束完整，无停牌涨跌停，价格不变；无收益推断",
         profiles=profiles, required_example=examples, replacement=comparisons)
     (args.output / "results.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -127,7 +128,7 @@ def main():
         writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(profiles)
-    lines = ["# 任务一机械可行性结果", "", f"被测提交：{sha}；工作树改动：{dirty}。",
+    lines = ["# 任务一机械可行性结果", "", f"被测提交：{sha}；已跟踪代码改动：{tracked_dirty}；含未跟踪测量文件：{dirty}。",
         "仅合成10元定价，不代表收益改善或全历史适用。目标25只、上限4%、最低1000元、100股一手。",
         "计划调仓周期与预测周期均保留medium的10交易日；此处不生成训练标签。", "",
         "| 本金 | 成交只数 | 买入金额 | 实际仓位 | 费用 | 剩余现金 | 状态 |",
