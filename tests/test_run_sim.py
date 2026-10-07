@@ -677,11 +677,14 @@ def test_sim_limit_down_blocks_exit_sell_and_keeps_position(tmp_path: Path):
         for o in _orders_for(runner, d)
         if o["ts_code"] == exiter and o["side"] == "sell"
     ]
-    assert sells
-    assert all(
-        o["status"] == "skipped" and o["reason"] == "limit_down" for o in sells
-    )
+    # P58 rounds the delta, so a constructor-pinned sell-blocked target
+    # no longer manufactures a rounding sell. The original bought shares
+    # must remain intact throughout the limit-down tail.
+    assert not sells
     assert exiter in runner.portfolio.positions
+    bought = sum(t["quantity"] for d in dates[:exit_day]
+        for t in _trades_for(runner, d) if t["ts_code"] == exiter and t["side"] == "buy")
+    assert runner.portfolio.positions[exiter].quantity == bought
 
 
 def test_current_st_stock_stays_in_union_and_trades_on_board_rates(

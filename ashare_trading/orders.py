@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 from ashare_data.schemas import SimOrder
+from ashare_execution import trade_share_delta
 
 
 def target_shares_from_weights(
@@ -95,11 +96,11 @@ def build_orders(
         code = ts_codes[i]
         current = current_quantities.get(code, 0.0)
         target = target_shares.get(i, 0.0)
-        delta = target - current
+        delta = trade_share_delta(target, current, lot_size=lot_size)
         if delta == 0.0:
             continue
         if delta > 0.0:
-            buy_qty = (int(delta) // lot_size) * lot_size if lot_size > 0 else delta
+            buy_qty = delta
             if buy_qty <= 0.0:
                 continue
             buys.append(_order("buy", code, buy_qty, open_prices[i]))

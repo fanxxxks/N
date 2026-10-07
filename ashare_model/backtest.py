@@ -16,6 +16,7 @@ from ashare_data.processor import (
 from ashare_data.schemas import BacktestResult
 from ashare_execution import (
     ExecutionCostModel,
+    trade_share_delta,
     validate_execution_config,
 )
 from ashare_logging import (
@@ -35,10 +36,9 @@ from .targets import causal_target_returns
 from .time_contract import TrainingTimeContract
 
 # P35 share-anchored execution constants (p35 §2): the A-share board lot,
-# the weight-comparison epsilon and the bounded affordability-loop cap.
+# and the weight-comparison epsilon. Cash sizing lives in shared execution.
 _P35_LOT = 100
 _P35_WEIGHT_EPS = 1e-12
-_P35_MAX_AFFORDABILITY_PASSES = 64
 
 
 def equal_weight_benchmark_returns(
@@ -296,71 +296,46 @@ class AshareBacktestEngine:
                     weights[tradable_price] * capital / p_entry[tradable_price]
                 )
                 shares = new_shares
-                # Sells: reductions and full exits.  A sell-blocked or
-                # suspended name keeps its drifted weight (the constructor
-                # pinned its target there), so it generates zero orders.
-                reduce = (
-                    (target_weights < weights - _P35_WEIGHT_EPS)
-                    & tradable_price
-                )
-                if reduce.any():
-                    delta_notional = (
-                        (weights[reduce] - target_weights[reduce]) * capital
+                # P58: use the paper path's delta rounding and sell-first,
+                # code-ordered cash allocation. A fee shortage only reduces
+                # orders reached after cash has actually been spent.
+                deltas = np.zeros(n_stocks, dtype=np.float64)
+                for i in np.flatnonzero(tradable_price):
+                    if abs(target_weights[i] - weights[i]) <= _P35_WEIGHT_EPS:
+                        continue
+                    deltas[i] = trade_share_delta(
+                        target_weights[i] * capital / p_entry[i], shares[i],
+                        lot_size=lot,
                     )
-                    sell_shares = np.where(
-                        target_weights[reduce] <= _P35_WEIGHT_EPS,
-                        shares[reduce],
-                        np.floor(
-                            delta_notional / p_entry[reduce] / lot
-                        )
-                        * lot,
-                    )
-                    sell_shares = np.minimum(sell_shares, shares[reduce])
-                    notional = sell_shares * p_entry[reduce]
-                    fees = self.cost_model.sell_cost(notional).total
-                    shares[reduce] = shares[reduce] - sell_shares
-                    cash += float(notional.sum() - fees.sum())
-                    trade_fees += float(fees.sum())
-                    sell_weights[reduce] = notional / capital
-                # Buys: increases, lot-floored, capped at the available
-                # cash including their own fees.  The affordability loop
-                # scales proportionally (geometric convergence — a
-                # one-lot-per-pass decrement can never reach affordability
-                # from a large unfunded book).  A missing-bar name is
-                # never bought: there is no price to size against (the
-                # authoritative matcher skips the same order with
-                # ``missing_bar``).
-                increase = (
-                    (target_weights > weights + _P35_WEIGHT_EPS)
-                    & tradable_price
-                )
-                if increase.any():
-                    idx = np.flatnonzero(increase)
-                    buy_shares = np.floor(
-                        (target_weights[idx] - weights[idx])
-                        * capital
-                        / p_entry[idx]
-                        / lot
-                    ) * lot
-                    notional = buy_shares * p_entry[idx]
-                    fees = self.cost_model.buy_cost(notional).total
-                    for _ in range(_P35_MAX_AFFORDABILITY_PASSES):
-                        over = notional.sum() + fees.sum() - cash
-                        if over <= 0.0:
-                            break
-                        scale = max(cash / (notional.sum() + fees.sum()), 0.0)
-                        buy_shares = np.floor(buy_shares * scale / lot) * lot
-                        notional = buy_shares * p_entry[idx]
-                        fees = self.cost_model.buy_cost(notional).total
-                    if notional.sum() + fees.sum() > cash:
-                        # fail-closed: fund nothing rather than go negative
-                        buy_shares = np.zeros_like(buy_shares)
-                        notional = buy_shares * p_entry[idx]
-                        fees = self.cost_model.buy_cost(notional).total
-                    shares[idx] = shares[idx] + buy_shares
-                    cash -= float(notional.sum() + fees.sum())
-                    trade_fees += float(fees.sum())
-                    buy_weights[idx] = notional / capital
+                minimum = self.config.min_trade_amount
+                for side in ("sell", "buy"):
+                    indices = np.flatnonzero(deltas < 0 if side == "sell" else deltas > 0)
+                    for i in sorted(indices, key=lambda index: ts_codes[index]):
+                        quantity = abs(deltas[i])
+                        if side == "buy":
+                            quantity = self.cost_model.affordable_shares(
+                                cash, p_entry[i], quantity, lot_size=lot,
+                            )
+                        else:
+                            quantity = min(quantity, shares[i])
+                        if quantity <= 0:
+                            continue
+                        notional = float(quantity * p_entry[i])
+                        full_exit = side == "sell" and quantity >= shares[i]
+                        if minimum is not None and not full_exit and notional < minimum:
+                            continue
+                        fees = float(self.cost_model.trade_cost(side, notional).total)
+                        if side == "sell":
+                            if cash + notional < fees:
+                                continue
+                            shares[i] -= quantity
+                            cash += notional - fees
+                            sell_weights[i] = notional / capital
+                        else:
+                            shares[i] += quantity
+                            cash -= notional + fees
+                            buy_weights[i] = notional / capital
+                        trade_fees += fees
                 cost_fraction = trade_fees / capital if capital > 0.0 else 0.0
                 # achieved book weights on the post-fee equity; the fees
                 # are already debited to cash, so the post-execution

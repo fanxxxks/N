@@ -174,9 +174,8 @@ def test_current_semantic_versions_are_pinned():
     # (identity blocks, current-run adjudication, benchmark fail-closed)
     # bumps "28" -> "29".
     assert PROTOCOL_VERSION == "29"
-    # p35 (APPROVED 2026-09-17): share-level execution with drifted non-due
-    # weights bumps the execution spec 3 -> 4.
-    assert EXECUTION_SPEC_VERSION == 4
+    # P58 cash and share-delta execution advances the generation to 6.
+    assert EXECUTION_SPEC_VERSION == 6  # P58 sequential cash execution contract
     assert BARE_FACTOR_BACKTEST_VERSION == 4
     # p17/D5 (t16 F1): the industry membership PIT switch bumps
     # FACTOR_COMPUTE to 3.

@@ -19,6 +19,23 @@ from ashare_data.config import BacktestConfig, SimConfig
 Number = float | np.ndarray
 
 
+def trade_share_delta(target: float, current: float, *, lot_size: int = 100) -> float:
+    """Signed executable share change; round the delta, never the held book.
+
+    Full exits may contain odd shares. The small numerical tolerance only
+    reconciles weights rounded onto the constructor's 12-decimal grid.
+    """
+    delta = float(target) - float(current)
+    if abs(delta) <= 1e-7:
+        return 0.0
+    if target <= 0.0 and delta < 0.0:
+        return -float(current)
+    if lot_size <= 0:
+        return delta
+    quantity = math.floor(abs(delta) / lot_size + 1e-9) * lot_size
+    return math.copysign(quantity, delta)
+
+
 def _scalar_or_array(value: np.ndarray) -> Number:
     return float(value) if value.ndim == 0 else value
 
@@ -218,7 +235,7 @@ class ExecutionCostModel:
             shares = mid * lot_size
             notional = shares * price
             payable = notional + float(self.buy_cost(notional).total)
-            if payable <= cash + 1e-9:
+            if payable <= cash:
                 low = mid
             else:
                 high = mid - 1

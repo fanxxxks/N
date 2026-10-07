@@ -27,7 +27,9 @@ from .rebalance import RebalancePolicy
 # last-target weights (an implicit daily zero-cost re-normalization) to
 # share-conserving drift between executions plus share-level execution
 # (lot-floor orders, full exits, cash + fees reconciliation identity).
-EXECUTION_SPEC_VERSION = 4
+# P58: ordinary backtest and paper execution share sequential cash sizing.
+# Generation 5 is already used by the user's uncommitted lot provenance work.
+EXECUTION_SPEC_VERSION = 6
 
 _PORTFOLIO_CONFIG_FIELDS = (
     "rebalance_frequency",
@@ -40,6 +42,7 @@ _PORTFOLIO_CONFIG_FIELDS = (
     "turnover_budget",
     "turnover_allocation",
     "target_weight_change_threshold",
+    "lot_size",
     "initial_capital",
     "single_weight_cap",
     "commission_rate",
@@ -80,6 +83,7 @@ def portfolio_config_provenance(config) -> dict[str, Any]:
             config.target_weight_change_threshold
         ),
         "initial_capital": float(config.initial_capital),
+        "lot_size": int(config.lot_size),
         "single_weight_cap": float(config.single_weight_cap),
         "commission_rate": float(config.commission_rate),
         "min_commission": float(config.min_commission),

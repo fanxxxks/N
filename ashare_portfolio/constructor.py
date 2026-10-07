@@ -64,7 +64,9 @@ def _cap_increases_to_available_cash(
     base = target - increase
     available = max(1.0 - float(base.sum()), 0.0)
     increase_sum = float(increase.sum())
-    if increase_sum > available and increase_sum > 0.0:
+    # Do not turn an exact minimum-sized order into a sub-minimum order
+    # merely because summing twenty 0.05 weights yields 1.0000000000000002.
+    if increase_sum > available + _WEIGHT_EPSILON and increase_sum > 0.0:
         return base + increase * (available / increase_sum)
     return target
 
@@ -108,6 +110,9 @@ def validate_portfolio_config(config: "BacktestConfig") -> None:
     threshold = float(config.target_weight_change_threshold)
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("target_weight_change_threshold must be in [0, 1]")
+    lot = getattr(config, "lot_size", 100)
+    if isinstance(lot, bool) or not isinstance(lot, (int, np.integer)) or lot < 1:
+        raise ValueError("lot_size must be a positive integer")
     if int(getattr(config, "lot_size", 100)) < 1:
         raise ValueError("lot_size must be >= 1")
 

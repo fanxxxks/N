@@ -110,7 +110,7 @@ def _assert_reward_backtest_parity(
     return backtest, reward
 
 
-def test_equal_weight_reward_and_backtest_share_exact_portfolio_output():
+def test_plan_reward_cannot_replace_fills_below_actual_minimum():
     signal, raw, codes, dates, mask = _market()
     cfg = BacktestConfig(
         initial_capital=100_000.0,
@@ -123,12 +123,20 @@ def test_equal_weight_reward_and_backtest_share_exact_portfolio_output():
         target_weight_change_threshold=0.01,
     )
     rebalance_mask = RebalancePolicy.from_config(cfg).rebalance_mask(dates)
-    backtest, _ = _assert_reward_backtest_parity(
-        cfg, signal, raw, codes, dates, mask, rebalance_mask
-    )
-    assert backtest.metrics["order_count"] <= 20 + 2 * (len(dates) - 3)
-    assert backtest.metrics["rebalance_count"] >= 1
-    assert backtest.metrics["suppressed_trade_count"] >= 0
+    backtest = AshareBacktestEngine(cfg).run(signal, raw, codes, dates, mask,
+        rebalance_mask=rebalance_mask)
+    reward = simulate_basket_daily_returns(signal, open_to_open_returns(raw["open"]),
+        cfg, universe_mask=mask, tie_break_keys=np.asarray(codes),
+        rebalance_mask=rebalance_mask)
+    # P58: every entry price is >10, so floor(5000/p/100)*100*p <5000.
+    # Actual fills must be rejected; a continuous-weight reward still buys.
+    np.testing.assert_array_equal(backtest.target_weights[0], reward.target_weights[0])
+    np.testing.assert_array_equal(backtest.final_shares, np.zeros(len(codes)))
+    assert backtest.final_cash == 100_000
+    np.testing.assert_array_equal(backtest.buy_weights, np.zeros((len(dates) - 2, len(codes))))
+    np.testing.assert_array_equal(backtest.sell_weights, np.zeros((len(dates) - 2, len(codes))))
+    assert backtest.cost_fractions == [0] * (len(dates) - 2)
+    assert reward.turnover[0] == 1
 
 
 def test_weekly_non_rebalance_days_hold_with_zero_cost_and_turnover():
