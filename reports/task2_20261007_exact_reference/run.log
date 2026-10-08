@@ -1,0 +1,14 @@
+2026-10-07 23:09:03.926 | INFO     | ashare_model.factor_cache:get:273 - factor_cache hit key=4ab7587af59d dataset=d36024cd1b197a8edcf976b2d950b3506bb0fae022f121d6aef06f2a281cde55 window=20140102..20260916:3091
+2026-10-07 23:09:03.950 | INFO     | ashare_model.data_loader:load_data:771 - factor cache outcome=hit reason=hit
+2026-10-07 23:09:10.470 | INFO     | ashare_model.backtest:run:469 - portfolio path method=equal_weight frequency=every_10_days periods=1210 due=121 rebalanced=120 orders=705 suppressed=2525 avg_turnover=0.023101
+2026-10-07 23:09:10.656 | INFO     | __main__:main:278 - account completed capital=30000 mode=active profit=57.80187248230817 cagr=0.0004009634890853597
+2026-10-07 23:09:11.974 | INFO     | ashare_model.backtest:run:469 - portfolio path method=equal_weight frequency=every_10_days periods=1210 due=1 rebalanced=1 orders=25 suppressed=0 avg_turnover=0.000826
+2026-10-07 23:09:12.237 | INFO     | __main__:main:278 - account completed capital=30000 mode=passive profit=6415.24945382401 cagr=0.04118513947781843
+2026-10-07 23:09:14.156 | INFO     | ashare_model.backtest:run:469 - portfolio path method=equal_weight frequency=every_10_days periods=1210 due=121 rebalanced=120 orders=745 suppressed=2596 avg_turnover=0.022728
+2026-10-07 23:09:14.348 | INFO     | __main__:main:278 - account completed capital=50000 mode=active profit=1260.4674231289748 cagr=0.005198591816476972
+2026-10-07 23:09:15.688 | INFO     | ashare_model.backtest:run:469 - portfolio path method=equal_weight frequency=every_10_days periods=1210 due=1 rebalanced=1 orders=25 suppressed=0 avg_turnover=0.000826
+2026-10-07 23:09:15.893 | INFO     | __main__:main:278 - account completed capital=50000 mode=passive profit=17064.255900596505 cagr=0.06306082606144492
+2026-10-07 23:09:17.467 | INFO     | ashare_model.backtest:run:469 - portfolio path method=equal_weight frequency=every_10_days periods=1210 due=121 rebalanced=120 orders=716 suppressed=2679 avg_turnover=0.020452
+2026-10-07 23:09:17.661 | INFO     | __main__:main:278 - account completed capital=100000 mode=active profit=10755.763884101643 cagr=0.021503670035541766
+2026-10-07 23:09:19.026 | INFO     | ashare_model.backtest:run:469 - portfolio path method=equal_weight frequency=every_10_days periods=1210 due=1 rebalanced=1 orders=25 suppressed=0 avg_turnover=0.000826
+2026-10-07 23:09:19.262 | INFO     | __main__:main:278 - account completed capital=100000 mode=passive profit=38991.593945155786 cagr=0.0709752401749777
