@@ -4,7 +4,9 @@ Local branch `codex/task2-continuous-account`, task-one base
 `1ad7686a70cb387c940b0c5053acf8339df035a5`. Preregistration `45db5eb`,
 input-recovery preregistration `2630ebf`, exact-reference reconstruction
 preregistration `e319d4b`. Measured implementation:
-`dd5453a92d3613c6b9161000b176259d7faf39fc`. Subsequent commits only add evidence.
+`dd5453a92d3613c6b9161000b176259d7faf39fc`. Final reporting implementation is
+`b2f1afbe00fc2737e6f5c76b95426d79acd53d6a` (terminal-field correction below).
+The final evidence commits change no executable code.
 Original `D:/minequant/AlphaGPT` code, configuration, data, WAL, backups and old
 WP18 evidence were never edited. No push, PR, merge or strategy promotion.
 
