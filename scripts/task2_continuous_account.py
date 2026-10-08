@@ -65,6 +65,16 @@ def write_csv(path, rows):
                 for k, v in row.items()})
 
 
+def export_replay_input(path, signal, raw, codes, dates, mask, due):
+    """Observation-only export for a paired historical engine replay (P60)."""
+    arrays = dict(signal=signal, codes=np.asarray(codes), dates=np.asarray(dates), mask=mask, due=due,
+        **{f"raw_{k}": v for k, v in raw.items()})
+    if any(np.asarray(v).dtype.hasobject for v in arrays.values()):
+        raise ValueError("replay inputs must not require pickle")
+    with path.open("xb") as stream:
+        np.savez_compressed(stream, **arrays)
+
+
 def render_report(rows, provenance):
     snapshot_label = provenance["snapshot_directory"] or (
         "原发布快照的独立重建副本" if provenance.get("private_preparation") else "当前数据库")
@@ -127,6 +137,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--export-replay-input", type=Path,
+        help="optional exclusive-create observation export; never affects execution")
     snapshots = parser.add_mutually_exclusive_group()
     snapshots.add_argument("--snapshot-directory", choices=["backup_20260919_p38"],
         help="explicit preregistered recovery; no automatic fallback")
@@ -241,6 +253,8 @@ def main():
         if direction_path.read_bytes() != direction_bytes or source_config_path.read_bytes() != source_config_bytes:
             raise ValueError("source configuration/directions changed during load")
         atomic_write_json(output / "provenance.json", provenance)
+        if args.export_replay_input is not None:
+            export_replay_input(args.export_replay_input.resolve(), signal, raw, codes, dates, mask, due)
         del loader, factors, payload
         gc.collect()
         ledger.complete_trial(input_trial, metrics={"dataset_id": expected_dataset})

@@ -150,6 +150,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_p35_share_accounting.py",
         "test_p58_small_capital_execution.py",
         "test_p59_continuous_account.py",
+        "test_p60_execution_experiment.py",
         "test_p3_measurement.py",
         "test_p3_portfolio_parity.py",
         "test_p44_priority_turnover_allocation.py",
