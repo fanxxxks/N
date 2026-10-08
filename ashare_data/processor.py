@@ -558,8 +558,29 @@ def normalize_daily_bars(df: pd.DataFrame) -> pd.DataFrame:
         & (df["close"] > 0)
     ]
     if "pre_close" not in df.columns:
-        df["pre_close"] = df.groupby("ts_code")["close"].shift(1)
-    df["pre_close"] = df.groupby("ts_code")["pre_close"].ffill()
+        df["pre_close"] = np.nan
+    # P0 fix: sort and deduplicate BEFORE deriving pre_close.  The stable
+    # sort (not pandas' default quicksort) makes drop_duplicates a
+    # deterministic function of the input frame — equal keys always keep
+    # the last row of the caller's frame order — and the derivation below
+    # then reads each stock's own previous DATE row instead of whatever
+    # row happened to precede it in the provider concat order (unsorted
+    # input used to leak a neighbour row's — even a future session's —
+    # close into pre_close, and the cross-source sync concat made the
+    # kept duplicate row an undefined pick).
+    df["trade_date"] = df["trade_date"].astype(str)
+    df = df.sort_values(["ts_code", "trade_date"], kind="stable").drop_duplicates(
+        subset=["ts_code", "trade_date"], keep="last"
+    )
+    # pre_close keeps the source-provided value (the exchange's exact
+    # previous close, e.g. the Baostock record); a missing cell is derived
+    # from the stock's own previous session close (never the previous row's
+    # pre_close, which is off by one session).  The open fallback therefore
+    # fires only for a stock's first bar, which has no prior value by
+    # construction.
+    df["pre_close"] = df["pre_close"].fillna(
+        df.groupby("ts_code")["close"].shift(1)
+    )
     df.loc[df["pre_close"].isna(), "pre_close"] = df["open"]
     df["volume"] = df["volume"].fillna(0.0)
     df["amount"] = df["amount"].fillna(0.0)
@@ -571,11 +592,6 @@ def normalize_daily_bars(df: pd.DataFrame) -> pd.DataFrame:
     # share count), so a missing column stays missing instead of pretending
     # to be ~1.0.  Downstream standardization treats it as neutral.
     df["turnover_rate"] = df["turnover_rate"].replace([np.inf, -np.inf], np.nan)
-
-    df["trade_date"] = df["trade_date"].astype(str)
-    df = df.sort_values(["ts_code", "trade_date"]).drop_duplicates(
-        subset=["ts_code", "trade_date"], keep="last"
-    )
     return df
 
 

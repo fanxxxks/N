@@ -11,9 +11,11 @@ authority).
   when a source it depends on fails.  A global "all optional sources
   must be fresh" gate is a preregistered NON-goal (p17 §12): unrequired
   sources never affect a verdict and are reported as not evaluated.
-* **Not computable never passes** — a missing store/table/manifest or an
-  empty source fails its check with an explicit not-computable reason
-  (p17 §12: 一切源 来源不可计算一律 fail 不得 pass).
+* **Not computable never passes** — a missing store/table/manifest, an
+  empty source, or a trade calendar that exists but carries no
+  completed open session before the evaluation day (an empty lag axis)
+  fails its check with an explicit not-computable reason (p17 §12:
+  一切源 来源不可计算一律 fail 不得 pass).
 * **Lag semantics** — 滞后 = 最近会话 − 该源最新 available_session, in
   open-session positions of the unique trade calendar (the production
   ``trade_calendar``; p17 §6.1 forbids a second calendar).  The §6.1
@@ -242,7 +244,13 @@ def _is_missing(value) -> bool:
 
 def _open_sessions_before(config, evaluation_day: str) -> list[str] | None:
     """Open sessions strictly before ``evaluation_day`` from the unique
-    production trade calendar (ascending); ``None`` = not computable."""
+    production trade calendar (ascending); ``None`` = not computable (the
+    calendar store/table is missing or the query failed).  An EMPTY list
+    is the third, distinct state: the table exists and answers but no
+    completed open session precedes the day — every session-count
+    consumer must treat it as not computable too (an empty lag axis has
+    no positions to count against and would otherwise read as lag 0,
+    a fail-open p17 §12 forbids)."""
 
     try:
         with AshareDB(config.duckdb_path, read_only=True) as db:
@@ -266,8 +274,15 @@ def _lag_sessions(
     session (the axis tail).  ``same_day`` selects the §6.1 mapping
     (price-limit: T's own session; otherwise the next open session after
     T).  An available_session beyond the axis means the data is ahead of
-    the completed window: lag 0."""
+    the completed window: lag 0.  An EMPTY axis is not a computable lag
+    reference at all (fail-closed guard: every ``index >= len(axis)``
+    vacuously holds and would silently read as lag 0)."""
 
+    if not axis:
+        raise ValueError(
+            "an empty open-session axis is not a computable lag "
+            "reference (not-computable must fail, never read as lag 0)"
+        )
     if same_day:
         index = bisect.bisect_left(axis, source_latest)
     else:
@@ -468,6 +483,15 @@ def _dataset_manifest_check(v2_db: AshareDB) -> tuple[bool | None, str]:
             "(identity cannot be established; "
             f"{type(exc).__name__}: {exc})"
         )
+    if manifest is None:
+        # latest_manifest's None convention covers both "no manifest
+        # table" and "table empty": identity cannot be established either
+        # way — not computable, never a pass (and never an expected=None
+        # crash inside verify_dataset).
+        return None, (
+            "not computable: the v2 store carries no dataset manifest "
+            "(identity cannot be established; latest_manifest is None)"
+        )
     report = verify_dataset(
         v2_db, TUSHARE_V2_CONFIG, expected=manifest, verify="fast",
     )
@@ -531,14 +555,37 @@ def check_runspec_data_eligibility(
         return SourceCheck(source, True, False, detail)
 
     try:
+        # Every source whose check counts open-session positions on the
+        # axis.  The three calendar states are distinct and both abnormal
+        # ones fail closed (p17 §12: 一切源 来源不可计算一律 fail 不得
+        # pass): the table missing/unreadable (axis ``None``), and the
+        # table present but with NO completed open session before the
+        # day (empty axis — previously it slipped into ``_lag_sessions``
+        # and every lag vacuously read 0, a fail-open this guard closes).
+        axis_sources = (
+            SOURCE_DAILY,
+            SOURCE_PRICE_LIMIT,
+            SOURCE_MARGIN,
+            SOURCE_INDUSTRY_MEMBERSHIP,
+            SOURCE_INDUSTRY_INDEX,
+        )
         if axis is None:
-            for source in (SOURCE_DAILY, SOURCE_PRICE_LIMIT, SOURCE_MARGIN):
+            for source in axis_sources:
                 if source in required:
                     checks[source] = fail(
                         source,
                         "not computable: the trade calendar at "
                         f"{config.duckdb_path} is unavailable (no completed "
                         "open-session reference)",
+                    )
+        elif not axis:
+            for source in axis_sources:
+                if source in required:
+                    checks[source] = fail(
+                        source,
+                        "not computable: calendar exists but no completed "
+                        f"open sessions before {day} (an empty lag axis is "
+                        "never a lag-0 pass; p17 §12)",
                     )
 
         if v2_db is None:
@@ -549,7 +596,7 @@ def check_runspec_data_eligibility(
                         f"not computable: v2 store unreadable ({v2_error})",
                     )
 
-        if axis is not None and v2_db is not None:
+        if axis and v2_db is not None:
             def lag_check(source: str, tables, column: str, *,
                           same_day: bool, tolerance: int) -> SourceCheck:
                 lags: list[str] = []
@@ -650,45 +697,52 @@ def check_runspec_data_eligibility(
                         f"{INDUSTRY_INDEX_MAX_LAG_SESSIONS} sessions",
                     )
 
-            if SOURCE_FINANCIAL in required:
-                window_start = (
-                    f"{int(spec.dev_window.start[:4]) - 1}"
-                    f"{spec.dev_window.start[4:]}"
+        # The financial report-period coverage consumes the v2 statement
+        # tables and the stocks listing dates — NOT the open-session
+        # axis — so it runs whenever the v2 store is readable, whatever
+        # the calendar state.  (It previously sat inside the axis gate:
+        # with the calendar unavailable or empty a REQUIRED financial
+        # source fell through to the not-required fill below and silently
+        # passed un-evaluated — fail-open, closed here.)
+        if SOURCE_FINANCIAL in required and v2_db is not None:
+            window_start = (
+                f"{int(spec.dev_window.start[:4]) - 1}"
+                f"{spec.dev_window.start[4:]}"
+            )
+            quarter_ends = _quarter_ends(
+                window_start, spec.dev_window.end
+            )
+            # t73: pre-listing quarters are excluded from the expected
+            # denominator (a mid-quarter-listed stock cannot have
+            # reports before its listing — a source gap, not a
+            # coverage failure; data-engineer's sampling confirmed it).
+            listing_dates = _universe_list_dates(
+                config, list(universe_codes)
+            )
+            coverage = _financial_coverage(
+                v2_db, list(universe_codes), quarter_ends,
+                listing_dates=listing_dates,
+            )
+            if coverage.ratio is None:
+                checks[SOURCE_FINANCIAL] = fail(
+                    SOURCE_FINANCIAL,
+                    f"not computable: {coverage.detail}",
                 )
-                quarter_ends = _quarter_ends(
-                    window_start, spec.dev_window.end
+            elif coverage.ratio < FINANCIAL_REPORT_COVERAGE_MIN:
+                checks[SOURCE_FINANCIAL] = fail(
+                    SOURCE_FINANCIAL,
+                    f"report-period coverage {coverage.ratio:.2%} < "
+                    f"{FINANCIAL_REPORT_COVERAGE_MIN:.0%} "
+                    f"({coverage.detail}; "
+                    f"periods {quarter_ends[0]}..{quarter_ends[-1]})",
                 )
-                # t73: pre-listing quarters are excluded from the expected
-                # denominator (a mid-quarter-listed stock cannot have
-                # reports before its listing — a source gap, not a
-                # coverage failure; data-engineer's sampling confirmed it).
-                listing_dates = _universe_list_dates(
-                    config, list(universe_codes)
+            else:
+                checks[SOURCE_FINANCIAL] = SourceCheck(
+                    SOURCE_FINANCIAL, True, True,
+                    f"report-period coverage {coverage.ratio:.2%} >= "
+                    f"{FINANCIAL_REPORT_COVERAGE_MIN:.0%} "
+                    f"({coverage.detail})",
                 )
-                coverage = _financial_coverage(
-                    v2_db, list(universe_codes), quarter_ends,
-                    listing_dates=listing_dates,
-                )
-                if coverage.ratio is None:
-                    checks[SOURCE_FINANCIAL] = fail(
-                        SOURCE_FINANCIAL,
-                        f"not computable: {coverage.detail}",
-                    )
-                elif coverage.ratio < FINANCIAL_REPORT_COVERAGE_MIN:
-                    checks[SOURCE_FINANCIAL] = fail(
-                        SOURCE_FINANCIAL,
-                        f"report-period coverage {coverage.ratio:.2%} < "
-                        f"{FINANCIAL_REPORT_COVERAGE_MIN:.0%} "
-                        f"({coverage.detail}; "
-                        f"periods {quarter_ends[0]}..{quarter_ends[-1]})",
-                    )
-                else:
-                    checks[SOURCE_FINANCIAL] = SourceCheck(
-                        SOURCE_FINANCIAL, True, True,
-                        f"report-period coverage {coverage.ratio:.2%} >= "
-                        f"{FINANCIAL_REPORT_COVERAGE_MIN:.0%} "
-                        f"({coverage.detail})",
-                    )
 
         if SOURCE_DATASET_MANIFEST in required:
             if v2_db is None:
@@ -1071,6 +1125,15 @@ def build_data_quality_report(
         axis_block = (
             "not computable: the trade calendar is unavailable (no "
             "completed open-session reference)"
+        )
+    elif not axis:
+        # The table exists but carries no completed open session before
+        # the day: same fail-closed treatment (an empty axis made every
+        # _lag_sessions call below vacuously read lag 0 and pass).
+        axis_block = (
+            "not computable: calendar exists but no completed open "
+            f"sessions before {day} (an empty lag axis is never a lag-0 "
+            "pass)"
         )
     else:
         try:

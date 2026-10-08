@@ -319,8 +319,17 @@ def test_simulate_basket_matches_backtest_engine_daily_returns():
     # the not-due constructor dust polluted the engine path — fixed by
     # feeding the constructor canonicalized prev weights).
     assert daily == pytest.approx(np.asarray(result.daily_returns), abs=5e-4)
+    # p52 (WP16-A FROZEN_A §1 (C1)/§6): the basket's legs are now sized
+    # net of the fee reserve (its turnover is the FUNDED turnover), while
+    # the engine's reported turnover stays its constructor intent (its
+    # own affordability loop executes inside the share ledger; the engine
+    # file is frozen, red line 4).  The systematic gap is the fee
+    # financing ~ c x traded (~1e-3 here); the daily-net parity above —
+    # the economics — still holds at the original 5e-4 because the
+    # reserved-basket net g−c equals the engine's booked net (FROZEN_A
+    # §2.1/§3.4 identity (1−c)(1+g0)−1 = (1−c)g0−c).
     assert avg_turnover == pytest.approx(
-        float(np.mean(result.turnover)), abs=5e-4
+        float(np.mean(result.turnover)), abs=5e-3
     )
 
 
@@ -960,7 +969,13 @@ def test_basket_exit_is_sold_through_cost_path_or_force_held():
     assert sim.daily_cost_fractions[0] > 0
     assert sim.daily_cost_fractions[1] == pytest.approx(0.0, abs=1e-15)
     assert sim.daily_cost_fractions[exit_day - 1] > sim.daily_cost_fractions[1]
-    assert sim.turnover[exit_day - 1] == pytest.approx(2.0)
+    # p52 (WP16-A FROZEN_A §1 (C1)/§3.4): the exit session sells the full
+    # 1.0 book and buys the replacement; booking the unfunded buy at 1.0
+    # (turnover exactly 2.0) requires cash = -c < 0 — the §3.4
+    # infeasible state that the old implementation washed through the
+    # >1 normalization.  The buy is now fee-reserved, so the turnover is
+    # 2 - (sell fees + buy fees) ≈ 2 - 2.0e-3 (bound 5e-3).
+    assert sim.turnover[exit_day - 1] == pytest.approx(2.0, abs=5e-3)
     # When the exit execution day is sell-blocked the position is
     # force-held: the sell is deferred and consumes the budget, so nothing
     # else can be bought either —zero turnover, zero cost (T1-02

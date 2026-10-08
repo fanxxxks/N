@@ -33,7 +33,7 @@ from loguru import logger
 
 from .config import resolve_v2_duckdb_path
 from .db import AshareDB, sql_quoted_list
-from .fundamentals import _cached_or_fetch, _read_cached, _write_cached
+from .fundamentals import _cached_or_fetch, _read_cached_tolerant, _write_cached
 from .gates import FRESHNESS_TOLERANCE_SESSIONS
 from .pit_import import SourceTimeSemantics
 from .universe import OPEN_ENDED_OUT_DATE
@@ -130,7 +130,10 @@ def sync_capital_flow(
         path = _capital_cache_path(config, f"margin_{date}")
         age_days = (datetime.now() - datetime.strptime(date, "%Y%m%d")).days
         settled = age_days > _MARGIN_STALE_DAYS
-        df = _read_cached(path) if settled else pd.DataFrame()
+        # IP-05 (corrupt-cache tolerance): a settled date with a corrupt
+        # parquet reads as a miss and refetches — never a fatal
+        # FundamentalCacheMiss aborting the whole capital sync.
+        df = _read_cached_tolerant(path) if settled else pd.DataFrame()
         if df.empty:
             parts = []
             for exchange in ("sse", "szse"):
@@ -353,6 +356,11 @@ def industry_index_freshness(
         return None
     latest_value = latest.iloc[0]["latest"] if not latest.empty else None
     if latest_value is None or pd.isna(latest_value):
+        return None
+    # An empty session axis cannot measure a lag — not computable, never a
+    # lag-0 "fresh" pass (the same fail-closed rule the D7 gate applies to
+    # every axis consumer).
+    if not dates:
         return None
     latest_date = str(latest_value)
     return len([date for date in dates if date > latest_date])

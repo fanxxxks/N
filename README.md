@@ -65,7 +65,9 @@ python -m ashare_model.searcher_bench --budget 128 # 四搜索器成本测量/�
 python scripts/admission_experiment.py             # P4 五组配对种子准入（含 random/imitation RL）
 python -m ashare_trading.run_sim
 python scripts/analyze_sim.py               # 模拟盘费用拖累/毛盈亏/现金核对
-streamlit run dashboard/app.py
+streamlit run dashboard/app.py              # 看板（须在仓库根目录执行；python 直接执行
+                                            # dashboard/app.py 无父包会失败，python -m
+                                            # dashboard.app 则无 Streamlit 服务端、不渲染）
 ```
 
 GP、TPE、Random 搜索会在统一 `SearchResult` 中生成确定性去重的 eligible
@@ -291,9 +293,11 @@ python -m uvicorn webapi.app:app --host 127.0.0.1 --port 8000
 
 **控制端点鉴权**：`/api/sim/start|stop|reset` 与 `PUT /api/sim/config` 受
 `webapi/auth.py` 保护——若 `config/.webapi_token`（gitignored）存在，变更请求必须
-携带 `X-API-Token` 头且与文件内容一致；无 token 文件时仅允许回环客户端变更，
-非回环变更请求返回 403 并提示创建 token 文件。因此把 `--host 0.0.0.0` 暴露到
-局域网之前，务必先写入 token 文件。
+携带 `X-API-Token` 头且与文件内容一致；无 token 文件时要求**两端同时回环**：客户端
+地址是回环**且** `Host` 头指向回环名/回环地址（后者防御"远端 → 本机反代 / `ssh -L` /
+VS Code 端口转发 → 127.0.0.1:8000"拓扑——转发的请求客户端地址是回环，但 `Host` 头
+是外部域名，将被 403）。经代理访问时请写入 token 文件并用 `X-API-Token` 认证；把
+`--host 0.0.0.0` 暴露到局域网之前，同样务必先写入 token 文件。
 
 | 端点 | 说明 |
 | --- | --- |

@@ -530,7 +530,11 @@ def gather_bound_run(
     source-run qualification consumed by the promotion side."""
 
     from ashare_model import lifecycle
-    from ashare_model.run_store import RunStore, RunStoreError
+    from ashare_model.run_store import (
+        LIFECYCLE_FILENAME,
+        RunStore,
+        RunStoreError,
+    )
 
     report: dict[str, Any] = {
         "spec_id": spec_id,
@@ -587,7 +591,7 @@ def gather_bound_run(
         index = store.load_index(spec_id, run_id)
         run_dir = store.runs_dir / spec_id / run_id
         events = lifecycle.load_events(
-            run_dir / run_store.LIFECYCLE_FILENAME,
+            run_dir / LIFECYCLE_FILENAME,
             expect_spec_id=spec_id,
             expect_run_id=run_id,
         )

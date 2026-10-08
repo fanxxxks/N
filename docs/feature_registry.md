@@ -20,7 +20,7 @@
 | TURNOVER_CHG | volume | A | pit_daily | volume_like | return | missing_nan | short | -1 | low | turnover_rate | short_price_volume | daily bars up to session t inclusive; no future session enters the computation; warmup 2 sessions | Turnover spikes mark attention peaks that fade. |
 | VOLUME_RATIO | volume | A | pit_daily | volume_like | ratio | missing_nan | short | -1 | medium | volume | short_price_volume | daily bars up to session t inclusive; no future session enters the computation; warmup 20 sessions | Abnormal volume signals speculative interest that mean-reverts. |
 | VOLUME_IMPACT | volume | A | pit_daily | volume_like | log_volume | missing_nan | short | -1 | medium | volume | short_price_volume | daily bars up to session t inclusive; no future session enters the computation; warmup 20 sessions | Log-volume deviation proxies abnormal trading interest; elevated values fade. |
-| AMPLITUDE | volume | A | pit_daily | return_like | ratio | missing_nan | short | -1 | low | high, low, close | short_price_volume | daily bars up to session t inclusive; no future session enters the computation; warmup 2 sessions | Wide intraday ranges reflect disagreement and instability; predictive of underperformance. |
+| AMPLITUDE | volume | A | pit_daily | return_like | ratio | missing_nan | short | -1 | low | high, low, pre_close | short_price_volume | daily bars up to session t inclusive; no future session enters the computation; warmup 2 sessions | Wide intraday ranges reflect disagreement and instability; predictive of underperformance. |
 | CLOSE_POSITION | volume | A | pit_daily | price_like | ratio | missing_nan | short | +1 | low | high, low, close | short_price_volume | daily bars up to session t inclusive; no future session enters the computation; warmup 1 sessions | Strong closes reflect intraday accumulation; short-horizon continuation. |
 | MOMENTUM_20 | momentum | A | pit_daily | return_like | return | missing_nan | medium | +1 | medium | close | medium_cross_section | daily bars up to session t inclusive; no future session enters the computation; warmup 21 sessions | One-month momentum: modest continuation at the medium horizon. |
 | MOMENTUM_60 | momentum | A | pit_daily | return_like | return | missing_nan | medium | +1 | high | close | medium_cross_section | daily bars up to session t inclusive; no future session enters the computation; warmup 61 sessions | Quarterly momentum: trend persistence at the medium horizon. |
@@ -358,7 +358,7 @@ arity 与实现来自 `OPS_CONFIG`（单一权威，此处派生不复制的导�
       "depends_on": [
         "high",
         "low",
-        "close"
+        "pre_close"
       ],
       "promotion_allowed": true,
       "implementation_status": "computed_live",

@@ -28,6 +28,10 @@ from .eval_folds import Fold, epoch_slice
 from .vm import StackVM
 from .vocab import FORMULA_VOCAB
 
+# p56 (WP18): pure counting helper for the additive hold funnel key —
+# imported lazily-free (a leaf module with no engine/loader imports).
+from .wp18_five_questions import hold_forced_exit_session_count
+
 # Metrics aggregated across folds/seeds for every candidate.
 METRIC_KEYS = (
     "total_return",
@@ -145,6 +149,7 @@ def evaluate_signal(
     loader: AshareDataLoader,
     fold: Fold,
     bt_cfg: BacktestConfig,
+    portfolio_constructor=None,
 ) -> dict:
     """Full-engine metrics plus rank IC for one signal on one test window.
 
@@ -154,6 +159,13 @@ def evaluate_signal(
     variants are reported: the universe-masked rank IC and the tradable IC
     (additionally excluding stocks the engine could not buy on the entry
     day).
+
+    ``portfolio_constructor`` (p56, WP18 FROZEN §3.1/§3.2) is the additive
+    opt-in row face for the hold mode: pass a
+    :class:`ashare_portfolio.constructor.HoldModeConstructor` built from
+    ``bt_cfg`` and the row runs the hold-mode account semantics on the
+    SAME engine path.  Default ``None`` keeps the dynamic (base)
+    constructor — every existing row is unchanged.
     """
 
     config_policy = RebalancePolicy.from_config(bt_cfg)
@@ -170,7 +182,12 @@ def evaluate_signal(
             f"signal shape {signal.shape} does not match "
             f"({len(loader.ts_codes)}, {len(dates)})"
         )
-    result = AshareBacktestEngine(bt_cfg).run(
+    engine = (
+        AshareBacktestEngine(bt_cfg)
+        if portfolio_constructor is None
+        else AshareBacktestEngine(bt_cfg, portfolio_constructor=portfolio_constructor)
+    )
+    result = engine.run(
         signal,
         raw,
         loader.ts_codes,
@@ -328,6 +345,11 @@ def evaluate_signal(
         "funnel_sessions_zero_holdings": sum(
             1 for count in holdings_counts if count == 0
         ),
+        # p56 (WP18 FROZEN §3.2 观测面, additive key): hold-mode sessions
+        # that ran a forced-exit leg (non-due leg or post-funding due
+        # leg).  Absent-flags count zero, so dynamic rows read 0 and
+        # every existing key keeps its value bit-for-bit.
+        "funnel_hold_forced_exit_sessions": hold_forced_exit_session_count(diag),
         # P37 R02 (additive observability): the continuous-vs-lot gap on
         # due sessions (target weights vs the lot-rounded realized book)
         # and the initial-funding order counts — read-only over the same

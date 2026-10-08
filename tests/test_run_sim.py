@@ -896,3 +896,80 @@ def test_sim_buy_orders_respect_single_weight_cap(tmp_path: Path):
             if order["side"] == "buy":
                 assert order["quantity"] * order["price"] <= cap * equity_ceiling
                 assert order["quantity"] * order["price"] > 0
+
+
+# --- lot_size configuration plumbing (P1 review 2026-09-21) -----------------
+
+
+def test_make_orders_executes_configured_lot_grain(tmp_path: Path):
+    # The paper account's order grain is the configured lot_size, not the
+    # hardcoded A-share 100.  With equity 1e5, weights [0.5, 0.5, 0] and
+    # opens [12.0, 7.0, 21.0] the targets are 4166.67 / 7142.86 shares:
+    # lot 200 floors them to 4000 / 7000 (the 100-grain would give
+    # 4100 / 7100 — the discriminating case).
+    runner, _ = _make_runner(
+        tmp_path, n_dates=8, backtest_overrides={"lot_size": 200}
+    )
+    orders = runner._make_orders(
+        np.asarray([0.5, 0.5, 0.0]),
+        ["000001.SZ", "600000.SH", "300001.SZ"],
+        exec_idx=0,
+        exec_date="20240102",
+        raw={"open": np.array([[12.0], [7.0], [21.0]])},
+        equity=100000.0,
+    )
+    quantities = {order.ts_code: order.quantity for order in orders}
+    assert quantities["000001.SZ"] == 4000.0
+    assert quantities["600000.SH"] == 7000.0
+
+
+def test_simulation_buy_grain_follows_configured_lot_size(tmp_path: Path):
+    # End to end: lot_size=200 and lot_size=100 configs over the same
+    # market produce different share books (the first funding targets have
+    # odd hundreds, e.g. 100000/3/10.6 = 3144.7 -> 3100 vs 3000), and the
+    # 200-grain run only ever holds multiples of 200.
+    codes = ["000001.SZ", "600000.SH", "300001.SZ"]
+    n_dates = 12
+    dates, _, default_bars = make_bars(n_dates, codes)
+    a = [10.0 + 0.30 * i for i in range(n_dates)]
+    b = [10.0 + 0.20 * i for i in range(n_dates)]
+    c = [10.0 + 0.10 * i for i in range(n_dates)]
+    bars = _replace_stock_bars(default_bars, "000001.SZ", a)
+    bars = _replace_stock_bars(bars, "600000.SH", b)
+    bars = _replace_stock_bars(bars, "300001.SZ", c)
+
+    runner200, _ = _make_runner(
+        tmp_path / "lot200", n_dates=n_dates, top_n=3, max_positions=3,
+        ts_codes=codes, bars=bars, backtest_overrides={"lot_size": 200},
+    )
+    runner200.run()
+    runner100, _ = _make_runner(
+        tmp_path / "lot100", n_dates=n_dates, top_n=3, max_positions=3,
+        ts_codes=codes, bars=bars, backtest_overrides={"lot_size": 100},
+    )
+    runner100.run()
+
+    buys = [
+        order
+        for date in dates[1:]
+        for order in _orders_for(runner200, date)
+        if order["side"] == "buy" and order["status"] == "filled"
+    ]
+    assert buys
+    for order in buys:
+        assert order["quantity"] % 200 == 0
+    # The two grains genuinely produce different execution trails on this
+    # market (the first funding targets have odd hundreds: 100000/3/10.6
+    # = 3144.7 shares -> 3100 vs 3000).
+    trail200 = {
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted(runner200.sim_config.orders_dir.glob("*.json"))
+    }
+    trail100 = {
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted(runner100.sim_config.orders_dir.glob("*.json"))
+    }
+    assert trail200 != trail100
+    positions200 = {k: v.quantity for k, v in runner200.portfolio.positions.items()}
+    positions100 = {k: v.quantity for k, v in runner100.portfolio.positions.items()}
+    assert positions200 != positions100

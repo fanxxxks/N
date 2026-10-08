@@ -6,7 +6,10 @@ Conventions
   detector's 60-session baseline) only look backwards.  Leading positions
   use the values actually available (an expanding window), so a constant
   series has a constant moving average and zero standard deviation; CORR20
-  with a degenerate window yields 0.
+  with a degenerate window yields 0.  All windowed reducers are NaN-aware;
+  CORR uses pairwise-complete semantics (a window counts only the
+  positions where both inputs are finite), so a single NaN input affects
+  exactly the windows containing it instead of the whole remaining tail.
 * Delay-based operators (DELAY1/MAX3/DECAY/DELTA5) extend the series with
   the first available value (constant extension) instead of zeros, so the
   leading positions do not fabricate spurious jumps or decay.
@@ -157,24 +160,45 @@ def _ts_corr(x: torch.Tensor, y: torch.Tensor, d: int) -> torch.Tensor:
     time (the VM executes on the full [stock x date] tensor inside the RL
     loop).  Expanding windows are used for the leading positions; a
     degenerate window (zero variance) yields correlation 0.
+
+    NaN-aware with pairwise-complete semantics (the ``pandas`` rolling-corr
+    convention, the same ``_ts_window`` contract the other windowed
+    reducers honor): a position contributes to a window only when BOTH
+    inputs are finite, so a single NaN input affects exactly the ``d``
+    windows that contain it and every later window recovers.  The previous
+    bare-cumsum implementation poisoned every prefix sum after the first
+    NaN, turning the whole tail NaN — which the VM's ``nan_to_num`` then
+    flattened to the neutral 0.  The per-window observation count enters
+    through the same O(T) prefix-sum pass (a cumsum over the pairwise
+    finite mask), so the operator stays linear in the timeline; a window
+    with no usable observation lands in the degenerate branch and yields 0.
     """
 
     if d <= 1:
         return torch.zeros_like(x)
     b, t = x.shape
+    # Pairwise-finite observations: masked cells contribute zero to every
+    # sum and are excluded from the per-window count n.
+    finite = torch.isfinite(x) & torch.isfinite(y)
+    valid = finite.to(x.dtype)
+    xm = torch.where(finite, x, torch.zeros_like(x))
+    ym = torch.where(finite, y, torch.zeros_like(y))
     pad = torch.zeros(b, 1, device=x.device, dtype=x.dtype)
-    sx = torch.cumsum(torch.cat([pad, x], dim=1), dim=1)
-    sy = torch.cumsum(torch.cat([pad, y], dim=1), dim=1)
-    sxx = torch.cumsum(torch.cat([pad, x * x], dim=1), dim=1)
-    syy = torch.cumsum(torch.cat([pad, y * y], dim=1), dim=1)
-    sxy = torch.cumsum(torch.cat([pad, x * y], dim=1), dim=1)
+    n_sum = torch.cumsum(torch.cat([pad, valid], dim=1), dim=1)
+    sx = torch.cumsum(torch.cat([pad, xm], dim=1), dim=1)
+    sy = torch.cumsum(torch.cat([pad, ym], dim=1), dim=1)
+    sxx = torch.cumsum(torch.cat([pad, xm * xm], dim=1), dim=1)
+    syy = torch.cumsum(torch.cat([pad, ym * ym], dim=1), dim=1)
+    sxy = torch.cumsum(torch.cat([pad, xm * ym], dim=1), dim=1)
     idx = torch.arange(t, device=x.device)
     start = torch.clamp(idx - d + 1, min=0)  # inclusive window start
 
     def window_sum(prefix: torch.Tensor) -> torch.Tensor:
         return prefix[:, idx + 1] - prefix[:, start]
 
-    n = (idx - start + 1).to(x.dtype)
+    # clamp(min=1): an empty window (n = 0) has all-zero sums and falls
+    # through to the degenerate 0 branch instead of dividing by zero.
+    n = window_sum(n_sum).clamp(min=1.0)
     xs, ys = window_sum(sx), window_sum(sy)
     cov = window_sum(sxy) - xs * ys / n
     vx = torch.clamp(window_sum(sxx) - xs * xs / n, min=0.0)

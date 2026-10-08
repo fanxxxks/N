@@ -327,6 +327,36 @@ def test_w4_isolated_single_winner_is_unstable():
     assert "不稳定" in verdict["note"] or "unstable" in verdict["note"].lower()
 
 
+def test_w4_multiple_disjoint_viable_is_never_a_single_winner():
+    """P1 repair: two viable cells that are NOT adjacent (diagonal on the
+    2x3 grid — cell_adjacent needs dn+dm==1) are neither a stable region
+    nor "exactly one viable cell".  The old binary adjudicator reported
+    isolated_single_winner here and pointed isolated_cell at an arbitrary
+    first viable cell — a verdict/note downstream evidence consumed as
+    fact."""
+    from ashare_model.r02_matrix import decide_r02_adjudication
+
+    cells = _full_panel(None)
+    # n10_m1000 vs n20_m2500: one grid step on BOTH axes (diagonal) — no
+    # adjacency, hence no stable pair.
+    cells["n10_m1000"]["arms"]["baseline:X"] = _arm_summary()
+    cells["n20_m2500"]["arms"]["baseline:X"] = _arm_summary()
+    verdict = decide_r02_adjudication(cells)
+    assert verdict["verdict"] == "multiple_disjoint_viable"
+    assert set(verdict["viable_cells"]) == {"n10_m1000", "n20_m2500"}
+    assert verdict["stable_pairs"] == []
+    assert verdict["isolated_cell"] is None
+    assert "no two adjacent" in verdict["note"]
+    # Same unstable-family discipline as the isolated verdict.
+    assert "不稳定" in verdict["note"]
+    assert "exactly one viable" not in verdict["note"]
+
+    # Control: the genuine single-winner semantics is unchanged.
+    single = decide_r02_adjudication(_full_panel("n10_m2500"))
+    assert single["verdict"] == "isolated_single_winner"
+    assert single["isolated_cell"] == "n10_m2500"
+
+
 def test_w4_gross_info_execution_blocked():
     from ashare_model.r02_matrix import decide_r02_adjudication
 
@@ -616,3 +646,51 @@ def test_w7_end_to_end_chain_verdict_consistent(mini_env, gate_run_asof):
         entry = directions[list(directions)[0]][arm]
         assert entry["direction"] in (-1, 1)
         assert "val_reward" in entry
+
+
+def test_w7_multiple_disjoint_viable_parks_not_retires(
+    mini_env, gate_run_asof, monkeypatch
+):
+    """Administrative walk for the new multiple_disjoint_viable verdict
+    (P1 repair): the conservative PARK — non-terminal at DATA_QUALIFIED,
+    the same family as stable/isolated — never a retire.  The verdict is
+    injected at the adjudicator seam because the canary data lands the
+    no-info side deterministically; the production driver's verdict->walk
+    mapping is what this pins."""
+
+    import ashare_model.r02_matrix as r02
+    from ashare_model.lifecycle import replay_run
+    from ashare_model.run_store import RunStore
+    from ashare_data.config import make_data_config
+
+    tmp_path, _data_config, cfg_path = mini_env
+    gate_run_asof(_mini_dates()[-1])
+
+    def fake_adjudication(cell_summaries, rules=None):
+        return {
+            "verdict": "multiple_disjoint_viable",
+            "note": "test injection: disjoint viable cells",
+            "viable_cells": ["n10_m1000", "n20_m2500"],
+            "isolated_cell": None,
+            "stable_pairs": [],
+            "gross_info_arms": [],
+            "cells": {},
+            "rules": {},
+        }
+
+    monkeypatch.setattr(r02, "decide_r02_adjudication", fake_adjudication)
+    summary = r02.run_r02_matrix(
+        cfg_path,
+        contract_sha256=_contract_sha(),
+        out_root=tmp_path / "r02_out_disjoint",
+        require_clean_tree=False,
+        min_eligible=3,
+    )
+    assert summary["verdict"] == "multiple_disjoint_viable"
+    assert summary["grid_adjudication"]["isolated_cell"] is None
+    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    data_config = make_data_config(raw, tmp_path)
+    store = RunStore(data_config.data_dir)
+    state = replay_run(store.root, summary["spec_id"], summary["run_id"])
+    # The disjoint verdict parks (non-terminal) instead of retiring.
+    assert state == "DATA_QUALIFIED"

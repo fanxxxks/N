@@ -29,6 +29,7 @@ from ashare_portfolio.constructor import (
     canonical_weights_to_output_grid,
 )
 from ashare_portfolio.rebalance import RebalancePolicy
+from ashare_portfolio.trade_groups import refuse_unwired_trade_groups
 
 from .reward import sortino_ratio
 from .targets import causal_target_returns
@@ -83,6 +84,14 @@ class AshareBacktestEngine:
         self.config = config or BacktestConfig()
         self.initial_capital = float(self.config.initial_capital)
         self.cost_model = ExecutionCostModel.from_config(self.config)
+        # Audit fix (2026-09-23, major): this engine executes the
+        # constructor's output weights in its own weight-space loop and
+        # does not consume plan_trade_session/execute_trade_session, so
+        # the experimental trade_groups mode (whose budget lives in the
+        # planner, frozen §1.1.2) must REFUSE to run here instead of
+        # silently trading the unbudgeted target.  No-op for every other
+        # allocation mode (red line 2).
+        refuse_unwired_trade_groups(self.config, "AshareBacktestEngine")
         self.portfolio_constructor = (
             portfolio_constructor or PortfolioConstructor(self.config)
         )
@@ -279,7 +288,12 @@ class AshareBacktestEngine:
             sell_weights = np.zeros(n_stocks, dtype=np.float64)
             trade_fees = 0.0
             p_entry = open_[:, entry_day]
-            if rebalance_due:
+            # p56 (WP18 FROZEN_18_PLAN §3.2 item 2): the execution gate
+            # also admits the opt-in not_due_forced_exit leg so its sell
+            # side + fees book; the constructor planned no buys there.
+            # Every default path (rebalance_due False, flag off) keeps
+            # the historical zero-cost else branch byte-for-byte.
+            if rebalance_due or output.reason == "not_due_forced_exit":
                 # P35: the share book is re-derived from the drifted
                 # weights at the raw entry open — a split halves the raw
                 # price and thereby doubles the materialized shares with

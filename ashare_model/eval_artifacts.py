@@ -24,6 +24,7 @@ from ashare_portfolio.execution_spec import execution_provenance
 
 from . import reward as _reward_owner
 from .artifact_schemas import ARTIFACT_SCHEMA_VERSION, ProtocolResultArtifact
+from .claim_record import build_claim_record
 from .data_loader import AshareDataLoader
 from .data_tier import DATA_TIER_VERSION, formula_data_tier_report
 from .eval_corrections import dsr_from_rows, max_t_from_rows
@@ -303,6 +304,19 @@ def build_result(
             ),
             "dsr_extra_trials": len(stitch_oos_series(extra_trial_rows or [])),
         }
+    )
+    # WP17 W1 (FROZEN_17 §1/§3.2): the five-group claim record is
+    # constructed UNCONDITIONALLY at the same place as dsr/max_t — the
+    # descriptive save path is never blocked by qualification.  The
+    # qualification group is filled from the then-available evidence
+    # registry (auto-loaded from the registered path; unavailable =>
+    # qualified=False + EVIDENCE_NOT_REGISTERED, still never a write
+    # blocker).  G2 recomputes it at promotion time (verify-don't-trust).
+    result["claim_record"] = build_claim_record(
+        result.get("max_t"),
+        result.get("dsr"),
+        (result.get("stitched") or {}).get("trials") or [],
+        max_t_perms,
     )
     # Fail-closed (P7-C §2.1): an artifact that does not satisfy the
     # schema raises ValidationError here and is never persisted by the

@@ -371,6 +371,12 @@ def run_gp_baseline(
     collapse (p14 §1.1/§5.1).  Only full evaluations consume budget.  The
     search stops when the budget is exhausted or a generation produced no
     new evaluation.  ``feature_ids`` (P6 §4.2) restricts the terminal set.
+
+    Selection compares only individuals whose fitness is the reward of the
+    tree they currently carry: ``toolbox.clone`` copies the parent's
+    fitness and the variation operators rewrite the tree without clearing
+    it, so every varied child is invalidated and re-scored before it can
+    enter the tournament (review P0-1/P0-2).
     """
 
     _ensure_creator()
@@ -422,20 +428,36 @@ def run_gp_baseline(
         return evaluator.worst_reward
 
     population = [fresh_individual() for _ in range(pop_size)]
+    # Selection invariant (review P0-1/P0-2): the tournament only compares
+    # individuals whose fitness was assigned from the reward of their own
+    # tree in this run.  Varied offspring are therefore invalidated below
+    # and re-scored by the next iteration's evaluation step; the mu+lambda
+    # selection over ``offspring + population`` is deferred until after
+    # that step (the same ordering as DEAP's eaSimple: vary, invalidate,
+    # evaluate, select).  ``unevaluated`` carries exactly the individuals
+    # whose fitness is not yet trustworthy.
+    selection_pool: list | None = None
+    unevaluated = list(population)
     stall_generations = 0
     while evaluator.budget_used < evaluator.budget:
         budget_before = evaluator.budget_used
-        # Propose the whole generation, then flush the batched scoring so
-        # every individual's fitness is the real reward (the evaluator
-        # scores in memory-bounded chunks; chunk=1 callers get eager
-        # scores and the flush is a no-op).
-        for ind in population:
+        # Propose the generation, then flush the batched scoring so every
+        # individual's fitness is the real reward (the evaluator scores in
+        # memory-bounded chunks; chunk=1 callers get eager scores and the
+        # flush is a no-op).  Survivors are already-claimed classes and
+        # never bill, so probing only the varied offspring observes the
+        # same new-class signal as re-proposing the whole population.
+        for ind in unevaluated:
             evaluator.propose(tuple(tree_to_tokens(ind, vocab)))
             if evaluator.budget_used >= evaluator.budget:
                 break  # never overshoot the budget by more than one
         evaluator.flush()
-        for ind in population:
+        for ind in unevaluated:
             ind.fitness.values = (fitness_of(ind),)
+        unevaluated = []
+        if selection_pool is not None:
+            population = toolbox.select(selection_pool, k=pop_size)
+            selection_pool = None
         # A generation that cannot produce any new evaluation is stalled:
         # the search has converged on the already-evaluated classes.
         if evaluator.budget_used == budget_before:
@@ -451,14 +473,28 @@ def run_gp_baseline(
         for child1, child2 in zip(offspring[::2], offspring[1::2]):
             if py_random.random() < cxpb:
                 toolbox.mate(child1, child2)
+                # The operators rewrite the tree but keep the cloned
+                # fitness; invalidate it so the child can only compete
+                # with the reward of its own (new) tree.
+                del child1.fitness.values
+                del child2.fitness.values
+            # varAnd semantics: crossover is decided per pair, mutation
+            # independently per child (review P0-2).
             if py_random.random() < mutpb:
                 toolbox.mutate(child1)
+                del child1.fitness.values
+            if py_random.random() < mutpb:
+                toolbox.mutate(child2)
+                del child2.fitness.values
         # Repair oversize children by regeneration (node cap mirrors the
-        # policy's max formula length).
+        # policy's max formula length).  A regenerated individual has no
+        # fitness yet — like any varied child it joins ``unevaluated`` and
+        # is scored before selection can compare it.
         for index, ind in enumerate(offspring):
             if len(ind) > node_cap:
                 offspring[index] = fresh_individual()
-        population = toolbox.select(offspring + population, k=pop_size)
+        selection_pool = offspring + population
+        unevaluated = [ind for ind in offspring if not ind.fitness.valid]
 
     stalled = evaluator.budget_used < evaluator.budget
     return evaluator.finish(

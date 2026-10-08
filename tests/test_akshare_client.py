@@ -326,6 +326,114 @@ def test_get_daily_bar_baostock_fallback_for_absorbed(monkeypatch: pytest.Monkey
     assert df.iloc[1]["ts_code"] == "000562.SZ"
 
 
+def test_eastmoney_circuit_breaker_counts_consecutive_failures(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """P1-1: the Eastmoney breaker trips on 3 CONSECUTIVE failures only —
+    a success resets the streak — and once tripped it stays open for the
+    rest of the run (conservative, no cooldown).  Before the fix the
+    streak only ever grew, so a ~5% sporadic failure rate over a
+    whole-market sync permanently switched the primary source after
+    ~60 stocks."""
+
+    import akshare as ak
+
+    cfg = data_config_module.DataConfig(start_date="2024-01-01", end_date="2024-12-31")
+    client = AkShareClient(cfg, offline=False)
+    monkeypatch.setattr(client, "_fetch", lambda *args, **_kwargs: args[0]())
+
+    def em_boom(**_kwargs):
+        raise AkShareUnavailable("eastmoney blocked")
+
+    def sina_ok(**_kwargs):
+        return pd.DataFrame(
+            {
+                "date": ["2024-01-02"],
+                "open": 1.0,
+                "close": 1.1,
+                "high": 1.2,
+                "low": 0.9,
+                "volume": 100.0,
+                "turnover": 0.0068,
+                "amount": 1100.0,
+            }
+        )
+
+    def em_ok(**_kwargs):
+        return pd.DataFrame({"日期": ["2024-01-02"], "收盘": 1.1})
+
+    monkeypatch.setattr(ak, "stock_zh_a_daily", sina_ok)
+    monkeypatch.setattr(ak, "stock_zh_a_hist", em_boom)
+
+    # Two failures, then a success: the streak resets, so these 2 + 2
+    # failures are NOT consecutive and the breaker must never trip.
+    for _ in range(2):
+        client.get_daily_bar("000001.SZ", "20240101", "20240110")
+    assert client._em_fail_streak == 2 and not client._em_broken
+    monkeypatch.setattr(ak, "stock_zh_a_hist", em_ok)
+    assert not client.get_daily_bar("000001.SZ", "20240101", "20240110").empty
+    assert client._em_fail_streak == 0 and not client._em_broken
+
+    # Three consecutive failures trip the breaker.
+    monkeypatch.setattr(ak, "stock_zh_a_hist", em_boom)
+    for _ in range(3):
+        client.get_daily_bar("000001.SZ", "20240101", "20240110")
+    assert client._em_broken
+
+    # Once tripped it is run-sticky: eastmoney is skipped entirely (the
+    # fallback serves the bar) and a later success does not re-close it.
+    em_calls: list[int] = []
+
+    def em_counting(**kwargs):
+        em_calls.append(1)
+        return em_ok(**kwargs)
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", em_counting)
+    assert not client.get_daily_bar("000001.SZ", "20240101", "20240110").empty
+    assert em_calls == []  # broken -> eastmoney never consulted
+    assert client._em_broken
+
+
+def test_get_daily_bar_drops_provider_dirty_date_rows(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """P1-4: a provider dirty date cell must never leak a raw ValueError
+    out of the client (sync only catches AkShareUnavailable) — the row is
+    coerced, dropped with a warning, and the clean remainder returned."""
+
+    import akshare as ak
+
+    cfg = data_config_module.DataConfig(start_date="2024-01-01", end_date="2024-12-31")
+    client = AkShareClient(cfg, offline=False)
+    monkeypatch.setattr(client, "_fetch", lambda fn, **_kwargs: fn())
+    monkeypatch.setattr(
+        ak,
+        "stock_zh_a_hist",
+        lambda **_kwargs: pd.DataFrame(
+            {
+                "日期": ["2024-01-02", "garbage-date", "2024-01-03"],
+                "开盘": [1.0, 1.0, 1.0],
+                "最高": [1.2, 1.2, 1.2],
+                "最低": [0.9, 0.9, 0.9],
+                "收盘": [1.1, 1.1, 1.1],
+                "成交量": [100.0, 100.0, 100.0],
+                "成交额": [110.0, 110.0, 110.0],
+            }
+        ),
+    )
+    df = client.get_daily_bar("000001.SZ", "20240101", "20240110")
+    assert df["trade_date"].tolist() == ["20240102", "20240103"]
+
+    # An entirely dirty frame degrades to the empty frame ("no data"),
+    # still without raising.
+    monkeypatch.setattr(
+        ak,
+        "stock_zh_a_hist",
+        lambda **_kwargs: pd.DataFrame({"日期": ["garbage"], "收盘": [1.0]}),
+    )
+    assert client.get_daily_bar("000001.SZ", "20240101", "20240110").empty
+
+
 def test_offline_fixtures(tmp_path: Path):
     cfg = data_config_module.DataConfig(start_date="2024-01-01", end_date="2024-12-31")
     fixture_dir = tmp_path / "fixtures"

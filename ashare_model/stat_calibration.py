@@ -81,6 +81,33 @@ SCENARIO_SPECS: dict[str, dict[str, Any]] = {
         "kind": "power", "k_trials": 8, "n_dates": 250,
         "sr": 0.25, "scale": 0.01,
     },
+    # WP17 W5 (FROZEN_17 §5.2): the task-scale power point, REGISTERED
+    # but never run in this package (red line 1: no new calibration
+    # runs).  Derivation (FROZEN §5.1, frozen arithmetic): the task's
+    # edge is <1% annualized relative excess; at the boundary 1%,
+    # daily mu = 0.01/252, sigma = scale = 0.01 (the family-wide noise
+    # scale), so sr = mu/sigma = 1/252 ~= 0.0039683 and the annualized
+    # Sharpe is 1/sqrt(252) ~= 0.063 — 126x/63x BELOW the planted edges
+    # of power_sr05/power_sr025.  The name sorts AFTER short_window_30d
+    # so it takes seed slice 970000 and the seven p48 scenarios keep
+    # their registered slices (measured naming constraint, §5.2).
+    "task_scale_excess_1pct": {
+        "kind": "power", "k_trials": 8, "n_dates": 250,
+        "sr": 1.0 / 252.0, "scale": 0.01,
+        "task_scale": True,
+        "note": (
+            "power_sr05/power_sr025 are NOT extrapolable to the task "
+            "scale: daily Sharpe 0.5/0.25 annualize to 7.94/3.97 "
+            "(x sqrt(252)), i.e. 126%/63% annualized relative excess at "
+            "scale=0.01 - 126x/63x the task-scale edge (<1% annualized "
+            "relative excess; task_scale_excess_1pct plants sr=1/252 "
+            "~= 0.00397, annualized Sharpe 1/sqrt(252) ~= 0.063). "
+            "Detection rates measured at 0.5/0.25 say nothing about "
+            "detection at the task scale; no power claim is made at the "
+            "task scale until task_scale_excess_1pct is calibrated "
+            "under the wp17 W6 protocol."
+        ),
+    },
 }
 
 
@@ -149,9 +176,20 @@ def calibration_verdict(
         )
     elif low <= alpha <= high:
         verdict = "calibrated"
+        # WP17 W4 (FROZEN_17 §4.2, frozen verbatim): the positive label
+        # states NON-REJECTION only.  A CI containing alpha also admits
+        # rates above alpha (e.g. [4.6%, 7.5%] contains 5% AND admits
+        # >5%), and the CI/test correspondence supports reject /
+        # non-reject decisions — it does not automatically verify an
+        # upper bound on the false-positive rate.
         claim = (
-            f"Nominal {alpha:.0%} size supported: rate={rate:.3f}, "
-            f"95% CI [{low:.3f}, {high:.3f}] contains {alpha}."
+            f"No significant departure from the nominal {alpha:.0%} "
+            f"level detected: rate={rate:.3f}, 95% CI "
+            f"[{low:.3f}, {high:.3f}] contains {alpha:.0%} — supports "
+            "non-rejection only; not a verification that the "
+            "false-positive rate is at most "
+            f"{alpha:.0%} (an interval containing {alpha:.0%} also "
+            f"admits rates above {alpha:.0%})."
         )
     elif high < alpha:
         verdict = "conservative"
@@ -246,7 +284,7 @@ def generate_scenario(name: str, rng: np.random.Generator) -> np.ndarray:
         return scale * np.repeat(raw, copies, axis=0)
     if name == "short_window_30d":
         return scale * rng.normal(0.0, 1.0, size=(k, n))
-    if name in ("power_sr05", "power_sr025"):
+    if name in ("power_sr05", "power_sr025", "task_scale_excess_1pct"):
         sr = float(spec["sr"])
         m = scale * rng.normal(0.0, 1.0, size=(k, n))
         m[0] = m[0] + sr * scale
@@ -269,6 +307,7 @@ def calibrate_scenario(
     n_perms: int = 999,
     block_size: int = 10,
     alpha: float = ALPHA,
+    episode_token: str | None = None,
 ) -> dict[str, Any]:
     """Run one scenario's held-out calibration (the heavy task).
 
@@ -276,7 +315,16 @@ def calibrate_scenario(
     :func:`eval_corrections.max_t_from_matrix` with seeds from this
     scenario's validation slice.  Returns the verdict plus the
     wall-clock cost and per-call milliseconds (B4 reporting duty).
+
+    WP17 W6 (FROZEN_17 §6.5, guard挂点 1): a calibration run may only
+    start inside an OPEN method-revision episode — ``episode_token``
+    must name one, otherwise the call refuses (fail-closed; the default
+    ``None`` refuses).  There is no bypass surface.
     """
+
+    from .method_revision import require_open_episode
+
+    require_open_episode(episode_token)
 
     from .eval_corrections import max_t_from_matrix
 

@@ -40,7 +40,9 @@ from .alphagpt import build_action_mask
 from .candidates import (
     PARETO_OBJECTIVES,
     CandidateScore,
+    CandidateSelector,
     CandidateSpec,
+    SelectionResult,
 )
 from .complexity import complexity_bill
 from .reward import REWARD_VERSION
@@ -126,6 +128,17 @@ class _StepState:
     cache_hits: int = 0
     semantic_dedups: int = 0
     semantic_duplicate_proposals: int = 0
+    # Token keys inserted into the cumulative ``_candidate_scores`` pool
+    # by this step (P1-1): the incremental selection folds exactly these
+    # in, mirroring what a full re-select over the pool would see.
+    new_candidate_keys: list[tuple[int, ...]] = field(default_factory=list)
+
+
+# P1-3: per-step RL diagnostics retained in full detail.  The default
+# workload (150 steps) stays far below this, so nothing changes for it;
+# divergent long runs keep the most recent windows plus whole-run scalar
+# aggregates instead of growing without bound.
+_STEP_SUMMARY_RETENTION = 512
 
 
 @dataclass
@@ -136,10 +149,76 @@ class _RLRunState:
     reward_values: list[float] = field(default_factory=list)
     rejection_reasons: dict[str, int] = field(default_factory=dict)
     formula_lengths: list[int] = field(default_factory=list)
+    # Bounded recent step summaries (P1-3): ``record_step_summary``
+    # retains the last ``_STEP_SUMMARY_RETENTION`` in full detail and
+    # folds every step into ``summary_stats`` so run-level aggregates
+    # (mean entropy / advantage variance, gradient-norm min/mean/max)
+    # still describe the WHOLE run.
     step_summaries: list[dict[str, object]] = field(default_factory=list)
+    dropped_step_summaries: int = 0
+    summary_stats: dict[str, float] = field(
+        default_factory=lambda: {
+            "count": 0.0,
+            "entropy_sum": 0.0,
+            "advantage_variance_sum": 0.0,
+            "gradient_norm_sum": 0.0,
+            "gradient_norm_min": float("inf"),
+            "gradient_norm_max": -float("inf"),
+        }
+    )
     semantic_duplicates: int = 0
     best_so_far: list[tuple[int, float]] = field(default_factory=list)
     best_reward: float = -float("inf")
+
+    def record_step_summary(self, summary: dict[str, object]) -> None:
+        """Retain ``summary`` under the P1-3 bound and accumulate the
+        whole-run scalars ``aggregate_rl_run`` later derives from the
+        retained window (count/sums/min/max — identical to the unbounded
+        aggregates whenever nothing was dropped)."""
+
+        stats = self.summary_stats
+        gradient_norm = float(summary["gradient_norm"])
+        stats["count"] += 1.0
+        stats["entropy_sum"] += float(summary["entropy"])
+        stats["advantage_variance_sum"] += float(summary["advantage_variance"])
+        stats["gradient_norm_sum"] += gradient_norm
+        stats["gradient_norm_min"] = min(stats["gradient_norm_min"], gradient_norm)
+        stats["gradient_norm_max"] = max(stats["gradient_norm_max"], gradient_norm)
+        self.step_summaries.append(summary)
+        if len(self.step_summaries) > _STEP_SUMMARY_RETENTION:
+            self.step_summaries.pop(0)
+            self.dropped_step_summaries += 1
+
+    def whole_run_step_aggregates(self) -> dict[str, object]:
+        """Whole-run step aggregates over EVERY recorded step (not just
+        the retained window), plus the retention bookkeeping.  Overwrites
+        the windowed values ``aggregate_rl_run`` computed from the
+        retained summaries; identical when nothing was dropped."""
+
+        stats = self.summary_stats
+        count = stats["count"]
+        if count:
+            gradient = {
+                "min": stats["gradient_norm_min"],
+                "mean": stats["gradient_norm_sum"] / count,
+                "max": stats["gradient_norm_max"],
+            }
+            mean_entropy = stats["entropy_sum"] / count
+            mean_advantage = stats["advantage_variance_sum"] / count
+        else:
+            gradient = {"min": None, "mean": None, "max": None}
+            mean_entropy = None
+            mean_advantage = None
+        return {
+            "mean_entropy": mean_entropy,
+            "mean_advantage_variance": mean_advantage,
+            "gradient_norm": gradient,
+            "step_summary_retention": {
+                "cap": _STEP_SUMMARY_RETENTION,
+                "retained": len(self.step_summaries),
+                "dropped": self.dropped_step_summaries,
+            },
+        }
 
 
 def history_reward_value(value: float) -> float | None:
@@ -169,6 +248,26 @@ class RLTrainingLoopMixin:
     # of the token sequence, so repeats (frequent once the policy
     # concentrates) are scored once and reused across steps.
     _REWARD_CACHE_CAP = 16384
+
+    # P1-3: bound of the cumulative candidate pool (``_candidate_scores``),
+    # sized like the invalid cache to keep the end-of-run
+    # ``SearchResult.scores`` and the selection input memory-bounded on
+    # divergent long runs.  Selection state (first Pareto front + best
+    # rejected) is always protected from eviction, and only candidates a
+    # front member dominates (or non-best rejected ones) are evicted —
+    # worst-first by the scalar selection ordering — so the elite
+    # selection is provably unchanged (pinned by tests).  The reported
+    # artifact pool is the retained top-K instead of every proposal;
+    # default runs stay under the cap.
+    _CANDIDATE_SCORES_CAP = 4096
+
+    # P1-2: global gradient-norm clip before ``optimizer.step()``.  The
+    # policy loss is a max_len-term log-prob sum times the clipped
+    # advantage (up to ~120 magnitude at the defaults), so advantage
+    # clipping alone does not bound the gradient; this does.  Not a
+    # ModelConfig field (the config schema is owned elsewhere): a module
+    # constant with the trigger recorded in the step diagnostics.
+    _MAX_GRAD_NORM = 5.0
 
     def train(
         self,
@@ -611,25 +710,42 @@ class RLTrainingLoopMixin:
                 )
             rewards[i] = score.train_reward
             batch_scores.append(score)
+            if key not in self._candidate_scores:
+                # P1-1: the incremental selection folds exactly the keys
+                # newly added to the pool (re-sampled keys dedup in the
+                # dict like the historical full re-select saw them).
+                state.new_candidate_keys.append(key)
             self._candidate_scores[key] = score
         return batch_scores
 
     def _update_selection_and_track(
         self, state: _StepState, batch_size: int, pbar
     ) -> float:
-        """Refresh the pareto selection from the cumulative scores, log a
+        """Advance the pareto selection from this step's new scores, log a
         new eligible best, and advance the policy-collapse monitor.
-        Returns the step's unique-formula fraction."""
+        Returns the step's unique-formula fraction.
+
+        P1-1: the selection is advanced incrementally (only the step's
+        new candidates are compared against the maintained first front
+        and best-rejected), instead of re-running the O(N^2) NSGA-II
+        sort over the whole accumulated pool every step.  The winners
+        are identical to a one-shot full re-select on the same pool
+        (pinned by tests); the result still reports the full candidate
+        tuple so downstream consumers (tier reports, artifact counts)
+        keep their contract."""
 
         previous_key = (
             self.selection_result.selected.deterministic_key
             if self.selection_result.selected
             else None
         )
-        self.selection_result = self.candidate_selector.select(
-            self._candidate_scores.values(),
-            pareto_objectives=PARETO_OBJECTIVES,
+        self._refresh_selection(state.new_candidate_keys)
+        self.selection_result = SelectionResult(
+            selected=self._selection_winner(),
+            best_rejected=self._best_rejected,
+            candidates=tuple(self._candidate_scores.values()),
         )
+        self._evict_excess_candidates()
         self._sync_best_from_selection()
         selected = self.selection_result.selected
         if selected is not None and selected.deterministic_key != previous_key:
@@ -656,6 +772,96 @@ class RLTrainingLoopMixin:
         else:
             self._collapse_streak = 0
         return unique_frac
+
+    def _refresh_selection(
+        self, new_keys: list[tuple[int, ...]]
+    ) -> None:
+        """Fold the step's new pool entries into the incremental selection
+        state (first Pareto front / best unmeasured / best rejected).
+
+        Exact-equivalence notes (P1-1): eligible measurable candidates go
+        through :class:`~ashare_model.pareto.IncrementalNonDominatedFront`;
+        eligible candidates with NaN objectives never join the front (the
+        one-shot sort sends them to the last front) and only matter while
+        no measurable eligible candidate exists, so a single tie-break
+        best is retained; rejected candidates reduce to the scalar
+        ``_sort_key`` minimum, which is exact over a stream.  A replaced
+        pool entry (cannot happen with deterministic scoring) marks the
+        front dirty and triggers one full rebuild so the incremental
+        state can never silently diverge from the pool.
+        """
+
+        for key in new_keys:
+            score = self._candidate_scores.get(key)
+            if score is None:
+                continue
+            if score.eligible:
+                if (
+                    self._selection_front.add(key, score) == "unmeasurable"
+                    and (
+                        self._selection_unmeasured is None
+                        or CandidateSelector._pareto_tie_key(score)
+                        < CandidateSelector._pareto_tie_key(
+                            self._selection_unmeasured
+                        )
+                    )
+                ):
+                    self._selection_unmeasured = score
+            elif (
+                self._best_rejected is None
+                or CandidateSelector._sort_key(score)
+                < CandidateSelector._sort_key(self._best_rejected)
+            ):
+                self._best_rejected = score
+        if self._selection_front.dirty:
+            self._selection_front.reset()
+            self._selection_unmeasured = None
+            self._best_rejected = None
+            self._refresh_selection(list(self._candidate_scores))
+
+    def _selection_winner(self) -> CandidateScore | None:
+        """The candidate a one-shot full re-select would pick now.
+
+        ``CandidateSelector`` (candidates.py) owns the ordering keys; the
+        first front's winner is its pareto tie-break minimum.  With no
+        measurable eligible candidate the best unmeasured one wins (the
+        one-shot sort's degenerate first front).
+        """
+
+        members = self._selection_front.members()
+        if members:
+            return min(members, key=CandidateSelector._pareto_tie_key)
+        return self._selection_unmeasured
+
+    def _evict_excess_candidates(self) -> None:
+        """Bound the cumulative candidate pool (P1-3).
+
+        Evicts worst-first by the scalar selection ordering, never the
+        selection state itself: front members, the best rejected and the
+        best unmeasured are protected (their pool keys are the selection
+        inputs a later full re-select would also see), and everything
+        evicted is dominated by a front member or a non-best rejected
+        candidate — provably unable to enter the elite set, so the
+        selection result is unchanged (pinned by tests).  The retained
+        pool is what the end-of-run ``SearchResult.scores`` reports.
+        """
+
+        pool = self._candidate_scores
+        excess = len(pool) - self._CANDIDATE_SCORES_CAP
+        if excess <= 0:
+            return
+        protected = set(self._selection_front.keys())
+        for score in (self._best_rejected, self._selection_unmeasured):
+            if score is not None and score.tokens is not None:
+                protected.add(score.tokens)
+        evictable = [
+            (CandidateSelector._sort_key(score), key)
+            for key, score in pool.items()
+            if key not in protected
+        ]
+        evictable.sort(reverse=True)  # worst first (best = smallest key)
+        for _, key in evictable[:excess]:
+            del pool[key]
 
     def _grammar_step_stats(
         self, state: _StepState, batch_size: int, unique_frac: float
@@ -704,8 +910,10 @@ class RLTrainingLoopMixin:
         semantic_duplicate_proposals: int,
     ):
         """Actor-critic update: REINFORCE with the learned value as
-        baseline, advantage clipping, and an entropy bonus; diagnostics
-        are summarized before ``optimizer.step()``."""
+        baseline, advantage clipping, an entropy bonus and a global
+        gradient-norm clip (P1-2 — the sequence-summed policy loss can
+        spike far beyond what advantage scaling bounds); diagnostics are
+        summarized with the PRE-clip norm before ``optimizer.step()``."""
 
         advantages = self._normalized_advantages(
             rewards,
@@ -723,7 +931,17 @@ class RLTrainingLoopMixin:
         )
         self.optimizer.zero_grad()
         loss.backward()
+        # Pre-clip global L2 norm: the honest gradient-magnitude
+        # diagnostic (rl_diagnostics.gradient_l2_norm stays a pure
+        # measurement; the clip below is the only mutation).
         gradient_norm = gradient_l2_norm(self.model.parameters())
+        # P1-2: clip before stepping.  Advantage clipping only bounds the
+        # scaling of the policy loss, not the gradient: the loss is a
+        # max_len-term log-prob sum (up to ~120 at the defaults) times
+        # the clipped advantage, and such spikes reach AdamW unbounded.
+        torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), max_norm=self._MAX_GRAD_NORM
+        )
         step_diagnostics = summarize_rl_step(
             rewards=rewards,
             advantages=advantages,
@@ -734,6 +952,13 @@ class RLTrainingLoopMixin:
             operator_names=step_op_coverage,
             semantic_duplicates=semantic_duplicate_proposals,
             proposal_count=len(batch_scores),
+        )
+        # Trainer-added clip observability on top of the pinned P4 step
+        # schema: whether this step's gradient was clipped (and against
+        # which bound).  ``gradient_norm`` above is the pre-clip value.
+        step_diagnostics["grad_clip_max_norm"] = float(self._MAX_GRAD_NORM)
+        step_diagnostics["grad_clip_triggered"] = bool(
+            gradient_norm > self._MAX_GRAD_NORM
         )
         self.optimizer.step()
         return step_diagnostics, loss, value_loss, entropy
@@ -763,7 +988,7 @@ class RLTrainingLoopMixin:
                 run.rejection_reasons.get(reason, 0) + int(count)
             )
         run.formula_lengths.extend(stats["lengths"])
-        run.step_summaries.append(step_diagnostics)
+        run.record_step_summary(step_diagnostics)
         run.semantic_duplicates += semantic_duplicate_proposals
 
         self.history.append(
@@ -836,7 +1061,7 @@ class RLTrainingLoopMixin:
         selection JSON and the artifact write."""
 
         # Hard fail on zero operator coverage: a run whose executed
-        # formulas never used an operator is bare-factor screening, not
+        # formulas never used any operator is bare-factor screening, not
         # formula search — no artifact may be produced from it.
         if not self._run_operator_coverage:
             raise RuntimeError(
@@ -851,13 +1076,13 @@ class RLTrainingLoopMixin:
             len(self._run_operator_coverage),
             len(self.history),
         )
-
         self.search_result = self._build_rl_search_result(
             seed=seed,
             requested_budget=int(steps) * int(batch_size),
             proposal_count=int(steps) * int(batch_size),
             reward_values=run.reward_values,
             step_summaries=run.step_summaries,
+            step_aggregates=run.whole_run_step_aggregates(),
             run_rejection_reasons=run.rejection_reasons,
             formula_lengths=run.formula_lengths,
             semantic_duplicates=run.semantic_duplicates,
@@ -929,6 +1154,7 @@ class RLTrainingLoopMixin:
         proposal_count: int,
         reward_values: list[float],
         step_summaries: list[dict[str, object]],
+        step_aggregates: dict[str, object],
         run_rejection_reasons: dict[str, int],
         formula_lengths: list[int],
         semantic_duplicates: int,
@@ -942,6 +1168,10 @@ class RLTrainingLoopMixin:
         inventing budget consumption.
         """
 
+        # The retained candidate pool (P1-3): the full accumulated dict
+        # below its cap, else its selection-protected top-K — the
+        # selection winners are unaffected by the retention (pinned by
+        # tests).
         scores = tuple(self._candidate_scores.values())
         rejections: dict[str, int] = {}
         for score in scores:
@@ -959,14 +1189,18 @@ class RLTrainingLoopMixin:
             step_summaries=step_summaries,
             rejection_reasons=run_rejection_reasons,
             formula_lengths=formula_lengths,
-            operator_names={
-                name
-                for summary in step_summaries
-                for name in summary["operator_coverage"]
-            },
+            # The whole-run executed-operator union (maintained by
+            # _grammar_step_stats) instead of re-deriving it from the
+            # retained step window — identical sets, but exact when the
+            # P1-3 retention has dropped old summaries.
+            operator_names=self._run_operator_coverage,
             semantic_duplicates=semantic_duplicates,
             proposal_count=proposal_count,
         )
+        # P1-3: the run-level step aggregates describe EVERY step, not
+        # just the retained window (identical when nothing was dropped);
+        # the retention block records the bounding.
+        run_diagnostics.update(step_aggregates)
         run_diagnostics["initialization"] = self.rl_initialization
         run_diagnostics["imitation"] = (
             self.imitation_result.to_dict()
@@ -1017,9 +1251,13 @@ class RLTrainingLoopMixin:
 
         Advantages are batch-normalized and clipped to
         ``[-advantage_clip, advantage_clip]`` so a degenerate reward spread
-        (e.g. a fully converged batch) cannot explode the policy gradient;
-        the entropy bonus counteracts mode collapse.  Pure function of its
-        inputs so the numerics are unit-testable.
+        (e.g. a fully converged batch) cannot scale the policy loss —
+        note this bounds the loss's advantage FACTOR only, not the
+        gradient magnitude (the log-prob terms still sum over the
+        sequence); the ``_MAX_GRAD_NORM`` clip in ``_policy_update`` is
+        what bounds the update.  The entropy bonus counteracts mode
+        collapse.  Pure function of its inputs so the numerics are
+        unit-testable.
         """
 
         adv = RLTrainingLoopMixin._normalized_advantages(

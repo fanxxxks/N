@@ -48,12 +48,17 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 # ``RunSpec.snapshot_publication_version``). v2 artifacts are not rewritten:
 # they classify as ``legacy`` (audit-only) and formal consumers go through
 # ``require_current_schema``.
-ARTIFACT_SCHEMA_VERSION = 3
+# WP17 (FROZEN_17 §7.1): 3 -> 4 — the additive ``claim_record`` top-level
+# group (five field groups, default None so pre-wp17 payloads still
+# validate); generation 3 joins the legacy set per the tuple's
+# only-ever-grows rule (v3 artifacts are audit-only, never rewritten).
+ARTIFACT_SCHEMA_VERSION = 4
 
 # Legacy schema generations (audit-only on read; never written anymore).
-# A02: generation 2 joins 1. This tuple only ever grows — shrinking it
-# would silently reclassify already-written artifacts as unknown.
-LEGACY_SCHEMA_VERSIONS = (1, 2)
+# A02: generation 2 joins 1. WP17: generation 3 joins. This tuple only
+# ever grows — shrinking it would silently reclassify already-written
+# artifacts as unknown.
+LEGACY_SCHEMA_VERSIONS = (1, 2, 3)
 
 _SPEC_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 _RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -355,6 +360,12 @@ class ProtocolResultArtifact(_LineageBase):
     dsr: dict | None
     max_t: dict | None
     dsr_extra_trials: int
+    # WP17 W1 (FROZEN_17 §1): the five-group claim record — statistics,
+    # method identity, task actuals, calibration evidence identity,
+    # qualification.  Additive with a default: pre-wp17 payloads (which
+    # never carried it) still validate, and G2 refuses them via the
+    # wp17 string A instead of via the schema.
+    claim_record: dict | None = None
 
 
 class BacktestResultArtifact(_LineageBase):

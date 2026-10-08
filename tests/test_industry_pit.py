@@ -510,6 +510,26 @@ def test_industry_index_freshness_measures_open_session_lag(tmp_path: Path):
     assert stale > 2  # the same source fails the tighter tolerance
 
 
+def test_industry_index_freshness_empty_session_axis_is_not_a_zero_lag(tmp_path: Path):
+    """An empty dates axis is not-computable, never a lag-0 fresh pass."""
+    config = _config(tmp_path)
+    with AshareDB(config.duckdb_path) as db:
+        db.create_schema(config)
+        db.execute(
+            f"CREATE TABLE IF NOT EXISTS {config.sw_index_table} "
+            "(index_code VARCHAR, industry_name VARCHAR, trade_date VARCHAR, "
+            "close DOUBLE, PRIMARY KEY (index_code, trade_date))"
+        )
+        db.execute(
+            f"INSERT INTO {config.sw_index_table} VALUES "
+            "('801010', '农林牧渔', '20240102', 100.0)"
+        )
+    # The source has rows, but there are no open sessions to measure the
+    # lag against: the answer must be None (p17 §12 fail-closed rule),
+    # never a lag-0 "fresh" pass.
+    assert industry_index_freshness(config, []) is None
+
+
 def test_industry_index_freshness_without_source_is_none(tmp_path: Path):
     config = _config(tmp_path)
     with AshareDB(config.duckdb_path) as db:

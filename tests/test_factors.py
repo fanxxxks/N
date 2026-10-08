@@ -201,12 +201,17 @@ def test_extra_frames_injected_and_missing_stay_neutral(bars_data):
 # Golden checksum of the first-generation feature block on the deterministic
 # ``make_bars`` fixture.  It pins the exact legacy values so any refactor
 # that silently changes an existing factor fails this test.  The checksum
-# was re-captured twice, deliberately: once when MARKET_CAP gained real data
-# (float market cap = amount/turnover_rate) in the PIT pipeline phase, and
+# was re-captured three times, deliberately: once when MARKET_CAP gained real
+# data (float market cap = amount/turnover_rate) in the PIT pipeline phase,
 # once when the v3 generation retired RET_20 (an exact duplicate of
 # MOMENTUM_20, kept resolvable through FEATURE_ALIASES) - all other v1
-# features keep their pre-refactor values.
-_GOLDEN_TENSOR_SHA256 = "0eabd18dc9f100bdc9f9ac94c72688bf28424e83fc7955ce63edd3d4d43b061f"
+# features keep their pre-refactor values - and once for the v5 AMPLITUDE
+# prev-close axis fix (whitelist §10.1 case 2: the P0 fix changes
+# AMPLITUDE's denominator from the previous STOCK's same-day close to the
+# stock's own previous close, FACTOR_COMPUTE_VERSION 4 -> 5; on this
+# fixture the new AMPLITUDE cross-section is constant, so its standardized
+# row is all-neutral and every other row is byte-identical).
+_GOLDEN_TENSOR_SHA256 = "8b29922121e713f6ecf712ba4660604ae522006ff9de84967dd00a9359e636f4"
 
 
 def test_factor_tensor_matches_pre_refactor_golden_values(bars_data):
@@ -287,6 +292,112 @@ def test_overnight_and_intraday_decomposition_values():
     assert overnight.iloc[0, 2] == pytest.approx(12.0 / 11.5 - 1.0)
     assert intraday.iloc[0, 1] == pytest.approx(11.5 / 11.0 - 1.0)
     assert intraday.iloc[0, 2] == pytest.approx(12.5 / 12.0 - 1.0)
+
+
+def test_amplitude_uses_each_stocks_own_previous_close():
+    """P0 (v5): AMPLITUDE's denominator is the stock's own previous close
+    (the bar ``pre_close``), never the previous ROW's same-day close.
+    ``DataFrame.shift`` defaults to axis=0 — the STOCK axis of the pivoted
+    ``[stock x date]`` frames — so the old ``ctx.close.shift(1)`` made the
+    first alphabetical stock all-NaN and every other stock divide by its
+    upper neighbour's same-day close."""
+    dates = ["20240101", "20240102", "20240103"]
+    closes = {"000001.SZ": [10.0, 10.5, 11.0], "000002.SZ": [20.0, 21.0, 22.0]}
+    rows = []
+    for code in sorted(closes):
+        for i, date in enumerate(dates):
+            close = closes[code][i]
+            rows.append(
+                {
+                    "ts_code": code,
+                    "trade_date": date,
+                    "open": close * 0.99,
+                    "high": close * 1.02,
+                    "low": close * 0.97,
+                    "close": close,
+                    "pre_close": closes[code][i - 1] if i else close * 0.99,
+                    "volume": 1e6,
+                    "amount": 1e7,
+                    "turnover_rate": 1.0,
+                    "adj_factor": 1.0,
+                }
+            )
+    codes = sorted(closes)
+    ctx = _context_for(_rows_to_bars(rows), dates, codes, ["AMPLITUDE"])
+    amp = _factor_fn("AMPLITUDE")(ctx)
+    # The first alphabetical stock keeps its OWN values (not all-NaN).
+    assert amp.loc["000001.SZ", "20240102"] == pytest.approx(
+        (10.5 * 1.02 - 10.5 * 0.97) / 10.0
+    )
+    # Stock B's amplitude at date t divides by B's own t-1 close, not by
+    # stock A's same-day close (10.5 / 11.0) — the values differ, so the
+    # assertion is sensitive to the axis.
+    assert amp.loc["000002.SZ", "20240102"] == pytest.approx(
+        (21.0 * 1.02 - 21.0 * 0.97) / 20.0
+    )
+    assert amp.loc["000002.SZ", "20240103"] == pytest.approx(
+        (22.0 * 1.02 - 22.0 * 0.97) / 21.0
+    )
+
+
+def test_amplitude_ignores_neighbour_suspension_and_code_order():
+    """P0 (v5): a neighbour's missing bar (suspension) and the ts_codes
+    order must never move a stock's AMPLITUDE — the old stock-axis shift
+    let universe eligibility leak into the factor value (a suspended upper
+    neighbour silently neutralized the stock below it)."""
+
+    dates = ["20240101", "20240102", "20240103"]
+    b_rows = [
+        {
+            "ts_code": "000002.SZ",
+            "trade_date": date,
+            "open": 20.8,
+            "high": 21.5,
+            "low": 20.5,
+            "close": 21.0,
+            "pre_close": pre_close,
+            "volume": 1e6,
+            "amount": 1e7,
+            "turnover_rate": 1.0,
+            "adj_factor": 1.0,
+        }
+        for date, pre_close in zip(dates, [19.9, 20.0, 21.0])
+    ]
+
+    def _a_row(date: str) -> dict:
+        return {
+            "ts_code": "000001.SZ",
+            "trade_date": date,
+            "open": 9.9,
+            "high": 10.1,
+            "low": 9.8,
+            "close": 10.0,
+            "pre_close": 9.9,
+            "volume": 1e6,
+            "amount": 1e7,
+            "turnover_rate": 1.0,
+            "adj_factor": 1.0,
+        }
+
+    def _amp(a_rows: list[dict], codes: list[str]) -> pd.DataFrame:
+        ctx = _context_for(_rows_to_bars(a_rows + b_rows), dates, codes, ["AMPLITUDE"])
+        return _factor_fn("AMPLITUDE")(ctx)
+
+    codes = ["000001.SZ", "000002.SZ"]
+    neighbour_present = _amp([_a_row(d) for d in dates], codes)
+    # 000001.SZ suspended through the last session: no 20240103 bar.  B's
+    # last-session amplitude must stay defined at its own value — the old
+    # stock-axis shift turned it into NaN (neutral) here.
+    neighbour_suspended = _amp([_a_row(d) for d in dates[:2]], codes)
+    got = neighbour_suspended.loc["000002.SZ", "20240103"]
+    assert got == pytest.approx((21.5 - 20.5) / 21.0)
+    # The neighbour's presence/absence cannot move any of B's values.
+    pd.testing.assert_series_equal(
+        neighbour_present.loc["000002.SZ"], neighbour_suspended.loc["000002.SZ"]
+    )
+    # And the ts_codes order never enters the value.
+    reordered = _amp([_a_row(d) for d in dates[:2]], ["000002.SZ", "000001.SZ"])
+    assert reordered.loc["000002.SZ", "20240103"] == pytest.approx(got)
 
 
 def test_amount_share_sums_to_one():
@@ -1041,7 +1152,12 @@ def test_p9_factor_compute_version_pinned():
 
     # p19 (D4): bumped 1 -> 2 for the adjusted price basis.
     # p17/D5 (t16 F1): bumped 2 -> 3 for the industry membership PIT switch.
-    assert FACTOR_COMPUTE_VERSION == 4  # t22 semantic fixes
+    # v5 (whitelist §10.1 case 2): AMPLITUDE's denominator switched from
+    # the previous STOCK's same-day close (bare shift, axis=0) to the
+    # stock's own previous close (ctx.pre_close) — every AMPLITUDE value
+    # changes, so the content-addressed factor cache must not keep hitting
+    # the v4 tensors.
+    assert FACTOR_COMPUTE_VERSION == 5  # P0 AMPLITUDE prev-close fix on top of the t22 semantic fixes
 
 
 def test_p9_new_factors_registered():
@@ -1232,7 +1348,8 @@ def test_formula_layer_facade_reexports_are_the_single_implementation():
         assert getattr(factors, name) is getattr(factor_formulas, name), name
     # The version owner stays in factors.py (the version-owner index pins
     # ashare_model.factors; factor_formulas must not re-own it).
-    # t87 integration: ==4 carries the t22 semantic fixes on top of the
-    # coordinated D5+D6 bump (3).
-    assert factors.FACTOR_COMPUTE_VERSION == 4
+    # t87 integration: ==4 carried the t22 semantic fixes on top of the
+    # coordinated D5+D6 bump (3); v5 (whitelist §10.1 case 2) carries the
+    # P0 AMPLITUDE prev-close axis fix.
+    assert factors.FACTOR_COMPUTE_VERSION == 5
     assert not hasattr(factor_formulas, 'FACTOR_COMPUTE_VERSION')

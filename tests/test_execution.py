@@ -91,7 +91,13 @@ def test_exact_cost_path_covers_capital_and_topn_grid(capital: float, top_n: int
         signal, target, cfg, universe_mask=np.ones_like(signal, dtype=bool)
     )
     assert simulation.daily_cost_fractions.shape == (n_dates - 2,)
-    assert simulation.turnover[0] == pytest.approx(1.0)
+    # p52 (WP16-A FROZEN_A §1 (C1)/§3.4/§6): the full top-n deployment is
+    # now sized net of the fee reserve, so turnover + cost = 1 exactly at
+    # the fixed point (the old exact-1.0 turnover booked the buy unfunded,
+    # cash = -c, the §3.4 infeasible state).
+    assert simulation.turnover[0] + float(
+        simulation.daily_cost_fractions[0]
+    ) == pytest.approx(1.0, abs=1e-9)
     assert np.all(simulation.daily_cost_fractions >= 0.0)
 
 

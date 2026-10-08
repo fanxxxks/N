@@ -176,13 +176,21 @@ def test_current_semantic_versions_are_pinned():
     assert PROTOCOL_VERSION == "29"
     # p35 (APPROVED 2026-09-17): share-level execution with drifted non-due
     # weights bumps the execution spec 3 -> 4.
-    assert EXECUTION_SPEC_VERSION == 4
+    # 4 -> 5: lot_size joined the portfolio_config provenance field set and
+    # every execution path (engine, paper sim, golden matcher) now reads
+    # the configured grain; v4 blocks without lot_size stay legacy by
+    # version (§10.1 case 2: contract change, version bumped).
+    assert EXECUTION_SPEC_VERSION == 5
     assert BARE_FACTOR_BACKTEST_VERSION == 4
     # p17/D5 (t16 F1): the industry membership PIT switch bumps
     # FACTOR_COMPUTE to 3.
     from ashare_model.factors import FACTOR_COMPUTE_VERSION
 
-    assert FACTOR_COMPUTE_VERSION == 4  # t22: exact-limit / per-date industry / margin v2 (FACTOR_COMPUTE 4)
+    # 4 -> 5: the AMPLITUDE axis fix (P0 correctness, 2026-09-21 review) — the
+    # denominator switched from the stock-axis ``close.shift(1)`` (the previous
+    # STOCK's same-day close on the pivoted frames) to the stock's own previous
+    # close (``pre_close``); every AMPLITUDE value changes.
+    assert FACTOR_COMPUTE_VERSION == 5  # t22 bases + v5 AMPLITUDE prev-close fix
 
 
 def test_pre_p7e_strategy_is_legacy_by_protocol_generation():

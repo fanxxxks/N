@@ -234,6 +234,88 @@ def test_stop_when_idle_is_a_noop(tmp_path: Path):
     assert result["state"] == "idle"
 
 
+# ------------------------------------------------- PID-reuse guard (P1 fix)
+
+
+class _FakeProcess:
+    """A psutil.Process stand-in whose liveness and creation time the test
+    controls — an "unrelated process" that predates the manager's spawn."""
+
+    def __init__(self, pid: int, create_time: float, running: bool = True):
+        self.pid = pid
+        self._create_time = create_time
+        self._running = running
+        self.signalled: list[str] = []
+
+    def is_running(self) -> bool:
+        return self._running
+
+    def create_time(self) -> float:
+        return self._create_time
+
+    def children(self, recursive=True):
+        return []
+
+    def terminate(self) -> None:
+        self.signalled.append("terminate")
+
+    def kill(self) -> None:
+        self.signalled.append("kill")
+
+
+def test_escalation_spares_pid_reused_during_grace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression (P1 review 2026-09-21): the escalation thread must hold
+    ``(pid, started_at)``.  When the child exits during the stop/kill grace
+    window and the OS reassigns its PID to an unrelated process (creation
+    time predating the recorded spawn), neither terminate nor kill may
+    reach the reuser."""
+    import ashare_trading.manager as manager_module
+
+    reused = _FakeProcess(pid=4242, create_time=1000000.0)
+    monkeypatch.setattr(manager_module.psutil, "Process", lambda pid: reused)
+    manager = _manager(
+        tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd()
+    )
+    manager._escalate_after_grace(4242, started_at="2020-01-01T00:00:00")
+    assert reused.signalled == []
+
+
+def test_terminate_and_kill_refuse_reused_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The guard also sits in front of the terminal calls themselves: a
+    reused PID (creation predates ``started_at``) is refused, while the
+    live child of this spawn (created after ``started_at``) is signalled —
+    the guard must not weaken the real escalation path."""
+    import ashare_trading.manager as manager_module
+    from datetime import datetime
+
+    reused = _FakeProcess(pid=4242, create_time=1000000.0)
+    live = _FakeProcess(pid=4242, create_time=time.time() + 60.0)
+    procs = {"reused": reused, "live": live}
+    state = {"mode": "reused"}
+    monkeypatch.setattr(
+        manager_module.psutil,
+        "Process",
+        lambda pid: procs[state["mode"]],
+    )
+    manager = _manager(
+        tmp_path, cmd_builder=lambda _reset, _start, _end: _sleep_cmd()
+    )
+    started_at = datetime.now().isoformat(timespec="seconds")
+
+    manager._terminate(4242, started_at)
+    manager._kill(4242, started_at)
+    assert reused.signalled == []
+
+    state["mode"] = "live"
+    manager._terminate(4242, started_at)
+    manager._kill(4242, started_at)
+    assert live.signalled == ["terminate", "kill"]
+
+
 # --------------------------------------------------------------------- status
 
 

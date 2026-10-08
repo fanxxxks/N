@@ -157,7 +157,11 @@ def _run(
 def test_execution_spec_is_versioned():
     # v4 (p35): share-level execution with drifted non-due weights —
     # the version the golden parity contract below is defined against.
-    assert EXECUTION_SPEC_VERSION == 4
+    # v5: lot_size joined the provenance field set and every execution
+    # path now consumes the configured grain (the golden matcher's
+    # lot_size default follows the config; run_sim stopped hardcoding
+    # 100) — v4 provenance without lot_size cannot claim parity.
+    assert EXECUTION_SPEC_VERSION == 5
 
 
 def test_external_weights_without_constructor_provenance_are_rejected():
@@ -268,6 +272,112 @@ def test_lot_residual_decomposes_into_recorded_rounding_and_cash():
     )
     # Drifting prices mean fractional targets: some rounding was recorded.
     assert any(abs(r.rounding) > 1e-6 for r in report.records)
+
+
+def test_daily_rounding_attributed_to_each_periods_own_book():
+    # Regression (P1 review 2026-09-21): the per-day rounding attribution
+    # must use the lot book held *during* that period, not the terminal
+    # portfolio after the last period.  A rotating multi-period scenario
+    # (buy A -> rotate to B -> full exit) makes every period's book
+    # different; the recorded rounding must equal the PnL of that day's
+    # own (lot - free) share gap, with the terminal book nowhere in it.
+    import pandas as pd
+
+    n_dates = 6
+    dates, ts_codes, _ = make_bars(n_dates, DEFAULT_CODES)
+    opens = {
+        "000001.SZ": [9.7, 9.7, 10.0, 10.4, 10.4, 10.4],
+        "600000.SH": [9.5, 9.0, 8.5, 8.9, 8.9, 8.9],
+        "300001.SZ": [10.0] * n_dates,
+    }
+    rows = []
+    for code in ts_codes:
+        for j, date in enumerate(dates):
+            open_ = opens[code][j]
+            rows.append(
+                {
+                    "ts_code": code,
+                    "trade_date": date,
+                    "open": open_,
+                    "high": open_ * 1.02,
+                    "low": open_ * 0.98,
+                    "pre_close": opens[code][j - 1] if j else open_,
+                    "volume": 1_000_000.0,
+                    "amount": 1_000_000.0 * open_,
+                    "close": open_,
+                    "adj_factor": 1.0,
+                }
+            )
+    raw = _raw_from_bars(pd.DataFrame(rows), ts_codes, dates)
+    signal = _constant_rank_signal(3, n_dates)
+    mask = np.ones((3, n_dates), dtype=bool)
+    cfg = _cfg(
+        top_n=1,
+        single_weight_cap=1.0,
+        initial_capital=100000.0,
+        commission_rate=0.0,
+        min_commission=0.0,
+        stamp_tax_rate=0.0,
+        transfer_fee_rate=0.0,
+        slippage_rate=0.0,
+    )
+    harness = GoldenParity(cfg, lot_size=100)
+    weights = [
+        np.asarray([1.0, 0.0, 0.0]),
+        np.asarray([0.0, 1.0, 0.0]),
+        np.asarray([0.0, 0.0, 0.0]),
+    ]
+    report = harness.run(
+        signal,
+        raw,
+        ts_codes,
+        dates,
+        mask,
+        target_weights=weights,
+        target_weights_provenance=execution_provenance(cfg),
+    )
+    harness.verify(report)
+    # Only periods 0/1 hold a book; the terminal book (after the period-2
+    # full exit) is empty, so attributing period 0's rounding from it would
+    # record the whole position as the rounding term.
+    assert report.records[0].rounding == pytest.approx(
+        (10300 - 100000.0 / 9.7) * (10.0 - 9.7), abs=1e-6
+    )
+    assert report.records[0].rounding != pytest.approx(
+        (0.0 - 100000.0 / 9.7) * (10.0 - 9.7), abs=1e-6
+    )
+    assert report.records[2].rounding == pytest.approx(0.0, abs=1e-9)
+    # Oracle: reconstruct the lot book from the recorded fills (the
+    # authoritative execution record) and re-derive every period's
+    # rounding independently of the attribution under test.
+    held: dict[str, float] = {}
+    for k, record in enumerate(report.records):
+        for fill in record.fills:
+            if fill.status == "filled":
+                held[fill.ts_code] = held.get(fill.ts_code, 0.0) + (
+                    fill.filled if fill.side == "buy" else -fill.filled
+                )
+        entry = k + 1
+        open_ = raw["open"]
+        q_lot = np.asarray(
+            [held.get(code, 0.0) for code in ts_codes], dtype=np.float64
+        )
+        valid = open_[:, entry] > 0.0
+        q_free = np.zeros(3)
+        q_free[valid] = (
+            report.target_weights[k][valid]
+            * report.free_equity[k]
+            / open_[valid, entry]
+        )
+        expected = float(
+            np.sum((q_lot - q_free) * (open_[:, entry + 1] - open_[:, entry]))
+        )
+        assert record.rounding == pytest.approx(expected, abs=1e-6), (
+            f"period {k}: rounding must reflect the book held that period"
+        )
+        # carry is the sub-lot / affordability cash only — it must never
+        # absorb a cross-period share error (order one lot notional here).
+        assert abs(record.carry) < 100 * 10.4 + 1e-6
 
 
 def test_deterministic_report():
@@ -533,6 +643,64 @@ def test_lot_size_sensitivity_recorded(lot_size: int):
     cfg = _cfg(initial_capital=1e6)
     _, report = _run(signal, raw, ts_codes, dates, mask, lot_size=lot_size, cfg=cfg)
     GoldenParity(cfg, lot_size=lot_size).verify(report)
+
+
+# --- lot_size configuration plumbing (P1 review 2026-09-21) -----------------
+
+
+def test_golden_lot_size_default_follows_config_and_provenance_is_sensitive():
+    # The matcher's default grain is the configuration's lot_size (the same
+    # grain the engine executes with); an explicit value — including the
+    # lot-free 0 — still overrides it.
+    cfg100 = _cfg(lot_size=100)
+    cfg200 = _cfg(lot_size=200)
+    assert GoldenParity(cfg200).lot_size == 200
+    assert GoldenParity(cfg100).lot_size == 100
+    assert GoldenParity(cfg200, lot_size=0).lot_size == 0
+    # execution provenance distinguishes two configs that differ only in
+    # lot_size, so the golden external-weight gate can no longer be fooled
+    # by weights minted under a different execution grain.
+    prov100 = execution_provenance(cfg100)
+    prov200 = execution_provenance(cfg200)
+    assert prov100["portfolio_config"]["lot_size"] == 100
+    assert prov200["portfolio_config"]["lot_size"] == 200
+    assert prov100 != prov200
+    signal, raw, ts_codes, dates, mask = _market(n_dates=8)
+    weights = [np.asarray([0.5, 0.5, 0.0], dtype=np.float64)]
+    with pytest.raises(ValueError, match="provenance"):
+        GoldenParity(cfg200, lot_size=0).run(
+            signal,
+            raw,
+            ts_codes,
+            dates,
+            mask,
+            target_weights=weights,
+            target_weights_provenance=prov100,
+        )
+
+
+def test_pre_v5_provenance_without_lot_size_is_rejected():
+    # A v4-era provenance block (recorded before lot_size joined the field
+    # set) is incomplete and must be refused — never silently defaulted.
+    from ashare_portfolio.execution_spec import (
+        validate_portfolio_config_provenance,
+    )
+
+    legacy = dict(execution_provenance(_cfg())["portfolio_config"])
+    legacy.pop("lot_size")
+    with pytest.raises(ValueError, match="lot_size"):
+        validate_portfolio_config_provenance(legacy)
+
+
+def test_configured_lot_size_keeps_engine_and_matcher_parity():
+    # Engine and matcher both execute the configured grain (200 here): the
+    # golden contract holds with the report recording that grain.
+    signal, raw, ts_codes, dates, mask = _market(n_dates=12)
+    cfg = _cfg(lot_size=200)
+    harness = GoldenParity(cfg)
+    report = harness.run(signal, raw, ts_codes, dates, mask)
+    assert report.lot_size == 200
+    harness.verify(report)
 
 
 # --- capstone: optimizer -> spec -> executed book ---------------------------

@@ -163,6 +163,52 @@ def _bar_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     return df[cols].to_dict("records")
 
 
+def _merge_member_bar_frames(
+    main_df: pd.DataFrame | None,
+    baostock_df: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Deterministic cross-source merge of one member's backfill bars.
+
+    The source priority is declared, never emergent from the concat order:
+    Baostock is the primary source for the historical-member backfill (its
+    record carries the exchange ``pre_close`` and the official suspension
+    rows), so on any ``(ts_code, trade_date)`` present in both frames the
+    Baostock row wins and the main-provider row survives only on dates
+    Baostock lacks.  ``trade_date`` is normalized to the %Y%m%d convention
+    so the two sources' keys are comparable (Baostock reports
+    ``YYYY-MM-DD``), and the merged frame carries no duplicate
+    ``(ts_code, trade_date)`` pairs regardless of the caller's row order.
+    """
+
+    def _normalized(frame: pd.DataFrame | None) -> pd.DataFrame:
+        if frame is None or frame.empty:
+            return pd.DataFrame()
+        out = frame.copy()
+        out["trade_date"] = pd.to_datetime(
+            out["trade_date"], errors="coerce"
+        ).dt.strftime("%Y%m%d")
+        return out.dropna(subset=["trade_date"])
+
+    primary = _normalized(baostock_df)
+    secondary = _normalized(main_df)
+    if primary.empty:
+        return secondary
+    if secondary.empty:
+        return primary
+    taken = {
+        (str(code), str(date))
+        for code, date in zip(primary["ts_code"], primary["trade_date"])
+    }
+    keep = pd.Series(
+        [
+            (str(code), str(date)) not in taken
+            for code, date in zip(secondary["ts_code"], secondary["trade_date"])
+        ],
+        index=secondary.index,
+    )
+    return pd.concat([primary, secondary[keep]], ignore_index=True)
+
+
 def _augment_sync_universe(
     db: AshareDB,
     config: DataConfig,
@@ -457,30 +503,58 @@ def backfill_member_bars(
     baostock_fallback = getattr(client, "_get_daily_bar_baostock", None)
     db = AshareDB(config.duckdb_path)
     try:
+        # The audited span is measured in open calendar sessions (the same
+        # convention as member_bar_coverage), so a main-fetch bar outside
+        # the sessions — e.g. a post-suspension resume after the audited
+        # window — never counts as covering the audited span.
+        calendar_sessions = {
+            str(d)
+            for d in db.query(
+                f"SELECT trade_date FROM {config.calendar_table} "
+                "WHERE is_open = true"
+            )["trade_date"]
+        }
         for _, interval in intervals.iterrows():
             code = str(interval["ts_code"])
             span_start = max(str(interval["in_date"]), start)
             span_end = min(str(interval["out_date"]), end)
-            frames: list[pd.DataFrame] = []
             df = client.get_daily_bar(code, start_date=start, end_date=end)
-            if df is not None and not df.empty:
-                frames.append(df)
             # Suspension-span supplement: if the interval's audited span
             # still has no bars, the Baostock record (which includes the
-            # official suspension rows) fills it.
-            have = db.query(
-                f"SELECT COUNT(*) AS n FROM {config.daily_table} "
-                f"WHERE ts_code = ? AND trade_date >= ? AND trade_date < ?",
-                [code, span_start, span_end],
-            ).iloc[0]["n"]
+            # official suspension rows) fills it.  The coverage count must
+            # include the audited-session dates the main fetch just
+            # returned — they are not upserted yet, so counting only the
+            # database rows under-reports coverage and both sources
+            # re-fetch the same span (their overlapping rows then met an
+            # undefined dedup winner).
+            have = int(
+                db.query(
+                    f"SELECT COUNT(*) AS n FROM {config.daily_table} "
+                    f"WHERE ts_code = ? AND trade_date >= ? AND trade_date < ?",
+                    [code, span_start, span_end],
+                ).iloc[0]["n"]
+            )
+            if df is not None and not df.empty and "trade_date" in df.columns:
+                fetched_dates = set(
+                    pd.to_datetime(df["trade_date"], errors="coerce")
+                    .dt.strftime("%Y%m%d")
+                    .dropna()
+                )
+                have += sum(
+                    1
+                    for d in fetched_dates
+                    if span_start <= d < span_end and d in calendar_sessions
+                )
+            bs_df: pd.DataFrame | None = None
             if have == 0 and baostock_fallback is not None:
                 bs_df = baostock_fallback(code, span_start, span_end)
-                if bs_df is not None and not bs_df.empty:
-                    frames.append(bs_df)
-            if not frames:
+            # Baostock-primary merge: the kept row for an overlapping
+            # (ts_code, trade_date) is a declared decision, independent of
+            # the frames' row order.
+            combined = _merge_member_bar_frames(df, bs_df)
+            if combined.empty:
                 result["failures"].append(code)
                 continue
-            combined = pd.concat(frames, ignore_index=True)
             _write_cached_bars(config, code, combined)
             rows = _bar_rows(combined)
             if rows:

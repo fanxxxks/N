@@ -9,6 +9,7 @@ from torch.distributions import Categorical
 
 from ashare_data.config import BacktestConfig, DataConfig, ModelConfig, RewardConfig
 from ashare_data.processor import open_to_open_returns
+from ashare_model.candidates import CandidateScore
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.evaluation import PROTOCOL_VERSION as EVALUATION_PROTOCOL_VERSION
 from ashare_model.reward import REWARD_VERSION
@@ -1848,3 +1849,341 @@ def test_validation_windows_new_defaults_split_longer_tail():
     assert validation_windows(10, ModelConfig()) == [
         (validation_start(10, ModelConfig()), 10)
     ]
+
+
+# --- P1-1/P1-2/P1-3: RL loop scalability and bounded-memory contracts -------
+
+
+class _SilentPbar:
+    """Progress-bar stub: ``_update_selection_and_track`` only needs
+    ``write`` for the new-eligible-best log line."""
+
+    def write(self, *_args, **_kwargs) -> None:
+        pass
+
+
+def _rl_unit_score(
+    idx: int,
+    *,
+    eligible: bool = True,
+    active_ir: float = 0.0,
+    risk_exposure: float = 0.0,
+    average_turnover: float = 0.0,
+    capacity_utilization: float = 0.0,
+    val_reward: float = 0.0,
+    val_icir: float = 0.0,
+    train_reward: float = 0.0,
+    train_icir: float = 0.0,
+):
+    return CandidateScore(
+        tokens=(idx,),
+        candidate_id=f"unit:{idx}",
+        formula_text=f"f{idx}",
+        source="rl",
+        direction=1,
+        val_reward=val_reward,
+        val_icir=val_icir,
+        train_reward=train_reward,
+        train_icir=train_icir,
+        complexity_penalty=0.0,
+        complexity_cost=1.0,
+        eligible=eligible,
+        rejection_reasons=() if eligible else ("val_icir_below_minimum",),
+        active_ir=active_ir,
+        risk_exposure=risk_exposure,
+        average_turnover=average_turnover,
+        capacity_utilization=capacity_utilization,
+    )
+
+
+def _step_state_for(scores):
+    """A ``_StepState`` whose pool insertions the selection refresh sees."""
+
+    from ashare_model.train_loop import _StepState
+
+    state = _StepState()
+    for score in scores:
+        state.step_results[score.tokens] = score
+        state.new_candidate_keys.append(score.tokens)
+    return state
+
+
+def _random_unit_scores(count: int, seed: int, start: int = 0):
+    """Random eligible/rejected candidates with random objectives."""
+
+    rng = np.random.default_rng(seed)
+    return [
+        _rl_unit_score(
+            start + i,
+            eligible=bool(rng.random() < 0.6),
+            active_ir=float(rng.uniform(-2.0, 2.0)),
+            risk_exposure=float(rng.uniform(0.1, 3.0)),
+            average_turnover=float(rng.uniform(0.1, 3.0)),
+            capacity_utilization=float(rng.uniform(0.1, 3.0)),
+            val_reward=float(rng.normal(0.0, 1.0)),
+            val_icir=float(rng.normal(0.0, 1.0)),
+            train_reward=float(rng.normal(0.0, 1.0)),
+            train_icir=float(rng.normal(0.0, 1.0)),
+        )
+        for i in range(count)
+    ]
+
+
+def test_step_selection_incremental_matches_full_reselect(populated_db: DataConfig):
+    """P1-1 equivalence pin at the trainer level: batches arriving through
+    ``_update_selection_and_track`` select exactly what a one-shot full
+    re-select over the whole accumulated pool selects, after every batch."""
+
+    from ashare_model.candidates import PARETO_OBJECTIVES
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    trainer = AshareTrainer(
+        populated_db,
+        ModelConfig(batch_size=4, train_steps=1, max_formula_len=4),
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    scores = _random_unit_scores(600, seed=31)
+    batches = [scores[i : i + 75] for i in range(0, len(scores), 75)]
+    assert len(batches) == 8
+    for batch in batches:
+        for score in batch:
+            trainer._candidate_scores[score.tokens] = score
+        trainer._update_selection_and_track(
+            _step_state_for(batch), batch_size=len(batch), pbar=_SilentPbar()
+        )
+        full = trainer.candidate_selector.select(
+            tuple(trainer._candidate_scores.values()),
+            pareto_objectives=PARETO_OBJECTIVES,
+        )
+        assert (
+            trainer.selection_result.selected.deterministic_key
+            == full.selected.deterministic_key
+        )
+        assert (
+            trainer.selection_result.best_rejected.deterministic_key
+            == full.best_rejected.deterministic_key
+        )
+
+
+def test_candidate_pool_bounded_and_elites_survive_eviction(
+    populated_db: DataConfig,
+):
+    """P1-3 bound: injecting far more candidates than the pool cap keeps
+    ``_candidate_scores`` bounded while the provably-never-selectable
+    tail is dropped worst-first -- the elite winners (a candidate that
+    dominates everything, plus the best rejected) always survive and the
+    selection result is unchanged."""
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    trainer = AshareTrainer(
+        populated_db,
+        ModelConfig(batch_size=4, train_steps=1, max_formula_len=4),
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    cap = AshareTrainer._CANDIDATE_SCORES_CAP
+    # Strictly dominates every other candidate on all four objectives.
+    winner = _rl_unit_score(
+        0,
+        active_ir=10.0,
+        risk_exposure=-1.0,
+        average_turnover=0.0,
+        capacity_utilization=0.0,
+        val_reward=9.0,
+        val_icir=9.0,
+    )
+    # Best rejected: strictly better scalar sort key than every other
+    # rejected candidate in the pool.
+    best_rejected = _rl_unit_score(
+        1, eligible=False, val_reward=5.0, val_icir=5.0
+    )
+    filler = _random_unit_scores(cap + 1200, seed=41, start=2)
+    batches = [filler[i : i + 256] for i in range(0, len(filler), 256)]
+    # The winners arrive in the FIRST batch: everything after only adds
+    # dominated / worse-rejected candidates.
+    first = [winner, best_rejected] + batches[0]
+    for score in first:
+        trainer._candidate_scores[score.tokens] = score
+    trainer._update_selection_and_track(
+        _step_state_for(first), batch_size=len(first), pbar=_SilentPbar()
+    )
+    for batch in batches[1:]:
+        for score in batch:
+            trainer._candidate_scores[score.tokens] = score
+        trainer._update_selection_and_track(
+            _step_state_for(batch), batch_size=len(batch), pbar=_SilentPbar()
+        )
+    assert len(trainer._candidate_scores) <= cap
+    assert winner.tokens in trainer._candidate_scores
+    assert best_rejected.tokens in trainer._candidate_scores
+    dropped = [
+        score
+        for score in filler
+        if score.tokens not in trainer._candidate_scores
+    ]
+    assert dropped, "the pool must have evicted its worst tail"
+    assert trainer.selection_result.selected.deterministic_key == (
+        winner.deterministic_key
+    )
+    assert trainer.selection_result.best_rejected.deterministic_key == (
+        best_rejected.deterministic_key
+    )
+    assert trainer.best_val_reward == pytest.approx(9.0)
+
+
+def test_policy_update_clips_gradient_norm_before_step(
+    populated_db: DataConfig, monkeypatch
+):
+    """P1-2: the actor-critic update clips the global gradient L2 norm
+    before ``optimizer.step()``; the step diagnostics record the bound
+    and whether clipping fired, while ``gradient_norm`` stays the honest
+    pre-clip measurement.  Under plain SGD the parameter delta is exactly
+    lr x (clipped) gradient, so the bound is observable without wall-clock
+    or Adam-normalized updates."""
+
+    import math
+
+    loader = AshareDataLoader(populated_db, ModelConfig())
+    loader.load_data()
+    trainer = AshareTrainer(
+        populated_db,
+        ModelConfig(batch_size=4, train_steps=1, max_formula_len=4),
+        BacktestConfig(top_n=2, train_end_date="2024-02-01"),
+        loader,
+        reward_config=_reward_cfg(),
+    )
+    lr = 1e-2
+    trainer.optimizer = torch.optim.SGD(trainer.model.parameters(), lr=lr)
+
+    inp = torch.zeros((4, 1), dtype=torch.long)
+    rewards = torch.tensor([10.0, -10.0, 10.0, -10.0])
+    scores = [_rl_unit_score(i) for i in range(4)]
+    # A fresh forward graph per update: backward frees the intermediates.
+    def fresh_inputs():
+        logits, value = trainer.model(inp)
+        dist_now = Categorical(logits=logits)
+        action_now = dist_now.sample()
+        return (
+            [dist_now.log_prob(action_now)],
+            [value.squeeze(-1)],
+            [dist_now.entropy()],
+        )
+
+    original_loss = AshareTrainer._policy_update_loss
+
+    def amplified(*args, **kwargs):
+        loss, policy_loss, value_loss, entropy = original_loss(*args, **kwargs)
+        return loss * 10000.0, policy_loss, value_loss, entropy
+
+    def attenuated(*args, **kwargs):
+        loss, policy_loss, value_loss, entropy = original_loss(*args, **kwargs)
+        return loss * 1e-4, policy_loss, value_loss, entropy
+
+    def run_update():
+        before = [
+            parameter.detach().clone()
+            for parameter in trainer.model.parameters()
+        ]
+        step_log_probs, step_values, step_entropies = fresh_inputs()
+        diagnostics, *_ = trainer._policy_update(
+            step_log_probs,
+            rewards,
+            step_values,
+            step_entropies,
+            scores,
+            lengths=[4],
+            step_op_coverage={"ADD"},
+            semantic_duplicate_proposals=0,
+        )
+        delta_sq = sum(
+            float(torch.sum((parameter.detach() - b) ** 2))
+            for parameter, b in zip(trainer.model.parameters(), before)
+        )
+        return diagnostics, math.sqrt(delta_sq)
+
+    # Spiked gradient: clipped to the bound, with the trigger recorded.
+    monkeypatch.setattr(
+        AshareTrainer, "_policy_update_loss", staticmethod(amplified)
+    )
+    diagnostics, delta = run_update()
+    assert diagnostics["gradient_norm"] > AshareTrainer._MAX_GRAD_NORM
+    assert diagnostics["grad_clip_triggered"] is True
+    assert diagnostics["grad_clip_max_norm"] == AshareTrainer._MAX_GRAD_NORM
+    assert delta <= lr * AshareTrainer._MAX_GRAD_NORM * (1 + 1e-4)
+
+    # Well-behaved gradient: no clipping, the update is exactly the
+    # measured (unclipped) gradient under SGD.
+    monkeypatch.setattr(
+        AshareTrainer, "_policy_update_loss", staticmethod(attenuated)
+    )
+    diagnostics, delta = run_update()
+    assert diagnostics["gradient_norm"] <= AshareTrainer._MAX_GRAD_NORM
+    assert diagnostics["grad_clip_triggered"] is False
+    assert delta == pytest.approx(lr * diagnostics["gradient_norm"], rel=1e-3)
+
+
+def test_step_summaries_bounded_with_whole_run_aggregates():
+    """P1-3 bound: only the last ``_STEP_SUMMARY_RETENTION`` step
+    summaries are kept in detail; the whole-run aggregates (mean entropy,
+    mean advantage variance, gradient-norm min/mean/max) still describe
+    every recorded step, and equal the unbounded aggregates whenever
+    nothing was dropped."""
+
+    from ashare_model.rl_diagnostics import aggregate_rl_run
+    from ashare_model.train_loop import _RLRunState, _STEP_SUMMARY_RETENTION
+
+    def summary(i: int) -> dict[str, object]:
+        return {
+            "entropy": 0.5 + (i % 7) * 0.01,
+            "advantage_variance": 1.0 + (i % 5) * 0.1,
+            "gradient_norm": float(i + 1),
+            "operator_coverage": ["ADD"] if i % 2 else ["MUL"],
+        }
+
+    run = _RLRunState()
+    total = _STEP_SUMMARY_RETENTION + 300
+    for i in range(total):
+        run.record_step_summary(summary(i))
+    assert len(run.step_summaries) == _STEP_SUMMARY_RETENTION
+    assert run.dropped_step_summaries == 300
+    # The retained window is the most recent one.
+    assert run.step_summaries[0]["gradient_norm"] == float(301)
+    assert run.step_summaries[-1]["gradient_norm"] == float(total)
+    aggregates = run.whole_run_step_aggregates()
+    assert aggregates["gradient_norm"]["min"] == 1.0
+    assert aggregates["gradient_norm"]["max"] == float(total)
+    assert aggregates["mean_entropy"] == pytest.approx(
+        sum(summary(i)["entropy"] for i in range(total)) / total
+    )
+    retention = aggregates["step_summary_retention"]
+    assert retention == {
+        "cap": _STEP_SUMMARY_RETENTION,
+        "retained": _STEP_SUMMARY_RETENTION,
+        "dropped": 300,
+    }
+
+    # Nothing dropped -> the whole-run aggregates coincide exactly with
+    # what aggregate_rl_run derives from the (complete) step window.
+    small = _RLRunState()
+    for i in range(10):
+        small.record_step_summary(summary(i))
+    reference = aggregate_rl_run(
+        reward_values=[0.0] * 10,
+        step_summaries=small.step_summaries,
+        rejection_reasons={},
+        formula_lengths=[4] * 10,
+        operator_names=set(),
+        semantic_duplicates=0,
+        proposal_count=10,
+    )
+    aggregates = small.whole_run_step_aggregates()
+    assert aggregates["mean_entropy"] == reference["mean_entropy"]
+    assert aggregates["mean_advantage_variance"] == (
+        reference["mean_advantage_variance"]
+    )
+    assert aggregates["gradient_norm"] == reference["gradient_norm"]

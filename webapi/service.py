@@ -414,13 +414,35 @@ def get_data_status() -> dict:
     }
 
 
+def _read_runspec(run_dir: Path) -> dict:
+    """Parse a run's frozen ``runspec.json``.
+
+    Raises ``ValueError`` (corrupt JSON / non-object payload) or ``OSError``
+    (missing/unreadable file) so every caller can degrade a single run
+    instead of letting the exception bubble up as a 500 (P1-1; the module
+    contract is fail-closed visibility, never silently dropped — and never
+    a crashed inventory either)."""
+
+    runspec = json.loads(
+        (run_dir / run_store.RUNSPEC_FILENAME).read_text(encoding="utf-8")
+    )
+    if not isinstance(runspec, dict):
+        raise ValueError(
+            f"{run_store.RUNSPEC_FILENAME} is not a JSON object "
+            f"(got {type(runspec).__name__})"
+        )
+    return runspec
+
+
 def list_runs(root: Path | None = None) -> dict:
     """RunStore-backed run inventory (E2/t26 re-dispatch): every
     ``runs/<spec_id>/<run_id>`` with its replayed lifecycle state, the
     manifest/dataset identity from the frozen runspec, and the artifact
     count — read directly from the RunStore, never stitched from
-    convenience JSONs.  Runs whose replay fails surface with
-    ``error`` set (fail-closed visibility, never silently dropped).
+    convenience JSONs.  Runs whose replay fails — or whose frozen
+    ``runspec.json``/``index.json`` is corrupt or missing (P1-1) — surface
+    with ``error`` set (fail-closed visibility, never silently dropped,
+    and never a crashed inventory either).
 
     A01 C8/C9: with ``root=None`` the store root is the config-derived
     ``data_dir`` (the same root the write side uses); the response always
@@ -466,14 +488,16 @@ def list_runs(root: Path | None = None) -> dict:
             entry["state"] = lifecycle.replay_run(store_root, spec_id, run_id)
             index = store.load_index(spec_id, run_id)
             entry["artifact_count"] = len(index.get("artifacts", []))
-            runspec = json.loads(
-                (run_dir / run_store.RUNSPEC_FILENAME).read_text(
-                    encoding="utf-8"
-                )
-            )
-            entry["dataset_id"] = runspec.get("dataset_id")
+            entry["dataset_id"] = _read_runspec(run_dir).get("dataset_id")
         except (lifecycle.LifecycleError, RunStoreError) as exc:
             entry["error"] = str(exc)
+        except (ValueError, OSError) as exc:
+            # P1-1: a truncated (half-written atomic rename) or missing
+            # runspec.json must degrade this ONE entry, never 500 the whole
+            # inventory. JSONDecodeError is a ValueError; missing files are
+            # OSErrors — neither is a LifecycleError/RunStoreError, so they
+            # used to escape the handler and kill /api/runs.
+            entry["error"] = f"unreadable run records: {exc}"
         runs.append(entry)
     return {
         "runs": runs,
@@ -517,11 +541,18 @@ def get_run_detail(root: Path | None, spec_id: str, run_id: str) -> dict:
             f"(runs_dir={store.runs_dir}, runs_dir_source={source}, "
             f"runs_dir_exists={store.runs_dir.is_dir()})"
         )
-    state = lifecycle.replay_run(store_root, spec_id, run_id)
-    index = store.load_index(spec_id, run_id)
-    runspec = json.loads(
-        (run_dir / run_store.RUNSPEC_FILENAME).read_text(encoding="utf-8")
-    )
+    try:
+        state = lifecycle.replay_run(store_root, spec_id, run_id)
+        index = store.load_index(spec_id, run_id)
+        runspec = _read_runspec(run_dir)
+    except (ValueError, OSError) as exc:
+        # P1-1: a corrupt or missing runspec/index must surface as an
+        # explicit RunStoreError (mapped to 404 by the app layer) instead
+        # of a raw JSONDecodeError/OSError escaping as a 500.
+        raise RunStoreError(
+            f"run {spec_id}/{run_id} has unreadable records (corrupt or "
+            f"missing runspec/index: {exc})"
+        ) from exc
     events = [
         {
             "seq": event.seq,

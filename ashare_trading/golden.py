@@ -220,11 +220,16 @@ class GoldenParity:
         self,
         config: BacktestConfig,
         *,
-        lot_size: int = 100,
+        lot_size: int | None = None,
         execution_delay: int = 1,
         atol: float = 1e-9,
         engine_friction_tol: float = 1e-4,
     ) -> None:
+        # lot_size=None follows the configuration's execution grain (the
+        # same ``lot_size`` the engine itself executes whole lots with);
+        # an explicit value — including the lot-free ``0`` — overrides it.
+        if lot_size is None:
+            lot_size = max(1, int(getattr(config, "lot_size", 100)))
         if lot_size < 0:
             raise ValueError(f"lot_size must be >= 0, got {lot_size}")
         if execution_delay < 1:
@@ -385,16 +390,22 @@ class GoldenParity:
             )
         )
         if self.lot_size > 0:
-            lot_equity, lot_returns, lot_fees, lot_fills, lot_portfolio = (
+            lot_equity, lot_returns, lot_fees, lot_fills, lot_snapshots = (
                 self._broker_path(
                     executed, bars, ts_codes, dates, open_, capital,
                     self.lot_size, target_ret,
                 )
             )
         else:
-            lot_equity, lot_returns, lot_fees, lot_fills, lot_portfolio = (
+            (
+                lot_equity,
+                lot_returns,
+                lot_fees,
+                lot_fills,
+                lot_snapshots,
+            ) = (
                 lot_free_equity, lot_free_returns, lot_free_fees, lot_free_fills,
-                None,
+                [],
             )
 
         # --- residual attribution (lot mode vs free path) -----------------
@@ -412,12 +423,16 @@ class GoldenParity:
                 valid = open_[:, entry] > 0.0
                 q_free[valid] = w[valid] * free_equity[k] / open_[valid, entry]
                 r = target_ret[:, entry - 1]
+                # The lot book held *during* this period is the snapshot
+                # taken after this period's entry execution — not the
+                # terminal portfolio (later periods' lots must never leak
+                # into this day's rounding).
                 q_lot = np.zeros(n, dtype=np.float64)
                 index_of = {code: i for i, code in enumerate(ts_codes)}
-                for code, pos in lot_portfolio.positions.items():
+                for code, quantity in lot_snapshots[k].items():
                     i = index_of.get(code)
                     if i is not None:
-                        q_lot[i] = pos.quantity
+                        q_lot[i] = quantity
                 rounding = float(np.sum((q_lot - q_free) * open_[:, entry] * r))
                 fee_diff = free_fees[k] - lot_fees[k]
                 carry = residual - rounding - fee_diff
@@ -525,7 +540,7 @@ class GoldenParity:
         target_ret: np.ndarray,
     ) -> tuple[
         list[float], list[float], list[float], list[list[FillRecord]],
-        SimulationPortfolio,
+        list[dict[str, float]],
     ]:
         """One matcher run over the executed weights.
 
@@ -543,6 +558,14 @@ class GoldenParity:
 
         ``target_ret`` is the caller's adjusted open-to-open matrix (p19
         §2.3) — the single label basis, computed once in :meth:`run`.
+
+        The fifth element is the per-period position snapshot (ts_code ->
+        quantity **after** that period's entry execution).  The residual
+        attribution in :meth:`run` needs the book actually held *during*
+        each period, not the terminal book after the last period — using
+        the terminal portfolio for every day would smear later lots into
+        earlier days' ``rounding`` and silently dump the difference into
+        ``carry``.
         """
 
         state_path = Path(tempfile.gettempdir()) / f"golden-{uuid4().hex}.json"
@@ -556,6 +579,7 @@ class GoldenParity:
         returns: list[float] = []
         fees_by_day: list[float] = []
         fills_by_day: list[list[FillRecord]] = []
+        snapshots: list[dict[str, float]] = []
 
         for k, w in enumerate(executed):
             entry = k + delay
@@ -654,6 +678,11 @@ class GoldenParity:
                 )
             )
             fees_by_day.append(fees)
+            # Snapshot the book held during this period (after the entry
+            # execution) for the per-day rounding attribution.
+            snapshots.append(
+                {code: pos.quantity for code, pos in portfolio.positions.items()}
+            )
             if lot_free:
                 # P35 (v4): the identical exact-equity-ratio net the free
                 # ledger books — (1 - cost) * (1 + gross) - 1 with the
@@ -677,4 +706,4 @@ class GoldenParity:
             equity.append(equity_after)
             fills_by_day.append(fills)
 
-        return equity, returns, fees_by_day, fills_by_day, portfolio
+        return equity, returns, fees_by_day, fills_by_day, snapshots

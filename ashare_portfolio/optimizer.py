@@ -84,8 +84,14 @@ class PortfolioObjective:
 class PortfolioSolution:
     """Result of one portfolio-construction call.
 
-    ``status`` is ``"optimal"`` (QP solved, projection applied) or
-    ``"empty"`` (no finite alpha: all-zero book, solver never called).
+    ``status`` is the solver's verdict passed through verbatim —
+    ``"optimal"`` or ``"optimal_inaccurate"`` (QP solved, projection
+    applied; an inaccurate solve is numerically degraded and must stay
+    visible to consumers) — or ``"empty"`` (no finite alpha: all-zero
+    book, solver never called).  Callers that require a fully trusted
+    solution check for ``"optimal"``; a raised
+    :class:`PortfolioOptimizationError` covers infeasible/unbounded and
+    solver-failure statuses.
     ``diagnostics`` carries the documented keys: ``turnover`` /
     ``post_turnover`` (L1 deviation before/after projection),
     ``qp_positions`` / ``positions`` (counts), ``min_trade_dropped`` /
@@ -314,7 +320,16 @@ class PortfolioOptimizer:
             )
 
         problem = cp.Problem(cp.Maximize(cp.sum(terms)), constraints)
-        problem.solve(solver=cp.OSQP)
+        try:
+            problem.solve(solver=cp.OSQP)
+        except cp.error.SolverError as exc:
+            # Solver-level failure (not a problem-status verdict) must
+            # surface as the portfolio layer's error type — callers that
+            # catch PortfolioOptimizationError would otherwise let the
+            # cvxpy error escape the layer boundary.
+            raise PortfolioOptimizationError(
+                f"portfolio optimization solver failed: {exc}"
+            ) from exc
         if problem.status not in ("optimal", "optimal_inaccurate"):
             raise PortfolioOptimizationError(
                 f"portfolio optimization failed: solver status {problem.status}"
@@ -404,7 +419,11 @@ class PortfolioOptimizer:
 
         return PortfolioSolution(
             weights=weights,
-            status="optimal",
+            # Pass the solver's verdict through verbatim: an
+            # optimal_inaccurate solve is numerically degraded and the
+            # audit trail (constructor diagnostics record this status)
+            # must show the downgrade instead of claiming "optimal".
+            status=str(problem.status),
             objective_value=objective_value,
             diagnostics=diagnostics,
             post_processed=post_processed,

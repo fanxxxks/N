@@ -594,6 +594,39 @@ def test_r8_paper_scan_without_runs_is_not_applicable(tmp_path):
     assert "no lifecycle-bound paper" in gathered["binding"]["detail"]
 
 
+def test_r13_gather_bound_run_replays_a_real_run_without_crashing(tmp_path):
+    """P0 regression (2026-09-21): gather_bound_run referenced an
+    unimported ``run_store.LIFECYCLE_FILENAME`` — a NameError outside
+    the except tuple, so every ``research_doctor --spec-id/--run-id``
+    invocation crashed AFTER a successful replay (the state was
+    computed, then the D7 evidence read exploded).  A run driven through
+    FACTOR_SET_QUALIFIED must instead replay its recorded D7 verdict."""
+
+    store = RunStore(tmp_path / "store")
+    spec = _spec()
+    run_id = _paper_observing_run(store, spec, account_id="acc-0001")
+    report = readiness.gather_bound_run(store.root, spec.spec_id, run_id)
+    assert report["state"] == "PAPER_OBSERVING"
+    assert report["state_status"] == readiness.STATUS_PASS
+    # The D7 verdict recorded at the run's own FACTOR_SET_QUALIFIED
+    # transition (the fixture's factor report carries ok=True).
+    assert report["eligibility"]["status"] == readiness.STATUS_PASS
+    assert "D7 verdict recorded" in report["eligibility"]["detail"]
+    # p27 R7/I10: PAPER_OBSERVING is above the search floor.
+    assert report["source_qualified"]["status"] == readiness.STATUS_PASS
+    json.dumps(report)  # the report stays JSON-serializable
+
+
+def test_r13_gather_bound_run_unknown_root_is_not_a_crash():
+    """The unresolved-root path returns the unknown report (all three
+    sub-verdicts unknown with reasons), never an exception."""
+
+    report = readiness.gather_bound_run(None, "s" * 64, "r" * 32)
+    assert report["state_status"] == readiness.STATUS_UNKNOWN
+    assert report["eligibility"]["status"] == readiness.STATUS_UNKNOWN
+    assert report["source_qualified"]["status"] == readiness.STATUS_UNKNOWN
+
+
 # --- R9: the hardcoded "current" false positive is gone -----------------------
 
 

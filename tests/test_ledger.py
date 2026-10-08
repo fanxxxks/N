@@ -267,3 +267,29 @@ def test_append_only_file_format(tmp_path):
         payload = json.loads(line)
         assert isinstance(payload, dict)
         assert payload["entry_hash"]
+
+
+# -- durability (P1 fsync review) ---------------------------------------------
+#
+# Real persistence is only provable by pulling the power cord; what this
+# pins is that every append calls os.fsync (flushed first) before the
+# ledger method returns — a completed line cannot vanish in a power loss.
+
+
+def test_append_fsyncs_every_entry(tmp_path, monkeypatch):
+    import os
+
+    calls: list[int] = []
+    monkeypatch.setattr(os, "fsync", lambda fd: calls.append(fd))
+
+    ledger = _ledger(tmp_path, run_id="run-fsync")
+    trial_id = ledger.record_trial(**_baseline_kwargs())
+    assert len(calls) == 1  # the "running" entry is durable before return
+    ledger.complete_trial(trial_id, metrics={"m": 1.0})
+    assert len(calls) == 2  # the terminal entry likewise
+
+    # Durability did not change the file format: two clean JSONL lines that
+    # re-verify through the hash-chain reload.
+    reloaded = _ledger(tmp_path, run_id="run-fsync")
+    assert len(reloaded) == 2
+    assert [e.status for e in reloaded.iter_entries()] == ["running", "succeeded"]

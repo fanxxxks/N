@@ -275,6 +275,118 @@ def test_grammar2_3_payloads_decode_via_frozen_v3_layout():
     ]
 
 
+def test_grammar_vocab_by_version_is_the_single_authority():
+    """P1-A: one exported grammar -> vocabulary table decides how every
+    bare payload decodes, consumed by BOTH resolve_formula_tokens and
+    data_tier._grammar_vocab.  Every superseded generation 2..8 has its
+    own frozen layout (the live table serves a superseded generation
+    NEVER -- a drifted token id silently becoming another legal token was
+    the t28 mechanism); the live generation 9 maps to the live object."""
+    from ashare_model.vocab import (
+        GRAMMAR_V3_VOCAB,
+        GRAMMAR_V5_VOCAB,
+        GRAMMAR_V6_VOCAB,
+        GRAMMAR_V8_VOCAB,
+        GRAMMAR_VOCAB_BY_VERSION,
+    )
+
+    assert sorted(GRAMMAR_VOCAB_BY_VERSION) == [2, 3, 4, 5, 6, 7, 8, 9]
+    assert GRAMMAR_VOCAB_BY_VERSION[9] is FORMULA_VOCAB
+    assert GRAMMAR_VOCAB_BY_VERSION[2] is GRAMMAR_VOCAB_BY_VERSION[3] is GRAMMAR_V3_VOCAB
+    assert GRAMMAR_VOCAB_BY_VERSION[4] is GRAMMAR_VOCAB_BY_VERSION[5] is GRAMMAR_V5_VOCAB
+    assert GRAMMAR_VOCAB_BY_VERSION[6] is GRAMMAR_VOCAB_BY_VERSION[7] is GRAMMAR_V6_VOCAB
+    assert GRAMMAR_VOCAB_BY_VERSION[8] is GRAMMAR_V8_VOCAB
+    # Layout pins: feature block sizes and EOS ids per generation
+    # (1 PAD + F features + 39 operators + EOS).
+    for generation, features, eos in (
+        (2, 62, 102), (3, 62, 102), (4, 73, 113), (5, 73, 113),
+        (6, 77, 117), (7, 77, 117), (8, 81, 121), (9, 83, 123),
+    ):
+        vocab = GRAMMAR_VOCAB_BY_VERSION[generation]
+        assert vocab.feature_count == features, generation
+        assert vocab.eos_token_id == eos, generation
+        assert vocab.operator_names == FORMULA_VOCAB.operator_names, generation
+    # Append-only discipline: every frozen table is a prefix of the live
+    # list (the derivation asserts it at import time; this pins it here).
+    for generation in range(2, 9):
+        vocab = GRAMMAR_VOCAB_BY_VERSION[generation]
+        assert vocab.feature_names == tuple(FEATURE_NAMES)[: vocab.feature_count]
+
+
+def test_grammar6_7_bare_payloads_decode_via_frozen_layout():
+    """P1-A: grammar 6/7 (77-feature layout) bare payloads decode against
+    the frozen grammar-6 table.  The released proof of the silent misdecode:
+    [1, 1, 78, 117] against the live 83-feature table decoded as
+    RET_1, RET_1, CFO_TO_ASSETS, CORR60 (identity -- every drifted id hit
+    another legal token); under the frozen layout it is RET_1, RET_1,
+    ADD, EOS."""
+    from ashare_model.vocab import GRAMMAR_V6_VOCAB
+
+    payload = {"formula": [1, 1, 78, 117], "grammar_version": 6}
+    names = tokens_to_names(payload["formula"], GRAMMAR_V6_VOCAB)
+    assert names == ["RET_1", "RET_1", "ADD", "EOS"]
+    # The drifted ids no longer map to live features/operators.
+    assert "CFO_TO_ASSETS" not in names and "CORR60" not in names
+    resolved = resolve_formula_tokens(payload, FORMULA_VOCAB)
+    assert resolved == [1, 1, FORMULA_VOCAB.operator_offset, FORMULA_VOCAB.eos_token_id]
+    # Grammar 7 (t22/t69) shares grammar 6's token layout exactly.
+    assert resolve_formula_tokens(
+        {"formula": [1, 1, 78, 117], "grammar_version": 7}, FORMULA_VOCAB
+    ) == resolved
+
+
+def test_grammar8_bare_payload_decodes_via_frozen_layout():
+    """P1-A: grammar-8 (81-feature layout) bare payloads decode against
+    the frozen grammar-8 table.  Token 81 is LEVERAGE_CHANGE (the last
+    grammar-8 append) and EOS sits at 121; under the live table token 81
+    silently reads MARGIN_BALANCE_TO_CIRC_MV and EOS 121 reads DELTA10."""
+    from ashare_model.vocab import GRAMMAR_V8_VOCAB
+
+    payload = {"formula": [81, 81, 82, 121], "grammar_version": 8}
+    names = tokens_to_names(payload["formula"], GRAMMAR_V8_VOCAB)
+    assert names == ["LEVERAGE_CHANGE", "LEVERAGE_CHANGE", "ADD", "EOS"]
+    assert "MARGIN_BALANCE_TO_CIRC_MV" not in names
+    resolved = resolve_formula_tokens(payload, FORMULA_VOCAB)
+    # Feature ids 1-81 are bit-stable; ADD moved 82 -> 84, EOS 121 -> 123.
+    assert resolved == [81, 81, FORMULA_VOCAB.operator_offset, FORMULA_VOCAB.eos_token_id]
+
+
+def test_frozen_vocab_feature_versions_are_pinned_to_their_generation(monkeypatch):
+    """P1-A: a frozen layout's feature_version must hash ITS OWN grammar
+    generation, not the live number -- otherwise every grammar bump
+    silently re-identifies the frozen table, contradicting "frozen" (the
+    V5 table embedded the live grammar since t46; V3 had the same flaw)."""
+    import ashare_model.vocab as vocab_module
+    from ashare_model.vocab import (
+        GRAMMAR_V3_VOCAB,
+        GRAMMAR_V5_VOCAB,
+        GRAMMAR_V6_VOCAB,
+        GRAMMAR_V8_VOCAB,
+    )
+
+    live = FORMULA_VOCAB.feature_version
+    frozen = {
+        3: GRAMMAR_V3_VOCAB,
+        5: GRAMMAR_V5_VOCAB,
+        6: GRAMMAR_V6_VOCAB,
+        8: GRAMMAR_V8_VOCAB,
+    }
+    frozen_versions = {g: v.feature_version for g, v in frozen.items()}
+    # A hypothetical grammar bump moves the live hash but no frozen one.
+    monkeypatch.setattr(vocab_module, "GRAMMAR_VERSION", 99)
+    assert FORMULA_VOCAB.feature_version != live
+    for generation, vocab in frozen.items():
+        assert vocab.feature_version == frozen_versions[generation], generation
+    # The pinned grammar rides in the hash payload: two tables with the
+    # same name lists but different pinned generations hash differently.
+    same_names = FormulaVocab(
+        feature_names=GRAMMAR_V5_VOCAB.feature_names,
+        operator_names=GRAMMAR_V5_VOCAB.operator_names,
+        grammar_version=4,
+    )
+    assert same_names.feature_version != GRAMMAR_V5_VOCAB.feature_version
+
+
 def test_legacy_bare_factor_requires_declared_generation():
     # t46 captain pre-ruling: the old bare-factor migration path ([1] with
     # no metadata) is superseded by the fail-closed grammar gate -- the
@@ -371,10 +483,10 @@ def test_resolve_formula_tokens_legacy_payload_without_metadata():
 
 
 def test_resolve_formula_tokens_remaps_legacy_under_future_vocab():
-    # Even against a hypothetical further-grown vocabulary a formula with
-    # a DECLARED generation remaps by name: feature ids stay, operator ids
+    # Even against a hypothetical further-grown vocabulary a formula with a
+    # DECLARED generation remaps by name: feature ids stay, operator ids
     # shift (t46 captain pre-ruling: the declared generation must be a
-    # known one -- here the live grammar 6).
+    # known one -- here the live generation, whatever it currently is).
     future = FormulaVocab(
         feature_names=tuple(FEATURE_NAMES) + ("NEW_FACTOR",),
         operator_names=tuple(FORMULA_VOCAB.operator_names) + ("NEWOP20",),
@@ -382,7 +494,7 @@ def test_resolve_formula_tokens_remaps_legacy_under_future_vocab():
     tokens = [1, 2, FORMULA_VOCAB.operator_offset]
     payload = {
         "formula": tokens,
-        "grammar_version": 6,
+        "grammar_version": GRAMMAR_VERSION,
     }
     resolved = resolve_formula_tokens(payload, vocab=future)
     assert resolved == [1, 2, future.operator_offset]

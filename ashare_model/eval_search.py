@@ -127,6 +127,16 @@ def baseline_candidates(
             )
         )
         train_signals.append(train_factors[idx])
+    # 16-C (p54): ONE scoring batch carries both fixed orientations' raw
+    # numbers out through ``oriented_evidence_out`` — aligned with
+    # ``scores`` — so every baseline row's direction carries the
+    # five-element provenance (rule / train_cutoff / label / missing
+    # handling / reference config) plus the both-directions evidence
+    # pattern.  Direction VALUES are unchanged — the decision still comes
+    # from the same Rule A comparison inside this pass; the old extra
+    # mirrored scoring round (whose "opposite" evidence was the same
+    # winner recorded twice) is gone (FROZEN_C §0.3 red line 1).
+    oriented_evidence: list[dict | None] = []
     scores = scorer.score_many(
         specs,
         train_signals,
@@ -143,41 +153,15 @@ def baseline_candidates(
         adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
         realized_ret=train_realized_ret,
         rebalance_mask=train_rebalance_mask,
+        oriented_evidence_out=oriented_evidence,
     )
     # The selector is invoked even though the protocol reports every bare
     # factor; this keeps ranking/eligibility behavior on the same code path.
     CandidateSelector().select(scores, pareto_objectives=PARETO_OBJECTIVES)
-    # p46 B3: one extra mirrored scoring pass records BOTH orientations'
-    # validation evidence, so every baseline row's direction carries the
-    # five-element provenance (rule / train_cutoff / label / missing
-    # handling / reference config).  Direction VALUES are unchanged — the
-    # decision still comes from the pass above.
-    from .direction import (
-        MISSING_HANDLING,
-        RULE_REFERENCE_RETURN,
-        DirectionDecision,
-        label_definition,
-    )
-    from ashare_portfolio.execution_spec import portfolio_config_provenance
+    from .direction import label_definition, reference_return_provenance
 
-    opposite_scores = scorer.score_many(
-        specs,
-        [-s for s in train_signals],
-        train_target,
-        val_windows,
-        blocked_buy=blocked_buy[:, :train_price_end],
-        blocked_sell=blocked_sell[:, :train_price_end],
-        train_signal_range=(
-            contract.train_signal_start,
-            validation_start(train_signal_end, model_cfg),
-        ),
-        universe_mask=loader.universe_mask[:, :train_price_end],
-        tie_break_keys=np.asarray(loader.ts_codes),
-        adv=np.asarray(loader.dollar_volume())[:, :train_price_end],
-        realized_ret=train_realized_ret,
-        rebalance_mask=train_rebalance_mask,
-    )
     label_def = label_definition(fold.policy)
+    train_dates = [str(d) for d in loader.dates[:train_price_end]]
     rows: list[dict] = []
     for i, (name, idx, score) in enumerate(
         zip(proto_cfg.baseline_signals, indices, scores)
@@ -186,20 +170,22 @@ def baseline_candidates(
         metrics = evaluate_signal(
             float(direction) * factors[idx], loader, fold, bt_cfg
         )
-        provenance = DirectionDecision(
+        provenance = reference_return_provenance(
             candidate=f"baseline:{name}",
             direction=int(direction),
-            rule=RULE_REFERENCE_RETURN,
+            oriented_evidence=oriented_evidence[i],
+            signal=train_signals[i],
+            universe_mask=loader.universe_mask[:, :train_price_end],
+            val_windows=val_windows,
+            train_signal_range=(
+                contract.train_signal_start,
+                validation_start(train_signal_end, model_cfg),
+            ),
             train_cutoff=fold.train_end,
-            label=dict(label_def),
-            missing_handling=MISSING_HANDLING,
-            reference_config=portfolio_config_provenance(bt_cfg),
-            evidence={
-                "val_reward": float(score.val_reward),
-                "val_icir": float(score.val_icir),
-                "val_reward_opposite": float(opposite_scores[i].val_reward),
-                "val_icir_opposite": float(opposite_scores[i].val_icir),
-            },
+            label_def=label_def,
+            backtest_config=bt_cfg,
+            reward_config=reward_cfg,
+            dates=train_dates,
         ).to_json()
         rows.append(
             {

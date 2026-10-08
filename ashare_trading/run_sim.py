@@ -55,6 +55,7 @@ from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
 from ashare_portfolio.constructor import PortfolioConstructor
 from ashare_portfolio.execution_spec import portfolio_config_provenance
 from ashare_portfolio.rebalance import RebalancePolicy
+from ashare_portfolio.trade_groups import refuse_unwired_trade_groups
 
 from .matching import SimBroker
 from .orders import build_orders, target_shares_from_weights
@@ -118,6 +119,17 @@ class SimulationRunner:
         # inspect the runner (display/audit only).
         self.today = (today or datetime.now().strftime("%Y%m%d")).replace("-", "")
         validate_execution_config(backtest_config, sim_config)
+        # Audit fix (2026-09-23, major): the paper sim executes the
+        # constructor's output weights through _make_orders (weight space)
+        # and does not consume plan_trade_session/execute_trade_session,
+        # so the experimental trade_groups mode (whose budget lives in the
+        # planner, frozen §1.1.2) must REFUSE to run here instead of
+        # silently trading the unbudgeted target.  No-op for every other
+        # allocation mode (red line 2).  Fires before any portfolio state
+        # is created.
+        refuse_unwired_trade_groups(
+            backtest_config, "SimulationRunner (paper sim)"
+        )
         # A03 (p27 I1/I2/I9): the formal paper entry passes the RunContext
         # attached to the observing run (exactly PAPER_OBSERVING, enforced
         # at attach); the writable account identity is DERIVED from the
@@ -611,11 +623,15 @@ class SimulationRunner:
         equity: float,
     ) -> list[SimOrder]:
         open_prices = raw["open"][:, exec_idx]
+        # Same execution grain as the engine (backtest.py): the configured
+        # lot_size, floor 1.  Hardcoding 100 here would desync the paper
+        # account from a backtest run with a non-default lot_size.
+        lot = max(1, int(getattr(self.backtest_config, "lot_size", 100)))
 
         # T3-02: one shared weight->order rule (whole-lot buys, sells
-        # first, full-exit sells) with the paper-trading lot size.
+        # first, full-exit sells) with the configured trading lot size.
         target_shares = target_shares_from_weights(
-            target_weights, equity, open_prices, lot_size=100
+            target_weights, equity, open_prices, lot_size=lot
         )
         current_quantities = {
             code: pos.quantity for code, pos in self.portfolio.positions.items()
@@ -628,7 +644,7 @@ class SimulationRunner:
             target_shares,
             selected,
             current_quantities,
-            lot_size=100,
+            lot_size=lot,
         )
 
     def _portfolio_weights(

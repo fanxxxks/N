@@ -314,7 +314,9 @@ def test_p9_factor_compute_version_wired_into_the_version_registry():
     # t17 observation ②).  The d6 line's copy of the bump missed this
     # pin (the d5 twin repaired it in aefb71d, t58-reviewed); pinned
     # here so the version-owner index stays exhaustive.
-    assert FACTOR_COMPUTE_VERSION == 4
+    # 4 -> 5: AMPLITUDE prev-close axis fix (P0 correctness, 2026-09-21
+    # review) — version-owner index stays exhaustive.
+    assert FACTOR_COMPUTE_VERSION == 5
     assert "factor_compute_version" in RunSpec.model_fields
     assert RunSpec.model_fields["factor_compute_version"].default is None
 

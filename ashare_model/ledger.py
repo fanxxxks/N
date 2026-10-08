@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from ashare_data.io_utils import durable_append_line
 from ashare_model.identity import canonical_json, sha256_hex
 
 
@@ -254,8 +255,12 @@ class ExperimentLedger:
                 prev_hash=previous_hash,
             )
         )
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(entry.to_json() + "\n")
+        # Evidence durability (P1 fsync review): every append is flushed +
+        # fsynced before it returns, so a completed ledger line cannot
+        # vanish in a power loss. A crash mid-line stays detectable by the
+        # fail-closed chain reload. Per-trial frequency (open + close) is
+        # low, so a per-line fsync is acceptable.
+        durable_append_line(self.path, entry.to_json())
         self._entries.append(entry)
         return entry
 

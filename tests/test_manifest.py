@@ -195,6 +195,20 @@ def test_save_latest_and_resolve_roundtrip(populated_db_without_manifest):
         assert rows == 1
 
 
+def test_latest_manifest_degrades_to_none_without_manifest_table(
+    populated_db_without_manifest,
+):
+    """P1-5: a database with no dataset_manifest table (the pre-T1-01
+    shape) degrades to None exactly like latest_publication — the
+    "or None when none exists" contract of resolve_dataset_id and the
+    CLI's null dataset_id degradation, never a raw CatalogException."""
+
+    config = populated_db_without_manifest
+    with AshareDB(config.duckdb_path, read_only=True) as db:
+        assert latest_manifest(db, config) is None
+        assert resolve_dataset_id(db, config) is None
+
+
 def test_verify_dataset_fast_and_full_agree(populated_db):
     with AshareDB(populated_db.duckdb_path) as db:
         manifest = _manifest(db, populated_db)

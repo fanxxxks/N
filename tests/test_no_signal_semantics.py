@@ -252,7 +252,13 @@ def test_basket_degenerate_cross_section_holds_book():
     assert sim.daily_net_returns[0] == pytest.approx(0.0, abs=1e-15)
     assert sim.daily_cost_fractions[0] == pytest.approx(0.0, abs=1e-15)
     # Period 3 is the first dispersed signal day: the basket trades again.
-    assert sim.turnover[3] == pytest.approx(1.0, abs=1e-12)
+    # p52 (WP16-A FROZEN_A §1 (C1)/§3.4/§6): the full single-stock
+    # deployment is sized net of the fee reserve, so turnover + cost = 1
+    # exactly at the fixed point (the old exact-1.0 turnover booked the
+    # buy unfunded, cash = -c).
+    assert sim.turnover[3] + float(sim.daily_cost_fractions[3]) == (
+        pytest.approx(1.0, abs=1e-9)
+    )
 
 
 def test_basket_underfilled_keeps_cash_and_cap_like_engine():
@@ -292,21 +298,34 @@ def test_basket_force_hold_never_renormalizes_above_cap():
     # P3 contract section 3: the blocked position consumes budget and
     # only the fresh buy may shrink.  P35 (p35 §2): the session-0
     # funding fees (buy rate 0.00076 on the invested 0.8) debit from
-    # cash, so the drifted incumbent inflates to 0.4/(1-0.000608) =
-    # 0.40024335...; the sell-blocked name is pinned THERE (not at the
-    # v3-frozen 0.4) and the fresh buy shrinks into the remaining
-    # budget.
+    # cash; with g = r = 0 on this session the old divisor (1−c)(1+g)
+    # and the p52 divisor 1+g−c coincide (FROZEN_A §3.3's zero-fee
+    # coincidence generalized to g = 0), so the drifted incumbent stays
+    # 0.4/(1-0.000608) = 0.40024335... and the sell-blocked name is
+    # pinned THERE.  p52 (FROZEN_A §1 (C1)/§6): the fresh entrant is now
+    # sized against cash AFTER the session's fees — the tiny pinned-leg
+    # sell (0.0002434 of equity = 24.3 yuan) pays the 5-yuan minimum
+    # commission floor, so the reserve is floor-dominated — and the
+    # booked book satisfies the (C1) equality: entrant + cost = budget.
     _cost0 = 0.8 * 0.00076
     _pinned = 0.4 / (1.0 - _cost0)
-    _entrant = 1.0 - _pinned - 0.4
+    _budget = 1.0 - _pinned - 0.4
+    _cost1 = float(sim.daily_cost_fractions[1])
+    booked = sim.target_weights[1]
     np.testing.assert_allclose(
-        sim.target_weights[1], np.array([_pinned, 0.4, _entrant]), atol=1e-12
+        booked[:2], np.array([_pinned, 0.4]), atol=1e-12
     )
-    assert sim.turnover[1] == pytest.approx(0.2, abs=1e-12)  # the pinned leg's fee-inflation sell (0.0002434) plus the entrant's capped buy (0.1997567) sum back to exactly the 0.2 budget swap
+    # (C1) equality: the entrant plus the session's exact fee fraction
+    # funds the whole free budget (the old unfunded entrant was _budget
+    # itself, cash = −cost₁).
+    assert booked[2] + _cost1 == pytest.approx(_budget, abs=1e-9)
+    # Leg sums: turnover + cost = the 0.2 budget swap (sell leg + buy leg
+    # + fees), and the gross return is the booked book's own dot product.
+    assert sim.turnover[1] + _cost1 == pytest.approx(0.2, abs=1e-9)
     assert sim.daily_gross_returns[1] == pytest.approx(
-        _pinned * float(target[0, 1])
-        + 0.4 * float(target[1, 1])
-        + _entrant * float(target[2, 1]),
+        booked[0] * float(target[0, 1])
+        + booked[1] * float(target[1, 1])
+        + booked[2] * float(target[2, 1]),
         abs=1e-12,
     )
 

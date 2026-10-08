@@ -22,8 +22,9 @@ What this module does (and deliberately does not do):
   ``eval_metrics.lot_gap_fields`` (engine untouched) so the 整手 account's
   deviation from the ideal weights is measured, not asserted;
 * applies the frozen adjudication (§7): ``stable_region_found`` /
-  ``isolated_single_winner`` (recorded unstable, never a parameter pick)
-  park the run at ``DATA_QUALIFIED``; ``gross_info_execution_blocked`` /
+  ``isolated_single_winner`` / ``multiple_disjoint_viable`` (all three
+  recorded unstable-except-the-region, never a parameter pick) park the
+  run at ``DATA_QUALIFIED``; ``gross_info_execution_blocked`` /
   ``panel_no_reliable_info`` retire it — round 2 (periods) is a separate
   authorization and run identity either way;
 * it does NOT compare rebalance periods, optimizer methods, capital
@@ -473,10 +474,13 @@ def decide_r02_adjudication(
 ) -> dict[str, Any]:
     """The p37 §7 frozen rules (pure function; never sees prices, only
     the summarized rows).  Arm viability per cell, cell viability, the
-    adjacency stability region, and the four-way verdict.  The
-    ``single_year_dependence`` flag is informational (round 1's
-    robustness criterion is the adjacency region, not the fold count);
-    it never changes viability."""
+    adjacency stability region, and the four-way verdict (with the
+    multi-viable-but-disjoint case — viable cells with no adjacent pair
+    — reported distinctly as ``multiple_disjoint_viable`` instead of
+    being mislabeled an isolated single winner; administratively it
+    stays in the park family).  The ``single_year_dependence`` flag is
+    informational (round 1's robustness criterion is the adjacency
+    region, not the fold count); it never changes viability."""
 
     merged = dict(R02_ADJUDICATION_RULES)
     merged.update(rules or {})
@@ -519,13 +523,29 @@ def decide_r02_adjudication(
             "over a region, not a lone grid point; round 2 (period "
             "comparison) is a separate authorization"
         )
-    elif viable_cells:
+    elif len(viable_cells) == 1:
         verdict = "isolated_single_winner"
         isolated = viable_cells[0]
         note = (
             "exactly one viable cell with no viable neighbor — recorded "
             "as an UNSTABLE result（不稳定结果）: never a parameter-choice "
             "basis and never a default-config change justification"
+        )
+    elif viable_cells:
+        # Multiple viable cells but NO adjacent pair: mutually disjoint
+        # islands are neither a contiguous region nor "exactly one
+        # viable cell" — the former binary branch mislabeled this as an
+        # isolated single winner and pointed isolated_cell at an
+        # arbitrary first cell (a reporting lie downstream evidence
+        # consumed; repaired).
+        verdict = "multiple_disjoint_viable"
+        note = (
+            f"{len(viable_cells)} viable cells with no two adjacent "
+            f"({', '.join(viable_cells)}) — mutually disjoint islands, "
+            "not a contiguous region and not exactly one winner; "
+            "recorded as an UNSTABLE result（不稳定结果）: never a "
+            "parameter-choice basis and never a default-config change "
+            "justification"
         )
     elif gross_info_arms:
         verdict = "gross_info_execution_blocked"
@@ -1058,10 +1078,16 @@ def run_r02_matrix(
         report_record = handle.write_artifact("r02_matrix_report", report)
 
         # -- the frozen verdict decides the administrative walk (p37 §7):
-        # a region (stable or isolated) parks the run at DATA_QUALIFIED —
-        # round 2 is a separate authorization; blocked/no-info retires.
+        # a region (stable, isolated, or multiple disjoint islands — all
+        # unstable-except-the-region evidence) parks the run at
+        # DATA_QUALIFIED — round 2 is a separate authorization;
+        # blocked/no-info retires.
         verdict = adjudication["verdict"]
-        if verdict in ("stable_region_found", "isolated_single_winner"):
+        if verdict in (
+            "stable_region_found",
+            "isolated_single_winner",
+            "multiple_disjoint_viable",
+        ):
             final_state = writer.current_state  # parked, non-terminal
         else:
             writer.retire(

@@ -477,6 +477,24 @@ def run_r03_panel(
             for name in R03_MEMBERS
         }
 
+        def _direction_or_failed(name: str) -> int | None:
+            """The r02 fail-closed seam, same semantics as
+            ``r02_matrix.run_r02_panel``'s helper of the same name: a
+            member without train-window direction evidence fails the
+            row — a silent ``+1`` default would fabricate the p42
+            frozen "per-fold train-window directions" and run the whole
+            panel on an invented side (the old ``directions.get(name,
+            1)`` did exactly that).  ``None`` = the singles call itself
+            failed (the caller re-raises that exception)."""
+
+            if name in directions:
+                return directions[name]
+            if singles_failed is not None:
+                return None
+            raise KeyError(
+                f"factor {name} missing from the direction evidence"
+            )
+
         for level in R03_COST_LEVELS:
             for cell in R03_CELLS:
                 variant = cost_variant(
@@ -488,11 +506,14 @@ def run_r03_panel(
                     try:
                         if singles_failed is not None:
                             raise singles_failed  # type: ignore[misc]
-                        members = [
-                            (float(directions.get(name, 1)),
-                             member_signals[name])
-                            for name in R03_MEMBERS
-                        ]
+                        members = []
+                        for name in R03_MEMBERS:
+                            direction = _direction_or_failed(name)
+                            if direction is None:
+                                raise singles_failed  # type: ignore[misc]
+                            members.append(
+                                (float(direction), member_signals[name])
+                            )
                         weights = [
                             float(fit["weights"][name]) for name in R03_MEMBERS
                         ]

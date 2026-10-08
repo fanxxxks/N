@@ -37,8 +37,13 @@ from .vocab import FEATURE_NAMES
 # availability instead of the legacy margin_balance trade-date pivot.
 # Every factor value of the affected families changes — no historical
 # migration.
+# v5 (P0 correctness fix): AMPLITUDE's denominator switched from
+# ``ctx.close.shift(1)`` — pandas' default axis=0 on the pivoted
+# [stock x date] frames, i.e. the PREVIOUS STOCK's same-day close — to the
+# stock's own previous close (``ctx.pre_close``).  AMPLITUDE values change
+# wholesale; recorded in run artifacts via the runspec version registry.
 # Recorded in run artifacts via the runspec version registry.
-FACTOR_COMPUTE_VERSION = 4
+FACTOR_COMPUTE_VERSION = 5
 
 
 # --- Mechanical split (t79, re-derived at t87) -----------------------------

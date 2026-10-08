@@ -204,8 +204,16 @@ def test_sim_start_enforces_production_universe_before_spawn(
 # --- M6: control-endpoint authorization -------------------------------------
 
 
-def _request(host: str, token: str | None = None) -> SimpleNamespace:
-    headers = {"X-API-Token": token} if token is not None else {}
+def _request(
+    host: str, token: str | None = None, host_header: str | None = None
+) -> SimpleNamespace:
+    # Keys use the exact casing auth reads ("host" is lowercase, matching
+    # Starlette's case-insensitive lookup of the Host header).
+    headers: dict = {}
+    if token is not None:
+        headers["X-API-Token"] = token
+    if host_header is not None:
+        headers["host"] = host_header
     return SimpleNamespace(
         headers=headers,
         client=SimpleNamespace(host=host),
@@ -411,3 +419,189 @@ def test_a01_run_under_config_data_dir_visible_via_api(tmp_path, monkeypatch):
     assert detail['spec_id'] == spec.spec_id
     assert detail['run_id'] == handle.run_id
     assert detail['dataset_id'] == 'ds-a01-roundtrip'
+
+
+# --- P1-1: a corrupt/missing runspec must not 500 the run views --------------
+
+
+def _extra_run(root, dataset_id: str):
+    from ashare_model.run_store import RunStore
+    from tests.conftest import make_test_spec
+
+    store = RunStore(root / 'data')
+    spec = make_test_spec(dataset_id=dataset_id)
+    handle = store.open_run(spec)
+    return spec, handle
+
+
+def test_list_runs_corrupt_or_missing_runspec_degrades_entry(
+    tmp_path, monkeypatch
+):
+    """P1-1: a truncated/half-written or missing runspec.json degrades that
+    ONE entry (error set, dataset_id None) instead of crashing /api/runs;
+    healthy runs in the same store keep their clean fields."""
+    from webapi import service
+    from webapi.app import app
+
+    root, store, handle, writer, spec = _webapi_run(tmp_path)
+    writer.lock_spec()
+    corrupt_spec, corrupt_handle = _extra_run(root, 'ds-corrupt')
+    missing_spec, missing_handle = _extra_run(root, 'ds-missing')
+    runs_dir = root / 'data' / 'runs'
+    (runs_dir / corrupt_spec.spec_id / corrupt_handle.run_id / 'runspec.json').write_text(
+        '{"dataset_id": "ds-corrupt', encoding='utf-8'  # truncated mid-write
+    )
+    (runs_dir / missing_spec.spec_id / missing_handle.run_id / 'runspec.json').unlink()
+
+    monkeypatch.setattr(service, 'ROOT', root)
+    result = service.list_runs()
+    by_run = {entry['run_id']: entry for entry in result['runs']}
+    assert len(by_run) == 3
+
+    healthy = by_run[handle.run_id]
+    assert healthy['error'] is None
+    assert healthy['dataset_id'] == 'ds-webapi-0001'
+
+    corrupt = by_run[corrupt_handle.run_id]
+    assert corrupt['dataset_id'] is None
+    assert corrupt['error'] is not None
+
+    missing = by_run[missing_handle.run_id]
+    assert missing['dataset_id'] is None
+    assert missing['error'] is not None
+
+    # The endpoint must stay 200 with the degraded entries, not 500.
+    client = TestClient(app)
+    response = client.get('/api/runs')
+    assert response.status_code == 200
+    payload = response.json()
+    degraded = {
+        entry['run_id']: entry for entry in payload['runs']
+    }
+    assert degraded[corrupt_handle.run_id]['error']
+    assert degraded[handle.run_id]['error'] is None
+
+
+def test_run_detail_corrupt_runspec_is_404_not_500(tmp_path, monkeypatch):
+    """P1-1: get_run_detail on a corrupt runspec surfaces as an explicit
+    RunStoreError (404 with a readable detail), never a raw
+    JSONDecodeError escaping as a 500."""
+    from webapi import service
+    from webapi.app import app
+
+    root, store, handle, writer, spec = _webapi_run(tmp_path)
+    writer.lock_spec()
+    (root / 'data' / 'runs' / spec.spec_id / handle.run_id / 'runspec.json').write_text(
+        '{"dataset_id": "bro', encoding='utf-8'
+    )
+    monkeypatch.setattr(service, 'ROOT', root)
+    client = TestClient(app)
+    response = client.get('/api/runs/' + spec.spec_id + '/' + handle.run_id)
+    assert response.status_code == 404
+    assert 'unreadable' in response.json()['detail']
+
+
+def test_run_detail_missing_runspec_is_404_not_500(tmp_path, monkeypatch):
+    from webapi import service
+    from webapi.app import app
+
+    root, store, handle, writer, spec = _webapi_run(tmp_path)
+    writer.lock_spec()
+    (root / 'data' / 'runs' / spec.spec_id / handle.run_id / 'runspec.json').unlink()
+    monkeypatch.setattr(service, 'ROOT', root)
+    client = TestClient(app)
+    response = client.get('/api/runs/' + spec.spec_id + '/' + handle.run_id)
+    assert response.status_code == 404
+    assert 'unreadable' in response.json()['detail']
+
+
+# --- P1-2: forwarded-Host hardening of the no-token loopback path ------------
+
+
+def test_mutation_without_token_requires_loopback_host_header(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Direct loopback connections pass; a loopback client presenting an
+    external Host header (the reverse-proxy / ssh -L / VS Code
+    port-forward topology) is rejected with 403."""
+    monkeypatch.setenv("ASHARE_WEBAPI_ROOT", str(tmp_path))
+    for host_header in (
+        "127.0.0.1:8000",
+        "localhost:8000",
+        "[::1]:8000",
+        "::1",
+        "",  # HTTP/1.0-style empty Host counts as loopback
+    ):
+        asyncio.run(
+            auth.require_mutation_token(
+                _request("127.0.0.1", host_header=host_header)
+            )
+        )
+    # IPv4-mapped IPv6 loopback peer (dual-stack listener) is loopback too.
+    asyncio.run(
+        auth.require_mutation_token(
+            _request("::ffff:127.0.0.1", host_header="127.0.0.1:8000")
+        )
+    )
+    # The proxy scenario: loopback TCP peer, forwarded external Host.
+    for host_header in (
+        "quant.example.com:8000",
+        "quant.example.com",
+        "192.168.1.20:8000",
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                auth.require_mutation_token(
+                    _request("127.0.0.1", host_header=host_header)
+                )
+            )
+        assert exc_info.value.status_code == 403
+        assert ".webapi_token" in exc_info.value.detail
+
+
+def test_mutation_with_token_skips_host_header_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """With a token file the Host check must not apply: a correctly
+    tokened request through any proxy/Host is the documented exposure."""
+    root = tmp_path / "config"
+    root.mkdir(parents=True)
+    (root / ".webapi_token").write_text("s3cret", encoding="utf-8")
+    monkeypatch.setenv("ASHARE_WEBAPI_ROOT", str(tmp_path))
+    asyncio.run(
+        auth.require_mutation_token(
+            _request("192.168.1.20", token="s3cret", host_header="quant.example.com")
+        )
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            auth.require_mutation_token(
+                _request(
+                    "192.168.1.20", token="wrong", host_header="quant.example.com"
+                )
+            )
+        )
+    assert exc_info.value.status_code == 401
+
+
+def test_mutation_non_ascii_token_file_is_401_not_500(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """hmac.compare_digest raises TypeError on non-ASCII str inputs; a
+    non-ASCII token file (and any token attempt against it) must degrade
+    to 401, not crash the dependency with a 500."""
+    root = tmp_path / "config"
+    root.mkdir(parents=True)
+    (root / ".webapi_token").write_text("令牌-非ASCII", encoding="utf-8")
+    monkeypatch.setenv("ASHARE_WEBAPI_ROOT", str(tmp_path))
+    for attempt in ("令牌-非ASCII", "s3cret"):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                auth.require_mutation_token(_request("127.0.0.1", token=attempt))
+            )
+        assert exc_info.value.status_code == 401
+    # A binary (non-UTF-8) token file is likewise an invalid token.
+    (root / ".webapi_token").write_bytes(b"\xff\xfe\x00s3cret")
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(auth.require_mutation_token(_request("127.0.0.1", token="x")))
+    assert exc_info.value.status_code == 401

@@ -156,8 +156,12 @@ class SimJobManager:
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return False
 
-    def _terminate(self, pid: int | None) -> None:
-        if not pid:
+    def _terminate(self, pid: int | None, started_at: str | None = None) -> None:
+        # PID-reuse guard: with ``started_at`` (the spawn-time record) the
+        # terminate only proceeds against the process we spawned — a PID
+        # the OS reassigned to an unrelated process after our child exited
+        # is refused here, never terminated.
+        if not pid or not self._is_alive(pid, started_at):
             return
         try:
             proc = psutil.Process(pid)
@@ -170,8 +174,10 @@ class SimJobManager:
         except psutil.Error:
             pass
 
-    def _kill(self, pid: int | None) -> None:
-        if not pid:
+    def _kill(self, pid: int | None, started_at: str | None = None) -> None:
+        # Same PID-reuse guard as _terminate (creation time must not
+        # predate the recorded spawn time).
+        if not pid or not self._is_alive(pid, started_at):
             return
         try:
             proc = psutil.Process(pid)
@@ -402,7 +408,7 @@ class SimJobManager:
         record["status"] = "stopping"
         record["stopping_at"] = _now_iso()
         self._write_run(record)
-        self._schedule_escalation(record.get("pid"))
+        self._schedule_escalation(record.get("pid"), record.get("started_at"))
         return {"ok": True, "state": "stopping", "pid": record.get("pid")}
 
     def _write_stop_signal(self) -> None:
@@ -410,32 +416,41 @@ class SimJobManager:
             return
         request_stop(self.sim_config.stop_signal_path)
 
-    def _schedule_escalation(self, pid: int | None) -> None:
+    def _schedule_escalation(
+        self, pid: int | None, started_at: str | None = None
+    ) -> None:
         """Background escalation so stop() returns immediately. If the API
         process is restarted, the next status() poll continues the escalation
-        via ``_maybe_escalate``."""
+        via ``_maybe_escalate``.
+
+        The thread holds ``(pid, started_at)`` so every liveness check and
+        every terminate/kill is PID-reuse protected: a PID the OS reassigned
+        after our child exited during the grace window is never signalled.
+        """
 
         if self._escalation_thread and self._escalation_thread.is_alive():
             return
         thread = threading.Thread(
-            target=self._escalate_after_grace, args=(pid,), daemon=True
+            target=self._escalate_after_grace, args=(pid, started_at), daemon=True
         )
         thread.start()
         self._escalation_thread = thread
 
-    def _escalate_after_grace(self, pid: int | None) -> None:
+    def _escalate_after_grace(
+        self, pid: int | None, started_at: str | None = None
+    ) -> None:
         deadline = time.monotonic() + self.stop_grace
         while time.monotonic() < deadline:
             time.sleep(1)
-            if not self._is_alive(pid):
+            if not self._is_alive(pid, started_at):
                 return
-        self._terminate(pid)
+        self._terminate(pid, started_at)
         deadline = time.monotonic() + self.kill_grace
         while time.monotonic() < deadline:
             time.sleep(0.5)
-            if not self._is_alive(pid):
+            if not self._is_alive(pid, started_at):
                 return
-        self._kill(pid)
+        self._kill(pid, started_at)
 
     def _maybe_escalate(self, record: dict) -> None:
         """Poll-time escalation fallback (API restarts lose the thread)."""
@@ -447,10 +462,11 @@ class SimJobManager:
         except (KeyError, TypeError, ValueError):
             return
         pid = record.get("pid")
+        started_at = record.get("started_at")
         if elapsed > self.stop_grace + self.kill_grace:
-            self._kill(pid)
+            self._kill(pid, started_at)
         elif elapsed > self.stop_grace:
-            self._terminate(pid)
+            self._terminate(pid, started_at)
 
     # ------------------------------------------------------------------ reset
 

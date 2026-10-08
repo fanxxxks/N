@@ -252,9 +252,11 @@ def test_j5_g2_fails_without_identity_blocks(tmp_path):
     assert any("bound" in r or "identity" in r for r in gate["reasons"])
 
 
-def test_j6_promotion_rule_version_is_4():
+def test_j6_promotion_rule_version_is_5():
     # p43 §4 (requirement change, §10.1 rule 2): v4 = numeric adjudication
     # + identity content verification; same assertion strength, new literal.
+    # wp17 (FROZEN_17 §7.2): v5 = G2 consumes the calibration
+    # qualification (the fourth layer), fail-closed.
     from ashare_model.promotion import PROMOTION_RULE_VERSION
 
-    assert PROMOTION_RULE_VERSION == "4"
+    assert PROMOTION_RULE_VERSION == "5"

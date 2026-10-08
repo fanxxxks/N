@@ -51,6 +51,13 @@ NEUTRAL_FEATURE_NAMES = {
 # seals/breaks against the exact v2 daily_price_limit prices instead of
 # the per-board limit_rate approximation + 0.5pp band; (c) the margin
 # frames read the v2 margin_detail_pit source with the p17 §6.1 T+1
+# v5 (P0 correctness fix, AMPLITUDE): the AMPLITUDE denominator switched
+# from ``ctx.close.shift(1)`` — which shifted along the STOCK axis of the
+# pivoted [stock x date] frames (pandas' default axis=0), making the first
+# alphabetical stock all-NaN and every other stock divide by its upper
+# neighbour's same-day close — to the stock's own previous close
+# (``ctx.pre_close``, the same prev-close input ATR_14/GAP consume).
+# AMPLITUDE values change for every stock/date; no historical migration.
 
 # Sparse event features standardize on the sparse-safe path: the 1%/99%
 # winsorize quantiles flatten any day whose event incidence is below the
@@ -797,10 +804,21 @@ def _make_registry() -> dict[str, tuple[FactorSpec, Callable[[FactorContext], pd
     add(
         "AMPLITUDE",
         "volume",
-        ("high", "low", "close"),
+        # P0 axis fix: the denominator is the stock's own previous close —
+        # the pivoted ``pre_close`` bar column, the same "prev close" input
+        # ATR_14 and GAP consume.  The previous ``ctx.close.shift(1)`` left
+        # pandas' default ``axis=0`` (the STOCK axis of the [stock x date]
+        # frames), so the first alphabetical stock was all-NaN and every
+        # other stock's amplitude divided by its upper neighbour's same-day
+        # close — a neighbour suspension silently neutralized the factor
+        # (universe eligibility leaked into the factor value) and the result
+        # depended on the ts_codes order.  Warmup stays 2 to match the
+        # authored availability metadata (feature_metadata.py AMPLITUDE),
+        # which is conservative: pre_close is defined from the first bar.
+        ("high", "low", "pre_close"),
         2,
         "Intraday amplitude (high-low)/prev close",
-        lambda ctx: (ctx.high - ctx.low) / (ctx.close.shift(1) + 1e-9),
+        lambda ctx: (ctx.high - ctx.low) / (ctx.pre_close + 1e-9),
     )
     add(
         "CLOSE_POSITION",

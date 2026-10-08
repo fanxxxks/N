@@ -1527,3 +1527,106 @@ def test_p8_15_agents_md_marker_flipped():
     agents = agents_path.read_text(encoding="utf-8")
     assert "待 lifecycle v1 激活" not in agents
     assert "P8-15 已激活" in agents or "强制" in agents
+
+
+# -- durability (P1 fsync review) ---------------------------------------------
+#
+# Evidence files (runspec.json, artifacts/<id>.json, index.json,
+# lifecycle.jsonl, trials.jsonl, lineage.jsonl) must be flushed + fsync-ed
+# before the writing method returns: os.replace / append are atomic or
+# detectable, but NOT durable — a power loss could otherwise expose a
+# renamed index.json whose bytes never reached the disk.  Real persistence
+# needs a power cord; these tests pin that os.fsync is actually called on
+# every write path, with the exact per-operation counts.
+
+
+def test_run_store_evidence_writes_are_fsynced(tmp_path, monkeypatch):
+    import os
+
+    fsyncs: list[int] = []
+    monkeypatch.setattr(os, "fsync", lambda fd: fsyncs.append(fd))
+
+    store = RunStore(tmp_path / "store")
+    with store.open_run(_spec()) as handle:
+        # open_run: runspec.json + the initial index.json — one fsync each.
+        assert len(fsyncs) == 2
+        handle.write_artifact("note", {"hello": "world"})
+        # write_artifact: the artifact file + the re-registered index.
+        assert len(fsyncs) == 4
+        trial_id = handle.record_trial(
+            algorithm="trained", candidate="trained", seed=1
+        )
+        handle.complete_trial(trial_id, metrics={"m": 1.0})
+        # trials.jsonl: one fsync per appended ledger line.
+        assert len(fsyncs) == 6
+
+    # The spied fsync changed nothing on the semantic path: the index is
+    # loadable and the artifact re-verifies against its content hash.
+    reopened = store.attach_run(_spec(), handle.run_id)
+    assert reopened.read_artifact(
+        reopened.load_index()["artifacts"][0]["artifact_id"]
+    ) == {"hello": "world"}
+    reopened.close()
+
+
+def test_lifecycle_event_appends_are_fsynced(tmp_path, monkeypatch):
+    import os
+
+    from ashare_model import lifecycle
+
+    fsyncs: list[int] = []
+    monkeypatch.setattr(os, "fsync", lambda fd: fsyncs.append(fd))
+
+    handle, writer = _lifecycle_writer(RunStore(tmp_path / "store"), _spec())
+    # _lifecycle_writer's open_run already fsynced runspec.json + the
+    # initial index.json (2) — the spy starts counting from there.
+    base = len(fsyncs)
+    assert base == 2
+    writer.record_idea(LIFECYCLE_IDEA)
+    # record_idea: evidence artifact + index registration (2 durable file
+    # writes) + the fsynced lifecycle.jsonl append itself.
+    assert len(fsyncs) - base == 3
+    writer.lock_spec()
+    assert len(fsyncs) - base == 6  # same 3-write composition per transition
+    assert writer.current_state == "SPEC_LOCKED"
+    handle.close()
+    assert lifecycle.load_events(
+        handle.run_dir / run_store.LIFECYCLE_FILENAME,
+        expect_spec_id=handle.spec.spec_id,
+        expect_run_id=handle.run_id,
+    )  # the durable chain still reloads clean
+
+
+def test_observation_lineage_appends_are_fsynced(tmp_path, monkeypatch):
+    import os
+
+    from ashare_model.observation_lineage import (
+        ObservationLineageWriter,
+        load_lineage,
+    )
+    from test_gates import _d7_calendar, _d7_config
+
+    config = _d7_config(tmp_path)
+    _d7_calendar(config)
+
+    fsyncs: list[int] = []
+    monkeypatch.setattr(os, "fsync", lambda fd: fsyncs.append(fd))
+
+    lineage_path = tmp_path / "lineage.jsonl"
+    lineage = ObservationLineageWriter(lineage_path)
+    lineage.append(
+        dataset_id="ds-lineage",
+        sessions=["20240101", "20240102"],
+        manifest_hash="m1",
+        config=config,
+    )
+    lineage.append(
+        dataset_id="ds-lineage",
+        sessions=["20240108", "20240109", "20240110", "20240111", "20240112"],
+        manifest_hash="m2",
+        config=config,
+    )
+    # One fsync per appended lineage line — a window extension that
+    # returned is on disk (append frequency is one per data refresh).
+    assert len(fsyncs) == 2
+    assert len(load_lineage(lineage_path)) == 2

@@ -251,6 +251,73 @@ def test_n3_arm_rules_are_the_p37_authority():
 # --- N4/N5: the panel driver and the refusal path (mini e2e) -------------------
 
 
+def test_n4_missing_member_direction_fails_rows_never_defaults(
+    mini_env, gate_run_asof
+):
+    """P1 repair (p42 fail-closed parity with r02's _direction_or_failed):
+    when the config's baseline_signals omits an R03 member, every combo
+    row must FAIL with the explicit missing-direction error — the old
+    ``directions.get(name, 1)`` silently fabricated a +1 direction and
+    ran the whole panel (including the adjudicated equal-weight arm) on
+    the invented side."""
+    import yaml as _yaml
+
+    from ashare_data.config import (
+        make_backtest_config,
+        make_data_config,
+        make_model_config,
+        make_protocol_config,
+        make_reward_config,
+    )
+    from ashare_model.data_loader import AshareDataLoader
+    from ashare_model.r01_baseline import load_config_file, resolve_folds_for
+    from ashare_model.r03_combos import run_r03_panel
+    from test_p34_r01_baseline import _mini_dates
+
+    tmp_path, _data_config, cfg_path = mini_env
+    gate_run_asof(_mini_dates()[-1])
+    raw = _yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    # RSQ_60 dropped from the direction/fit evidence source.
+    raw["protocol"]["baseline_signals"] = ["MOMENTUM_20", "REVERSAL_60"]
+    cfg2 = tmp_path / "mini_r01_missing_member.yaml"
+    cfg2.write_text(_yaml.safe_dump(raw), encoding="utf-8")
+
+    raw2 = load_config_file(cfg2)
+    data_config = make_data_config(raw2, tmp_path)
+    model_config = make_model_config(raw2)
+    backtest_config = make_backtest_config(raw2)
+    reward_config = make_reward_config(raw2)
+    proto_cfg = make_protocol_config(raw2)
+    loader = AshareDataLoader(data_config, model_config)
+    loader.confirm_input_snapshot()
+    loader.load_data()
+    folds = resolve_folds_for(proto_cfg, loader)
+
+    rows, _fold_evidence = run_r03_panel(
+        loader, proto_cfg, folds, backtest_config, model_config,
+        reward_config,
+    )
+    combo_rows = [r for r in rows if "::combo:" in str(r["candidate"])]
+    assert combo_rows, "the panel must carry the combo rows"
+    for row in combo_rows:
+        assert row["failed"], row
+        assert (
+            "factor RSQ_60 missing from the direction evidence"
+            in str(row["failure_reason"])
+        ), row["failure_reason"]
+    # The two configured singles are still measured on the reference-cell
+    # direction path; only the fabricated-direction path is closed.
+    singles = {
+        str(r["candidate"])
+        for r in rows
+        if "::baseline:" in str(r["candidate"])
+    }
+    assert singles == {
+        "n10_m2500::baseline:MOMENTUM_20",
+        "n10_m2500::baseline:REVERSAL_60",
+    }
+
+
 def test_n5_contract_sha_mismatch_refused(mini_env, gate_run_asof):
     tmp_path, _data_config, cfg_path = mini_env
     from test_p34_r01_baseline import _mini_dates

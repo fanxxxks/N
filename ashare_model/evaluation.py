@@ -239,6 +239,7 @@ from .eval_artifacts import (
     build_result,
     universe_policy_payload,
 )
+from .claim_record import claim_record_stdout_lines
 from .eval_corrections import (
     deflated_sharpe,
     dsr_from_rows,
@@ -1035,6 +1036,11 @@ def main(argv=None) -> int:
                 f"max_t: observed={mt['observed_max_t']:.3f} "
                 f"p={mt['p_value']:.4f} significant_95={mt['significant_95']}"
             )
+        # WP17 W3 (FROZEN_17 §3.4): the qualification lines follow the
+        # max_t line on the user-visible statistical-conclusion surface —
+        # the descriptive selfcheck semantics below are unchanged.
+        for line in claim_record_stdout_lines(result.get("claim_record")):
+            print(line)
         if args.selfcheck and result["dsr"] and result["max_t"]:
             passed = (
                 result["dsr"]["dsr"] < 0.95

@@ -1,6 +1,46 @@
-"""Streamlit research and paper-trading dashboard."""
+"""Streamlit research and paper-trading dashboard.
+
+Launch from the repository root:
+
+    streamlit run dashboard/app.py
+
+``python dashboard/app.py`` and ``python -m dashboard.app`` execute the
+module without a Streamlit server ("bare mode" renders nothing), so they
+exit with a reminder pointing at the command above instead of failing on
+the package-relative imports (P1-3).
+"""
 
 from __future__ import annotations
+
+import sys
+
+if __name__ == "__main__" and "streamlit" not in sys.modules:
+    # P1-3: started without `streamlit run` (python dashboard/app.py,
+    # python -m dashboard.app). Two problems: a bare script has no parent
+    # package for the relative imports below, and Streamlit "bare mode"
+    # renders nothing anyway. Exit with the correct command instead of a
+    # cryptic "attempted relative import with no known parent package".
+    raise SystemExit(
+        "dashboard/app.py must be started through Streamlit from the "
+        "repository root:\n"
+        "    streamlit run dashboard/app.py\n"
+        "(executing it directly has no parent package for its relative "
+        "imports, and without the Streamlit server nothing renders)"
+    )
+
+if __name__ == "__main__" and not globals().get("__package__"):
+    # P1-3: `streamlit run dashboard/app.py` executes this file as a bare
+    # __main__ script — no parent package, so the relative imports below
+    # would raise ImportError. Adopt the package identity (PEP 366) and
+    # put the repository root on sys.path so `import dashboard` resolves.
+    from pathlib import Path as _Path
+
+    _repo_root = str(_Path(__file__).resolve().parents[1])
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+    import dashboard  # noqa: F401 — registers the package for the imports below
+
+    __package__ = "dashboard"
 
 import json
 from pathlib import Path

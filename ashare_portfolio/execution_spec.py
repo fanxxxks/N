@@ -27,7 +27,11 @@ from .rebalance import RebalancePolicy
 # last-target weights (an implicit daily zero-cost re-normalization) to
 # share-conserving drift between executions plus share-level execution
 # (lot-floor orders, full exits, cash + fees reconciliation identity).
-EXECUTION_SPEC_VERSION = 4
+# Bumped 4 -> 5 — the execution grain (``lot_size``) joined the provenance
+# field set and every execution path (engine, paper sim, golden matcher)
+# now reads it from the configuration instead of hardcoding 100; v4
+# provenance blocks recorded without lot_size stay legacy by version.
+EXECUTION_SPEC_VERSION = 5
 
 _PORTFOLIO_CONFIG_FIELDS = (
     "rebalance_frequency",
@@ -40,6 +44,7 @@ _PORTFOLIO_CONFIG_FIELDS = (
     "turnover_budget",
     "turnover_allocation",
     "target_weight_change_threshold",
+    "lot_size",
     "initial_capital",
     "single_weight_cap",
     "commission_rate",
@@ -79,6 +84,10 @@ def portfolio_config_provenance(config) -> dict[str, Any]:
         "target_weight_change_threshold": float(
             config.target_weight_change_threshold
         ),
+        # The execution grain: two configs that differ only in lot_size
+        # execute different share books, so the provenance (and the golden
+        # external-weight check on it) must distinguish them.
+        "lot_size": int(getattr(config, "lot_size", 100)),
         "initial_capital": float(config.initial_capital),
         "single_weight_cap": float(config.single_weight_cap),
         "commission_rate": float(config.commission_rate),

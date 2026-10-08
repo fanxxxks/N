@@ -228,6 +228,23 @@ def _cached_or_fetch(
         return df
 
 
+def _read_cached_tolerant(path: Path) -> pd.DataFrame:
+    """Direct cache read that treats corruption as a miss (IP-05).
+
+    For the sync loops that read the parquet cache directly instead of
+    through :func:`_cached_or_fetch`: a corrupt file drives the same
+    refetch path as an absent one, so a single byte-corrupt cache can
+    never abort the whole sync ("failures are logged and skipped, never
+    fatal" — the sync contract).
+    """
+
+    try:
+        return _read_cached(path)
+    except FundamentalCacheMiss as exc:
+        logger.warning(f"cache unreadable, treating as miss: {exc}")
+        return pd.DataFrame()
+
+
 def _single_periods(rows: pd.DataFrame, col: str) -> list[tuple[str, float]]:
     """Convert cumulative YTD values to single-period values.
 
@@ -496,18 +513,6 @@ def _family5_asof_frames(
                 for back in range(4, -1, -1)
             ]
 
-        def _profit_ttm(end_date: str) -> list[tuple[str, str, float]]:
-            maps = _cum_maps(end_date, income_cum)
-
-            def combine(values):
-                return _ttm_at(maps, end_date, values and values[-1] and _segment_session(values))
-
-            return _merge_timelines(maps, combine)
-
-        def _segment_session(values):
-            return None
-
-        del _segment_session
         profit_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
         _cashflow_ttm_cache: dict[str, list[tuple[str, str, float]]] = {}
 
@@ -1058,7 +1063,7 @@ def sync_fundamentals(
         quarter_date = datetime.strptime(quarter, "%Y%m%d").date()
         announcing = (datetime.now().date() - quarter_date).days < _ANNOUNCING_WINDOW_DAYS
         path = _fundamental_cache_path(config, f"earnings_{quarter}")
-        df = pd.DataFrame() if announcing else _read_cached(path)
+        df = pd.DataFrame() if announcing else _read_cached_tolerant(path)
         if df.empty:
             try:
                 df = client.get_earnings_report(quarter)
@@ -1111,7 +1116,7 @@ def sync_fundamentals(
                 datetime.now().date() - quarter_date
             ).days < _ANNOUNCING_WINDOW_DAYS
             path = _fundamental_cache_path(config, f"{section}_{quarter}")
-            df = pd.DataFrame() if announcing else _read_cached(path)
+            df = pd.DataFrame() if announcing else _read_cached_tolerant(path)
             if df.empty:
                 try:
                     df = fetcher(quarter)

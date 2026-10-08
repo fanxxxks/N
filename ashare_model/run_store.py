@@ -40,8 +40,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
+from ashare_data.io_utils import durable_write_text
 from ashare_model.identity import canonical_json_strict, content_hash
 from ashare_model.ledger import ExperimentLedger
 from ashare_model.runspec import RunSpec, new_run_id
@@ -81,9 +81,12 @@ def _now() -> str:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid4().hex[:8]}")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    # Durability authority: the single write path for every evidence file
+    # this store publishes (runspec.json, artifacts/<id>.json, index.json).
+    # durable_write_text flushes + fsyncs the temp file BEFORE the
+    # os.replace, so a power loss can no longer expose a renamed file
+    # whose bytes never reached the disk (P1 fsync review).
+    durable_write_text(path, text)
 
 
 def write_runspec_once(run_dir: Path, spec: RunSpec) -> None:

@@ -227,6 +227,78 @@ def test_n1_compare_reports_four_error_families_within_bounds():
     assert verdict["verdict"] == "reliable", verdict["reasons"]
 
 
+def _market_with_adj_factor(n_dates: int = 10, factor=None):
+    """The ``_market`` fixture with an explicit adjusted-open axis.
+
+    ``factor`` (per-date) multiplies the nominal open into the adjusted
+    label basis, mimicking the 复权因子: the engine still executes on
+    the nominal open (lots, fees, cash) but accrues session returns on
+    the adjusted basis (backtest.py: ``target_ret`` from
+    ``adjusted_open``), so ``raw["adjusted_open"] != raw["open"]`` is
+    exactly the real-data corporate-action shape the shared fixture's
+    ``setdefault(adjusted_open, open)`` masks.
+    """
+    codes, dates, raw, signal = _market(n_dates=n_dates)
+    if factor is not None:
+        factor = np.asarray(factor, dtype=np.float64)
+        raw["adjusted_open"] = (
+            np.asarray(raw["open"], dtype=np.float64) * factor[None, :]
+        )
+    return codes, dates, raw, signal
+
+
+def test_n1_proxy_label_basis_is_the_adjusted_open_like_the_engine():
+    # A mid-window factor step is an ex-dividend/rights session: the
+    # nominal and adjusted open-to-open returns genuinely diverge there,
+    # so the proxy path must feed the engine's own label basis
+    # (adjusted open, p19 §2.3) — pre-fix it fed the nominal open, the
+    # two paths measured different returns on every corporate-action
+    # session (~the factor step apart, far beyond the daily_net bound)
+    # and the verdict failed conservative ("unreliable").
+    step = 0.15
+    factor = np.ones(10)
+    factor[5:] = 1.0 + step
+    codes, dates, raw, signal = _market_with_adj_factor(factor=factor)
+    # Fixture precondition: the two bases really do diverge at the step
+    # (without this the test would pass vacuously on the raw basis too).
+    bases = (
+        open_to_open_returns(np.asarray(raw["adjusted_open"], dtype=np.float64))
+        - open_to_open_returns(np.asarray(raw["open"], dtype=np.float64))
+    )
+    assert bases.max() > 0.5 * step
+    candidates = _fixed_candidates(len(codes), len(dates))
+    report = compare_candidate_parity(
+        candidates, raw, codes, dates,
+        universe_mask=np.ones(signal.shape, dtype=bool),
+        backtest_config=_cfg(),
+    )
+    assert report.bounds["daily_net"] < step / 10.0
+    for row in report.rows:
+        assert row.daily_net_error_max <= report.bounds["daily_net"], row
+    verdict = proxy_reliability_verdict(report)
+    assert verdict["verdict"] == "reliable", verdict["reasons"]
+
+
+def test_n1_constant_adj_factor_is_label_neutral_for_parity():
+    # A CONSTANT factor cancels in the open-to-open ratio, so adjusted
+    # and nominal returns coincide and parity holds regardless of the
+    # basis choice — the fix must therefore change nothing here (it
+    # targets only the genuine step divergence, not adjusted_open per se).
+    codes, dates, raw, signal = _market_with_adj_factor(
+        factor=np.full(10, 1.3)
+    )
+    candidates = _fixed_candidates(len(codes), len(dates))
+    report = compare_candidate_parity(
+        candidates, raw, codes, dates,
+        universe_mask=np.ones(signal.shape, dtype=bool),
+        backtest_config=_cfg(),
+    )
+    for row in report.rows:
+        assert row.daily_net_error_max <= report.bounds["daily_net"], row
+    verdict = proxy_reliability_verdict(report)
+    assert verdict["verdict"] == "reliable", verdict["reasons"]
+
+
 def test_n5_loader_wiring_runs_both_paths_on_one_slice(populated_db):
     from ashare_model.data_loader import AshareDataLoader
     from ashare_data.config import ModelConfig, ProtocolConfig

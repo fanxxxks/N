@@ -12,9 +12,12 @@ Prod:
 The simulation control endpoints (start/stop/reset, config update) are
 guarded by ``webapi.auth``: with ``config/.webapi_token`` present every
 mutating request must send its content as ``X-API-Token``; without the
-token file only loopback clients may mutate, so binding ``--host
-0.0.0.0`` without a token file refuses non-local control requests
-instead of exposing the paper account to the LAN.
+token file only requests that are loopback on both ends may mutate —
+loopback client address AND a loopback ``Host`` header (the Host check
+stops same-machine reverse proxies / ssh -L / VS Code port-forwards from
+relaying remote control requests as loopback ones).  Binding ``--host
+0.0.0.0`` without a token file therefore refuses non-local control
+requests instead of exposing the paper account to the LAN.
 """
 
 from __future__ import annotations

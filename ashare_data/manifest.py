@@ -961,10 +961,18 @@ def latest_manifest(db: AshareDB, config) -> DatasetManifest | None:
     publication = latest_publication(db, config)
     if publication is not None:
         return publication.manifest
-    rows = db.query(
-        f"SELECT manifest FROM {_MANIFEST_TABLE} "
-        "ORDER BY created_at DESC, dataset_id DESC LIMIT 1"
-    )
+    try:
+        rows = db.query(
+            f"SELECT manifest FROM {_MANIFEST_TABLE} "
+            "ORDER BY created_at DESC, dataset_id DESC LIMIT 1"
+        )
+    except duckdb.CatalogException:
+        # Same expected-absent convention as latest_publication above:
+        # pre-T1-01 databases have no dataset_manifest table, so the
+        # "or None when none exists" contract of resolve_dataset_id (and
+        # the CLI's null dataset_id degradation) holds — never a raw
+        # CatalogException.
+        return None
     if rows.empty:
         return None
     return DatasetManifest.from_dict(json.loads(str(rows.iloc[0]["manifest"])))

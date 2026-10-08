@@ -60,6 +60,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ashare_data.io_utils import durable_append_line
 from ashare_model import run_store
 from ashare_model.identity import canonical_json_strict, content_hash
 from ashare_model.run_store import (
@@ -1682,8 +1683,10 @@ class LifecycleWriter:
             reason=reason,
             ts=str(payload["ts"]),
         )
-        with open(self._path, "a", encoding="utf-8") as stream:
-            stream.write(_event_line(event) + "\n")
+        # Evidence durability (P1 fsync review): each lifecycle event line
+        # is flushed + fsynced before the writer returns (event frequency
+        # is a handful per run — per-line fsync is negligible).
+        durable_append_line(self._path, _event_line(event))
         self.events.append(event)
         return event
 

@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ashare_data.db import AshareDB
+from ashare_data.io_utils import durable_append_line
 from ashare_model.identity import canonical_json_strict, content_hash
 
 OBSERVATION_LINEAGE_VERSION = 1
@@ -278,7 +279,9 @@ class ObservationLineageWriter:
         line = canonical_json_strict(
             {**entry.payload(), "entry_hash": entry.entry_hash}
         )
-        with open(self.path, "a", encoding="utf-8") as stream:
-            stream.write(line + "\n")
+        # Evidence durability (P1 fsync review): one append per observation
+        # window extension (data-refresh frequency) — flush + fsync per
+        # line, so a returned append cannot vanish in a power loss.
+        durable_append_line(self.path, line)
         self.entries.append(entry)
         return entry

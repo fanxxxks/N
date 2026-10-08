@@ -714,14 +714,21 @@ def test_version_impact_table_bumps_are_in_place():
     from ashare_model.versions import PROTOCOL_VERSION
     from ashare_portfolio.execution_spec import EXECUTION_SPEC_VERSION
 
-    assert EXECUTION_SPEC_VERSION == 4  # p35 share-accounting (drifted non-due weights + share-level execution)
+    # p35 share-accounting (drifted non-due weights + share-level
+    # execution) bumped 3 -> 4; 4 -> 5 adds lot_size to the provenance
+    # field set and routes every execution path through the configured
+    # grain (§10.1 case 2: contract change, version bumped).
+    assert EXECUTION_SPEC_VERSION == 5
     # p21 §8 (APPROVED 2026-09-06): PROTOCOL 26 -> 27 (tier_set additive);
     # p40/p41 §4 (APPROVED 2026-09-19): 27 -> 28 -> 29 (statistical
     # resampling semantics, then candidate-evidence binding).
     assert str(PROTOCOL_VERSION) == "29"
     # p17/D5 (t16 F1): bumped 2 -> 3 for the industry membership PIT
     # switch; p17/D6 bumps to 4 for the family-⑤ source switch.
-    assert FACTOR_COMPUTE_VERSION == 4  # t22 semantic fixes (covers D4/D5/D6 bases + t22 consumption fixes)
+    # 4 -> 5: AMPLITUDE now consumes ``pre_close`` (the stock's own previous
+    # close) instead of the stock-axis ``close.shift(1)`` — same raw nominal
+    # price family, corrected axis (P0 fix, 2026-09-21 review).
+    assert FACTOR_COMPUTE_VERSION == 5  # t22 bases + v5 AMPLITUDE prev-close fix
     assert TARGET_CONTRACT_VERSION == 2
     assert BARE_FACTOR_BACKTEST_VERSION == 4
     assert P3_MEASUREMENT_VERSION == 4

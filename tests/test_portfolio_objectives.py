@@ -401,3 +401,143 @@ def test_selector_legacy_mode_unchanged():
                capacity=0.1, val_icir=0.5)
     result = CandidateSelector().select([a, b])
     assert result.selected == b  # scalar val_reward/val_icir order
+
+
+# --- P1-1: incrementally maintained first front -----------------------------
+
+def _synthetic(idx, rng, *, eligible=True):
+    """A synthetic measurable eligible candidate with a unique key."""
+
+    return CandidateScore(
+        tokens=(idx,),
+        candidate_id=f"synthetic:{idx}",
+        formula_text=f"f{idx}",
+        source="test",
+        direction=1,
+        val_reward=float(rng.normal(0.0, 1.0)),
+        val_icir=float(rng.normal(0.0, 1.0)),
+        train_reward=float(rng.normal(0.0, 1.0)),
+        train_icir=float(rng.normal(0.0, 1.0)),
+        complexity_penalty=0.0,
+        complexity_cost=1.0,
+        eligible=eligible,
+        rejection_reasons=() if eligible else ("val_icir_below_minimum",),
+        active_ir=float(rng.uniform(-2.0, 2.0)),
+        risk_exposure=float(rng.uniform(0.1, 3.0)),
+        average_turnover=float(rng.uniform(0.1, 3.0)),
+        capacity_utilization=float(rng.uniform(0.1, 3.0)),
+    )
+
+
+def test_incremental_front_matches_one_shot_sort_on_random_batches():
+    """P1-1 equivalence pin: 2000 random candidates arriving in 8 batches
+    (the RL arrival pattern).  The incrementally maintained first front
+    and the selection winner must equal the one-shot full sort over the
+    whole accumulated set — the incremental path exists to remove the
+    per-step quadratic re-sort, not to change any elite decision."""
+
+    from ashare_model.pareto import IncrementalNonDominatedFront
+
+    rng = np.random.default_rng(20260921)
+    scores = [_synthetic(i, rng) for i in range(2000)]
+    batches = [scores[i : i + 250] for i in range(0, len(scores), 250)]
+    assert len(batches) == 8
+
+    front = IncrementalNonDominatedFront(PARETO)
+    for batch in batches:
+        for score in batch:
+            front.add(score.deterministic_key, score)
+
+    one_shot = nondominated_fronts(scores, PARETO)[0]
+    assert {s.deterministic_key for s in front.members()} == {
+        s.deterministic_key for s in one_shot
+    }
+    winner = min(front.members(), key=CandidateSelector._pareto_tie_key)
+    assert winner == CandidateSelector().select(
+        scores, pareto_objectives=PARETO
+    ).selected
+
+
+def test_incremental_front_classifies_unmeasurable_like_one_shot():
+    """NaN objectives are never admitted to the front (the one-shot sort
+    sends them to the last front); a pool of ONLY unmeasurable items
+    keeps the front empty so the selector-side tie-break path decides."""
+
+    from ashare_model.pareto import IncrementalNonDominatedFront
+
+    rng = np.random.default_rng(5)
+    measurable = [_synthetic(i, rng) for i in range(20)]
+    unmeasurable = [
+        _synthetic(100 + i, rng) for i in range(5)
+    ]
+    unmeasurable = [
+        score.__class__(**{**score.__dict__, "active_ir": float("nan")})
+        for score in unmeasurable
+    ]
+
+    front = IncrementalNonDominatedFront(PARETO)
+    for score in measurable + unmeasurable:
+        status = front.add(score.deterministic_key, score)
+        if score in unmeasurable:
+            assert status == "unmeasurable"
+    one_shot = nondominated_fronts(measurable + unmeasurable, PARETO)
+    assert len(one_shot[-1]) == len(unmeasurable)
+    assert {s.deterministic_key for s in front.members()} == {
+        s.deterministic_key for s in one_shot[0]
+    }
+
+    empty_front = IncrementalNonDominatedFront(PARETO)
+    for score in unmeasurable:
+        assert empty_front.add(score.deterministic_key, score) == "unmeasurable"
+    assert empty_front.members() == []
+    assert len(nondominated_fronts(unmeasurable, PARETO)) == 1
+
+
+def test_incremental_front_replacement_sets_dirty():
+    """Re-adding a key with a changed item asks the caller for a full
+    rebuild (the incremental structure cannot replay a front member
+    leaving); a fresh key never does."""
+
+    from ashare_model.pareto import IncrementalNonDominatedFront
+
+    front = IncrementalNonDominatedFront(PARETO)
+    a = _synthetic(1, np.random.default_rng(1))
+    b = _synthetic(1, np.random.default_rng(2))
+    front.add(a.deterministic_key, a)
+    assert not front.dirty
+    front.add(b.deterministic_key, b)
+    assert front.dirty
+    front.reset()
+    assert not front.dirty and len(front) == 0
+
+
+def test_incremental_front_comparisons_follow_batch_not_pool():
+    """P1-1 performance pin, by comparison count instead of wall-clock
+    (CI-stable): with a totally ordered arrival stream the first front
+    stays a single member, so the domination comparisons per batch stay
+    proportional to the batch size — not to the accumulated pool the
+    one-shot sort re-scans quadratically on every step."""
+
+    from ashare_model.pareto import IncrementalNonDominatedFront
+
+    rng = np.random.default_rng(7)
+    objectives = [("a", 1), ("b", 1)]
+    front = IncrementalNonDominatedFront(objectives)
+    total = 0
+    for _ in range(40):  # 40 batches x 250 = 10,000 accumulated
+        batch = [
+            {"a": float(rng.uniform(0.0, 1.0)), "b": 0.5}
+            for _ in range(250)
+        ]
+        before = front.dominance_comparisons
+        for idx, item in enumerate(batch):
+            front.add((total, idx), item)
+        total += len(batch)
+        # Front size is 1 throughout: each arrival costs at most one
+        # domination check plus one removal check.
+        assert len(front) == 1
+        assert front.dominance_comparisons - before <= 3 * len(batch) + 3
+    assert total == 10_000
+    # Total work stayed linear in the arrivals although the pool grew to
+    # 10k — the per-step cost is O(batch x front), never O(pool^2).
+    assert front.dominance_comparisons <= 3 * total + 40 * 3

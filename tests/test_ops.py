@@ -241,6 +241,110 @@ def test_corr20_respects_trailing_window():
     assert torch.allclose(out[:, -1], torch.ones(1), atol=1e-5)
 
 
+def test_corr20_single_nan_affects_only_windows_containing_it():
+    """P1-B: _ts_corr must be NaN-aware like every other windowed reducer.
+    A single NaN at position k poisons exactly the d windows that contain
+    it; the earlier windows are untouched and the later windows RECOVER to
+    the clean baseline.  The old bare-cumsum implementation poisoned every
+    prefix sum after the NaN, so the whole tail went NaN (and the VM's
+    nan_to_num then flattened it to the neutral 0)."""
+    torch.manual_seed(43)
+    b, t, d, k = 3, 60, 20, 30
+    x = torch.randn(b, t)
+    y = torch.randn(b, t)
+    base = _op("CORR20")(x, y)
+
+    xn = x.clone()
+    xn[:, k] = float("nan")
+    out = _op("CORR20")(xn, y)
+    assert torch.isfinite(out).all(), "a single NaN must not produce NaN output"
+    # Windows before the NaN are identical to the baseline.
+    assert torch.allclose(out[:, :k], base[:, :k], atol=1e-6)
+    # Windows containing the NaN change (one fewer observation).
+    assert not torch.allclose(out[:, k : k + d], base[:, k : k + d], atol=1e-6)
+    # Once the NaN leaves the window the output recovers (to float32
+    # prefix-sum rounding: the masked cell cancels in the window
+    # difference, so this is numerical -- not bitwise -- recovery).
+    assert torch.allclose(out[:, k + d :], base[:, k + d :], atol=1e-6)
+
+    # A NaN in y behaves identically (pairwise: either side excludes the
+    # observation), and an all-NaN input yields the neutral 0 everywhere.
+    yn = y.clone()
+    yn[:, k] = float("nan")
+    out_yn = _op("CORR20")(x, yn)
+    assert torch.isfinite(out_yn).all()
+    assert torch.allclose(out_yn[:, k + d :], base[:, k + d :], atol=1e-6)
+    all_nan = _op("CORR20")(torch.full((1, 10), float("nan")), torch.randn(1, 10))
+    assert torch.allclose(all_nan, torch.zeros_like(all_nan), atol=1e-7)
+
+
+def test_corr_matches_pandas_rolling_corr_on_clean_data():
+    # P1-B: on finite inputs the NaN-aware rewrite is numerically the same
+    # operator as before -- the pandas rolling-corr reference agrees on
+    # every full window (leading expanding windows and pandas' NaN warm-up
+    # are excluded from the comparison).
+    import pandas as pd
+
+    torch.manual_seed(47)
+    x = torch.randn(4, 80)
+    y = torch.randn(4, 80)
+    mine = _ts_corr(x, y, 20)
+    for i in range(x.shape[0]):
+        ref = (
+            pd.Series(x[i].numpy())
+            .rolling(20)
+            .corr(pd.Series(y[i].numpy()))
+            .to_numpy()
+        )
+        assert np.allclose(mine[i, 19:].numpy(), ref[19:], atol=1e-5), i
+
+
+def test_corr_pairwise_nan_matches_per_window_reference():
+    """P1-B oracle: the pairwise-complete (pd rolling corr) semantics --
+    each trailing window uses only the positions where BOTH inputs are
+    finite; a window with < 2 usable observations or zero variance yields
+    the neutral 0."""
+    import numpy as np
+
+    def reference(xs: np.ndarray, ys: np.ndarray, d: int) -> np.ndarray:
+        out = np.zeros(len(xs))
+        for i in range(len(xs)):
+            start = max(0, i - d + 1)
+            wx, wy = xs[start : i + 1], ys[start : i + 1]
+            pair = ~(np.isnan(wx) | np.isnan(wy))
+            if int(pair.sum()) < 2:
+                continue
+            a, b = wx[pair], wy[pair]
+            denom = (a.var() * b.var()) ** 0.5
+            if denom > 1e-12:
+                out[i] = ((a * b).mean() - a.mean() * b.mean()) / denom
+        return out
+
+    torch.manual_seed(53)
+    x = torch.randn(2, 50)
+    y = torch.randn(2, 50)
+    # Scattered NaNs in BOTH inputs (disjoint positions) plus a leading
+    # NaN block, so windows exercise n < d, n = 0-adjacent and recovery.
+    x[0, 10] = float("nan")
+    y[0, 20] = float("nan")
+    x[1, 5:9] = float("nan")
+    y[1, 40] = float("nan")
+    x_lead = torch.cat([torch.full((1, 3), float("nan")), x[:1, 3:]], dim=1)
+    y_lead = torch.cat([torch.full((1, 3), float("nan")), y[:1, 3:]], dim=1)
+
+    mine = _ts_corr(x, y, 10)
+    for i in range(x.shape[0]):
+        assert np.allclose(
+            mine[i].numpy(), reference(x[i].numpy(), y[i].numpy(), 10), atol=1e-5
+        ), i
+    mine_lead = _ts_corr(x_lead, y_lead, 10)
+    assert np.allclose(
+        mine_lead[0].numpy(),
+        reference(x_lead[0].numpy(), y_lead[0].numpy(), 10),
+        atol=1e-5,
+    )
+
+
 def test_downvol20_only_penalizes_negative_values():
     x = torch.cat([torch.full((1, 10), 1.0), torch.full((1, 10), -2.0)], dim=1)
     out = _op("DOWNVOL20")(x)

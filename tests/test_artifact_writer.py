@@ -222,12 +222,15 @@ def test_schema_version_matrix_is_pinned():
     # legacy set. Deliberate literal pins: a generation bump must stay an
     # explicit, reviewed act, and the legacy tuple only ever grows (shrinking
     # it would silently reclassify written artifacts).
-    assert ARTIFACT_SCHEMA_VERSION == 3
-    assert LEGACY_SCHEMA_VERSIONS == (1, 2)
+    # WP17 (FROZEN_17 §7.1): 3 -> 4 (additive `claim_record`), and
+    # generation 3 joins the legacy set by the same growth rule.
+    assert ARTIFACT_SCHEMA_VERSION == 4
+    assert LEGACY_SCHEMA_VERSIONS == (1, 2, 3)
     assert classify_schema_version({"artifact_schema_version": 1}) == "legacy"
     assert classify_schema_version({"artifact_schema_version": 2}) == "legacy"
-    assert classify_schema_version({"artifact_schema_version": 3}) == "current"
-    assert classify_schema_version({"artifact_schema_version": 4}) == "unknown"
+    assert classify_schema_version({"artifact_schema_version": 3}) == "legacy"
+    assert classify_schema_version({"artifact_schema_version": 4}) == "current"
+    assert classify_schema_version({"artifact_schema_version": 5}) == "unknown"
 
 
 def test_candidate_id_is_deterministic_content_identity():
@@ -434,8 +437,10 @@ def test_v1_payload_is_legacy_audit_only(tmp_path):
 
 
 def test_unknown_future_version_rejected(tmp_path):
+    # WP17 (FROZEN_17 §7.1): after the 3 -> 4 bump (with generation 3
+    # joining the legacy set), the not-yet-written generation is 5.
     path = tmp_path / "strategy.json"
-    path.write_text(json.dumps({"artifact_schema_version": 3}), encoding="utf-8")
+    path.write_text(json.dumps({"artifact_schema_version": 5}), encoding="utf-8")
     with pytest.raises(ArtifactSchemaError):
         read_boundary_artifact(path, model_cls=StrategyArtifact, formal=False)
     with pytest.raises(ArtifactSchemaError):

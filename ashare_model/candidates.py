@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import math
-from typing import Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
 
@@ -387,6 +387,7 @@ class CandidateScorer:
         adv: np.ndarray | None = None,
         realized_ret: np.ndarray | None = None,
         rebalance_mask: np.ndarray | None = None,
+        oriented_evidence_out: list[dict[str, Any] | None] | None = None,
     ) -> list[CandidateScore]:
         """Score a batch of candidates under one PIT eligibility mask.
 
@@ -414,6 +415,20 @@ class CandidateScorer:
         uniform window semantics.  The near-constant rejection scans the
         same window: a formula constant on the learning window carries no
         gradient signal even if it varies on the validation tail.
+
+        ``oriented_evidence_out`` (16-C / p54): when a (empty) list is
+        passed, it is extended with one row per input spec, aligned with
+        the returned scores, carrying BOTH fixed orientations' raw batch
+        numbers (``val_reward_plus/minus``, ``val_icir_plus/minus``,
+        ``train_reward_plus/minus``, ``train_icir_plus/minus``,
+        ``objectives_plus/minus`` — the ``[B, 8]`` rows stored whole) as
+        they came out of the ONE interleaved ``reward_function`` batch of
+        this call (plus = ``2k``, minus = ``2k + 1``), or
+        ``rejected_reason`` for candidates that never entered the batch.
+        This is the single sanctioned source of both-direction evidence
+        (FROZEN_C §0.3 red line 1 / §1): the numbers must come from the
+        same scoring pass that decided the direction, never from a second
+        auto-selecting scorer call.  Selection behavior is unchanged.
         """
 
         if len(specs) != len(signals):
@@ -440,12 +455,23 @@ class CandidateScorer:
         results: list[CandidateScore | None] = [None] * len(specs)
         batch_indices: list[int] = []
         batch_signals: list[np.ndarray] = []
+        oriented_rows: list[dict[str, Any] | None] | None = (
+            [None] * len(specs) if oriented_evidence_out is not None else None
+        )
+
+        def _record_oriented(index: int, row: dict[str, Any]) -> None:
+            if oriented_rows is not None:
+                oriented_rows[index] = row
+
         for index, (spec, signal, formula_is_valid) in enumerate(
             zip(specs, signals, valid_flags)
         ):
             if not formula_is_valid or signal is None:
                 results[index] = self._rejected_score(
                     spec, "invalid_formula", self.reward_config.reward_clip_low
+                )
+                _record_oriented(
+                    index, self._rejected_oriented_row("invalid_formula")
                 )
                 continue
             array = np.asarray(signal, dtype=np.float64)
@@ -461,6 +487,10 @@ class CandidateScorer:
                     spec,
                     "constant_or_near_constant_signal",
                     self.reward_config.bad_reward,
+                )
+                _record_oriented(
+                    index,
+                    self._rejected_oriented_row("constant_or_near_constant_signal"),
                 )
                 continue
             batch_indices.append(index)
@@ -532,6 +562,32 @@ class CandidateScorer:
                     universe_mask,
                 )
                 chosen = plus if direction == 1 else minus
+                # 16-C (p54): both fixed orientations' raw numbers from
+                # THIS batch, for the evidence layer downstream.  No
+                # selection happens here and nothing is recomputed —
+                # FROZEN_C §1's source constraint.
+                if oriented_rows is not None:
+                    oriented_rows[result_index] = {
+                        "rejected_reason": None,
+                        "val_reward_plus": float(val_rewards[plus]),
+                        "val_reward_minus": float(val_rewards[minus]),
+                        "val_icir_plus": float(val_icir[plus]),
+                        "val_icir_minus": float(val_icir[minus]),
+                        "train_reward_plus": float(rewards[plus]),
+                        "train_reward_minus": float(rewards[minus]),
+                        "train_icir_plus": float(icir[plus]),
+                        "train_icir_minus": float(icir[minus]),
+                        "objectives_plus": (
+                            [float(v) for v in objectives[plus]]
+                            if objectives is not None
+                            else None
+                        ),
+                        "objectives_minus": (
+                            [float(v) for v in objectives[minus]]
+                            if objectives is not None
+                            else None
+                        ),
+                    }
                 penalty = self.complexity_penalty(spec)
                 cost = self.complexity_cost(spec)
                 if objectives is not None:
@@ -605,7 +661,31 @@ class CandidateScorer:
                     )
                 results[result_index] = self._apply_eligibility(score)
 
+        if oriented_evidence_out is not None:
+            if oriented_rows is None:  # pragma: no cover - defensive
+                raise RuntimeError("oriented evidence rows were not collected")
+            oriented_evidence_out.extend(oriented_rows)
         return [score for score in results if score is not None]
+
+    @staticmethod
+    def _rejected_oriented_row(reason: str) -> dict[str, Any]:
+        """The 16-C oriented-evidence row of a candidate that never
+        entered a reward batch (numbers stay absent — ``None`` — rather
+        than fabricated)."""
+
+        return {
+            "rejected_reason": reason,
+            "val_reward_plus": None,
+            "val_reward_minus": None,
+            "val_icir_plus": None,
+            "val_icir_minus": None,
+            "train_reward_plus": None,
+            "train_reward_minus": None,
+            "train_icir_plus": None,
+            "train_icir_minus": None,
+            "objectives_plus": None,
+            "objectives_minus": None,
+        }
 
     def _apply_eligibility(self, score: CandidateScore) -> CandidateScore:
         reasons: list[str] = list(score.rejection_reasons)

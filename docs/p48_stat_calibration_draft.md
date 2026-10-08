@@ -125,3 +125,34 @@ diff-check；全量 `-n auto`（对账口径同前）。重校准为独立验收
 - 任何场景 `unreliable_at_nominal` → 如实记录并停在该结论，**不修
   方法不放宽判据**（修复属下一契约）。
 - 单测若迫使统计实现改动才能通过 → 停止回契约。
+
+---
+
+## 附录：勘误 2 与 W5 功效尺度标注（WP17 追加，2026-09-23）
+
+本节为**追加面**（冻结文档只读、勘误只追加；依据 `reports/wp17/FROZEN_17.md`）。
+
+**勘误 2（§2 B4 `calibrated` 分支的正向标签措辞）**：正向标签语义改为
+"未检出与名义水平的显著偏离（CI 包含 5%）——支持未拒绝，不构成误报率
+≤5% 的验证"。理由：CI 包含 5% 只表示未检出与 5% 的显著偏离，例
+[4.6%, 7.5%] 同时容许高于 5%；CI 与检验的对应只支持拒绝/未拒绝，不自动
+验证上限。**判定表四分支不变**（本勘误只改措辞，不改判定）；代码落点为
+`stat_calibration.calibration_verdict` 的 `calibrated` 分支。本文件 §2 B4
+判定表、仓外 `reports/p48/calibration_report.json` 的 claim 串与测量日志
+§2 表均为冻结历史记录，原样保留。
+
+**W5 功效尺度不可外推标注（逐字）**：
+
+> power_sr05/power_sr025 不可外推到任务尺度：日 Sharpe 0.5/0.25 简单年化
+> ≈ 7.94/3.97（×√252），按 scale=0.01 折算即 126%/63% 年化相对超额，为任务尺度
+> （<1% 年化相对超额；task_scale_excess_1pct 植入 sr=1/252≈0.00397，年化
+> Sharpe 1/√252≈0.063）的 126 倍/63 倍。在这两点测得的检测率（100%/93%）对
+> 任务尺度的检测能力不作任何声明；在 task_scale_excess_1pct 依 WP17 W6 协议
+> 校准之前，任务尺度不作任何功效声明。
+
+`task_scale_excess_1pct` 已登记入 `SCENARIO_SPECS`（kind=power、k=8、n=250、
+sr=1/252、scale=0.01、task_scale=True，note=上述英文串），**本包未运行**
+（WP17 红线 1：不启动任何新校准）。该场景无证据行，readiness 永远是
+unlisted/uncalibrated → "无法推断"；将来运行须走 W6 协议（episode purpose
+可为 scenario_extension）。种子切片约束：场景名排序在 `short_window_30d`
+之后（slice 970000），既有 7 场景的 seed_start 不动。

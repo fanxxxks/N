@@ -259,6 +259,7 @@ def test_cli_purge_writes_audit_artifact(tmp_path: Path):
         encoding="utf-8",
     )
     audit_path = tmp_path / "fundamental_scope.json"
+    backup_dir = tmp_path / "purge_backups"
     result = subprocess.run(
         [
             sys.executable,
@@ -268,6 +269,8 @@ def test_cli_purge_writes_audit_artifact(tmp_path: Path):
             "--purge",
             "--output",
             str(audit_path),
+            "--backup-dir",
+            str(backup_dir),
         ],
         capture_output=True,
         text=True,
@@ -282,6 +285,18 @@ def test_cli_purge_writes_audit_artifact(tmp_path: Path):
     assert payload["stocks_purge"] == {
         "removed_rows": 1, "rows_before": 2, "rows_after": 1,
     }
+    # P2 review follow-up: --purge backs up the deleted rows first.
+    backups = list(backup_dir.glob("fundamental_purge_backup_*.json"))
+    assert len(backups) == 1
+    backup_payload = _json.loads(backups[0].read_text(encoding="utf-8"))
+    backup_fund_codes = {
+        row["ts_code"] for row in backup_payload["fundamental_pit"]["rows"]
+    }
+    backup_stock_codes = {
+        row["ts_code"] for row in backup_payload["stocks"]["rows"]
+    }
+    assert backup_fund_codes == {"430047.BJ"}
+    assert backup_stock_codes == {"900935.SH"}
     with AshareDB(cfg.duckdb_path) as check:
         remaining = {
             str(r[0])

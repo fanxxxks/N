@@ -182,9 +182,15 @@ def _artifact():
 
 
 def _significance_gate(artifact):
-    from test_promotion import _verdict
+    # WP17 re-anchor (FROZEN_17 §7.2): G2's positive control now needs
+    # the calibration-qualification layer — the helper injects the same
+    # in-memory evidence registry as test_promotion._calibration_evidence
+    # over the (re-anchored) in-domain fixture (n=250, k=8, n_perms=999),
+    # preserving this module's "numeric adjudication positive control"
+    # purpose.
+    from test_promotion import _calibration_evidence, _verdict
 
-    verdict = _verdict(artifact)
+    verdict = _verdict(artifact, calibration_evidence=_calibration_evidence())
     return verdict["gates"]["significance"]
 
 
@@ -403,7 +409,15 @@ def test_b9_seed_class_by_candidate_family():
 
 
 def _deterministic_artifact():
-    """A strong artifact whose top trial is a deterministic baseline arm."""
+    """A strong artifact whose top trial is a deterministic baseline arm.
+
+    WP17 re-anchor (FROZEN_17 §3.1 + the §7.2 row-5 pattern): the G2
+    positive path now also needs the calibration-qualification layer,
+    so the fixture sits at the calibrated operating point — 8 current
+    trials (the deterministic baseline arm plus 7 deterministic noise
+    pool arms, all seed=None), a 250-common-date stitched axis
+    (2 folds x 125 sessions) and max_t_perms=999; _significance_gate
+    injects the in-memory covering evidence registry."""
 
     from ashare_data.config import FoldConfig, ProtocolConfig, TierConfig
     from ashare_model.evaluation import build_result
@@ -415,7 +429,7 @@ def _deterministic_artifact():
         ("2026-01-01", "2026-06-30"),
         ("2026-06-30", "2026-12-31"),
     ]:
-        daily = [0.004 + x for x in rng.normal(0.0, 0.001, 250)]
+        daily = [0.004 + x for x in rng.normal(0.0, 0.001, 125)]
         rows.append(
             _row(
                 "baseline:RET_1",
@@ -432,6 +446,28 @@ def _deterministic_artifact():
                 capacity_utilization=0.05,
             )
         )
+    for i in range(7):  # the multiplicity pool (deterministic noise arms)
+        for train_end, test_end in [
+            ("2026-01-01", "2026-06-30"),
+            ("2026-06-30", "2026-12-31"),
+        ]:
+            daily = [x for x in rng.normal(0.0, 0.001, 125)]
+            rows.append(
+                _row(
+                    f"baseline:pool_{i}",
+                    None,
+                    train_end,
+                    test_end,
+                    daily=daily,
+                    formula_text="RET_1",
+                    eligible=True,
+                    rejection_reasons=[],
+                    direction=1,
+                    formula=None,
+                    average_turnover=0.05,
+                    capacity_utilization=0.05,
+                )
+            )
     proto = ProtocolConfig(
         folds=[
             FoldConfig("2026-01-01", "2026-06-30"),
@@ -447,6 +483,7 @@ def _deterministic_artifact():
         run_id="b" * 32,
         data_end_date="2026-12-31",
         dataset_id="ds-current",
+        max_t_perms=999,
     )
 
 

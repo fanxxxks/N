@@ -31,7 +31,7 @@ import enum
 
 from .feature_registry import PitLevel, pit_level_of
 from .ir import decode, feature_names as ir_feature_names
-from .vocab import FEATURE_NAMES, GRAMMAR_V5_VOCAB
+from .vocab import FEATURE_NAMES, GRAMMAR_VOCAB_BY_VERSION
 
 # Bump when the tier schema, the mapping or the time rules change.
 # v2 (p17 §9, D6): the fundamentals B-rule switches to revision-tracking
@@ -100,24 +100,39 @@ def tier_features(tiers: tuple[DataTier, ...]) -> list[str]:
 def _grammar_vocab(grammar_version) -> FormulaVocab | None:
     """Decode-reference vocabulary for a declared artifact grammar.
 
-    ``None`` (the live vocabulary) for every generation except grammar 5:
-    grammar-6 appended the family-⑤ features to the feature block and
-    shifted the operator/EOS ids, so grammar-5-era bare token lists decode
-    only against the frozen grammar-5 layout (t46 Plan A).
+    Consumes the single grammar -> vocabulary authority
+    (:data:`ashare_model.vocab.GRAMMAR_VOCAB_BY_VERSION`): every
+    superseded generation 2..8 decodes against its own FROZEN layout
+    (grammar 2/3 -> 62 features, 4/5 -> 73, 6/7 -> 77, 8 -> 81), the live
+    generation 9 maps to the live vocabulary (``None``, decode's default),
+    and a MISSING declaration also falls back to the live layout for
+    current-generation rows.  A declared but UNKNOWN generation raises
+    (fail-closed: silently decoding it against the live table is the t28
+    incident mechanism) -- the caller converts any raise into "no formula".
     """
 
     if grammar_version is None:
         return None
-    return GRAMMAR_V5_VOCAB if int(grammar_version) == 5 else None
+    try:
+        return GRAMMAR_VOCAB_BY_VERSION[int(grammar_version)]
+    except (KeyError, TypeError, ValueError):
+        raise ValueError(
+            f"unsupported grammar generation {grammar_version!r} for tier "
+            f"decoding (known generations: "
+            f"{', '.join(str(g) for g in sorted(GRAMMAR_VOCAB_BY_VERSION))})"
+        ) from None
 
 
 def formula_feature_names(tokens, grammar_version=None) -> list[str] | None:
     """Distinct feature names referenced by a formula's token list.
 
     ``grammar_version`` is the artifact-declared grammar generation: bare
-    grammar-5 token lists decode against the frozen grammar-5 layout
-    (t46 Plan A) instead of the shifted live vocabulary.  Returns ``None``
-    when the token list is not a decodable formula.
+    token lists of a superseded generation decode against that
+    generation's frozen layout from the single authority
+    (:data:`ashare_model.vocab.GRAMMAR_VOCAB_BY_VERSION`) instead of the
+    shifted live vocabulary; a declared-but-unknown generation is
+    fail-closed rejected.  Returns ``None`` when the token list is not a
+    decodable formula.
     """
 
     try:

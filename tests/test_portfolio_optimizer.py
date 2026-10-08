@@ -82,6 +82,56 @@ def test_solution_reports_status_objective_and_diagnostics():
     assert sol.weights.shape == (4,)
 
 
+# --- solver-status verbatim passthrough and failure typing ------------------
+
+
+def test_optimal_inaccurate_status_is_reported_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A numerically degraded solve must stay visible: the solution's
+    status is the solver's verdict (``optimal_inaccurate``), never a
+    hardcoded ``"optimal"`` — the constructor records this status into its
+    diagnostics, which is the audit trail for trading on an untrusted
+    solution."""
+
+    import cvxpy as cp
+
+    def fake_solve(self, *args, **kwargs):
+        # ``Problem.status``/``value`` are read-only properties over the
+        # recorded solve result; set the backing attributes the way a real
+        # solve does.
+        self._status = "optimal_inaccurate"
+        self._value = 0.5
+        variable = self.variables()[0]
+        variable.value = np.full(variable.shape, 0.1)
+
+    monkeypatch.setattr(cp.Problem, "solve", fake_solve)
+    sol = _optimizer(single_weight_cap=0.5).solve(_alpha(), np.zeros(4))
+    assert sol.status == "optimal_inaccurate"
+    assert sol.weights.shape == (4,)
+    assert np.isfinite(sol.weights).all()
+
+
+def test_solver_error_is_converted_to_portfolio_optimization_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """``cp.error.SolverError`` is not a ``ValueError``: without the
+    conversion, callers that catch ``PortfolioOptimizationError`` would let
+    the cvxpy exception escape the portfolio layer."""
+
+    import cvxpy as cp
+
+    def raising_solve(self, *args, **kwargs):
+        raise cp.error.SolverError("OSQP failed to factorize")
+
+    monkeypatch.setattr(cp.Problem, "solve", raising_solve)
+    opt = _optimizer(single_weight_cap=0.5)
+    with pytest.raises(PortfolioOptimizationError, match="solver failed") as excinfo:
+        opt.solve(_alpha(), np.zeros(4))
+    # The original cvxpy error stays chained for the audit trail.
+    assert isinstance(excinfo.value.__cause__, cp.error.SolverError)
+
+
 # --- validation (fail fast) ------------------------------------------------
 
 

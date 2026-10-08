@@ -41,6 +41,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_db.py",
         "test_fundamental_scope.py",
         "test_fundamentals.py",
+        "test_import_pit_universe_script.py",
         "test_io_utils.py",
         "test_load_cache.py",
         "test_lock_files.py",
@@ -125,6 +126,23 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_p4_admission_diagnostics.py",
         "test_p4_elite_imitation.py",
         "test_p4_search_contract.py",
+        "test_p50_wp14_acceptance.py",
+        "test_p50_wp14_errata.py",
+        "test_p50_wp14_plan.py",
+        "test_p50_wp14_precheck.py",
+        "test_p50_wp14_reconcile.py",
+        "test_p50_wp14_status.py",
+        # p51 (WP15): the trade-group planner, funding scenario and
+        # execution-layer integration tests.
+        "test_p51_wp15_funding.py",
+        "test_p51_wp15_integration.py",
+        "test_p51_wp15_planner.py",
+        # p52 (WP16-A): the additive cash-fees identity of the basket
+        # reward simulation.
+        "test_p52_wp16a_cash_identity.py",
+        # p54 (WP16 16-C §4): the percentile-through-combo structural
+        # identity pins + the wp16c panel output contract.
+        "test_p54_wp16c_combo_invariance.py",
         "test_promotion.py",
         "test_regime.py",
         "test_research_doctor.py",
@@ -153,6 +171,23 @@ SHARDS: dict[str, tuple[str, ...]] = {
         "test_p44_priority_turnover_allocation.py",
         "test_p45_scoring_parity.py",
         "test_p46_direction_provenance.py",
+        # p53 (WP16-B): the p45 parity harness comparability contract.
+        "test_p53_wp16b_p45_parity.py",
+        # p54 (WP16 16-C): both-directions direction evidence from one
+        # scoring batch (direction/candidates/eval_search wiring).
+        "test_p54_wp16c_direction_evidence.py",
+        # p55 (WP17): the claim-qualification (calibration-evidence
+        # identity, fail-closed qualification, G2 fourth layer) tests.
+        "test_p55_wp17_claim_qualification.py",
+        # p56 (WP18): the signal-vs-account round — row-set
+        # materialization, hold mode, frozen-direction consumption and
+        # the five-question math.
+        "test_p56_wp18_round.py",
+        # p57 (WP18 closure): the closure package — E8 refusal-message
+        # disclosure, the WP17 claim audit + descriptive drill,
+        # method-revision zero-trigger and slow-cost-stress closure
+        # pins, audit-findings persistence.
+        "test_p57_wp18_closure.py",
         "test_p48_stat_calibration.py",
         "test_p49_slow_route.py",
         "test_portfolio_constructor.py",

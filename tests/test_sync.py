@@ -376,6 +376,121 @@ def test_backfill_member_bars_supplements_suspended_span(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# P0 correctness fixes (cross-source backfill): declared Baostock-primary
+# source priority, order-independent dedup, and the fetched-span counting
+# that stops both sources re-fetching the same date range.
+# ---------------------------------------------------------------------------
+
+
+def test_merge_member_bar_frames_baostock_priority_is_row_order_independent():
+    """P0: the merged backfill frame keeps the Baostock row for any
+    (ts_code, trade_date) both sources serve (it carries the exchange
+    pre_close), the main-provider row survives only on Baostock gaps, and
+    the normalized result is independent of the caller's row order.
+    Baostock's native YYYY-MM-DD dates must join the YYYYMMDD keys."""
+
+    eastmoney = pd.DataFrame(
+        [
+            {"ts_code": "600999.SH", "trade_date": "20240102", "open": 11.0, "high": 11.2, "low": 10.9, "close": 11.1, "volume": 10.0, "amount": 100.0},
+            {"ts_code": "600999.SH", "trade_date": "20240103", "open": 12.0, "high": 12.2, "low": 11.9, "close": 12.1, "volume": 10.0, "amount": 100.0},
+            {"ts_code": "600999.SH", "trade_date": "20240104", "open": 13.0, "high": 13.2, "low": 12.9, "close": 13.1, "volume": 10.0, "amount": 100.0},
+        ]
+    )
+    baostock = pd.DataFrame(
+        [
+            # Native Baostock date format; suspension row in the span.
+            {"ts_code": "600999.SH", "trade_date": "2024-01-03", "open": 22.0, "high": 22.0, "low": 22.0, "close": 22.1, "pre_close": 21.1, "volume": 0.0, "amount": 0.0},
+        ]
+    )
+    merged = sync._merge_member_bar_frames(eastmoney, baostock)
+    assert len(merged) == 3
+    by_date = merged.set_index("trade_date")
+    # Baostock wins the overlapping key (its close and zero volume);
+    # eastmoney fills only the dates Baostock lacks.
+    assert by_date.loc["20240103", "close"] == pytest.approx(22.1)
+    assert by_date.loc["20240103", "volume"] == pytest.approx(0.0)
+    assert by_date.loc["20240102", "close"] == pytest.approx(11.1)
+    assert by_date.loc["20240104", "close"] == pytest.approx(13.1)
+    # The winner is a declared decision, never the concat row order: two
+    # different input row orders normalize to identical bar rows
+    # (DataFrame.equals is NaN-aware for the missing turnover/adj cells).
+    rows_forward = sync._bar_rows(
+        sync._merge_member_bar_frames(eastmoney, baostock)
+    )
+    rows_reversed = sync._bar_rows(
+        sync._merge_member_bar_frames(
+            eastmoney.iloc[::-1].reset_index(drop=True),
+            baostock.iloc[::-1].reset_index(drop=True),
+        )
+    )
+    assert pd.DataFrame(rows_forward).equals(pd.DataFrame(rows_reversed))
+    # The pre_close-less source's row is backfilled with the stock's own
+    # previous close (22.1), never its own same-day open (13.0) — the old
+    # row-order ffill persisted pre_close=open here.
+    d4 = next(r for r in rows_forward if r["trade_date"] == "20240104")
+    assert d4["pre_close"] == pytest.approx(22.1)
+
+
+class _BaostockTrackingClient(_FakeClient):
+    """Records Baostock supplement invocations (the double-fetch guard)."""
+
+    def __init__(self, frames: dict[str, pd.DataFrame]):
+        super().__init__(frames)
+        self.baostock_calls: list[tuple[str, str, str]] = []
+
+    def _get_daily_bar_baostock(self, ts_code, start_date, end_date):
+        self.baostock_calls.append((ts_code, start_date, end_date))
+        return pd.DataFrame(
+            [
+                {
+                    "ts_code": ts_code,
+                    "trade_date": "20240102",
+                    "open": 4.64,
+                    "high": 4.64,
+                    "low": 4.64,
+                    "close": 4.64,
+                    "pre_close": 4.64,
+                    "volume": 0.0,
+                    "amount": 0.0,
+                    "turnover_rate": None,
+                }
+            ]
+        )
+
+
+def test_backfill_member_bars_counts_fetched_span_against_double_fetch(tmp_path: Path):
+    """P0: the audited-span coverage count must include the dates the main
+    fetch just returned (they are not upserted yet), so a span the main
+    provider already covers is NOT re-fetched from Baostock and the two
+    sources cannot double-book the same dates with an undefined dedup
+    winner (the old DB-only count saw zero and always re-fetched)."""
+
+    cfg = _seed_backfill_db(tmp_path)
+    bars = pd.DataFrame(
+        [
+            {
+                "ts_code": "600999.SH",
+                "trade_date": d,
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.05,
+                "volume": 10.0,
+                "amount": 100.0,
+            }
+            for d in ("20240102", "20240103")
+        ]
+    )
+    client = _BaostockTrackingClient({"600999.SH": bars})
+    result = sync.backfill_member_bars(cfg, client=client)
+    # The main fetch covered the audited span: no Baostock supplement.
+    assert client.baostock_calls == []
+    assert result["fetched_codes"] == 1
+    assert result["daily_rows"] == 2
+    assert result["remaining_zero_bar_intervals"] == 0
+
+
+# ---------------------------------------------------------------------------
 # IP-11 (03-F-07 / 03-F-08): sync log identity header, fixed summary key set,
 # and the loud process-exit guard.  Everything here is fixture-based — no
 # real (stateful) sync runs in tests.

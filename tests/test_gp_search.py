@@ -10,6 +10,8 @@ binds evaluation to the shared semantic budget.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -341,3 +343,153 @@ def test_run_gp_baseline_punitive_fitness_deterministic():
     )
     assert first.best_so_far == second.best_so_far
     assert first.consumed_budget == second.consumed_budget
+
+
+# --- review P0-1/P0-2: fitness validity and mutation parity -----------------
+#
+# Contract: the mu+lambda tournament compares only individuals whose
+# fitness is the reward of the tree they currently carry.  ``toolbox.clone``
+# deep-copies the parent's fitness and DEAP's cxOnePoint/mutUniform rewrite
+# the tree without clearing it, so varied offspring must be invalidated and
+# re-scored before selection (DEAP's eaSimple applies the same
+# vary-invalidate-evaluate-select ordering).  Mutation follows varAnd
+# semantics: the crossover coin is flipped per pair, the mutation coin
+# independently per child.
+
+
+def _install_selection_invariants(monkeypatch, evaluator) -> dict:
+    """Spy the evaluation and selection boundaries of a GP run.
+
+    ``evaluator.propose`` records every proposed token tuple and the
+    registered reward of its class; the patched ``selTournament`` then
+    asserts, per selection round, that every candidate (i) carries a valid
+    fitness, (ii) has a tree that was proposed in this run — unless the
+    budget gate stopped the generation's proposal loop, in which case the
+    skipped individual legitimately carries the punitive anchor — and
+    (iii) has a fitness equal to that tree's registered reward.  A varied
+    child holding its parent's cloned fitness violates (ii); a repaired
+    regenerated individual entering comparison unevaluated violates (i).
+    """
+
+    import ashare_model.gp_search as gp_module
+    from ashare_model.gp_search import tree_to_tokens
+
+    proposed: set[tuple[int, ...]] = set()
+    reward_of: dict[tuple[int, ...], float] = {}
+    real_propose = evaluator.propose
+
+    def propose_spy(tokens):
+        score, consumed = real_propose(tokens)
+        key = tuple(int(t) for t in tokens)
+        proposed.add(key)
+        cached = evaluator.score_of(tokens)
+        if cached is not None and math.isfinite(cached.val_reward):
+            reward_of[key] = float(cached.val_reward)
+        return score, consumed
+
+    evaluator.propose = propose_spy
+
+    real_select = gp_module.tools.selTournament
+    state = {"rounds": 0}
+
+    def select_spy(individuals, k, tournsize):
+        state["rounds"] += 1
+        for ind in individuals:
+            assert ind.fitness.valid, (
+                f"round {state['rounds']}: selection compared an individual "
+                "that was never evaluated"
+            )
+            tokens = tuple(int(t) for t in tree_to_tokens(ind, evaluator.vocab))
+            if tokens not in proposed:
+                # Only the budget gate may leave a tree unproposed: the
+                # proposal loop stopped early and the individual carries
+                # the punitive anchor.  Under an open budget this is a
+                # stale cloned fitness competing for its parent.
+                assert evaluator.budget_used >= evaluator.budget, (
+                    f"round {state['rounds']}: an individual whose tree was "
+                    "never proposed reached selection while the budget was "
+                    "still open (stale cloned fitness)"
+                )
+                continue
+            reward = reward_of.get(tokens)
+            if reward is not None:
+                assert ind.fitness.values == (reward,), (
+                    f"round {state['rounds']}: fitness {ind.fitness.values} "
+                    f"is not the reward {reward} of the individual's own tree"
+                )
+        return real_select(individuals, k, tournsize=tournsize)
+
+    monkeypatch.setattr(gp_module.tools, "selTournament", select_spy)
+    return state
+
+
+def test_varied_offspring_are_rescored_before_selection(monkeypatch):
+    # P0-1 regression: after crossover/mutation the child's fitness must be
+    # invalidated and re-evaluated — a child must never compete (let alone
+    # survive) on the score of the parent tree it no longer carries.
+    evaluator = _evaluator(budget=30)
+    state = _install_selection_invariants(monkeypatch, evaluator)
+    result = run_gp_baseline(
+        seed=3,
+        evaluator=evaluator,
+        max_formula_len=10,
+        pop_size=8,
+    )
+    assert state["rounds"] >= 1  # the run actually varied and selected
+    assert result.consumed_budget <= 30
+
+
+def test_repaired_oversize_children_are_rescored_before_selection(monkeypatch):
+    # P0-1 crash sub-path: a node cap of 2 (max_formula_len == 3) makes
+    # crossed/mutated children overflow on most draws, so the regeneration
+    # repair fires nearly every generation.  A regenerated individual has
+    # no fitness of its own; it must be scored before any tournament can
+    # compare it, never enter selection as an unparented worst.
+    evaluator = _evaluator(budget=60)
+    state = _install_selection_invariants(monkeypatch, evaluator)
+    result = run_gp_baseline(
+        seed=3,
+        evaluator=evaluator,
+        max_formula_len=3,
+    )
+    assert state["rounds"] >= 1
+    assert result.consumed_budget <= 60
+    assert result.selected is not None
+
+
+def test_mutation_applies_independently_to_both_children(monkeypatch):
+    # P0-2 regression: varAnd flips the mutation coin per child.  With
+    # mutpb == 1.0 every offspring of every generation is mutated, so the
+    # mutate call count equals rounds x pop_size; mutating only the
+    # even-position child halves it.
+    import ashare_model.gp_search as gp_module
+
+    real_mutate = gp_module.gp.mutUniform
+    mutate_calls = []
+
+    def mutate_spy(ind, *, expr, pset):
+        mutate_calls.append(1)
+        return real_mutate(ind, expr=expr, pset=pset)
+
+    monkeypatch.setattr(gp_module.gp, "mutUniform", mutate_spy)
+
+    real_select = gp_module.tools.selTournament
+    rounds = []
+
+    def select_spy(individuals, k, tournsize):
+        rounds.append(1)
+        return real_select(individuals, k, tournsize=tournsize)
+
+    monkeypatch.setattr(gp_module.tools, "selTournament", select_spy)
+
+    pop_size = 8
+    result = run_gp_baseline(
+        seed=3,
+        evaluator=_evaluator(budget=30),
+        max_formula_len=10,
+        pop_size=pop_size,
+        cxpb=0.0,
+        mutpb=1.0,
+    )
+    assert len(rounds) >= 1  # at least one vary-evaluate-select cycle
+    assert len(mutate_calls) == len(rounds) * pop_size

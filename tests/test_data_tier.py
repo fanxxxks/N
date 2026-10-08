@@ -200,6 +200,72 @@ def test_formula_grammar5_tokens_decode_via_declared_generation():
     assert formula_data_tier_report(tokens=tokens) is None
 
 
+def test_formula_grammar2_3_4_tier_decode_uses_frozen_layouts():
+    """P1-A: the data_tier decode consumes the SAME single grammar ->
+    vocabulary authority as vocab.resolve_formula_tokens (t57 F2裁定:
+    grammar 2/3 -> the 62-feature grammar-3 layout, 4/5 -> the 73-feature
+    grammar-5 layout).  The old data_tier branch fell back to the live
+    vocabulary for 2/3/4, misdecoding or rejecting legal legacy formulas:
+    under the grammar-3 layout token 63 is ADD and EOS is 102, while under
+    the live layout 63 is the feature IND_REL_RET_60 and 102 is TS_RANK5."""
+    # grammar 2/3: RET_1 RET_5 ADD EOS (operator offset 63, EOS 102).
+    g3_tokens = [1, 2, 63, 102]
+    for generation in (2, 3):
+        names = formula_feature_names(g3_tokens, grammar_version=generation)
+        assert names == ["RET_1", "RET_5"], generation
+        report = formula_data_tier_report(tokens=g3_tokens, grammar_version=generation)
+        assert report is not None and report["max_tier"] == "A", generation
+    # grammar 4 (shares grammar 5's feature block): IND_REL_RET_60 RET_1
+    # ADD EOS (operator offset 74, EOS 113).  The Tier-C IND_REL_ feature
+    # is only visible through the frozen layout; a live-layout decode
+    # reads token 74 as the feature CASHFLOW_QUALITY (Tier B) instead.
+    g4_tokens = [63, 1, 74, 113]
+    assert formula_feature_names(g4_tokens, grammar_version=4) == [
+        "IND_REL_RET_60",
+        "RET_1",
+    ]
+    report = formula_data_tier_report(tokens=g4_tokens, grammar_version=4)
+    assert report == {
+        "data_tier_version": DATA_TIER_VERSION,
+        "max_tier": "C",
+        "tiers_used": ["A", "C"],
+        "per_feature": {"IND_REL_RET_60": "C", "RET_1": "A"},
+    }
+    # 对照 vocab 裁定: the same payload resolved through
+    # resolve_formula_tokens yields the same feature names.
+    from ashare_model.vocab import resolve_formula_tokens
+
+    resolved = resolve_formula_tokens(
+        {"formula": g4_tokens, "grammar_version": 4}
+    )
+    assert formula_feature_names(resolved) == ["IND_REL_RET_60", "RET_1"]
+
+
+def test_formula_grammar6_tier_decode_uses_frozen_layout():
+    """P1-A: a legal grammar-6 bare payload ([1, 1, 78, 117] = RET_1 RET_1
+    ADD EOS under the frozen 77-feature layout) is tier-traceable; the old
+    live-layout decode read 78 as CFO_TO_ASSETS and 117 as CORR60, leaving
+    the stack unterminated and the artifact untraceable (None)."""
+    tokens = [1, 1, 78, 117]
+    assert formula_feature_names(tokens, grammar_version=6) == ["RET_1"]
+    report = formula_data_tier_report(tokens=tokens, grammar_version=6)
+    assert report is not None
+    assert report["per_feature"] == {"RET_1": "A"}
+    # grammar 7 shares grammar 6's layout (sampling-set change only).
+    assert formula_feature_names(tokens, grammar_version=7) == ["RET_1"]
+
+
+def test_formula_tier_decode_fails_closed_on_unknown_declared_generation():
+    """P1-A: a declared-but-unknown generation must never silently decode
+    against the live table (the t28 mechanism); it fails closed to "no
+    formula" just like resolve_formula_tokens rejects it."""
+    for generation in (1, 10, "bogus"):
+        assert formula_feature_names([1, 2], grammar_version=generation) is None
+        assert (
+            formula_data_tier_report(tokens=[1, 2], grammar_version=generation) is None
+        )
+
+
 def test_tier_features_filters_by_tier_set():
     assert set(tier_features((DataTier.A,))) == _tier_set(DataTier.A)
     assert set(tier_features((DataTier.A, DataTier.B))) == (

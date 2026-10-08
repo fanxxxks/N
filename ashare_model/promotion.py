@@ -55,6 +55,18 @@ dsr/p, ``significant_95`` consistent with its own p-value) and to
 trial's own date axis, benchmark definition and span, trial-set
 composition vs the artifact's own stitched evidence, and the seed
 class demanded by the candidate family).
+
+Structure (fail-closed by construction, user ruling 2026-09-21):
+each gate G1-G7 is ONE independent :func:`_gate_gN_*` function
+returning ``{"passed": bool, "reasons": [...]}`` with its own local
+state — :func:`evaluate_challenger` only assembles them.  The
+historical single ~360-line inline block shared local variables
+across gates, which is exactly how an unchecked NaN slipped through
+G3/G4; the split removes the shared state by construction.  Every
+numeric gate input is read through :func:`_finite_metric`, the
+single fail-closed reader that converts a missing / boolean / NaN /
+infinite value into that gate's refusal reason, so no threshold
+comparison ever sees a non-finite number.
 """
 
 from __future__ import annotations
@@ -73,6 +85,14 @@ from ashare_data.io_utils import atomic_write_json, read_json_safe
 
 from .eval_corrections import BENCHMARK_DEFINITION, P40_MIN_WINDOW_DATES
 from .identity import formula_hash
+from .claim_record import (
+    CALIBRATION_EVIDENCE_REGISTRATION,
+    CalibrationEvidenceRegistry,
+    STRING_A_NO_CLAIM_RECORD,
+    STRING_C_UNQUALIFIED_TEMPLATE,
+    claim_record_consistency_reasons,
+    qualify_claim_record,
+)
 
 from .artifact_versions import version_matches
 from .data_tier import (
@@ -112,8 +132,14 @@ from ashare_portfolio.execution_spec import (
 # adjudicate numerically (finite in-range values, consistent
 # significant_95) and verify the identity content (run kind,
 # window, benchmark, trial set, seed class) against the
-# artifact's own evidence.
-PROMOTION_RULE_VERSION = "4"
+# artifact's own evidence.  v5 (WP17, reports/wp17/FROZEN_17.md)
+# adds G2's fourth layer: the calibration-qualification layer —
+# the artifact must carry the five-group claim record, its groups
+# must be consistent with the artifact's own statistical blocks,
+# and the qualification is RECOMPUTED from the registered
+# calibration evidence (fail-closed: p=0.001 with an unqualified
+# method cannot support promotion).
+PROMOTION_RULE_VERSION = "5"
 
 
 @dataclass(frozen=True)
@@ -378,31 +404,63 @@ def _annualized_excess(excess_return, n_days: int) -> float | None:
 
 
 def _stress_failures(stress, thresholds: PromotionThresholds) -> list[str]:
+    """G4's per-cell adjudication (every metric read fail-closed).
+
+    A cell whose ``n_days`` is absent or below 2 has no stitched OOS
+    series (refused); a measured cell's sharpe / max_drawdown /
+    excess_return are ALL required finite numbers read through
+    :func:`_finite_metric` — a missing or NaN metric is an explicit
+    refusal, never a bound that silently holds (``NaN < min`` is
+    False, and the pre-2026-09-21 ``is not None and > threshold``
+    form let a missing field pass).
+    """
+
     failures: list[str] = []
     for cell in stress.get("grid", []):
         label = (
             f"cost x{cell.get('cost_multiplier')} "
             f"capital x{cell.get('capital_multiplier')}"
         )
-        if (cell.get("n_days") or 0) < 2:
+        reasons: list[str] = []
+        n_days = _finite_metric(
+            cell, "n_days", reasons=reasons, required=False,
+            what="stress cell",
+        )
+        if reasons:
+            # present-but-non-finite n_days: an integrity refusal
+            failures.extend(f"{label}: {reason}" for reason in reasons)
+            continue
+        if n_days is None or n_days < 2:
             failures.append(f"{label}: no stitched OOS series")
             continue
-        sharpe = cell.get("sharpe")
-        if sharpe is None or sharpe < thresholds.min_sharpe:
-            failures.append(
-                f"{label}: sharpe {sharpe} < {thresholds.min_sharpe}"
-            )
-        mdd = cell.get("max_drawdown")
+        sharpe = _finite_metric(
+            cell, "sharpe", reasons=reasons, what="stress cell"
+        )
+        if sharpe is not None and sharpe < thresholds.min_sharpe:
+            reasons.append(f"sharpe {sharpe} < {thresholds.min_sharpe}")
+        mdd = _finite_metric(
+            cell, "max_drawdown", reasons=reasons, what="stress cell"
+        )
         if mdd is not None and mdd > thresholds.max_drawdown:
-            failures.append(
-                f"{label}: max_drawdown {mdd:.3f} > {thresholds.max_drawdown}"
+            reasons.append(
+                f"max_drawdown {mdd:.3f} > {thresholds.max_drawdown}"
             )
-        excess_ann = _annualized_excess(cell.get("excess_return"), cell.get("n_days"))
-        if excess_ann is None or excess_ann < thresholds.min_excess_annualized:
-            failures.append(
-                f"{label}: annualized excess {excess_ann} < "
+        excess_return = _finite_metric(
+            cell, "excess_return", reasons=reasons, what="stress cell"
+        )
+        excess_ann = (
+            _annualized_excess(excess_return, n_days)
+            if excess_return is not None
+            else None
+        )
+        if excess_return is not None and (
+            excess_ann is None or excess_ann < thresholds.min_excess_annualized
+        ):
+            reasons.append(
+                f"annualized excess {excess_ann} < "
                 f"{thresholds.min_excess_annualized}"
             )
+        failures.extend(f"{label}: {reason}" for reason in reasons)
     return failures
 
 
@@ -617,38 +675,95 @@ def _is_finite_number(value) -> bool:
     )
 
 
-def evaluate_challenger(
-    artifact: dict,
+def _finite_metric(
+    payload,
+    key: str,
     *,
-    regime: RegimeRegistry | None = None,
-    dataset_id: str | None = None,
-    paper_registry: PaperWindowRegistry | None = None,
-    stress: dict | None = None,
-    thresholds: PromotionThresholds | None = None,
-    allowed_data_tiers: tuple[str, ...] = ("A",),
-    today: str | None = None,
-    backtest_config=None,
-) -> dict:
-    """Apply the seven promotion gates to a current protocol artifact.
+    reasons: list[str],
+    required: bool = True,
+    what: str = "gate input",
+) -> float | None:
+    """Read one numeric gate input, fail-closed (p43 N5 made structural).
 
-    Every gate returns ``{"passed": bool, "reasons": [...]}``; the
-    challenger is promoted only when all seven pass.  ``allowed_data_tiers``
-    is the P2 data-tier policy (default Tier A only; Tier B requires an
-    explicit separate comparison; Tier C raises).  ``today`` is injectable
-    for tests (paper-window completion check).
+    THE single numeric entry point of the seven promotion gates (user
+    ruling 2026-09-21): a value that is missing, ``None``, boolean, NaN
+    or infinite is converted into a refusal reason appended to
+    ``reasons`` — the caller's gate fails through its normal
+    ``not reasons`` rule — and ``None`` is returned, so no threshold
+    comparison ever sees a non-finite number and no gate can "forget"
+    its own NaN check.  With ``required=False`` a MISSING value is a
+    legal ``None`` read (no reason); a present-but-non-finite value is
+    always a refusal either way.
+
+    Returns the finite value as a float.
     """
 
-    thresholds = thresholds or PromotionThresholds()
-    allowed = validate_allowed_tiers(allowed_data_tiers)
-    gates: dict[str, dict] = {}
-    top = artifact.get("top_trial")
+    value = (payload or {}).get(key)
+    if _is_finite_number(value):
+        return float(value)
+    if required or value is not None:
+        reasons.append(
+            f"{what} {key} is "
+            + (
+                "missing"
+                if value is None
+                else f"not a finite number ({value!r})"
+            )
+            + "; a missing or non-finite risk metric cannot support "
+            "promotion (fail-closed)"
+        )
+    return None
 
-    # G1 -- data & formula P0 gate.  Version equality uses the single
-    # comparison primitive from ashare_model.artifact_versions; a missing
-    # field never matches and renders as ``None`` in the message (pinned
-    # by the F2 characterization tests).  G1 checks protocol / reward /
-    # execution / portfolio_constructor only; the wider field set
-    # (model_version, searcher, imitation) belongs to classify_strategy.
+
+def _top_row_formula_hash(row: dict, reasons: list[str]) -> str | None:
+    """The formula identity of a top-trial row, fail-closed (P2-5).
+
+    A row carrying neither ``formula`` tokens nor ``formula_text``
+    has no hashable identity: the pre-2026-09-21 code propagated the
+    helper's ``ValueError`` out of :func:`evaluate_challenger` (a
+    whole-verdict crash), while the same malformed input in G6/G7 was
+    a gate refusal.  The unified rule is the gate failure: append the
+    refusal reason and return ``None``.
+    """
+
+    try:
+        return formula_hash(row.get("formula"), row.get("formula_text"))
+    except ValueError:
+        reasons.append(
+            "the top trial row carries neither formula tokens nor "
+            "formula_text; its identity cannot be hashed — promotion "
+            "requires a traceable formula"
+        )
+        return None
+
+
+# --- the seven gate functions (G1-G7) -------------------------------------------
+#
+# Structural fail-closed reform (user ruling 2026-09-21): each gate is
+# one independent function owning ONLY its local ``reasons`` list — no
+# shared locals across gates — and every numeric input is read through
+# _finite_metric so a missing/NaN metric is a refusal reason, never a
+# silently-passed bound.  evaluate_challenger only assembles them.
+
+
+def _gate_g1_data_formula_p0(
+    artifact: dict,
+    *,
+    regime: RegimeRegistry | None,
+    dataset_id: str | None,
+    backtest_config,
+    top_rows: list[dict],
+) -> dict:
+    """G1 — data, formula & execution P0 gate (fail-closed bindings).
+
+    Version equality uses the single comparison primitive from
+    ashare_model.artifact_versions; a missing field never matches and
+    renders as ``None`` in the message (pinned by the F2
+    characterization tests).  G1 checks protocol / reward / execution /
+    portfolio_constructor only; the wider field set (model_version,
+    searcher, imitation) belongs to classify_strategy.
+    """
+
     reasons: list[str] = []
     if artifact.get("legacy") is True:
         reasons.append("artifact is explicitly marked legacy")
@@ -712,7 +827,7 @@ def evaluate_challenger(
             regime.assert_final_evaluation(artifact.get("folds") or [])
         except HoldoutViolation as exc:
             reasons.append(str(exc))
-    top_rows = _top_rows(artifact) if top else []
+    top = artifact.get("top_trial")
     if not top:
         reasons.append("no stitched top trial in the artifact")
     elif not top_rows:
@@ -733,21 +848,46 @@ def evaluate_challenger(
                     for r in rejected
                 )
             )
-    gates["data_formula_p0"] = _gate(not reasons, reasons)
+    return _gate(not reasons, reasons)
 
-    # G2 -- statistical significance (stitched matrix), p41 B4: binding
-    # before values.  The dsr/max-t blocks must carry the p41 identity
-    # (adjudicated candidate/seed, run kind, window, benchmark, trial
-    # set) and must adjudicate the artifact's own top trial — a
-    # historical trial's significance is never granted to the challenger
-    # under review, and pre-p41 value-only blocks fail closed.  p43
-    # B5-B9: the identity's CONTENT is verified too (run kind, window
-    # vs the top trial's own date axis, benchmark definition/span,
-    # trial-set composition vs the artifact's own stitched evidence,
-    # and the seed class demanded by the candidate family), and
-    # seed=None is a legal identity value decided by that family —
-    # presence is checked by key, never by None-ness.
-    reasons = []
+
+def _gate_g2_significance(
+    artifact: dict,
+    thresholds: PromotionThresholds,
+    calibration_evidence: CalibrationEvidenceRegistry | None = None,
+) -> dict:
+    """G2 — statistical significance (stitched matrix), p41 B4: binding
+    before values.
+
+    The dsr/max-t blocks must carry the p41 identity (adjudicated
+    candidate/seed, run kind, window, benchmark, trial set) and must
+    adjudicate the artifact's own top trial — a historical trial's
+    significance is never granted to the challenger under review, and
+    pre-p41 value-only blocks fail closed.  p43 B5-B9: the identity's
+    CONTENT is verified too (run kind, window vs the top trial's own
+    date axis, benchmark definition/span, trial-set composition vs the
+    artifact's own stitched evidence, and the seed class demanded by
+    the candidate family), and seed=None is a legal identity value
+    decided by that family — presence is checked by key, never by
+    None-ness.  The numeric values (dsr, max-t p_value) are read
+    through :func:`_finite_metric` (p43 N5): a non-finite statistic is
+    a refusal, and a bare boolean significant_95 that contradicts its
+    own p-value is not trusted.
+
+    WP17 W3 (FROZEN_17 §3.1) adds the FOURTH layer after the three
+    above: the calibration-qualification layer.  (1) the artifact must
+    carry the five-group ``claim_record`` (string A); (2) verify-don't-
+    trust — its statistics/method/task-actuals groups must match the
+    artifact's own dsr/max_t/stitched content field by field (string
+    B), and the record's own ``qualification.qualified`` flag is NEVER
+    trusted; (3) the qualification is recomputed from the evidence
+    object (string C when unqualified).  The numeric layer evaluates
+    FIRST but is NOT sufficient: p=0.001 with an unqualified method
+    fails G2, and the qualification layer can never rescue a numeric
+    failure.
+    """
+
+    reasons: list[str] = []
     top = artifact.get("top_trial")
     seed_class = candidate_seed_class((top or {}).get("candidate"))
     for name, block in (("dsr", artifact.get("dsr") or {}),
@@ -788,135 +928,235 @@ def evaluate_challenger(
         # requires finite in-range self-consistent values — a NaN
         # slips past every < comparison, and a bare boolean can
         # contradict its own p-value, so neither is trusted.
-        dsr_value = dsr.get("dsr")
-        if dsr_value is None:
+        if dsr.get("dsr") is None:
             reasons.append("no Deflated Sharpe in the artifact")
-        elif not _is_finite_number(dsr_value):
-            reasons.append(
-                f"dsr value {dsr_value!r} is not a finite number; "
-                "non-finite statistics cannot support promotion "
-                "(p43 N5)"
-            )
-        elif not 0.0 <= dsr_value <= 1.0:
-            reasons.append(
-                f"dsr {dsr_value} outside its [0, 1] value range "
-                "(p43 N5)"
-            )
-        elif dsr_value < thresholds.dsr_min:
-            reasons.append(
-                f"dsr {dsr_value:.3f} < {thresholds.dsr_min}"
-            )
-        p_value = mt.get("p_value")
-        if p_value is None:
-            reasons.append("no max-t in the artifact")
-        elif not _is_finite_number(p_value):
-            reasons.append(
-                f"max-t p_value {p_value!r} is not a finite number "
-                "(p43 N5)"
-            )
-        elif not 0.0 < p_value <= 1.0:
-            reasons.append(
-                f"max-t p_value {p_value} outside its (0, 1] value "
-                "range (p43 N5)"
-            )
         else:
-            significant = mt.get("significant_95")
-            if not isinstance(significant, bool):
-                reasons.append(
-                    f"significant_95 must be a boolean, got "
-                    f"{significant!r} (p43 N5)"
-                )
-            elif significant != (p_value <= thresholds.max_t_p_max):
-                reasons.append(
-                    f"significant_95={significant} contradicts "
-                    f"p_value={p_value} against the threshold "
-                    f"{thresholds.max_t_p_max} (p43 N5)"
-                )
-            elif p_value > thresholds.max_t_p_max:
-                reasons.append(
-                    f"max-t not significant (p={p_value} > "
-                    f"{thresholds.max_t_p_max})"
-                )
-    gates["significance"] = _gate(not reasons, reasons)
-
-    # G3 -- excess return & risk constraints on the stitched top trial.
-    reasons = []
-    if top:
-        if top.get("sharpe") is None or top["sharpe"] < thresholds.min_sharpe:
-            reasons.append(
-                f"stitched sharpe {top.get('sharpe')} < {thresholds.min_sharpe}"
+            dsr_value = _finite_metric(
+                dsr, "dsr", reasons=reasons, what="dsr block"
             )
-        excess_ann = _annualized_excess(top.get("excess_return"), top.get("n_days"))
+            if dsr_value is not None and not 0.0 <= dsr_value <= 1.0:
+                reasons.append(
+                    f"dsr {dsr_value} outside its [0, 1] value range "
+                    "(p43 N5)"
+                )
+            elif dsr_value is not None and dsr_value < thresholds.dsr_min:
+                reasons.append(
+                    f"dsr {dsr_value:.3f} < {thresholds.dsr_min}"
+                )
+        if mt.get("p_value") is None:
+            reasons.append("no max-t in the artifact")
+        else:
+            p_value = _finite_metric(
+                mt, "p_value", reasons=reasons, what="max_t block"
+            )
+            if p_value is not None and not 0.0 < p_value <= 1.0:
+                reasons.append(
+                    f"max-t p_value {p_value} outside its (0, 1] value "
+                    "range (p43 N5)"
+                )
+            elif p_value is not None:
+                significant = mt.get("significant_95")
+                if not isinstance(significant, bool):
+                    reasons.append(
+                        f"significant_95 must be a boolean, got "
+                        f"{significant!r} (p43 N5)"
+                    )
+                elif significant != (p_value <= thresholds.max_t_p_max):
+                    reasons.append(
+                        f"significant_95={significant} contradicts "
+                        f"p_value={p_value} against the threshold "
+                        f"{thresholds.max_t_p_max} (p43 N5)"
+                    )
+                elif p_value > thresholds.max_t_p_max:
+                    reasons.append(
+                        f"max-t not significant (p={p_value} > "
+                        f"{thresholds.max_t_p_max})"
+                    )
+    if not reasons:
+        # WP17 W3 (FROZEN_17 §3.1): the fourth layer — qualification,
+        # fail-closed.  A tiny p-value cannot support promotion unless
+        # the significance method carries calibrated-evidence
+        # qualification for THIS artifact's operating point.
+        record = artifact.get("claim_record")
+        if not isinstance(record, dict) or any(
+            not isinstance(record.get(group), dict)
+            for group in (
+                "statistics", "method", "task_actuals",
+                "calibration_evidence", "qualification",
+            )
+        ):
+            reasons.append(STRING_A_NO_CLAIM_RECORD)
+        else:
+            # Step 2 (verify-don't-trust): the record's groups 1-3
+            # against the artifact's own statistical content.
+            reasons.extend(
+                claim_record_consistency_reasons(record, artifact)
+            )
+            if not reasons:
+                # Step 3: recompute — the artifact's own qualification
+                # flag is never consulted.
+                recomputed = qualify_claim_record(
+                    record, calibration_evidence
+                )
+                if not recomputed["qualified"]:
+                    task = record.get("task_actuals") or {}
+                    method = record.get("method") or {}
+                    reasons.append(
+                        STRING_C_UNQUALIFIED_TEMPLATE.format(
+                            n=task.get("n_common_dates"),
+                            k=task.get("n_pool_trials"),
+                            np=method.get("n_perms"),
+                            bs=method.get("block_size"),
+                            policy=task.get("missing_fold_policy"),
+                            codes=", ".join(recomputed["reason_codes"]),
+                        )
+                    )
+    return _gate(not reasons, reasons)
+
+
+def _gate_g3_excess_and_risk(
+    artifact: dict, thresholds: PromotionThresholds
+) -> dict:
+    """G3 — excess return & risk bounds on the stitched top trial.
+
+    Every risk metric is REQUIRED and read through :func:`_finite_metric`
+    (user ruling 2026-09-21, unified with the historical sharpe
+    behaviour — "risk metric missing = refuse"): sharpe, excess_return,
+    n_days, max_drawdown, average_turnover_mean and
+    capacity_utilization_max must all be finite numbers.  The
+    ProtocolResultArtifact schema types ``top_trial`` as a plain dict
+    with no inner schema, so nothing inside it is schema-guaranteed;
+    the producer (``eval_metrics.top_trial``) always writes sharpe /
+    max_drawdown / excess_return / n_days, and writes
+    average_turnover_mean / capacity_utilization_max whenever the fold
+    rows carry turnover/capacity measurements — promotion demands the
+    complete set, and a NaN (which slips past every ``<`` comparison)
+    or an absent metric is an explicit refusal reason.
+    """
+
+    top = artifact.get("top_trial")
+    if not top:
+        return _gate(False, ["no top trial to constrain"])
+    reasons: list[str] = []
+    sharpe = _finite_metric(
+        top, "sharpe", reasons=reasons, what="stitched top trial"
+    )
+    if sharpe is not None and sharpe < thresholds.min_sharpe:
+        reasons.append(
+            f"stitched sharpe {sharpe} < {thresholds.min_sharpe}"
+        )
+    excess_return = _finite_metric(
+        top, "excess_return", reasons=reasons, what="stitched top trial"
+    )
+    n_days = _finite_metric(
+        top, "n_days", reasons=reasons, what="stitched top trial"
+    )
+    if excess_return is not None and n_days is not None:
+        excess_ann = _annualized_excess(excess_return, n_days)
         if excess_ann is None or excess_ann < thresholds.min_excess_annualized:
             reasons.append(
                 f"annualized excess return {excess_ann} < "
                 f"{thresholds.min_excess_annualized}"
             )
-        mdd = top.get("max_drawdown")
-        if mdd is not None and mdd > thresholds.max_drawdown:
-            reasons.append(f"max drawdown {mdd:.3f} > {thresholds.max_drawdown}")
-        turnover = top.get("average_turnover_mean")
-        if turnover is not None and turnover > thresholds.max_average_turnover:
-            reasons.append(
-                f"average turnover {turnover:.4f} > "
-                f"{thresholds.max_average_turnover}"
-            )
-        capacity = top.get("capacity_utilization_max")
-        if (
-            capacity is not None
-            and capacity > thresholds.max_capacity_utilization
-        ):
-            reasons.append(
-                f"capacity utilization {capacity:.3f} > "
-                f"{thresholds.max_capacity_utilization}"
-            )
-    else:
-        reasons.append("no top trial to constrain")
-    gates["excess_and_risk"] = _gate(not reasons, reasons)
+    mdd = _finite_metric(
+        top, "max_drawdown", reasons=reasons, what="stitched top trial"
+    )
+    if mdd is not None and mdd > thresholds.max_drawdown:
+        reasons.append(f"max drawdown {mdd:.3f} > {thresholds.max_drawdown}")
+    turnover = _finite_metric(
+        top, "average_turnover_mean", reasons=reasons,
+        what="stitched top trial",
+    )
+    if turnover is not None and turnover > thresholds.max_average_turnover:
+        reasons.append(
+            f"average turnover {turnover:.4f} > "
+            f"{thresholds.max_average_turnover}"
+        )
+    capacity = _finite_metric(
+        top, "capacity_utilization_max", reasons=reasons,
+        what="stitched top trial",
+    )
+    if capacity is not None and capacity > thresholds.max_capacity_utilization:
+        reasons.append(
+            f"capacity utilization {capacity:.3f} > "
+            f"{thresholds.max_capacity_utilization}"
+        )
+    return _gate(not reasons, reasons)
 
-    # G4 -- cost & capacity stress.
-    reasons = []
+
+def _gate_g4_cost_capacity_stress(
+    stress: dict | None, thresholds: PromotionThresholds
+) -> dict:
+    """G4 — cost & capacity stress (per-cell adjudication in
+    :func:`_stress_failures`, every metric through
+    :func:`_finite_metric`)."""
+
     if stress is None:
-        reasons.append("no cost/capacity stress result provided")
-    else:
-        reasons = _stress_failures(stress, thresholds)
-    gates["cost_capacity_stress"] = _gate(not reasons, reasons)
+        return _gate(False, ["no cost/capacity stress result provided"])
+    failures = _stress_failures(stress, thresholds)
+    return _gate(not failures, failures)
 
-    # G5 -- at least one complete future paper-trading observation window.
-    reasons = []
-    if top_rows:
-        last = top_rows[-1]
-        fh = formula_hash(last.get("formula"), last.get("formula_text"))
-        if paper_registry is None:
-            reasons.append("no paper-window registry provided")
-        else:
-            window = paper_registry.completed(
-                fh, thresholds.paper_min_sessions, today=today
-            )
-            if window is None:
-                reasons.append(
-                    f"no completed paper window with >= "
-                    f"{thresholds.paper_min_sessions} sessions for this formula"
-                )
-            else:
-                kind = "dev"
-                if regime is not None:
-                    kind = regime.classify_window(window.start, window.end)
-                if kind == "dev":
-                    reasons.append(
-                        f"paper window {window.start}..{window.end} ran on "
-                        "dev/validation data; the observation window must be "
-                        "future or locked data"
-                    )
-    else:
+
+def _gate_g5_paper_window(
+    top_rows: list[dict],
+    paper_registry: PaperWindowRegistry | None,
+    regime: RegimeRegistry | None,
+    thresholds: PromotionThresholds,
+    today: str | None,
+) -> dict:
+    """G5 — at least one complete future paper-trading window.
+
+    The top-trial row's formula identity is hashed fail-closed (P2-5):
+    a row carrying neither ``formula`` tokens nor ``formula_text`` is a
+    GATE REFUSAL (the pre-2026-09-21 code crashed the whole evaluation
+    with the hasher's ``ValueError``), the same fail-closed semantics
+    G6/G7 apply to an untraceable formula.
+    """
+
+    reasons: list[str] = []
+    if not top_rows:
         reasons.append("no top trial to promote")
-    gates["paper_window"] = _gate(not reasons, reasons)
+        return _gate(False, reasons)
+    fh = _top_row_formula_hash(top_rows[-1], reasons)
+    if fh is None:
+        return _gate(False, reasons)
+    if paper_registry is None:
+        reasons.append("no paper-window registry provided")
+        return _gate(False, reasons)
+    window = paper_registry.completed(
+        fh, thresholds.paper_min_sessions, today=today
+    )
+    if window is None:
+        reasons.append(
+            f"no completed paper window with >= "
+            f"{thresholds.paper_min_sessions} sessions for this formula"
+        )
+    else:
+        kind = "dev"
+        if regime is not None:
+            kind = regime.classify_window(window.start, window.end)
+        if kind == "dev":
+            reasons.append(
+                f"paper window {window.start}..{window.end} ran on "
+                "dev/validation data; the observation window must be "
+                "future or locked data"
+            )
+    return _gate(not reasons, reasons)
 
-    # G6 -- data credibility tier (P2-03/P2-04): the challenger formula is
-    # traced back to the tiers of its features; every feature must belong
-    # to the allowed tiers (default: Tier A only).  Tier C can never be
-    # allowed here (validate_allowed_tiers rejects it up front).
-    reasons = []
+
+def _gate_g6_data_tier(
+    top_rows: list[dict], allowed: tuple[str, ...]
+) -> tuple[dict, dict | None]:
+    """G6 — data credibility tier (P2-03/P2-04): the challenger formula
+    is traced back to the tiers of its features; every feature must
+    belong to the allowed tiers (default: Tier A only).  Tier C can
+    never be allowed here (validate_allowed_tiers rejects it up front).
+
+    Returns ``(gate, tier_report)`` — the report is recorded in the
+    verdict's ``data_tier_policy`` block.
+    """
+
+    reasons: list[str] = []
     tier_report = None
     if top_rows:
         last = top_rows[-1]
@@ -939,17 +1179,26 @@ def evaluate_challenger(
                     f"feature {feature} uses data tier {tier}, which is not "
                     f"in the allowed tiers {list(allowed)}"
                 )
-    gates["data_tier"] = _gate(not reasons, reasons)
+    return _gate(not reasons, reasons), tier_report
 
-    # G7 -- feature registry status (P12): the challenger formula's
-    # features must all be registry-promotable (promotion_allowed, not
-    # deprecated).  Same top-trial source as G6, so the artifact loading
-    # path is covered by construction (newly sampled and historical
-    # formulas both arrive as artifact top rows).  Fail-closed: an
-    # untraceable formula or a registry gap is a rejection.  The
-    # promotion-gate numbering (G1-G7) is independent of the data-quality
-    # gate numbering in ashare_data/gates.py.
-    reasons = []
+
+def _gate_g7_feature_registry(
+    top_rows: list[dict],
+) -> tuple[dict, dict | None]:
+    """G7 — feature registry status (P12): the challenger formula's
+    features must all be registry-promotable (promotion_allowed, not
+    deprecated).  Same top-trial source as G6, so the artifact loading
+    path is covered by construction (newly sampled and historical
+    formulas both arrive as artifact top rows).  Fail-closed: an
+    untraceable formula or a registry gap is a rejection.  The
+    promotion-gate numbering (G1-G7) is independent of the data-quality
+    gate numbering in ashare_data/gates.py.
+
+    Returns ``(gate, registry_report)`` — the report is recorded in the
+    verdict's ``registry_status_policy`` block.
+    """
+
+    reasons: list[str] = []
     registry_report = None
     if top_rows:
         last = top_rows[-1]
@@ -975,21 +1224,99 @@ def evaluate_challenger(
                         f"feature {name} is deprecated "
                         "(feature registry status)"
                     )
-    gates["feature_registry_status"] = _gate(not reasons, reasons)
+    return _gate(not reasons, reasons), registry_report
+
+
+def _qualification_summary(
+    artifact: dict, calibration_evidence: CalibrationEvidenceRegistry | None
+) -> dict | None:
+    """G2's recomputed qualification summary for the verdict (WP17 W3,
+    FROZEN_17 §3.4): qualified / reason codes / covering / blocking —
+    recomputed from the evidence object with the same §2 algorithm the
+    gate runs, never read off the artifact's own flag.  ``None`` when
+    the artifact carries no claim record (string A case)."""
+
+    record = artifact.get("claim_record")
+    if not isinstance(record, dict):
+        return None
+    recomputed = qualify_claim_record(record, calibration_evidence)
+    return {
+        "qualified": recomputed["qualified"],
+        "reason_codes": list(recomputed["reason_codes"]),
+        "covering_scenarios": list(recomputed["covering_scenarios"]),
+        "blocking_scenarios": list(recomputed["blocking_scenarios"]),
+    }
+
+
+def evaluate_challenger(
+    artifact: dict,
+    *,
+    regime: RegimeRegistry | None = None,
+    dataset_id: str | None = None,
+    paper_registry: PaperWindowRegistry | None = None,
+    stress: dict | None = None,
+    thresholds: PromotionThresholds | None = None,
+    allowed_data_tiers: tuple[str, ...] = ("A",),
+    today: str | None = None,
+    backtest_config=None,
+    calibration_evidence: CalibrationEvidenceRegistry | None = None,
+) -> dict:
+    """Apply the seven promotion gates to a current protocol artifact.
+
+    Every gate returns ``{"passed": bool, "reasons": [...]}``; the
+    challenger is promoted only when all seven pass.  This function
+    ONLY assembles the seven independent :func:`_gate_gN_*` functions
+    (the structural fail-closed reform of 2026-09-21) — no gate logic
+    lives here.  ``allowed_data_tiers`` is the P2 data-tier policy
+    (default Tier A only; Tier B requires an explicit separate
+    comparison; Tier C raises).  ``today`` is injectable for tests
+    (paper-window completion check).  ``calibration_evidence`` is the
+    WP17 W2 object-form evidence registry G2's fourth layer consumes
+    (``None``/unavailable => fail-closed, EVIDENCE_NOT_REGISTERED); a
+    caller string never grants qualification.
+    """
+
+    thresholds = thresholds or PromotionThresholds()
+    allowed = validate_allowed_tiers(allowed_data_tiers)
+    top = artifact.get("top_trial")
+    top_rows = _top_rows(artifact) if top else []
+
+    tier_gate, tier_report = _gate_g6_data_tier(top_rows, allowed)
+    registry_gate, registry_report = _gate_g7_feature_registry(top_rows)
+    # G5 independently hashes the same top row and reports the failure
+    # reason when the identity is missing; the challenger mirror below only
+    # needs the hash (None then), so no reason list is carried here.
+    challenger_formula_hash = (
+        _top_row_formula_hash(top_rows[-1], []) if top_rows else None
+    )
+    gates: dict[str, dict] = {
+        "data_formula_p0": _gate_g1_data_formula_p0(
+            artifact,
+            regime=regime,
+            dataset_id=dataset_id,
+            backtest_config=backtest_config,
+            top_rows=top_rows,
+        ),
+        "significance": _gate_g2_significance(
+            artifact, thresholds, calibration_evidence
+        ),
+        "excess_and_risk": _gate_g3_excess_and_risk(artifact, thresholds),
+        "cost_capacity_stress": _gate_g4_cost_capacity_stress(
+            stress, thresholds
+        ),
+        "paper_window": _gate_g5_paper_window(
+            top_rows, paper_registry, regime, thresholds, today
+        ),
+        "data_tier": tier_gate,
+        "feature_registry_status": registry_gate,
+    }
 
     return {
         "promoted": all(g["passed"] for g in gates.values()),
         "challenger": {
             "candidate": top.get("candidate") if top else None,
             "seed": top.get("seed") if top else None,
-            "formula_hash": (
-                formula_hash(
-                    top_rows[-1].get("formula"),
-                    top_rows[-1].get("formula_text"),
-                )
-                if top_rows
-                else None
-            ),
+            "formula_hash": challenger_formula_hash,
         },
         "data_tier_policy": {
             "data_tier_version": DATA_TIER_VERSION,
@@ -998,6 +1325,15 @@ def evaluate_challenger(
             "time_rules": dict(TIER_TIME_RULES),
         },
         "promotion_rule_version": PROMOTION_RULE_VERSION,
+        # WP17 W3 (FROZEN_17 §3.4): the verdict carries the artifact's
+        # claim record (copy) and G2's recomputed qualification summary
+        # — the user-visible formal-conclusion surface.
+        "claim_record": (
+            json.loads(json.dumps(artifact.get("claim_record")))
+            if isinstance(artifact.get("claim_record"), dict)
+            else None
+        ),
+        "qualification": _qualification_summary(artifact, calibration_evidence),
         "registry_status_policy": {
             "feature_registry_version": FEATURE_REGISTRY_VERSION,
             "report": registry_report,
@@ -1020,6 +1356,45 @@ def evaluate_challenger(
     }
 
 
+def assert_consumable_protocol_artifact(runs_root, artifact: dict) -> str:
+    """Verify a protocol artifact payload is consumable for promotion.
+
+    A03 (p27 read side, user ruling of 2026-09-21): the promotion CLI
+    reads the CONVENIENCE MIRROR file, and a mirror is a cache, never
+    the formal evidence — exactly like the formal backtest / paper-sim
+    entries, the consumed payload must pass BOTH read-side assertions
+    before any gate work:
+
+    * the source run named by the artifact's lineage has a lifecycle
+      chain at or above SEARCH_PLAN_ADMITTED
+      (:func:`ashare_model.lifecycle.assert_qualified_source_run`,
+      p27 R7/I10 — a current schema alone is never qualification, and
+      engineering/audit products are never promotion evidence);
+    * the payload's content id IS registered in that run's index as a
+      ``protocol`` artifact
+      (:func:`ashare_model.artifact_writer.assert_registered_boundary_artifact`,
+      p27 I7 — a tampered, copied or foreign-run mirror is refused).
+
+    Returns the registered artifact id; raises
+    ``LifecycleError`` / ``RunStoreError`` / ``ArtifactSchemaError`` on
+    refusal.  Extracted as its own function so the consumption rule is
+    unit-testable without driving the whole CLI.
+    """
+
+    from .artifact_writer import assert_registered_boundary_artifact
+    from .lifecycle import assert_qualified_source_run
+    from .run_store import RunStore
+
+    root = Path(runs_root)
+    spec_id = str(artifact.get("spec_id", ""))
+    run_id = str(artifact.get("run_id", ""))
+    assert_qualified_source_run(root, spec_id, run_id)
+    store = RunStore(root)
+    return assert_registered_boundary_artifact(
+        store, spec_id, run_id, artifact, artifact_type="protocol"
+    )
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -1029,6 +1404,15 @@ def main(argv=None) -> int:
     parser.add_argument("--output", default="data/promotion_verdict.json")
     parser.add_argument("--regime", default="data/holdout_registry.json")
     parser.add_argument("--paper", default="data/paper_windows.json")
+    parser.add_argument(
+        "--calibration-evidence",
+        default=None,
+        help=(
+            "calibration evidence JSON for G2's wp17 qualification layer "
+            "(default: the registered evidence path; unregistered or "
+            "unreadable => fail-closed)"
+        ),
+    )
     parser.add_argument("--min-eligible", type=int, default=None)
     parser.add_argument(
         "--register-paper",
@@ -1089,16 +1473,14 @@ def main(argv=None) -> int:
     artifact, _ = loaded
 
     # A03 follow-up (user ruling 1a of 2026-09-12; p27 R7/I10 consumption
-    # side): the source run named by the artifact's lineage must have a
-    # lifecycle chain at or above SEARCH_PLAN_ADMITTED — a current schema
-    # alone is never qualification, and engineering/audit products are
-    # never promotion evidence.  Read-only replay, before any gate work.
-    from .lifecycle import (
-        LifecycleError,
-        RunStoreError,
-        assert_qualified_source_run,
-    )
-    from .run_store import RunStore
+    # side) + the 2026-09-21 registration check (p27 I7 read side): the
+    # source run named by the artifact's lineage must have a lifecycle
+    # chain at or above SEARCH_PLAN_ADMITTED AND the consumed mirror
+    # payload must be that run's REGISTERED protocol artifact (the
+    # mirror is a cache — formal consumption resolves identity from the
+    # RunStore).  Read-only replay, before any gate work.
+    from .artifact_schemas import ArtifactSchemaError
+    from .lifecycle import LifecycleError, RunStoreError
 
     if args.runs_root:
         runs_root = Path(args.runs_root)
@@ -1119,20 +1501,34 @@ def main(argv=None) -> int:
             )
             return 1
     try:
-        assert_qualified_source_run(
-            runs_root,
-            str(artifact.get("spec_id", "")),
-            str(artifact.get("run_id", "")),
-        )
-    except (LifecycleError, RunStoreError) as exc:
+        assert_consumable_protocol_artifact(runs_root, artifact)
+    except (LifecycleError, RunStoreError, ArtifactSchemaError) as exc:
         print(
-            f"promotion: source-run lifecycle check refused: {exc}",
+            f"promotion: source-run/artifact-registration check refused: {exc}",
             file=sys.stderr,
         )
         return 1
 
     regime = RegimeRegistry(root / args.regime)
     paper = PaperWindowRegistry(root / args.paper)
+
+    # WP17 W3 (FROZEN_17 §3.1): the calibration evidence is loaded as an
+    # OBJECT from a registered path (the G1 RegimeRegistry precedent);
+    # None/unavailable => fail-closed (EVIDENCE_NOT_REGISTERED).  A
+    # path that is not the registered one builds an unregistered
+    # registry object — still fail-closed.
+    evidence_path = Path(
+        args.calibration_evidence
+        or CALIBRATION_EVIDENCE_REGISTRATION[0]["source"]
+    )
+    if not evidence_path.is_absolute():
+        evidence_path = root / evidence_path
+    try:
+        calibration_evidence = CalibrationEvidenceRegistry.from_file(
+            evidence_path
+        )
+    except (OSError, ValueError):
+        calibration_evidence = None
 
     stress = None
     if args.config:
@@ -1178,6 +1574,7 @@ def main(argv=None) -> int:
             stress=stress,
             allowed_data_tiers=("A", "B") if args.allow_tier_b else ("A",),
             backtest_config=backtest_config,
+            calibration_evidence=calibration_evidence,
         )
     else:
         verdict = evaluate_challenger(
@@ -1186,6 +1583,7 @@ def main(argv=None) -> int:
             paper_registry=paper,
             stress=stress,
             allowed_data_tiers=("A", "B") if args.allow_tier_b else ("A",),
+            calibration_evidence=calibration_evidence,
         )
 
     out_path = Path(args.output)

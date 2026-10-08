@@ -668,6 +668,62 @@ def test_sync_cash_flow_and_balance_sheet_join_announce_master(tmp_path: Path):
     assert np.isnan(by_code["000002.SZ"].iloc[0]["net_operate_cash_flow"])
 
 
+def test_sync_fundamentals_survives_corrupt_direct_read_caches(tmp_path: Path):
+    """P1-2 (IP-05): a corrupt parquet cache is an expected-miss in the
+    DIRECT-read sync loops too (earnings + cash/balance sections) — the
+    quarter refetches instead of the FundamentalCacheMiss aborting the
+    whole sync ("failures are logged and skipped, never fatal")."""
+
+    from ashare_data import fundamentals as fundamentals_module
+
+    cfg = _data_config(tmp_path)
+    universe = ["000001.SZ"]
+    # Byte-corrupt the direct-read caches of one earnings quarter and one
+    # cash-flow quarter (well past the announcing window, so the sync
+    # reads the files rather than skipping them).
+    for name in ("earnings_20231231", "cash_flow_20231231"):
+        corrupt = fundamentals_module._fundamental_cache_path(cfg, name)
+        corrupt.parent.mkdir(parents=True, exist_ok=True)
+        corrupt.write_text("byte-corrupt parquet", encoding="utf-8")
+    earnings = {
+        "20231231": pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20231231",
+                    "announce_date": "20240430",
+                }
+            ]
+        )
+    }
+    cash_flow = {
+        "20231231": pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20231231",
+                    "net_operate_cash_flow": 74.0,
+                }
+            ]
+        )
+    }
+    client = _StubFundamentalClient(earnings, cash_flow, {})
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        result = sync_fundamentals(client, db, cfg, universe)
+        rows = db.query(
+            f"SELECT * FROM {cfg.fundamentals_table} WHERE report_date = '20231231'"
+        )
+    # The sync completed, both corrupt quarters refetched and landed.
+    assert result["fundamental_failures"] == 0
+    assert result["fundamental_rows"] >= 1
+    assert rows.iloc[0]["net_operate_cash_flow"] == pytest.approx(74.0)
+    # The refetch replaced the corrupt cache bytes with readable files.
+    for name in ("earnings_20231231", "cash_flow_20231231"):
+        path = fundamentals_module._fundamental_cache_path(cfg, name)
+        assert not fundamentals_module._read_cached(path).empty
+
+
 def test_build_pit_frames_family5_golden(tmp_path: Path):
     """RED-4 (§5.3): the four family-⑤ formulas, value by value, on
     synthetic fundamentals.  Visibility = the later announce of the

@@ -938,6 +938,62 @@ def test_d7_uncomputable_sources_fail_never_pass(tmp_path: Path):
         assert "not computable" in verdict.checks[source].detail
 
 
+def test_d7_empty_open_session_axis_fails_never_lag_zero(tmp_path: Path):
+    """P1 repair (fail-open): a calendar table that EXISTS but carries no
+    completed open session before the evaluation day — every row
+    is_open=FALSE, or the table simply empty — must fail every
+    axis-consuming source as not computable.  The old code handed the
+    empty axis to _lag_sessions, where every bisect index vacuously met
+    ``index >= len(axis)`` and DAILY/PRICE_LIMIT/MARGIN (and via
+    capital_flow's 0-on-empty freshness, INDUSTRY_INDEX) silently read
+    "lag 0 <= tolerance" and passed (p17 §12: 一切源 来源不可计算一律
+    fail 不得 pass)."""
+    from ashare_model.data_eligibility import (
+        SOURCE_DAILY,
+        SOURCE_FINANCIAL,
+        SOURCE_INDUSTRY_INDEX,
+        SOURCE_INDUSTRY_MEMBERSHIP,
+        SOURCE_MARGIN,
+        SOURCE_PRICE_LIMIT,
+        check_runspec_data_eligibility,
+    )
+
+    for mode in ("all_closed", "no_rows"):
+        config, _ = _d7_world(tmp_path / mode)
+        with AshareDB(config.duckdb_path) as db:
+            if mode == "all_closed":
+                db.execute(
+                    f"UPDATE {config.calendar_table} SET is_open=FALSE"
+                )
+            else:
+                db.execute(f"DELETE FROM {config.calendar_table}")
+        verdict = check_runspec_data_eligibility(
+            make_test_spec(),
+            ["RET_5", "MARGIN_BALANCE_CHG", "IND_REL_RET_5",
+             "CASHFLOW_QUALITY"],
+            D7_UNIVERSE, config,
+            evaluation_day=D7_EVALUATION_DAY,
+        )
+        assert not verdict.ok, (mode, verdict.reasons)
+        for source in (
+            SOURCE_DAILY, SOURCE_PRICE_LIMIT, SOURCE_MARGIN,
+            SOURCE_INDUSTRY_MEMBERSHIP, SOURCE_INDUSTRY_INDEX,
+        ):
+            check = verdict.checks[source]
+            assert check.required, (mode, source)
+            assert not check.ok, (mode, source, check.detail)
+            assert "no completed open sessions" in check.detail, (
+                mode, source, check.detail
+            )
+        # FINANCIAL consumes the v2 statement tables and listing dates,
+        # not the open-session axis: it stays honestly evaluated (and is
+        # healthy in this world) — an unavailable calendar must neither
+        # pass it un-evaluated nor silently fail it.
+        financial = verdict.checks[SOURCE_FINANCIAL]
+        assert financial.required
+        assert financial.ok, (mode, financial.detail)
+
+
 def test_d7_daily_family_worst_member_fails_and_boundary_passes(tmp_path):
     """The DAILY family (daily_bar_raw + daily_adj_factor +
     daily_basic_pit, the p17 §13 same-per-day pull) fails on its

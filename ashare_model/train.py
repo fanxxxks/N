@@ -40,6 +40,7 @@ from .alphagpt import AlphaGPTModel
 from .lifecycle import RunContext, assert_formal_run_lifecycle
 from .lifecycle import LifecycleError
 from .candidates import (
+    PARETO_OBJECTIVES,
     CandidateScore,
     CandidateScorer,
     CandidateSelector,
@@ -47,6 +48,7 @@ from .candidates import (
     score_chunk_size,
 )
 from .data_loader import AshareDataLoader
+from .pareto import IncrementalNonDominatedFront
 from .reward import batched_basket_rewards
 from .train_artifacts import ArtifactPersistenceMixin, write_trainer_artifact
 from .train_entry import main as _entry_main
@@ -189,6 +191,15 @@ class AshareTrainer(
         self._candidate_scores: OrderedDict[tuple[int, ...], CandidateScore] = (
             OrderedDict()
         )
+        # Incremental Pareto selection state (P1-1): the RL loop folds
+        # each step's new candidates into the first front instead of
+        # re-sorting the whole pool; results identical to the one-shot
+        # full sort (tests pin it).  ``_selection_unmeasured``: the
+        # tie-break best among eligible candidates with NaN objectives,
+        # selectable only while no measurable eligible exists.
+        self._selection_front = IncrementalNonDominatedFront(PARETO_OBJECTIVES)
+        self._selection_unmeasured: CandidateScore | None = None
+        self._best_rejected: CandidateScore | None = None
         # Invalid/degenerate formulas (no canonical form) are rejected
         # pre-evaluation: they never touch the VM and never consume
         # evaluation budget.  Cached by token sequence, LRU-bounded, so a

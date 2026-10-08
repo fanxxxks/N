@@ -226,6 +226,49 @@ def test_sync_capital_flow_offline_skips(tmp_path: Path):
     }
 
 
+class _StubCapitalClient:
+    """offline=False stub for the margin loop (offline mode skips the
+    sync entirely, so the corrupt-cache path needs a fake online client)."""
+
+    offline = False
+
+    def __init__(self, margin: dict[tuple[str, str], pd.DataFrame]):
+        self._margin = margin
+
+    def get_margin_detail(self, exchange: str, date: str) -> pd.DataFrame:
+        return self._margin.get((exchange, date), pd.DataFrame())
+
+    def get_sw_industry_list(self) -> pd.DataFrame:
+        return pd.DataFrame()
+
+
+def test_sync_capital_flow_survives_corrupt_margin_cache(tmp_path: Path):
+    """P1-2 (capital side, IP-05): a corrupt settled margin cache reads
+    as an expected-miss and refetches — never a FundamentalCacheMiss
+    aborting the whole capital sync."""
+
+    from ashare_data import fundamentals as fundamentals_module
+
+    cfg = _data_config(tmp_path)
+    date = "20240102"  # far past _MARGIN_STALE_DAYS -> the settled read path
+    corrupt = cfg.parquet_dir / "capital" / f"margin_{date}.parquet"
+    corrupt.parent.mkdir(parents=True, exist_ok=True)
+    corrupt.write_text("byte-corrupt parquet", encoding="utf-8")
+    part = pd.DataFrame(
+        {"ts_code": ["000001.SZ"], "trade_date": [date], "rzye": [100.0]}
+    )
+    client = _StubCapitalClient({("sse", date): part})
+    with AshareDB(cfg.duckdb_path) as db:
+        db.create_schema(cfg)
+        result = sync_capital_flow(client, db, cfg, [date])
+        rows = db.query(f"SELECT * FROM {cfg.margin_table}")
+    assert result["margin_rows"] == 1
+    assert result["capital_failures"] == 0
+    assert rows.iloc[0]["ts_code"] == "000001.SZ"
+    # The refetch replaced the corrupt cache bytes with a readable file.
+    assert not fundamentals_module._read_cached(corrupt).empty
+
+
 def test_f2_frames_raw_ratios(tmp_path: Path):
     """The two F2 frames carry the RAW ratios (the balance-to-float and
     the 5-day buy pressure); the per-date xcs-z is applied loader-side

@@ -145,7 +145,8 @@ class TestClassifyMatrix:
     # version, so it stopped expressing "unknown". Advanced to 4 — the
     # intent (a not-yet-written generation must classify ``unknown``) and the
     # strength (exact equality) are unchanged.
-    @pytest.mark.parametrize("bad", [4, 0, -1, "1", 1.0, True, [1]])
+    # WP17 (FROZEN_17 §7.1): same act for the 3 -> 4 bump — advanced to 5.
+    @pytest.mark.parametrize("bad", [5, 0, -1, "1", 1.0, True, [1]])
     def test_unknown_versions(self, bad):
         assert (
             classify_schema_version({"artifact_schema_version": bad}) == "unknown"

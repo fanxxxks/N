@@ -87,6 +87,92 @@ def test_normalize_daily_bars_drops_invalid_and_deduplicates():
     assert out.iloc[0]["trade_date"] == "20240101"
 
 
+def test_normalize_daily_bars_sorts_before_pre_close_derivation():
+    """P0: pre_close is derived on the (ts_code, trade_date)-sorted frame,
+    so an arbitrary input row order can never leak a neighbour row's — or
+    a future session's — close into pre_close (the derivation used to run
+    before the sort and read the previous ROW)."""
+
+    rows = [
+        {"ts_code": "A", "trade_date": "20240103", "open": 13.0, "high": 13.2, "low": 12.9, "close": 13.1, "volume": 10.0, "amount": 100.0},
+        {"ts_code": "B", "trade_date": "20240101", "open": 20.0, "high": 20.2, "low": 19.9, "close": 20.1, "volume": 10.0, "amount": 100.0},
+        {"ts_code": "A", "trade_date": "20240101", "open": 10.0, "high": 10.2, "low": 9.9, "close": 10.1, "volume": 10.0, "amount": 100.0},
+        {"ts_code": "A", "trade_date": "20240102", "open": 11.0, "high": 11.2, "low": 10.9, "close": 11.1, "volume": 10.0, "amount": 100.0},
+        {"ts_code": "B", "trade_date": "20240102", "open": 21.0, "high": 21.2, "low": 20.9, "close": 21.1, "volume": 10.0, "amount": 100.0},
+    ]
+    out = normalize_daily_bars(pd.DataFrame(rows)).set_index(["ts_code", "trade_date"])
+    # First bar of each stock: no prior value exists -> the open fallback
+    # (the shuffled input used to put A's FUTURE 20240103 close 13.1 here).
+    assert out.loc[("A", "20240101"), "pre_close"] == pytest.approx(10.0)
+    assert out.loc[("B", "20240101"), "pre_close"] == pytest.approx(20.0)
+    # Every later bar: the stock's own previous DATE close.
+    assert out.loc[("A", "20240102"), "pre_close"] == pytest.approx(10.1)
+    assert out.loc[("A", "20240103"), "pre_close"] == pytest.approx(11.1)
+    assert out.loc[("B", "20240102"), "pre_close"] == pytest.approx(20.1)
+
+
+def test_normalize_daily_bars_row_permutation_does_not_change_output():
+    """P0 property: with distinct (ts_code, trade_date) keys the normalized
+    frame is a function of the row SET, never of the row order — the
+    canonical sort makes the output itself canonical."""
+
+    rows = [
+        {"ts_code": c, "trade_date": d, "open": 10.0 + i, "high": 10.2 + i, "low": 9.9 + i, "close": 10.1 + i, "volume": 10.0, "amount": 100.0}
+        for c in ("000001.SZ", "600000.SH")
+        for i, d in enumerate(("20240101", "20240102", "20240103"))
+    ]
+    canonical = normalize_daily_bars(pd.DataFrame(rows))
+    rng = np.random.default_rng(42)
+    order = rng.permutation(len(rows))
+    shuffled = normalize_daily_bars(pd.DataFrame(rows).iloc[order])
+    pd.testing.assert_frame_equal(canonical.reset_index(drop=True), shuffled.reset_index(drop=True))
+
+
+def test_normalize_daily_bars_pre_close_fallback_open_only_for_first_bar():
+    """P0: a row whose source provided no pre_close (the eastmoney shape)
+    is backfilled with the stock's own previous close, never its own
+    same-day open; the open fallback fires only for the stock's first bar,
+    which has no prior value by construction."""
+
+    baostock = pd.DataFrame(
+        [
+            {"ts_code": "A", "trade_date": "20240101", "open": 10.0, "high": 10.2, "low": 9.9, "close": 10.1, "pre_close": 9.9, "volume": 10.0, "amount": 100.0},
+            {"ts_code": "A", "trade_date": "20240102", "open": 11.0, "high": 11.2, "low": 10.9, "close": 11.1, "pre_close": 10.1, "volume": 10.0, "amount": 100.0},
+            {"ts_code": "A", "trade_date": "20240103", "open": 12.0, "high": 12.2, "low": 11.9, "close": 12.1, "pre_close": 11.1, "volume": 10.0, "amount": 100.0},
+        ]
+    )
+    eastmoney = pd.DataFrame(
+        [
+            {"ts_code": "A", "trade_date": "20240104", "open": 13.0, "high": 13.2, "low": 12.9, "close": 13.1, "volume": 10.0, "amount": 100.0},
+        ]
+    )
+    out = normalize_daily_bars(
+        pd.concat([eastmoney, baostock], ignore_index=True)
+    ).set_index("trade_date")
+    # Provided pre_close values are kept verbatim.
+    assert out.loc["20240101", "pre_close"] == pytest.approx(9.9)
+    assert out.loc["20240103", "pre_close"] == pytest.approx(11.1)
+    # The pre_close-less row: previous session close (12.1), NOT its own
+    # open (13.0) — the row-order ffill used to persist pre_close=open.
+    assert out.loc["20240104", "pre_close"] == pytest.approx(12.1)
+
+
+def test_normalize_daily_bars_dedup_winner_is_frame_order_defined():
+    """P0: the stable sort makes drop_duplicates(keep="last") a
+    deterministic function of the input frame — the surviving duplicate is
+    always the last row of the caller's frame order (pandas' default
+    quicksort left the winner an arbitrary pick)."""
+
+    base = _bars().iloc[[0]].copy()  # (000001.SZ, 20240101), close 10.1
+    later = base.copy()
+    later["close"] = 10.5
+    kept_last = normalize_daily_bars(pd.concat([base, later], ignore_index=True))
+    kept_first = normalize_daily_bars(pd.concat([later, base], ignore_index=True))
+    assert len(kept_last) == len(kept_first) == 1
+    assert kept_last.iloc[0]["close"] == pytest.approx(10.5)  # later row is last
+    assert kept_first.iloc[0]["close"] == pytest.approx(10.1)  # base row is last
+
+
 def test_pivot_wide_shape_and_reindex():
     bars = _bars()
     wide = pivot_wide(bars, ["000001.SZ", "600000.SH"], ["20240101", "20240102"])

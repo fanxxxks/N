@@ -178,9 +178,15 @@ class AkShareClient:
             else os.getenv("ASHARE_OFFLINE", "0").lower() in {"1", "true", "yes"}
         )
         self.fixture_dir = Path(fixture_dir) if fixture_dir else Path("tests/fixtures")
-        # Circuit breaker for the Eastmoney daily endpoint: after a few
-        # consecutive failures we skip it and go straight to the fallback so
-        # a blocked host does not stall the whole sync with retries.
+        # Circuit breaker for the Eastmoney daily endpoint: after 3
+        # CONSECUTIVE failures we skip it and go straight to the fallback
+        # so a blocked host does not stall the whole sync with retries.
+        # A success resets the streak (true consecutive-failure
+        # semantics, so a 5% sporadic failure rate never trips it); once
+        # tripped the breaker stays open for the rest of this process —
+        # deliberately conservative, no cooldown recovery (a run that saw
+        # the host fail 3 times in a row finishes on the fallback; the
+        # next process/run starts with the primary source again).
         self._em_fail_streak = 0
         self._em_broken = False
 
@@ -208,6 +214,17 @@ class AkShareClient:
                 "Eastmoney daily endpoint failing repeatedly; "
                 f"switching to Sina for the rest of this run ({exc})"
             )
+
+    def _em_success(self) -> None:
+        """A successful Eastmoney call clears the failure streak.
+
+        The breaker counts *consecutive* failures: without this reset a
+        ~5% sporadic failure rate over a whole-market sync would
+        accumulate 3 total failures within ~60 stocks and permanently
+        switch the primary source mid-run.
+        """
+
+        self._em_fail_streak = 0
 
     def _fixture_path(self, name: str) -> Path:
         return self.fixture_dir / f"{name}.json"
@@ -241,6 +258,10 @@ class AkShareClient:
             import akshare as ak
 
             df = self._fetch(ak.tool_trade_date_hist_sina)
+            # Strict (no coerce) on purpose: the trade CALENDAR must be
+            # complete or the whole fetch fails over to the next provider
+            # (outer except) — a silently date-dropped calendar would
+            # misalign every downstream session computation.
             dates = sorted(pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d").tolist())
             end = self.config.end_date.replace("-", "")
             # Listing age is measured in open sessions.  Retain the provider's
@@ -445,6 +466,7 @@ class AkShareClient:
                     retries=1,
                 )
                 source = "eastmoney"
+                self._em_success()
             except AkShareUnavailable as exc:
                 self._em_trip(exc)
 
@@ -541,7 +563,20 @@ class AkShareClient:
         if "trade_date" not in df.columns:
             return pd.DataFrame()
         df["ts_code"] = ts_code
-        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d")
+        # Provider dirty-date defense (never leak a raw ValueError past
+        # this client): coerce unparseable trade_date cells, drop those
+        # rows with a warning, and let the clean remainder flow on.  An
+        # all-dirty frame degrades to the empty frame the sync already
+        # treats as "no data".
+        parsed_dates = pd.to_datetime(df["trade_date"], errors="coerce")
+        bad_rows = parsed_dates.isna()
+        if bad_rows.any():
+            logger.warning(
+                f"{ts_code}: dropped {int(bad_rows.sum())} daily-bar row(s) "
+                "with an unparseable trade_date cell (provider dirty data)"
+            )
+        df = df.loc[~bad_rows].copy()
+        df["trade_date"] = parsed_dates.loc[~bad_rows].dt.strftime("%Y%m%d")
         return df
 
     def _get_daily_bar_baostock(

@@ -41,14 +41,25 @@ from test_stitched_oos import _row
 
 
 def _strong_rows():
-    """A clearly strong stitched candidate: 2 folds x 250 sessions."""
+    """A clearly strong stitched candidate pool: 8 (candidate, seed)
+    trials x 2 folds x 125 sessions = a 250-common-date stitched axis.
+
+    WP17 re-anchor (FROZEN_17 §7.2 row 1, 依据=冻结): the promotion
+    positive path needs k=8 current trials, a 250-date adjudication
+    window and max_t_perms=999 to sit INSIDE the calibrated operating
+    domain (k in [4,9], n in {30,250}, n_perms=999, block=10).  The
+    challenger carries the planted edge; the other 7 trials are pure
+    noise — they form the multiplicity pool the max-t null takes its
+    max over, keeping the observed statistic (the challenger's
+    studentized mean) far in the tail => p = 1/(999+1) = 0.001.
+    """
     rng = np.random.default_rng(7)
     rows = []
     for train_end, test_end in [
         ("2026-01-01", "2026-06-30"),
         ("2026-06-30", "2026-12-31"),
     ]:
-        daily = [0.004 + x for x in rng.normal(0.0, 0.001, 250)]
+        daily = [0.004 + x for x in rng.normal(0.0, 0.001, 125)]
         rows.append(
             _row(
                 "challenger",
@@ -65,7 +76,60 @@ def _strong_rows():
                 capacity_utilization=0.05,
             )
         )
+    for i in range(7):  # the multiplicity pool (pure-noise trials)
+        for train_end, test_end in [
+            ("2026-01-01", "2026-06-30"),
+            ("2026-06-30", "2026-12-31"),
+        ]:
+            daily = [x for x in rng.normal(0.0, 0.001, 125)]
+            rows.append(
+                _row(
+                    f"trained_pool_{i}",
+                    100 + i,
+                    train_end,
+                    test_end,
+                    daily=daily,
+                    formula_text="RET_1",
+                    eligible=True,
+                    rejection_reasons=[],
+                    direction=1,
+                    formula=[1],
+                    average_turnover=0.05,
+                    capacity_utilization=0.05,
+                )
+            )
     return rows
+
+
+def _calibration_evidence():
+    """The in-memory evidence registry for the promotion positive path
+    (WP17 re-anchor, FROZEN_17 §7.2 row 1): the covering set for
+    n=250 — {independent_noise, common_factor_095, ar1_phi04,
+    duplicate_candidates} — all verdict='calibrated' at the fixture's
+    operating point (n_perms=999, block_size=10).  Expected values are
+    hand-derived from the FROZEN §2 algorithm (qualified=True iff the
+    covering conjunction passes), not read back from the
+    implementation."""
+
+    from ashare_model.claim_record import CalibrationEvidenceRegistry
+
+    scenarios = {}
+    for name in (
+        "independent_noise", "common_factor_095",
+        "ar1_phi04", "duplicate_candidates", "short_window_30d",
+    ):
+        scenarios[name] = {
+            "scenario": name,
+            "kind": "size",
+            "n_perms": 999,
+            "block_size": 10,
+            "seed_start": 930_000,
+            "reps": 1000,
+            "verdict": "calibrated",
+        }
+    return CalibrationEvidenceRegistry.from_payload(
+        {"scenarios": scenarios}
+    )
 
 
 def _strong_artifact(regime=None, **kwargs):
@@ -79,6 +143,7 @@ def _strong_artifact(regime=None, **kwargs):
         baseline_signals=[],
         random_samples=0,
     )
+    kwargs.setdefault("max_t_perms", 999)  # WP17: the calibrated point
     return build_result(
         proto, "confirmation", TierConfig(50, 256), rows,
         spec_id="a" * 64,
@@ -136,6 +201,11 @@ def _verdict(artifact, **kwargs):
 
 
 def test_all_gates_pass_promotes(tmp_path):
+    # WP17 re-anchor (FROZEN_17 §7.2 row 1): promoted=True now needs the
+    # calibration-qualification layer — the in-memory registry below
+    # covers the fixture's operating point with four calibrated
+    # scenarios, so G2's fourth layer passes by the FROZEN §2
+    # conjunction (hand-derived expectation: qualified=True).
     artifact = _strong_artifact()
     verdict = _verdict(
         artifact,
@@ -143,12 +213,15 @@ def test_all_gates_pass_promotes(tmp_path):
         dataset_id="ds-current",
         paper_registry=_paper_registry(tmp_path),
         stress=_passing_stress(),
+        calibration_evidence=_calibration_evidence(),
     )
     assert verdict["promoted"] is True
     assert all(g["passed"] for g in verdict["gates"].values())
     assert verdict["challenger"]["candidate"] == "challenger"
     assert verdict["challenger"]["formula_hash"] == formula_hash([1], "RET_1")
     assert verdict["thresholds"]["dsr_min"] == 0.95
+    assert verdict["qualification"]["qualified"] is True
+    assert verdict["qualification"]["reason_codes"] == []
 
 
 def test_g1_rejects_old_protocol_version(tmp_path):
@@ -474,7 +547,7 @@ def test_cli_register_paper_window(tmp_path):
         {"artifact_schema_version": 1, "rows": []},
         {"artifact_schema_version": 3, "rows": []},
     ],
-    ids=["legacy-v1", "unknown-v3"],
+    ids=["legacy-v1", "legacy-v3"],  # wp17 §7.1: v3 joined the legacy set
 )
 def test_cli_promotion_rejects_noncurrent_protocol_artifact(tmp_path, payload):
     import json
@@ -673,6 +746,7 @@ def test_data_tier_gate_passes_tier_a_formula(tmp_path):
         dataset_id="ds-current",
         paper_registry=_paper_registry(tmp_path),
         stress=_passing_stress(),
+        calibration_evidence=_calibration_evidence(),  # WP17 §7.2
     )
     assert verdict["gates"]["data_tier"]["passed"] is True
     assert verdict["promoted"] is True
@@ -689,6 +763,7 @@ def test_data_tier_gate_tier_b_requires_separate_comparison(tmp_path):
         paper_registry=_paper_registry(tmp_path, formula="ROE", token=_tok("ROE")),
         stress=_passing_stress(),
         allowed_data_tiers=("A", "B"),
+        calibration_evidence=_calibration_evidence(),  # WP17 §7.2
     )
     assert verdict["gates"]["data_tier"]["passed"] is True
     assert verdict["data_tier_policy"]["allowed_tiers"] == ["A", "B"]
@@ -1056,6 +1131,7 @@ def test_g7_passes_registry_promotable_formula(tmp_path):
         dataset_id="ds-current",
         paper_registry=_paper_registry(tmp_path),
         stress=_passing_stress(),
+        calibration_evidence=_calibration_evidence(),  # WP17 §7.2
     )
     gate = _require_g7(verdict)
     assert gate["passed"] is True
@@ -1065,7 +1141,7 @@ def test_g7_passes_registry_promotable_formula(tmp_path):
     assert policy["report"]["per_feature"] == {
         "RET_1": {"promotion_allowed": True, "deprecated": False}
     }
-    assert verdict["promotion_rule_version"] == "4"  # p43 §4: v4
+    assert verdict["promotion_rule_version"] == "5"  # wp17 §7.1: v5
     assert verdict["promoted"] is True
 
 
@@ -1128,4 +1204,281 @@ def test_promotion_rule_version_pinned():
     evidence binding)."""
     from ashare_model.promotion import PROMOTION_RULE_VERSION
 
-    assert PROMOTION_RULE_VERSION == "4"  # p43 §4: v4 (numerics + identity)
+    # wp17 (FROZEN_17 §7.1): v5 = G2 consumes the calibration
+    # qualification, fail-closed (the fourth layer).
+    assert PROMOTION_RULE_VERSION == "5"
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed numeric guard (structural reform, user ruling 2026-09-21).
+# The seven gates are independent functions and EVERY numeric input is
+# read through promotion._finite_metric: a missing or NaN risk metric is
+# that gate's refusal reason, never a silently-passed bound (NaN slips
+# past every < comparison; the old ``is not None and > threshold`` form
+# let a missing field pass G3/G4 entirely).
+# ---------------------------------------------------------------------------
+
+
+def test_g3_rejects_nan_risk_metrics(tmp_path):
+    artifact = _strong_artifact()
+    artifact["top_trial"]["sharpe"] = float("nan")
+    artifact["top_trial"]["max_drawdown"] = float("nan")
+    artifact["top_trial"]["average_turnover_mean"] = float("nan")
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["excess_and_risk"]
+    assert not gate["passed"]
+    assert sum(
+        "not a finite number" in r for r in gate["reasons"]
+    ) == 3
+
+
+def test_g3_rejects_missing_risk_metrics(tmp_path):
+    """A missing risk metric is a refusal (unified with the historical
+    sharpe behaviour), and the reason names the missing field."""
+    artifact = _strong_artifact()
+    for key in (
+        "max_drawdown",
+        "average_turnover_mean",
+        "capacity_utilization_max",
+    ):
+        artifact["top_trial"].pop(key, None)
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["excess_and_risk"]
+    assert not gate["passed"]
+    for key in (
+        "max_drawdown",
+        "average_turnover_mean",
+        "capacity_utilization_max",
+    ):
+        assert any(f"{key} is missing" in r for r in gate["reasons"])
+    assert verdict["promoted"] is False
+
+
+def test_g3_passing_scenario_unchanged_by_required_turnover(tmp_path):
+    """Positive control: the untouched strong artifact (complete finite
+    risk metrics, turnover/capacity included) still passes G3."""
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    assert verdict["gates"]["excess_and_risk"]["passed"] is True
+
+
+def test_g4_rejects_nan_stress_cell(tmp_path):
+    stress = _passing_stress()
+    stress["grid"][0]["sharpe"] = float("nan")
+    stress["grid"][0]["max_drawdown"] = float("nan")
+    stress["grid"][0]["excess_return"] = float("nan")
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=stress,
+    )
+    gate = verdict["gates"]["cost_capacity_stress"]
+    assert not gate["passed"]
+    assert sum(
+        "not a finite number" in r for r in gate["reasons"]
+    ) == 3
+    assert any("cost x0.5" in r for r in gate["reasons"])
+
+
+def test_g4_rejects_nonfinite_stress_cell_n_days(tmp_path):
+    """A NaN n_days made the old ``(cell.get("n_days") or 0) < 2` check
+    truthy-skip the whole cell; now it is an explicit refusal."""
+    stress = _passing_stress()
+    stress["grid"][0]["n_days"] = float("nan")
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=stress,
+    )
+    gate = verdict["gates"]["cost_capacity_stress"]
+    assert not gate["passed"]
+    assert any(
+        "n_days" in r and "not a finite number" in r
+        for r in gate["reasons"]
+    )
+
+
+def test_g4_rejects_missing_stress_metrics(tmp_path):
+    stress = _passing_stress()
+    del stress["grid"][0]["max_drawdown"]
+    stress["grid"][1].pop("sharpe", None)
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=stress,
+    )
+    gate = verdict["gates"]["cost_capacity_stress"]
+    assert not gate["passed"]
+    assert any("max_drawdown is missing" in r for r in gate["reasons"])
+    assert any("sharpe is missing" in r for r in gate["reasons"])
+    # A cell with no stitched series keeps its historical reason.
+    stress = _passing_stress()
+    stress["grid"][0]["n_days"] = 1
+    verdict = _verdict(
+        _strong_artifact(),
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=stress,
+    )
+    assert any(
+        "no stitched OOS series" in r
+        for r in verdict["gates"]["cost_capacity_stress"]["reasons"]
+    )
+
+
+def test_g5_missing_formula_identity_is_a_gate_failure_not_a_crash(tmp_path):
+    """P2-5: a top row with neither formula tokens nor formula_text used
+    to crash evaluate_challenger with the hasher's ValueError; the
+    unified rule is a G5 gate refusal (same fail-closed semantics as
+    G6/G7's untraceable formula), and the challenger mirror degrades to
+    None instead of crashing."""
+    artifact = _strong_artifact()
+    for row in artifact["rows"]:
+        row["formula"] = None
+        row["formula_text"] = None
+    verdict = _verdict(
+        artifact,
+        regime=_future_regime(tmp_path),
+        dataset_id="ds-current",
+        paper_registry=_paper_registry(tmp_path),
+        stress=_passing_stress(),
+    )
+    gate = verdict["gates"]["paper_window"]
+    assert not gate["passed"]
+    assert any(
+        "neither formula tokens nor formula_text" in r
+        for r in gate["reasons"]
+    )
+    assert verdict["challenger"]["formula_hash"] is None
+    assert verdict["promoted"] is False
+
+
+def _qualified_protocol_run(tmp_path):
+    """A real run qualified through SEARCH_PLAN_ADMITTED with its
+    protocol artifact REGISTERED in the store and mirrored to a
+    convenience file; returns ``(store_root, artifact, mirror_path)``."""
+
+    from ashare_model import lifecycle
+    from ashare_model.artifact_schemas import ProtocolResultArtifact
+    from ashare_model.artifact_writer import write_boundary_artifact
+    from ashare_model.run_store import RunStore
+    from test_p27_a03_lifecycle_runcontext import _factor_report
+    from test_run_store import LIFECYCLE_IDEA, _clean_data_report, _spec
+
+    store = RunStore(tmp_path / "store")
+    spec = _spec()
+    handle = store.open_run(spec)
+    writer = lifecycle.LifecycleWriter(handle)
+    writer.record_idea(LIFECYCLE_IDEA)
+    writer.lock_spec()
+    writer.qualify_data(_clean_data_report(spec))
+    writer.qualify_factor_set(_factor_report(spec))
+    writer.admit_search_plan(lifecycle.build_search_admission_evidence(spec))
+    artifact = build_result(
+        ProtocolConfig(
+            folds=[
+                FoldConfig("2026-01-01", "2026-06-30"),
+                FoldConfig("2026-06-30", "2026-12-31"),
+            ],
+            seeds=[42],
+            baseline_signals=[],
+            random_samples=0,
+        ),
+        "confirmation",
+        TierConfig(50, 256),
+        _strong_rows(),
+        spec_id=spec.spec_id,
+        run_id=handle.run_id,
+        data_end_date="2026-12-31",
+        dataset_id="ds-current",
+    )
+    mirror = tmp_path / "artifact.json"
+    write_boundary_artifact(
+        handle,
+        artifact_type="protocol",
+        model_cls=ProtocolResultArtifact,
+        payload=artifact,
+        candidate_id=artifact["candidate_id"],
+        convenience_path=mirror,
+    )
+    handle.close()
+    return store.root, artifact, mirror
+
+
+def test_consumption_check_accepts_the_registered_mirror(tmp_path):
+    """Positive control: the genuine convenience mirror resolves to its
+    registered artifact id (lifecycle-qualified source run + registered
+    protocol payload)."""
+    from ashare_model.promotion import assert_consumable_protocol_artifact
+
+    store_root, artifact, _mirror = _qualified_protocol_run(tmp_path)
+    artifact_id = assert_consumable_protocol_artifact(store_root, artifact)
+    assert artifact_id
+
+
+def test_consumption_check_refuses_an_unregistered_mirror(tmp_path):
+    """A03 (p27 I7 read side): a tampered/c copied mirror whose content
+    id is not the run's registered protocol artifact is refused — the
+    mirror is a cache, never the formal evidence."""
+    from ashare_model.artifact_schemas import ArtifactSchemaError
+    from ashare_model.promotion import assert_consumable_protocol_artifact
+
+    store_root, artifact, _mirror = _qualified_protocol_run(tmp_path)
+    forged = dict(artifact)
+    forged["n_candidates"] = artifact["n_candidates"] + 1
+    with pytest.raises(ArtifactSchemaError, match="registered"):
+        assert_consumable_protocol_artifact(store_root, forged)
+
+
+def test_cli_refuses_unregistered_protocol_mirror(tmp_path):
+    """The promotion CLI itself refuses a tampered mirror BEFORE any
+    gate work (no verdict file is written)."""
+    import json
+
+    from ashare_model.promotion import main
+
+    store_root, _artifact, mirror = _qualified_protocol_run(tmp_path)
+    payload = json.loads(mirror.read_text(encoding="utf-8"))
+    payload["n_candidates"] = int(payload["n_candidates"]) + 1
+    mirror.write_text(json.dumps(payload), encoding="utf-8")
+    verdict_path = tmp_path / "verdict.json"
+    rc = main(
+        [
+            "--artifact",
+            str(mirror),
+            "--output",
+            str(verdict_path),
+            "--regime",
+            str(tmp_path / "regime.json"),
+            "--paper",
+            str(tmp_path / "paper.json"),
+            "--runs-root",
+            str(store_root),
+        ]
+    )
+    assert rc == 1
+    assert not verdict_path.exists()

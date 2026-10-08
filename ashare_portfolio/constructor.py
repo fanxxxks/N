@@ -57,12 +57,26 @@ def _readonly(values: np.ndarray) -> np.ndarray:
 def _cap_increases_to_available_cash(
     target: np.ndarray,
     prev: np.ndarray,
+    fee_reserve: float = 0.0,
 ) -> np.ndarray:
-    """Shrink only fresh increases until the long-only book is funded."""
+    """Shrink only fresh increases until the long-only book is funded.
+
+    p52 (WP16-A, ``reports/wp16/FROZEN_A.md`` §1 (C1)/§6): ``fee_reserve``
+    (a fraction of pre-trade equity) carves the session's execution fees
+    out of the investable cash BEFORE the buys are sized, so the post-trade
+    book satisfies ``Σa + c ≤ 1`` — fees are payable from the zero-yield
+    cash account, never financed by a negative cash balance.  The engine
+    analogue is its buy-affordability loop (``backtest.py:356-368``), which
+    executes with its own cash ledger and therefore keeps the default 0.0:
+    every legacy caller is byte-identical, and only the weight-space basket
+    reward simulation (which has no execution layer) passes a reserve.
+    """
 
     increase = np.maximum(target - prev, 0.0)
     base = target - increase
-    available = max(1.0 - float(base.sum()), 0.0)
+    available = max(
+        1.0 - float(base.sum()) - max(float(fee_reserve), 0.0), 0.0
+    )
     increase_sum = float(increase.sum())
     if increase_sum > available and increase_sum > 0.0:
         return base + increase * (available / increase_sum)
@@ -100,10 +114,10 @@ def validate_portfolio_config(config: "BacktestConfig") -> None:
     if config.turnover_budget is not None and float(config.turnover_budget) < 0.0:
         raise ValueError("turnover_budget must be >= 0")
     allocation = str(getattr(config, "turnover_allocation", "priority"))
-    if allocation not in ("proportional", "priority"):
+    if allocation not in ("proportional", "priority", "trade_groups"):
         raise ValueError(
-            "turnover_allocation must be 'proportional' or 'priority', "
-            f"got {allocation!r}"
+            "turnover_allocation must be 'proportional', 'priority' or "
+            f"'trade_groups', got {allocation!r}"
         )
     threshold = float(config.target_weight_change_threshold)
     if not 0.0 <= threshold <= 1.0:
@@ -231,8 +245,54 @@ class PortfolioConstructor:
         beta: np.ndarray | None = None,
         size: np.ndarray | None = None,
         adv: np.ndarray | None = None,
+        initial_funding_used: bool | None = None,
+        fee_reserve: float = 0.0,
+        not_due_forced_exit: bool = False,
+        hold_after_first_funding: bool = False,
     ) -> PortfolioOutput:
-        """Construct one target from only signal-date and entry-date inputs."""
+        """Construct one target from only signal-date and entry-date inputs.
+
+        ``initial_funding_used`` (p51 W4, frozen §6.2) is the run-level
+        first-funding state maintained by the CALLER (engine / run_sim /
+        reward baskets — one flag per account ledger).  ``None`` (the
+        default) keeps the legacy semantics verbatim: an empty prev book
+        counts as first funding.  An explicit bool opts into the state
+        machine ``initial_funding := (not b) and prev.sum() <= eps`` —
+        a burned exemption (or any earlier holding) never re-gains the
+        unbudgeted privilege after the book is cleared.
+
+        ``fee_reserve`` (p52, WP16-A FROZEN §1 (C1)/§6) is a fraction of
+        pre-trade equity withheld from the cash cap so the session's
+        execution fees stay payable from cash (``Σa + c ≤ 1``).  Default
+        0.0 keeps the legacy cap byte-identical — the engine/run_sim pay
+        fees inside their own share-space cash ledgers, so only the
+        weight-space basket simulator passes a reserve.
+
+        ``not_due_forced_exit`` / ``hold_after_first_funding`` (p56, WP18
+        FROZEN_18_PLAN §3.2) are the opt-in hold-mode legs, both default
+        False so every legacy path stays byte-identical:
+
+        * ``not_due_forced_exit=True`` lets a NON-due session run its
+          forced-risk-exit leg only (``target=prev`` with
+          ``forced_exit`` names zeroed, reason
+          ``"not_due_forced_exit"``).  Historically the not_due early
+          return (below) preceded the ``forced_exit`` computation, so an
+          ineligible holding was never exited on a non-due session —
+          the WP18 hold mode closes that gap per the frozen semantics
+          "保留必要的强制风险退出，仅关闭主动换股"; with the flag off
+          the early return is unchanged.
+        * ``hold_after_first_funding=True`` marks a DUE session of an
+          already-funded hold account: active re-selection is OFF — the
+          target is ``prev`` with ``forced_exit`` names zeroed (reason
+          ``"hold_forced_exit"`` / ``"hold_no_trade"``); no buys are
+          ever planned on this leg.  The run-level "already funded"
+          state is the CALLER's (see :class:`HoldModeConstructor`).
+        """
+
+        if not isinstance(fee_reserve, (int, float, np.integer, np.floating)):
+            raise TypeError("fee_reserve must be a real fraction of equity")
+        if not np.isfinite(float(fee_reserve)) or float(fee_reserve) < 0.0:
+            raise ValueError("fee_reserve must be finite and non-negative")
 
         signal = np.asarray(signal, dtype=np.float64)
         prev = np.asarray(prev_weights, dtype=np.float64)
@@ -249,6 +309,21 @@ class PortfolioConstructor:
             stable_keys,
             capital,
         )
+        if initial_funding_used is not None and not isinstance(
+            initial_funding_used, (bool, np.bool_)
+        ):
+            raise TypeError(
+                "initial_funding_used must be a bool or None (frozen §6.2)"
+            )
+        # p51 W4 (frozen §6.2): default None keeps the legacy line-272
+        # rule byte-for-byte; an explicit bool switches to the run-level
+        # state machine and echoes itself into diagnostics.
+        if initial_funding_used is None:
+            initial_funding = bool(prev.sum() <= _WEIGHT_EPSILON)
+        else:
+            initial_funding = (not bool(initial_funding_used)) and bool(
+                prev.sum() <= _WEIGHT_EPSILON
+            )
         diagnostics: dict[str, Any] = {
             "version": PORTFOLIO_CONSTRUCTOR_VERSION,
             "method": self.method,
@@ -258,7 +333,8 @@ class PortfolioConstructor:
             "min_trade_dropped": (),
             "turnover_budget_scale": 1.0,
             # p44 A3: the allocation diagnostics.  mode is set
-            # below ("unbudgeted" | "proportional" | "priority");
+            # below ("unbudgeted" | "proportional" | "priority", plus
+            # the p51 experimental "trade_groups" delegation label);
             # the executed tuples keep their PRIORITY order (the
             # allocation order is the auditable fact).
             "turnover_budget_mode": None,
@@ -269,14 +345,57 @@ class PortfolioConstructor:
             "turnover_budget_consumed": 0.0,
             "forced_exit_count": 0,
             "legacy_position_wind_down": (),
-            "initial_funding": bool(prev.sum() <= _WEIGHT_EPSILON),
+            "initial_funding": initial_funding,
         }
+        if initial_funding_used is not None:
+            # §6.2 diagnostics contract: echo the run-level state only
+            # when the caller actually passed it (no new key otherwise).
+            diagnostics["initial_funding_used"] = bool(initial_funding_used)
         notional_capital = max(float(capital), 0.0)
+        # p56 (WP18 FROZEN §3.2): forced_exit is computed BEFORE the
+        # not_due early return so the opt-in not_due_forced_exit /
+        # hold_after_first_funding legs can act on it.  The formula is
+        # verbatim the due-path one (below); with both flags off this
+        # hoist changes no observable value (the due path recomputes the
+        # identical mask and the default not_due return never reads it).
+        held = prev > _WEIGHT_EPSILON
+        forced_exit = held & ~eligible & ~sell_blocked
         if not rebalance_due:
+            if not_due_forced_exit and bool(forced_exit.any()):
+                # §3.2 row 7: non-due session forced-exit leg — sell the
+                # disqualified holdings, no buys, proceeds stay cash.
+                diagnostics["forced_exit_count"] = int(
+                    np.count_nonzero(forced_exit)
+                )
+                diagnostics["hold_forced_exit"] = True
+                target = prev.copy()
+                target[forced_exit] = 0.0
+                selected = tuple(
+                    np.flatnonzero(target > _WEIGHT_EPSILON).astype(int)
+                )
+                return self._output(
+                    target, prev, selected, "not_due_forced_exit", diagnostics
+                )
             selected = tuple(np.flatnonzero(prev > _WEIGHT_EPSILON).astype(int))
             return self._output(prev, prev, selected, "not_due", diagnostics)
 
-        held = prev > _WEIGHT_EPSILON
+        if hold_after_first_funding:
+            # §3.2 row 5: a due session of an already-funded hold account
+            # closes active re-selection — target = prev with only the
+            # forced-risk-exit names zeroed; no buy leg is ever planned.
+            reason = (
+                "hold_forced_exit" if bool(forced_exit.any()) else "hold_no_trade"
+            )
+            diagnostics["forced_exit_count"] = int(np.count_nonzero(forced_exit))
+            if bool(forced_exit.any()):
+                diagnostics["hold_forced_exit"] = True
+            target = prev.copy()
+            target[forced_exit] = 0.0
+            selected = tuple(
+                np.flatnonzero(target > _WEIGHT_EPSILON).astype(int)
+            )
+            return self._output(target, prev, selected, reason, diagnostics)
+
         finite_eligible = np.isfinite(signal) & eligible
         selectable = finite_eligible & ~buy_blocked
         selectable_values = signal[selectable]
@@ -298,6 +417,9 @@ class PortfolioConstructor:
 
         forced_exit = held & ~eligible & ~sell_blocked
         mandatory = forced_exit.copy()
+        # (forced_exit recomputed verbatim above the not_due early return
+        # since p56/WP18 §3.2 — the mask is identical, one formula hoisted;
+        # the assignment below is kept for the due path's readability)
         diagnostics["forced_exit_count"] = int(np.count_nonzero(forced_exit))
 
         survivors: list[int] = []
@@ -408,13 +530,23 @@ class PortfolioConstructor:
                 target[below] = prev[below]
 
         budget = self.config.turnover_budget
+        allocation = str(getattr(self.config, "turnover_allocation", "priority"))
         budgeted = budget is not None and not diagnostics["initial_funding"]
-        if not budgeted:
+        if allocation == "trade_groups":
+            # p51 (frozen §1.1.2): the experimental trade-groups mode.
+            # The constructor walks EXACTLY the unbudgeted code path
+            # (threshold/min-trade filters and the cash cap unchanged)
+            # and only labels the mode; its own priority/proportional
+            # allocation never executes — the budget is delegated to the
+            # pure planner (ashare_portfolio/trade_groups.py, §1.4),
+            # which sees shares/prices/cash the weight-space constructor
+            # does not.
+            diagnostics["turnover_budget_mode"] = (
+                "trade_groups" if budget is not None else "unbudgeted"
+            )
+        elif not budgeted:
             diagnostics["turnover_budget_mode"] = "unbudgeted"
-        elif (
-            str(getattr(self.config, "turnover_allocation", "priority"))
-            == "proportional"
-        ):
+        elif allocation == "proportional":
             # v1 comparison path (p44 A1): scale every discretionary
             # leg by budget / discretionary turnover, then re-apply
             # the minimum filter.
@@ -515,8 +647,17 @@ class PortfolioConstructor:
 
         # Both suppression passes can restore a planned reduction after fresh
         # buys were sized.  Re-apply the same cash boundary so the resulting
-        # book remains self-financing; only increases may shrink.
-        target = _cap_increases_to_available_cash(target, prev)
+        # book remains self-financing; only increases may shrink.  p52
+        # (WP16-A FROZEN §1 (C1)/§6): the fee reserve applies ONLY at this
+        # final funding boundary — after the threshold / min-trade /
+        # budget passes have sized the PLAN — mirroring the engine's
+        # execution order (it plans at full size, then its affordability
+        # loop funds the buys against cash-after-fees).  Reserving before
+        # the min-trade filter would shrink every planned leg below the
+        # minimum order and suppress the whole book instead of funding it.
+        target = _cap_increases_to_available_cash(
+            target, prev, fee_reserve=float(fee_reserve)
+        )
 
         diagnostics["threshold_dropped"] = tuple(sorted(threshold_dropped))
         diagnostics["min_trade_dropped"] = tuple(sorted(min_trade_dropped))
@@ -528,3 +669,107 @@ class PortfolioConstructor:
             | set(diagnostics["budget_skipped_no_viable"])
         )
         return self._output(target, prev, selected, reason, diagnostics)
+
+
+class HoldModeConstructor(PortfolioConstructor):
+    """The WP18 hold-mode strategy entry (p56, FROZEN_18_PLAN §3.2).
+
+    "首次建仓后持有" with the necessary forced risk exits kept: the
+    wrapper owns the ONE piece of run-level state the weight-space
+    constructor cannot see — whether the account's first funding has
+    already happened — and routes every session accordingly:
+
+    * before first funding: sessions are the base constructor verbatim
+      (the first DUE session with an empty book builds normally, §3.2
+      row 4; non-due pre-funding sessions are plain ``not_due`` — an
+      empty book has nothing to exit);
+    * after first funding: ``hold_after_first_funding=True`` on due
+      sessions (active re-selection OFF, only the forced-exit leg) and
+      ``not_due_forced_exit=True`` on non-due sessions (the exit-only
+      leg) — so a hold account NEVER buys again, even after its book is
+      fully liquidated by forced exits (§3.2: "hold 模式首建仓后永不
+      主动买入", proceeds stay cash).
+
+    One instance per account run (the engine holds its constructor for
+    the whole ``run``): the first-funding flag is sequential session
+    state, exactly like the engine's own weights/cash ledger.  The
+    dynamic mode is the unwrapped base class — the two modes differ
+    ONLY in the active-reselection leg and share the session grid,
+    signal input, cost ladder and fee accounting (§3.2 header table).
+    """
+
+    def __init__(
+        self,
+        config: "BacktestConfig",
+        *,
+        optimizer: PortfolioOptimizer | None = None,
+    ) -> None:
+        super().__init__(config, optimizer=optimizer)
+        self._first_funding_done: bool = False
+
+    @property
+    def first_funding_done(self) -> bool:
+        return self._first_funding_done
+
+    def construct(
+        self,
+        signal,
+        prev_weights,
+        *,
+        capital: float,
+        eligible,
+        buy_blocked,
+        sell_blocked,
+        stable_keys,
+        rebalance_due: bool = True,
+        cov: np.ndarray | None = None,
+        industries: np.ndarray | None = None,
+        beta: np.ndarray | None = None,
+        size: np.ndarray | None = None,
+        adv: np.ndarray | None = None,
+        initial_funding_used: bool | None = None,
+        fee_reserve: float = 0.0,
+    ) -> PortfolioOutput:
+        prev = np.asarray(prev_weights, dtype=np.float64)
+        if not self._first_funding_done:
+            output = super().construct(
+                signal,
+                prev,
+                capital=capital,
+                eligible=eligible,
+                buy_blocked=buy_blocked,
+                sell_blocked=sell_blocked,
+                stable_keys=stable_keys,
+                rebalance_due=rebalance_due,
+                cov=cov,
+                industries=industries,
+                beta=beta,
+                size=size,
+                adv=adv,
+                initial_funding_used=initial_funding_used,
+                fee_reserve=fee_reserve,
+            )
+            if rebalance_due and float(np.asarray(output.weights).sum()) > (
+                _WEIGHT_EPSILON
+            ):
+                self._first_funding_done = True
+            return output
+        return super().construct(
+            signal,
+            prev,
+            capital=capital,
+            eligible=eligible,
+            buy_blocked=buy_blocked,
+            sell_blocked=sell_blocked,
+            stable_keys=stable_keys,
+            rebalance_due=rebalance_due,
+            cov=cov,
+            industries=industries,
+            beta=beta,
+            size=size,
+            adv=adv,
+            initial_funding_used=initial_funding_used,
+            fee_reserve=fee_reserve,
+            not_due_forced_exit=True,
+            hold_after_first_funding=True,
+        )
