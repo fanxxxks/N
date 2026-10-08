@@ -1,690 +1,9 @@
 {
   "kind": "synthetic functional validation, never cloud throughput or profit evidence",
-  "command": "python -m pytest -q tests/test_cloud_search.py tests/test_run_sim.py --basetemp=D:/minequant/cloud-tests-005 --tb=short",
-  "result": "37 passed in 261.08s",
+  "command": "python -m pytest -q tests/test_cloud_search.py tests/test_db.py tests/test_train_module_split.py --basetemp=D:/minequant/cloud-tests-final-clean-001 --tb=short",
+  "result": "21 passed in 200.81s",
   "runtime": "3.13.12 | packaged by Anaconda, Inc. | (main, Feb 24 2026, 16:05:56) [MSC v.1942 64 bit (AMD64)]",
   "rows": [
-    {
-      "method": "rl",
-      "seed": 42,
-      "window": {
-        "name": "synthetic",
-        "start": "2022-01-03",
-        "train_end": "2022-11-04",
-        "validation_end": "2023-01-27",
-        "test_end": "2023-04-21"
-      },
-      "outcome": "frozen_test_completed",
-      "search": {
-        "contract_version": 4,
-        "backend": "rl",
-        "seed": 42,
-        "requested_budget": 4,
-        "consumed_budget": 4,
-        "termination_reason": "budget_exhausted",
-        "stagnation_reason": null,
-        "best_so_far": [
-          [
-            1,
-            1.3469085987512175
-          ],
-          [
-            2,
-            3.695303104831381
-          ],
-          [
-            3,
-            3.695303104831381
-          ],
-          [
-            4,
-            3.695303104831381
-          ]
-        ],
-        "selected": {
-          "tokens": [
-            10,
-            96,
-            1,
-            88,
-            117,
-            123
-          ],
-          "candidate_id": "rl:10,96,1,88,117,123",
-          "formula_text": "(DELTA5(AMPLITUDE) CORR60 NEG(RET_1))",
-          "source": "rl",
-          "direction": 1,
-          "data_tier": {
-            "data_tier_version": 2,
-            "max_tier": "A",
-            "tiers_used": [
-              "A"
-            ]
-          },
-          "val_reward": 3.695303104831381,
-          "val_icir": 0.24203709645239155,
-          "train_reward": -3.3311442864958063,
-          "train_icir": -0.19841296141224182,
-          "complexity_penalty": 0.0,
-          "complexity_cost": 2.7499999999999996,
-          "active_ir": 3.778847177516484,
-          "risk_exposure": 0.02287048111067754,
-          "average_turnover": 0.18020999959047368,
-          "capacity_utilization": 0.001309095890259329,
-          "eligible": true,
-          "rejection_reasons": []
-        },
-        "rejection_reasons": {},
-        "proposal_count": 4,
-        "invalid_proposals": 0,
-        "semantic_duplicates": 0,
-        "elite_archive": null,
-        "diagnostics": {
-          "version": 1,
-          "reward_distribution": {
-            "count": 4,
-            "min": -3.331144332885742,
-            "q25": -2.0825235545635223,
-            "median": -1.2050805985927582,
-            "q75": -0.6675276756286621,
-            "max": -0.43857699632644653,
-            "mean": -1.5449706315994263,
-            "std": 1.1259497309940383
-          },
-          "rejection_reasons": {},
-          "mean_entropy": 2.220515489578247,
-          "semantic_duplicates": 0,
-          "semantic_duplicate_rate": 0.0,
-          "mean_advantage_variance": 1.4107292792613693,
-          "gradient_norm": {
-            "min": 10.208751526520746,
-            "mean": 10.208751526520746,
-            "max": 10.208751526520746
-          },
-          "formula_length": {
-            "count": 4,
-            "min": 3,
-            "mean": 5.25,
-            "max": 6
-          },
-          "operator_coverage": [
-            "CORR10",
-            "CORR60",
-            "CS_DEMEAN",
-            "CS_RANK",
-            "CS_ZSCORE",
-            "DELAY1",
-            "DELTA5",
-            "MA10",
-            "NEG",
-            "STD60",
-            "TS_RANK20"
-          ],
-          "steps": [
-            {
-              "version": 1,
-              "reward_distribution": {
-                "count": 4,
-                "min": -3.331144332885742,
-                "q25": -2.0825235545635223,
-                "median": -1.2050805985927582,
-                "q75": -0.6675276756286621,
-                "max": -0.43857699632644653,
-                "mean": -1.5449706315994263,
-                "std": 1.1259497309940383
-              },
-              "rejection_reasons": {},
-              "entropy": 2.220515489578247,
-              "semantic_duplicates": 0,
-              "semantic_duplicate_rate": 0.0,
-              "advantage_variance": 1.4107292792613693,
-              "gradient_norm": 10.208751526520746,
-              "formula_length": {
-                "count": 4,
-                "min": 3,
-                "mean": 5.25,
-                "max": 6
-              },
-              "operator_coverage": [
-                "CORR10",
-                "CORR60",
-                "CS_DEMEAN",
-                "CS_RANK",
-                "CS_ZSCORE",
-                "DELAY1",
-                "DELTA5",
-                "MA10",
-                "NEG",
-                "STD60",
-                "TS_RANK20"
-              ],
-              "grad_clip_max_norm": 5.0,
-              "grad_clip_triggered": true
-            }
-          ],
-          "step_summary_retention": {
-            "cap": 512,
-            "retained": 1,
-            "dropped": 0
-          },
-          "initialization": "random",
-          "imitation": null
-        },
-        "n_scores": 4,
-        "stop_reason": "budget_exhausted"
-      },
-      "curve": [
-        {
-          "effective_evaluations": 1,
-          "best_validation_score": 1.3469085987512175,
-          "elapsed_seconds": 1.633249699982116
-        },
-        {
-          "effective_evaluations": 2,
-          "best_validation_score": 3.695303104831381,
-          "elapsed_seconds": 1.633249699982116
-        },
-        {
-          "effective_evaluations": 3,
-          "best_validation_score": 3.695303104831381,
-          "elapsed_seconds": 1.633249699982116
-        },
-        {
-          "effective_evaluations": 4,
-          "best_validation_score": 3.695303104831381,
-          "elapsed_seconds": 1.633249699982116
-        }
-      ],
-      "search_seconds": 1.6354156000015792,
-      "elapsed_seconds": 25.244298600009643,
-      "test_accounts": [
-        {
-          "capital": 10000,
-          "account": {
-            "account_summary_version": 2,
-            "initial_capital": 10000,
-            "first_mark_date": "20230131",
-            "final_mark_date": "20230421",
-            "periods": 58,
-            "terminal_net_assets": 8596.839451440093,
-            "net_profit_rmb": -1403.1605485599064,
-            "net_return": -0.14031605485599064,
-            "net_cagr": -0.4815421226743124,
-            "max_drawdown": 0.1403160548568504,
-            "annual_returns": {
-              "2023": -0.14031605485599064
-            },
-            "worst_year": "2023",
-            "worst_year_return": -0.14031605485599064,
-            "actual_exposure_mean": 0.6948467850195298,
-            "actual_exposure_min": 0.5606689644162798,
-            "actual_exposure_final": 0.6085567089345129,
-            "actual_exposure_last_entry": 0.6085027873179212,
-            "actual_holdings_mean": 4.879310344827586,
-            "actual_holdings_min": 4,
-            "actual_holdings_final": 4,
-            "fraction_days_below_20": 1.0,
-            "actual_max_single_weight": 0.18096544709538212,
-            "dispersion_status": "实际持仓不足20只的天数需审查",
-            "actual_turnover_total": 28.92004622235705,
-            "actual_turnover_daily_mean": 0.49862148659236294,
-            "plan_turnover_total": 36.577096775263,
-            "plan_order_count": 246,
-            "actual_order_count": 202,
-            "cash_min": 2052.1890258257367,
-            "final_cash": 3365.175127633327,
-            "fees": {
-              "commission": 1010.0,
-              "stamp_tax": 66.2137503862381,
-              "transfer_fee": 2.70275772023201,
-              "slippage": 135.1378860116005,
-              "total": 1214.0543941180706
-            },
-            "execution_rejections": {
-              "below_board_lot": 44
-            },
-            "constructor_suppression": {
-              "threshold_dropped": 0,
-              "min_trade_dropped": 143,
-              "budget_skipped_no_viable": 0,
-              "budget_cash_capped": 0
-            },
-            "market_block_counts": {
-              "buy_blocked": 0,
-              "sell_blocked": 0,
-              "nonfinite_signal": 0
-            },
-            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
-            "valuation_complete": true,
-            "terminal_missing_prices": [],
-            "theoretical_equal_weight_return": 0.0005024163921976132,
-            "benchmark_return": 0.0005024163921976132,
-            "net_excess_return": -0.1407477572677719,
-            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
-            "no_trade_reason": null
-          },
-          "config": {
-            "start_date": "2022-01-03",
-            "end_date": "2023-04-21",
-            "train_end_date": "2022-11-04",
-            "rebalance_frequency": "daily",
-            "target_horizon": 1,
-            "initial_capital": 10000,
-            "top_n": 5,
-            "portfolio_method": "equal_weight",
-            "buy_rank": 5,
-            "sell_rank": 5,
-            "min_trade_amount": 500,
-            "turnover_budget": null,
-            "turnover_allocation": "priority",
-            "target_weight_change_threshold": 0.0,
-            "single_weight_cap": 0.18,
-            "commission_rate": 0.00025,
-            "min_commission": 5.0,
-            "stamp_tax_rate": 0.0005,
-            "transfer_fee_rate": 1e-05,
-            "slippage_rate": 0.0005,
-            "lot_size": 100,
-            "benchmark": "全市场等权"
-          }
-        },
-        {
-          "capital": 50000,
-          "account": {
-            "account_summary_version": 2,
-            "initial_capital": 50000,
-            "first_mark_date": "20230131",
-            "final_mark_date": "20230421",
-            "periods": 58,
-            "terminal_net_assets": 47684.1353884337,
-            "net_profit_rmb": -2315.864611566298,
-            "net_return": -0.04631729223132597,
-            "net_cagr": -0.18620778386948267,
-            "max_drawdown": 0.0482010719494802,
-            "annual_returns": {
-              "2023": -0.04631729223132597
-            },
-            "worst_year": "2023",
-            "worst_year_return": -0.04631729223132597,
-            "actual_exposure_mean": 0.8327930100883324,
-            "actual_exposure_min": 0.7906425623340665,
-            "actual_exposure_final": 0.7997878896813586,
-            "actual_exposure_last_entry": 0.7994104118816614,
-            "actual_holdings_mean": 10.0,
-            "actual_holdings_min": 10,
-            "actual_holdings_final": 10,
-            "fraction_days_below_20": 1.0,
-            "actual_max_single_weight": 0.09299418881511057,
-            "dispersion_status": "实际持仓不足20只的天数需审查",
-            "actual_turnover_total": 24.06689570824862,
-            "actual_turnover_daily_mean": 0.41494647772842447,
-            "plan_turnover_total": 25.608617542442,
-            "plan_order_count": 312,
-            "actual_order_count": 288,
-            "cash_min": 6700.671772681476,
-            "final_cash": 9546.94137483812,
-            "fees": {
-              "commission": 1440.0,
-              "stamp_tax": 284.3947846889496,
-              "transfer_fee": 11.757081914186479,
-              "slippage": 587.8540957093239,
-              "total": 2324.00596231246
-            },
-            "execution_rejections": {
-              "below_board_lot": 24
-            },
-            "constructor_suppression": {
-              "threshold_dropped": 0,
-              "min_trade_dropped": 407,
-              "budget_skipped_no_viable": 0,
-              "budget_cash_capped": 0
-            },
-            "market_block_counts": {
-              "buy_blocked": 0,
-              "sell_blocked": 0,
-              "nonfinite_signal": 0
-            },
-            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
-            "valuation_complete": true,
-            "terminal_missing_prices": [],
-            "theoretical_equal_weight_return": 0.0005024163921976132,
-            "benchmark_return": 0.0005024163921976132,
-            "net_excess_return": -0.04679619744683383,
-            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
-            "no_trade_reason": null
-          },
-          "config": {
-            "start_date": "2022-01-03",
-            "end_date": "2023-04-21",
-            "train_end_date": "2022-11-04",
-            "rebalance_frequency": "daily",
-            "target_horizon": 1,
-            "initial_capital": 50000,
-            "top_n": 10,
-            "portfolio_method": "equal_weight",
-            "buy_rank": 10,
-            "sell_rank": 10,
-            "min_trade_amount": 1000,
-            "turnover_budget": null,
-            "turnover_allocation": "priority",
-            "target_weight_change_threshold": 0.0,
-            "single_weight_cap": 0.09,
-            "commission_rate": 0.00025,
-            "min_commission": 5.0,
-            "stamp_tax_rate": 0.0005,
-            "transfer_fee_rate": 1e-05,
-            "slippage_rate": 0.0005,
-            "lot_size": 100,
-            "benchmark": "全市场等权"
-          }
-        },
-        {
-          "capital": 100000,
-          "account": {
-            "account_summary_version": 2,
-            "initial_capital": 100000,
-            "first_mark_date": "20230131",
-            "final_mark_date": "20230421",
-            "periods": 58,
-            "terminal_net_assets": 96842.9331104075,
-            "net_profit_rmb": -3157.0668895925082,
-            "net_return": -0.03157066889592508,
-            "net_cagr": -0.13010351136657272,
-            "max_drawdown": 0.03630936741310686,
-            "annual_returns": {
-              "2023": -0.03157066889592508
-            },
-            "worst_year": "2023",
-            "worst_year_return": -0.03157066889592508,
-            "actual_exposure_mean": 0.8675334108923517,
-            "actual_exposure_min": 0.8486191718680591,
-            "actual_exposure_final": 0.8489345792795845,
-            "actual_exposure_last_entry": 0.8486191718680591,
-            "actual_holdings_mean": 10.0,
-            "actual_holdings_min": 10,
-            "actual_holdings_final": 10,
-            "fraction_days_below_20": 1.0,
-            "actual_max_single_weight": 0.09250665868767981,
-            "dispersion_status": "实际持仓不足20只的天数需审查",
-            "actual_turnover_total": 24.92100312554178,
-            "actual_turnover_daily_mean": 0.4296724676817549,
-            "plan_turnover_total": 25.460614191657,
-            "plan_order_count": 288,
-            "actual_order_count": 288,
-            "cash_min": 11039.005093280555,
-            "final_cash": 14629.618434122769,
-            "fees": {
-              "commission": 1440.0,
-              "stamp_tax": 592.4515297174454,
-              "transfer_fee": 24.518935831785203,
-              "slippage": 1225.94679158926,
-              "total": 3282.9172571384906
-            },
-            "execution_rejections": {},
-            "constructor_suppression": {
-              "threshold_dropped": 0,
-              "min_trade_dropped": 431,
-              "budget_skipped_no_viable": 0,
-              "budget_cash_capped": 0
-            },
-            "market_block_counts": {
-              "buy_blocked": 0,
-              "sell_blocked": 0,
-              "nonfinite_signal": 0
-            },
-            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
-            "valuation_complete": true,
-            "terminal_missing_prices": [],
-            "theoretical_equal_weight_return": 0.0005024163921976132,
-            "benchmark_return": 0.0005024163921976132,
-            "net_excess_return": -0.03205697933621987,
-            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
-            "no_trade_reason": null
-          },
-          "config": {
-            "start_date": "2022-01-03",
-            "end_date": "2023-04-21",
-            "train_end_date": "2022-11-04",
-            "rebalance_frequency": "daily",
-            "target_horizon": 1,
-            "initial_capital": 100000,
-            "top_n": 10,
-            "portfolio_method": "equal_weight",
-            "buy_rank": 10,
-            "sell_rank": 10,
-            "min_trade_amount": 2000,
-            "turnover_budget": null,
-            "turnover_allocation": "priority",
-            "target_weight_change_threshold": 0.0,
-            "single_weight_cap": 0.09,
-            "commission_rate": 0.00025,
-            "min_commission": 5.0,
-            "stamp_tax_rate": 0.0005,
-            "transfer_fee_rate": 1e-05,
-            "slippage_rate": 0.0005,
-            "lot_size": 100,
-            "benchmark": "全市场等权"
-          }
-        }
-      ],
-      "selected": {
-        "candidate": {
-          "tokens": [
-            11,
-            94,
-            104,
-            103,
-            107,
-            123
-          ],
-          "candidate_id": "rl:11,94,104,103,107,123",
-          "formula_text": "MA10(CS_ZSCORE(CS_DEMEAN(DELAY1(CLOSE_POSITION))))",
-          "source": "rl",
-          "direction": 1,
-          "data_tier": {
-            "data_tier_version": 2,
-            "max_tier": "A",
-            "tiers_used": [
-              "A"
-            ]
-          },
-          "val_reward": 0.6676305324244743,
-          "val_icir": 0.08000009021402757,
-          "train_reward": -0.7438445955737472,
-          "train_icir": 0.07010379850706913,
-          "complexity_penalty": 0.01541666666666668,
-          "complexity_cost": 3.3083333333333336,
-          "active_ir": 0.8829448434500505,
-          "risk_exposure": 0.02531892537611776,
-          "average_turnover": 0.42449357807010524,
-          "capacity_utilization": 0.0012574316548154248,
-          "eligible": true,
-          "rejection_reasons": []
-        },
-        "selected_by": "validation_net_excess_50000",
-        "validation_account": {
-          "account_summary_version": 2,
-          "initial_capital": 50000,
-          "first_mark_date": "20221108",
-          "final_mark_date": "20230127",
-          "periods": 58,
-          "terminal_net_assets": 48568.79143936703,
-          "net_profit_rmb": -1431.2085606329683,
-          "net_return": -0.028624171212659366,
-          "net_cagr": -0.11854537557615519,
-          "max_drawdown": 0.03390013456600982,
-          "annual_returns": {
-            "2022": -0.02448987635115607,
-            "2023": -0.004238085040101036
-          },
-          "worst_year": "2022",
-          "worst_year_return": -0.02448987635115607,
-          "actual_exposure_mean": 0.8336152424314323,
-          "actual_exposure_min": 0.7987127205790032,
-          "actual_exposure_final": 0.8405273196401533,
-          "actual_exposure_last_entry": 0.84012383669124,
-          "actual_holdings_mean": 10.0,
-          "actual_holdings_min": 10,
-          "actual_holdings_final": 10,
-          "fraction_days_below_20": 1.0,
-          "actual_max_single_weight": 0.0924773475000884,
-          "dispersion_status": "实际持仓不足20只的天数需审查",
-          "actual_turnover_total": 19.323499968982862,
-          "actual_turnover_daily_mean": 0.33316379256867,
-          "plan_turnover_total": 20.549178912899,
-          "plan_order_count": 246,
-          "actual_order_count": 236,
-          "cash_min": 6936.155037319191,
-          "final_cash": 7745.39535267424,
-          "fees": {
-            "commission": 1180.0,
-            "stamp_tax": 226.83963388204575,
-            "transfer_fee": 9.477229618310929,
-            "slippage": 473.8614809155464,
-            "total": 1890.1783444159032
-          },
-          "execution_rejections": {
-            "below_board_lot": 10
-          },
-          "constructor_suppression": {
-            "threshold_dropped": 0,
-            "min_trade_dropped": 447,
-            "budget_skipped_no_viable": 0,
-            "budget_cash_capped": 0
-          },
-          "market_block_counts": {
-            "buy_blocked": 0,
-            "sell_blocked": 0,
-            "nonfinite_signal": 0
-          },
-          "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
-          "valuation_complete": true,
-          "terminal_missing_prices": [],
-          "theoretical_equal_weight_return": 0.011693026725554612,
-          "benchmark_return": 0.011693026725554612,
-          "net_excess_return": -0.03985121659749358,
-          "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
-          "no_trade_reason": null
-        },
-        "frequency": "daily",
-        "target_horizon": 1,
-        "identity": {
-          "method": "rl",
-          "seed": 42,
-          "window": {
-            "name": "synthetic",
-            "start": "2022-01-03",
-            "train_end": "2022-11-04",
-            "validation_end": "2023-01-27",
-            "test_end": "2023-04-21"
-          },
-          "budget": 4,
-          "data": {
-            "primary": {
-              "sha256": "5277b6cde285f560aab041a6a5560b2e0a0150b87dd1998d0551c1012f1d70e4",
-              "bytes": 5517312
-            },
-            "v2": {
-              "sha256": "7dcff0a1e6b0d4d7f673a0cdec45c412a377a0ab5127757c8b71ec3718ba1e49",
-              "bytes": 10235904
-            }
-          },
-          "config": {
-            "version": 1,
-            "dataset_id": "e801ae248ffa0c4c0f0113fc50f35248e4bddb987a09c6762cf57555bf59044e",
-            "budget": 4,
-            "time_limit": 180,
-            "threads": 1,
-            "device": "cpu",
-            "attempt_multiplier": 20,
-            "candidates": 15,
-            "horizon": 1,
-            "minimum_validation_excess": -1000000000.0,
-            "index_codes": [
-              "000300.SH"
-            ],
-            "min_listed_sessions": 60,
-            "min_eligible": 24,
-            "feature_names": [
-              "RET_1",
-              "MOMENTUM_20",
-              "REVERSAL_5",
-              "VOL_20",
-              "TURNOVER",
-              "AMPLITUDE",
-              "CLOSE_POSITION",
-              "OVERNIGHT_RET",
-              "ILLIQ_20"
-            ],
-            "model": {
-              "d_model": 16,
-              "nhead": 2,
-              "num_layers": 1,
-              "dim_feedforward": 32,
-              "num_loops": 1,
-              "dropout": 0.0,
-              "batch_size": 8,
-              "max_formula_len": 6,
-              "validation_fraction": 0.35,
-              "validation_splits": 2
-            },
-            "backtest": {
-              "portfolio_method": "equal_weight",
-              "turnover_budget": null,
-              "turnover_allocation": "priority",
-              "target_weight_change_threshold": 0.0,
-              "lot_size": 100,
-              "commission_rate": 0.00025,
-              "min_commission": 5.0,
-              "stamp_tax_rate": 0.0005,
-              "transfer_fee_rate": 1e-05,
-              "slippage_rate": 0.0005
-            },
-            "accounts": {
-              "10000": {
-                "top_n": 5,
-                "buy_rank": 5,
-                "sell_rank": 5,
-                "single_weight_cap": 0.18,
-                "min_trade_amount": 500
-              },
-              "50000": {
-                "top_n": 10,
-                "buy_rank": 10,
-                "sell_rank": 10,
-                "single_weight_cap": 0.09,
-                "min_trade_amount": 1000
-              },
-              "100000": {
-                "top_n": 10,
-                "buy_rank": 10,
-                "sell_rank": 10,
-                "single_weight_cap": 0.09,
-                "min_trade_amount": 2000
-              }
-            },
-            "synthetic_fixture": true,
-            "reward": {
-              "ic_min_stocks": 10,
-              "min_val_reward": -1000000000.0,
-              "min_val_icir": -1000000000.0,
-              "min_valid_ic_days": 2,
-              "min_effective_stocks": 10,
-              "min_coverage": 0.0,
-              "min_activity": 0.0,
-              "min_sign_stability": 0.0,
-              "min_val_window_q25": -1000000000.0
-            }
-          },
-          "code": {
-            "commit": "9a948c50517b65e910f931290735640040e26e00",
-            "source_digest": "8b0c53e90453f5e0c49a6a9da7f17c81cc8f0fe9a935e8d23ab423aa2a825e31",
-            "cloud_version": 1
-          }
-        },
-        "frozen_before_test": true
-      }
-    },
     {
       "method": "tpe",
       "seed": 42,
@@ -866,26 +185,26 @@
         {
           "effective_evaluations": 1,
           "best_validation_score": -0.9696852985709423,
-          "elapsed_seconds": 0.6281707999878563
+          "elapsed_seconds": 0.5044380000035744
         },
         {
           "effective_evaluations": 2,
           "best_validation_score": 2.2945157155514444,
-          "elapsed_seconds": 1.0569327999837697
+          "elapsed_seconds": 0.8663498000241816
         },
         {
           "effective_evaluations": 3,
           "best_validation_score": 2.2945157155514444,
-          "elapsed_seconds": 1.5549006999935955
+          "elapsed_seconds": 1.28628270002082
         },
         {
           "effective_evaluations": 4,
           "best_validation_score": 2.2945157155514444,
-          "elapsed_seconds": 2.0043753999925684
+          "elapsed_seconds": 1.6548349000222515
         }
       ],
-      "search_seconds": 2.0072020999796223,
-      "elapsed_seconds": 25.65630400000373,
+      "search_seconds": 1.6579263000166975,
+      "elapsed_seconds": 23.3979083999875,
       "test_accounts": [
         {
           "capital": 10000,
@@ -1269,12 +588,12 @@
           "budget": 4,
           "data": {
             "primary": {
-              "sha256": "5277b6cde285f560aab041a6a5560b2e0a0150b87dd1998d0551c1012f1d70e4",
+              "sha256": "d0c2e7121f0de889fb0e46338259346c8f5c7082ef9c2751d01a97d126b4a9ed",
               "bytes": 5517312
             },
             "v2": {
-              "sha256": "7dcff0a1e6b0d4d7f673a0cdec45c412a377a0ab5127757c8b71ec3718ba1e49",
-              "bytes": 10235904
+              "sha256": "f917dc94ae731de5d039a6ff40060163911a10de64f09a388113e171913ed810",
+              "bytes": 9187328
             }
           },
           "config": {
@@ -1365,683 +684,8 @@
             }
           },
           "code": {
-            "commit": "9a948c50517b65e910f931290735640040e26e00",
-            "source_digest": "8b0c53e90453f5e0c49a6a9da7f17c81cc8f0fe9a935e8d23ab423aa2a825e31",
-            "cloud_version": 1
-          }
-        },
-        "frozen_before_test": true
-      }
-    },
-    {
-      "method": "gp",
-      "seed": 42,
-      "window": {
-        "name": "synthetic",
-        "start": "2022-01-03",
-        "train_end": "2022-11-04",
-        "validation_end": "2023-01-27",
-        "test_end": "2023-04-21"
-      },
-      "outcome": "frozen_test_completed",
-      "search": {
-        "contract_version": 4,
-        "backend": "gp",
-        "seed": 42,
-        "requested_budget": 4,
-        "consumed_budget": 4,
-        "termination_reason": "budget_exhausted",
-        "stagnation_reason": null,
-        "best_so_far": [
-          [
-            1,
-            5.143858784329645
-          ],
-          [
-            2,
-            5.143858784329645
-          ],
-          [
-            3,
-            5.143858784329645
-          ],
-          [
-            4,
-            10.0
-          ]
-        ],
-        "selected": {
-          "tokens": [
-            36,
-            107
-          ],
-          "candidate_id": "gp:36,107",
-          "formula_text": "MA10(ILLIQ_20)",
-          "source": "gp",
-          "direction": -1,
-          "data_tier": {
-            "data_tier_version": 2,
-            "max_tier": "A",
-            "tiers_used": [
-              "A"
-            ]
-          },
-          "val_reward": 10.0,
-          "val_icir": 1.3510820190168062,
-          "train_reward": 10.0,
-          "train_icir": 0.9410137422136725,
-          "complexity_penalty": 0.0,
-          "complexity_cost": 1.5583333333333333,
-          "active_ir": 20.286119456508573,
-          "risk_exposure": 0.026248654003529576,
-          "average_turnover": 0.049775058201842096,
-          "capacity_utilization": 0.0006117640990537822,
-          "eligible": true,
-          "rejection_reasons": []
-        },
-        "rejection_reasons": {},
-        "proposal_count": 5,
-        "invalid_proposals": 1,
-        "semantic_duplicates": 0,
-        "elite_archive": {
-          "version": 1,
-          "source_backends": [
-            "gp"
-          ],
-          "entries": [
-            {
-              "tokens": [
-                36,
-                107
-              ],
-              "canonical_tokens": [
-                36,
-                107,
-                123
-              ],
-              "formula_text": "MA10(ILLIQ_20)",
-              "source": "gp",
-              "direction": -1,
-              "val_reward": 10.0,
-              "train_reward": 10.0,
-              "complexity_cost": 1.5583333333333333
-            },
-            {
-              "tokens": [
-                6,
-                101
-              ],
-              "canonical_tokens": [
-                6,
-                101,
-                123
-              ],
-              "formula_text": "DOWNVOL20(TURNOVER)",
-              "source": "gp",
-              "direction": 1,
-              "val_reward": 5.143858784329645,
-              "train_reward": 0.18005514660677058,
-              "complexity_cost": 1.5666666666666667
-            },
-            {
-              "tokens": [
-                34,
-                108,
-                99
-              ],
-              "canonical_tokens": [
-                34,
-                108,
-                99,
-                123
-              ],
-              "formula_text": "TS_RANK20(MA60(OVERNIGHT_RET))",
-              "source": "gp",
-              "direction": 1,
-              "val_reward": 0.9817678286156284,
-              "train_reward": -1.2747794429483605,
-              "complexity_cost": 2.1500000000000004
-            },
-            {
-              "tokens": [
-                11,
-                90
-              ],
-              "canonical_tokens": [
-                11,
-                90,
-                123
-              ],
-              "formula_text": "SIGN(CLOSE_POSITION)",
-              "source": "gp",
-              "direction": -1,
-              "val_reward": -5.738750328256167,
-              "train_reward": -7.3321685029684085,
-              "complexity_cost": 1.45
-            }
-          ]
-        },
-        "diagnostics": {
-          "stall_generations": 0,
-          "evaluator": {
-            "budget_used": 4,
-            "n_hits": 4,
-            "n_semantic_dedups": 0,
-            "n_entries": 4,
-            "cap": 16384,
-            "dataset_id": "e801ae248ffa0c4c0f0113fc50f35248e4bddb987a09c6762cf57555bf59044e",
-            "reward_version": 15,
-            "protocol_version": 29,
-            "window_id": "train:0:218:label:220:frequency:daily:horizon:1:val:142:180|180:218",
-            "version": 3,
-            "n_evaluated": 4,
-            "n_invalid": 1
-          },
-          "full_evaluations": 4
-        },
-        "n_scores": 4,
-        "stop_reason": "budget_exhausted"
-      },
-      "curve": [
-        {
-          "effective_evaluations": 1,
-          "best_validation_score": 5.143858784329645,
-          "elapsed_seconds": 0.3919478000025265
-        },
-        {
-          "effective_evaluations": 2,
-          "best_validation_score": 5.143858784329645,
-          "elapsed_seconds": 0.7538598000246566
-        },
-        {
-          "effective_evaluations": 3,
-          "best_validation_score": 5.143858784329645,
-          "elapsed_seconds": 1.1354002000007313
-        },
-        {
-          "effective_evaluations": 4,
-          "best_validation_score": 10.0,
-          "elapsed_seconds": 1.4493774000147823
-        }
-      ],
-      "search_seconds": 1.451726500003133,
-      "elapsed_seconds": 25.6957037000102,
-      "test_accounts": [
-        {
-          "capital": 10000,
-          "account": {
-            "account_summary_version": 2,
-            "initial_capital": 10000,
-            "first_mark_date": "20230131",
-            "final_mark_date": "20230421",
-            "periods": 58,
-            "terminal_net_assets": 10178.650796822561,
-            "net_profit_rmb": 178.65079682256146,
-            "net_return": 0.017865079682256146,
-            "net_cagr": 0.07997240498019198,
-            "max_drawdown": 0.008105527434768778,
-            "annual_returns": {
-              "2023": 0.017865079682256146
-            },
-            "worst_year": "2023",
-            "worst_year_return": 0.017865079682256146,
-            "actual_exposure_mean": 0.6373228398196875,
-            "actual_exposure_min": 0.5773484280456878,
-            "actual_exposure_final": 0.636086229533222,
-            "actual_exposure_last_entry": 0.6355317253662698,
-            "actual_holdings_mean": 5.0,
-            "actual_holdings_min": 5,
-            "actual_holdings_final": 5,
-            "fraction_days_below_20": 1.0,
-            "actual_max_single_weight": 0.17204267171479398,
-            "dispersion_status": "实际持仓不足20只的天数需审查",
-            "actual_turnover_total": 4.003133506109117,
-            "actual_turnover_daily_mean": 0.06901954320877789,
-            "plan_turnover_total": 17.066693831549,
-            "plan_order_count": 208,
-            "actual_order_count": 31,
-            "cash_min": 3071.0347183599547,
-            "final_cash": 3704.1511897363725,
-            "fees": {
-              "commission": 155.0,
-              "stamp_tax": 8.52865586280823,
-              "transfer_fee": 0.40226428127288827,
-              "slippage": 20.113214063644413,
-              "total": 184.04413420772553
-            },
-            "execution_rejections": {
-              "below_board_lot": 177
-            },
-            "constructor_suppression": {
-              "threshold_dropped": 0,
-              "min_trade_dropped": 95,
-              "budget_skipped_no_viable": 0,
-              "budget_cash_capped": 0
-            },
-            "market_block_counts": {
-              "buy_blocked": 0,
-              "sell_blocked": 0,
-              "nonfinite_signal": 0
-            },
-            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
-            "valuation_complete": true,
-            "terminal_missing_prices": [],
-            "theoretical_equal_weight_return": 0.0005024163921976132,
-            "benchmark_return": 0.0005024163921976132,
-            "net_excess_return": 0.017353944383930786,
-            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
-            "no_trade_reason": null
-          },
-          "config": {
-            "start_date": "2022-01-03",
-            "end_date": "2023-04-21",
-            "train_end_date": "2022-11-04",
-            "rebalance_frequency": "daily",
-            "target_horizon": 1,
-            "initial_capital": 10000,
-            "top_n": 5,
-            "portfolio_method": "equal_weight",
-            "buy_rank": 5,
-            "sell_rank": 5,
-            "min_trade_amount": 500,
-            "turnover_budget": null,
-            "turnover_allocation": "priority",
-            "target_weight_change_threshold": 0.0,
-            "single_weight_cap": 0.18,
-            "commission_rate": 0.00025,
-            "min_commission": 5.0,
-            "stamp_tax_rate": 0.0005,
-            "transfer_fee_rate": 1e-05,
-            "slippage_rate": 0.0005,
-            "lot_size": 100,
-            "benchmark": "全市场等权"
-          }
-        },
-        {
-          "capital": 50000,
-          "account": {
-            "account_summary_version": 2,
-            "initial_capital": 50000,
-            "first_mark_date": "20230131",
-            "final_mark_date": "20230421",
-            "periods": 58,
-            "terminal_net_assets": 52288.83478409106,
-            "net_profit_rmb": 2288.8347840910537,
-            "net_return": 0.04577669568182108,
-            "net_cagr": 0.21467174220959762,
-            "max_drawdown": 0.004006172521471396,
-            "annual_returns": {
-              "2023": 0.04577669568182108
-            },
-            "worst_year": "2023",
-            "worst_year_return": 0.04577669568182108,
-            "actual_exposure_mean": 0.8203585766237997,
-            "actual_exposure_min": 0.7862135843626108,
-            "actual_exposure_final": 0.8451642611931188,
-            "actual_exposure_last_entry": 0.8447920132882818,
-            "actual_holdings_mean": 10.0,
-            "actual_holdings_min": 10,
-            "actual_holdings_final": 10,
-            "fraction_days_below_20": 1.0,
-            "actual_max_single_weight": 0.0934762178080164,
-            "dispersion_status": "实际持仓不足20只的天数需审查",
-            "actual_turnover_total": 1.6653974254131123,
-            "actual_turnover_daily_mean": 0.028713748714019178,
-            "plan_turnover_total": 2.8563960366949996,
-            "plan_order_count": 71,
-            "actual_order_count": 22,
-            "cash_min": 8096.180365145683,
-            "final_cash": 8096.180365145683,
-            "fees": {
-              "commission": 110.0,
-              "stamp_tax": 10.556366896629331,
-              "transfer_fee": 0.8396590824127197,
-              "slippage": 41.98295412063599,
-              "total": 163.37898009967805
-            },
-            "execution_rejections": {
-              "below_board_lot": 49
-            },
-            "constructor_suppression": {
-              "threshold_dropped": 0,
-              "min_trade_dropped": 514,
-              "budget_skipped_no_viable": 0,
-              "budget_cash_capped": 0
-            },
-            "market_block_counts": {
-              "buy_blocked": 0,
-              "sell_blocked": 0,
-              "nonfinite_signal": 0
-            },
-            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
-            "valuation_complete": true,
-            "terminal_missing_prices": [],
-            "theoretical_equal_weight_return": 0.0005024163921976132,
-            "benchmark_return": 0.0005024163921976132,
-            "net_excess_return": 0.04525154417205912,
-            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
-            "no_trade_reason": null
-          },
-          "config": {
-            "start_date": "2022-01-03",
-            "end_date": "2023-04-21",
-            "train_end_date": "2022-11-04",
-            "rebalance_frequency": "daily",
-            "target_horizon": 1,
-            "initial_capital": 50000,
-            "top_n": 10,
-            "portfolio_method": "equal_weight",
-            "buy_rank": 10,
-            "sell_rank": 10,
-            "min_trade_amount": 1000,
-            "turnover_budget": null,
-            "turnover_allocation": "priority",
-            "target_weight_change_threshold": 0.0,
-            "single_weight_cap": 0.09,
-            "commission_rate": 0.00025,
-            "min_commission": 5.0,
-            "stamp_tax_rate": 0.0005,
-            "transfer_fee_rate": 1e-05,
-            "slippage_rate": 0.0005,
-            "lot_size": 100,
-            "benchmark": "全市场等权"
-          }
-        },
-        {
-          "capital": 100000,
-          "account": {
-            "account_summary_version": 2,
-            "initial_capital": 100000,
-            "first_mark_date": "20230131",
-            "final_mark_date": "20230421",
-            "periods": 58,
-            "terminal_net_assets": 104813.88027740146,
-            "net_profit_rmb": 4813.880277401461,
-            "net_return": 0.04813880277401461,
-            "net_cagr": 0.22663728607312983,
-            "max_drawdown": 0.0036382138296695565,
-            "annual_returns": {
-              "2023": 0.04813880277401461
-            },
-            "worst_year": "2023",
-            "worst_year_return": 0.04813880277401461,
-            "actual_exposure_mean": 0.855255208413966,
-            "actual_exposure_min": 0.849195897619973,
-            "actual_exposure_final": 0.861061358818345,
-            "actual_exposure_last_entry": 0.8607350694023933,
-            "actual_holdings_mean": 10.0,
-            "actual_holdings_min": 10,
-            "actual_holdings_final": 10,
-            "fraction_days_below_20": 1.0,
-            "actual_max_single_weight": 0.09328761424652227,
-            "dispersion_status": "实际持仓不足20只的天数需审查",
-            "actual_turnover_total": 1.71205504551758,
-            "actual_turnover_daily_mean": 0.029518190439958278,
-            "plan_turnover_total": 1.77991547168,
-            "plan_order_count": 20,
-            "actual_order_count": 20,
-            "cash_min": 14290.84005018902,
-            "final_cash": 14562.69810271883,
-            "fees": {
-              "commission": 100.0,
-              "stamp_tax": 21.860429382324213,
-              "transfer_fee": 1.7266909775733947,
-              "slippage": 86.33454887866974,
-              "total": 209.92166923856735
-            },
-            "execution_rejections": {},
-            "constructor_suppression": {
-              "threshold_dropped": 0,
-              "min_trade_dropped": 565,
-              "budget_skipped_no_viable": 0,
-              "budget_cash_capped": 0
-            },
-            "market_block_counts": {
-              "buy_blocked": 0,
-              "sell_blocked": 0,
-              "nonfinite_signal": 0
-            },
-            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
-            "valuation_complete": true,
-            "terminal_missing_prices": [],
-            "theoretical_equal_weight_return": 0.0005024163921976132,
-            "benchmark_return": 0.0005024163921976132,
-            "net_excess_return": 0.04761246509887829,
-            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
-            "no_trade_reason": null
-          },
-          "config": {
-            "start_date": "2022-01-03",
-            "end_date": "2023-04-21",
-            "train_end_date": "2022-11-04",
-            "rebalance_frequency": "daily",
-            "target_horizon": 1,
-            "initial_capital": 100000,
-            "top_n": 10,
-            "portfolio_method": "equal_weight",
-            "buy_rank": 10,
-            "sell_rank": 10,
-            "min_trade_amount": 2000,
-            "turnover_budget": null,
-            "turnover_allocation": "priority",
-            "target_weight_change_threshold": 0.0,
-            "single_weight_cap": 0.09,
-            "commission_rate": 0.00025,
-            "min_commission": 5.0,
-            "stamp_tax_rate": 0.0005,
-            "transfer_fee_rate": 1e-05,
-            "slippage_rate": 0.0005,
-            "lot_size": 100,
-            "benchmark": "全市场等权"
-          }
-        }
-      ],
-      "selected": {
-        "candidate": {
-          "tokens": [
-            36,
-            107
-          ],
-          "candidate_id": "gp:36,107",
-          "formula_text": "MA10(ILLIQ_20)",
-          "source": "gp",
-          "direction": -1,
-          "data_tier": {
-            "data_tier_version": 2,
-            "max_tier": "A",
-            "tiers_used": [
-              "A"
-            ]
-          },
-          "val_reward": 10.0,
-          "val_icir": 1.3510820190168062,
-          "train_reward": 10.0,
-          "train_icir": 0.9410137422136725,
-          "complexity_penalty": 0.0,
-          "complexity_cost": 1.5583333333333333,
-          "active_ir": 20.286119456508573,
-          "risk_exposure": 0.026248654003529576,
-          "average_turnover": 0.049775058201842096,
-          "capacity_utilization": 0.0006117640990537822,
-          "eligible": true,
-          "rejection_reasons": []
-        },
-        "selected_by": "validation_net_excess_50000",
-        "validation_account": {
-          "account_summary_version": 2,
-          "initial_capital": 50000,
-          "first_mark_date": "20221108",
-          "final_mark_date": "20230127",
-          "periods": 58,
-          "terminal_net_assets": 52962.01130888513,
-          "net_profit_rmb": 2962.0113088851263,
-          "net_return": 0.059240226177702526,
-          "net_cagr": 0.2840934853057493,
-          "max_drawdown": 0.004072496586044916,
-          "annual_returns": {
-            "2022": 0.04194878480023467,
-            "2023": 0.0165952891636445
-          },
-          "worst_year": "2023",
-          "worst_year_return": 0.0165952891636445,
-          "actual_exposure_mean": 0.8196464547937836,
-          "actual_exposure_min": 0.810929060216129,
-          "actual_exposure_final": 0.8224523308706466,
-          "actual_exposure_last_entry": 0.8221982104206402,
-          "actual_holdings_mean": 10.0,
-          "actual_holdings_min": 10,
-          "actual_holdings_final": 10,
-          "fraction_days_below_20": 1.0,
-          "actual_max_single_weight": 0.09694846127335556,
-          "dispersion_status": "实际持仓不足20只的天数需审查",
-          "actual_turnover_total": 2.4039114200795297,
-          "actual_turnover_daily_mean": 0.04144674862206086,
-          "plan_turnover_total": 2.598207371136,
-          "plan_order_count": 30,
-          "actual_order_count": 30,
-          "cash_min": 8886.082276694773,
-          "final_cash": 9403.281660295015,
-          "fees": {
-            "commission": 150.0,
-            "stamp_tax": 20.735594677925114,
-            "transfer_fee": 1.233054756641388,
-            "slippage": 61.652737832069405,
-            "total": 233.6213872666359
-          },
-          "execution_rejections": {},
-          "constructor_suppression": {
-            "threshold_dropped": 0,
-            "min_trade_dropped": 560,
-            "budget_skipped_no_viable": 0,
-            "budget_cash_capped": 0
-          },
-          "market_block_counts": {
-            "buy_blocked": 0,
-            "sell_blocked": 0,
-            "nonfinite_signal": 0
-          },
-          "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
-          "valuation_complete": true,
-          "terminal_missing_prices": [],
-          "theoretical_equal_weight_return": 0.011693026725554612,
-          "benchmark_return": 0.011693026725554612,
-          "net_excess_return": 0.04699765462063055,
-          "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
-          "no_trade_reason": null
-        },
-        "frequency": "daily",
-        "target_horizon": 1,
-        "identity": {
-          "method": "gp",
-          "seed": 42,
-          "window": {
-            "name": "synthetic",
-            "start": "2022-01-03",
-            "train_end": "2022-11-04",
-            "validation_end": "2023-01-27",
-            "test_end": "2023-04-21"
-          },
-          "budget": 4,
-          "data": {
-            "primary": {
-              "sha256": "5277b6cde285f560aab041a6a5560b2e0a0150b87dd1998d0551c1012f1d70e4",
-              "bytes": 5517312
-            },
-            "v2": {
-              "sha256": "7dcff0a1e6b0d4d7f673a0cdec45c412a377a0ab5127757c8b71ec3718ba1e49",
-              "bytes": 10235904
-            }
-          },
-          "config": {
-            "version": 1,
-            "dataset_id": "e801ae248ffa0c4c0f0113fc50f35248e4bddb987a09c6762cf57555bf59044e",
-            "budget": 4,
-            "time_limit": 180,
-            "threads": 1,
-            "device": "cpu",
-            "attempt_multiplier": 20,
-            "candidates": 15,
-            "horizon": 1,
-            "minimum_validation_excess": -1000000000.0,
-            "index_codes": [
-              "000300.SH"
-            ],
-            "min_listed_sessions": 60,
-            "min_eligible": 24,
-            "feature_names": [
-              "RET_1",
-              "MOMENTUM_20",
-              "REVERSAL_5",
-              "VOL_20",
-              "TURNOVER",
-              "AMPLITUDE",
-              "CLOSE_POSITION",
-              "OVERNIGHT_RET",
-              "ILLIQ_20"
-            ],
-            "model": {
-              "d_model": 16,
-              "nhead": 2,
-              "num_layers": 1,
-              "dim_feedforward": 32,
-              "num_loops": 1,
-              "dropout": 0.0,
-              "batch_size": 8,
-              "max_formula_len": 6,
-              "validation_fraction": 0.35,
-              "validation_splits": 2
-            },
-            "backtest": {
-              "portfolio_method": "equal_weight",
-              "turnover_budget": null,
-              "turnover_allocation": "priority",
-              "target_weight_change_threshold": 0.0,
-              "lot_size": 100,
-              "commission_rate": 0.00025,
-              "min_commission": 5.0,
-              "stamp_tax_rate": 0.0005,
-              "transfer_fee_rate": 1e-05,
-              "slippage_rate": 0.0005
-            },
-            "accounts": {
-              "10000": {
-                "top_n": 5,
-                "buy_rank": 5,
-                "sell_rank": 5,
-                "single_weight_cap": 0.18,
-                "min_trade_amount": 500
-              },
-              "50000": {
-                "top_n": 10,
-                "buy_rank": 10,
-                "sell_rank": 10,
-                "single_weight_cap": 0.09,
-                "min_trade_amount": 1000
-              },
-              "100000": {
-                "top_n": 10,
-                "buy_rank": 10,
-                "sell_rank": 10,
-                "single_weight_cap": 0.09,
-                "min_trade_amount": 2000
-              }
-            },
-            "synthetic_fixture": true,
-            "reward": {
-              "ic_min_stocks": 10,
-              "min_val_reward": -1000000000.0,
-              "min_val_icir": -1000000000.0,
-              "min_valid_ic_days": 2,
-              "min_effective_stocks": 10,
-              "min_coverage": 0.0,
-              "min_activity": 0.0,
-              "min_sign_stability": 0.0,
-              "min_val_window_q25": -1000000000.0
-            }
-          },
-          "code": {
-            "commit": "9a948c50517b65e910f931290735640040e26e00",
-            "source_digest": "8b0c53e90453f5e0c49a6a9da7f17c81cc8f0fe9a935e8d23ab423aa2a825e31",
+            "commit": "0c7df0492e6a817e8f1095d6a0febf6dff990f4b",
+            "source_digest": "673f6fb94bef8edc69590fe5af7fba54ca589684c724d7e67b982a6dadccef89",
             "cloud_version": 1
           }
         },
@@ -2238,26 +882,26 @@
         {
           "effective_evaluations": 1,
           "best_validation_score": -0.11258051578270756,
-          "elapsed_seconds": 0.5586175000062212
+          "elapsed_seconds": 0.5525714000104927
         },
         {
           "effective_evaluations": 2,
           "best_validation_score": 2.7069477356952194,
-          "elapsed_seconds": 0.9679108999844175
+          "elapsed_seconds": 0.8820083000173327
         },
         {
           "effective_evaluations": 3,
           "best_validation_score": 2.7069477356952194,
-          "elapsed_seconds": 1.3357297999900766
+          "elapsed_seconds": 1.2244927000137977
         },
         {
           "effective_evaluations": 4,
           "best_validation_score": 2.7069477356952194,
-          "elapsed_seconds": 1.6543524999869987
+          "elapsed_seconds": 1.567418299993733
         }
       ],
-      "search_seconds": 1.6564776999875903,
-      "elapsed_seconds": 26.063628199975938,
+      "search_seconds": 1.568864000000758,
+      "elapsed_seconds": 24.33052299998235,
       "test_accounts": [
         {
           "capital": 10000,
@@ -2642,12 +1286,12 @@
           "budget": 4,
           "data": {
             "primary": {
-              "sha256": "5277b6cde285f560aab041a6a5560b2e0a0150b87dd1998d0551c1012f1d70e4",
+              "sha256": "d0c2e7121f0de889fb0e46338259346c8f5c7082ef9c2751d01a97d126b4a9ed",
               "bytes": 5517312
             },
             "v2": {
-              "sha256": "7dcff0a1e6b0d4d7f673a0cdec45c412a377a0ab5127757c8b71ec3718ba1e49",
-              "bytes": 10235904
+              "sha256": "f917dc94ae731de5d039a6ff40060163911a10de64f09a388113e171913ed810",
+              "bytes": 9187328
             }
           },
           "config": {
@@ -2738,8 +1382,1364 @@
             }
           },
           "code": {
-            "commit": "9a948c50517b65e910f931290735640040e26e00",
-            "source_digest": "8b0c53e90453f5e0c49a6a9da7f17c81cc8f0fe9a935e8d23ab423aa2a825e31",
+            "commit": "0c7df0492e6a817e8f1095d6a0febf6dff990f4b",
+            "source_digest": "673f6fb94bef8edc69590fe5af7fba54ca589684c724d7e67b982a6dadccef89",
+            "cloud_version": 1
+          }
+        },
+        "frozen_before_test": true
+      }
+    },
+    {
+      "method": "rl",
+      "seed": 42,
+      "window": {
+        "name": "synthetic",
+        "start": "2022-01-03",
+        "train_end": "2022-11-04",
+        "validation_end": "2023-01-27",
+        "test_end": "2023-04-21"
+      },
+      "outcome": "frozen_test_completed",
+      "search": {
+        "contract_version": 4,
+        "backend": "rl",
+        "seed": 42,
+        "requested_budget": 4,
+        "consumed_budget": 4,
+        "termination_reason": "budget_exhausted",
+        "stagnation_reason": null,
+        "best_so_far": [
+          [
+            1,
+            1.3469085987512175
+          ],
+          [
+            2,
+            3.695303104831381
+          ],
+          [
+            3,
+            3.695303104831381
+          ],
+          [
+            4,
+            3.695303104831381
+          ]
+        ],
+        "selected": {
+          "tokens": [
+            10,
+            96,
+            1,
+            88,
+            117,
+            123
+          ],
+          "candidate_id": "rl:10,96,1,88,117,123",
+          "formula_text": "(DELTA5(AMPLITUDE) CORR60 NEG(RET_1))",
+          "source": "rl",
+          "direction": 1,
+          "data_tier": {
+            "data_tier_version": 2,
+            "max_tier": "A",
+            "tiers_used": [
+              "A"
+            ]
+          },
+          "val_reward": 3.695303104831381,
+          "val_icir": 0.24203709645239155,
+          "train_reward": -3.3311442864958063,
+          "train_icir": -0.19841296141224182,
+          "complexity_penalty": 0.0,
+          "complexity_cost": 2.7499999999999996,
+          "active_ir": 3.778847177516484,
+          "risk_exposure": 0.02287048111067754,
+          "average_turnover": 0.18020999959047368,
+          "capacity_utilization": 0.001309095890259329,
+          "eligible": true,
+          "rejection_reasons": []
+        },
+        "rejection_reasons": {},
+        "proposal_count": 4,
+        "invalid_proposals": 0,
+        "semantic_duplicates": 0,
+        "elite_archive": null,
+        "diagnostics": {
+          "version": 1,
+          "reward_distribution": {
+            "count": 4,
+            "min": -3.331144332885742,
+            "q25": -2.0825235545635223,
+            "median": -1.2050805985927582,
+            "q75": -0.6675276756286621,
+            "max": -0.43857699632644653,
+            "mean": -1.5449706315994263,
+            "std": 1.1259497309940383
+          },
+          "rejection_reasons": {},
+          "mean_entropy": 2.220515489578247,
+          "semantic_duplicates": 0,
+          "semantic_duplicate_rate": 0.0,
+          "mean_advantage_variance": 1.4107292792613693,
+          "gradient_norm": {
+            "min": 10.208751526520746,
+            "mean": 10.208751526520746,
+            "max": 10.208751526520746
+          },
+          "formula_length": {
+            "count": 4,
+            "min": 3,
+            "mean": 5.25,
+            "max": 6
+          },
+          "operator_coverage": [
+            "CORR10",
+            "CORR60",
+            "CS_DEMEAN",
+            "CS_RANK",
+            "CS_ZSCORE",
+            "DELAY1",
+            "DELTA5",
+            "MA10",
+            "NEG",
+            "STD60",
+            "TS_RANK20"
+          ],
+          "steps": [
+            {
+              "version": 1,
+              "reward_distribution": {
+                "count": 4,
+                "min": -3.331144332885742,
+                "q25": -2.0825235545635223,
+                "median": -1.2050805985927582,
+                "q75": -0.6675276756286621,
+                "max": -0.43857699632644653,
+                "mean": -1.5449706315994263,
+                "std": 1.1259497309940383
+              },
+              "rejection_reasons": {},
+              "entropy": 2.220515489578247,
+              "semantic_duplicates": 0,
+              "semantic_duplicate_rate": 0.0,
+              "advantage_variance": 1.4107292792613693,
+              "gradient_norm": 10.208751526520746,
+              "formula_length": {
+                "count": 4,
+                "min": 3,
+                "mean": 5.25,
+                "max": 6
+              },
+              "operator_coverage": [
+                "CORR10",
+                "CORR60",
+                "CS_DEMEAN",
+                "CS_RANK",
+                "CS_ZSCORE",
+                "DELAY1",
+                "DELTA5",
+                "MA10",
+                "NEG",
+                "STD60",
+                "TS_RANK20"
+              ],
+              "grad_clip_max_norm": 5.0,
+              "grad_clip_triggered": true
+            }
+          ],
+          "step_summary_retention": {
+            "cap": 512,
+            "retained": 1,
+            "dropped": 0
+          },
+          "initialization": "random",
+          "imitation": null
+        },
+        "n_scores": 4,
+        "stop_reason": "budget_exhausted"
+      },
+      "curve": [
+        {
+          "effective_evaluations": 1,
+          "best_validation_score": 1.3469085987512175,
+          "elapsed_seconds": 1.4048533999884967
+        },
+        {
+          "effective_evaluations": 2,
+          "best_validation_score": 3.695303104831381,
+          "elapsed_seconds": 1.4048533999884967
+        },
+        {
+          "effective_evaluations": 3,
+          "best_validation_score": 3.695303104831381,
+          "elapsed_seconds": 1.4048533999884967
+        },
+        {
+          "effective_evaluations": 4,
+          "best_validation_score": 3.695303104831381,
+          "elapsed_seconds": 1.4048533999884967
+        }
+      ],
+      "search_seconds": 1.406818999996176,
+      "elapsed_seconds": 23.119183300004806,
+      "test_accounts": [
+        {
+          "capital": 10000,
+          "account": {
+            "account_summary_version": 2,
+            "initial_capital": 10000,
+            "first_mark_date": "20230131",
+            "final_mark_date": "20230421",
+            "periods": 58,
+            "terminal_net_assets": 8596.839451440093,
+            "net_profit_rmb": -1403.1605485599064,
+            "net_return": -0.14031605485599064,
+            "net_cagr": -0.4815421226743124,
+            "max_drawdown": 0.1403160548568504,
+            "annual_returns": {
+              "2023": -0.14031605485599064
+            },
+            "worst_year": "2023",
+            "worst_year_return": -0.14031605485599064,
+            "actual_exposure_mean": 0.6948467850195298,
+            "actual_exposure_min": 0.5606689644162798,
+            "actual_exposure_final": 0.6085567089345129,
+            "actual_exposure_last_entry": 0.6085027873179212,
+            "actual_holdings_mean": 4.879310344827586,
+            "actual_holdings_min": 4,
+            "actual_holdings_final": 4,
+            "fraction_days_below_20": 1.0,
+            "actual_max_single_weight": 0.18096544709538212,
+            "dispersion_status": "实际持仓不足20只的天数需审查",
+            "actual_turnover_total": 28.92004622235705,
+            "actual_turnover_daily_mean": 0.49862148659236294,
+            "plan_turnover_total": 36.577096775263,
+            "plan_order_count": 246,
+            "actual_order_count": 202,
+            "cash_min": 2052.1890258257367,
+            "final_cash": 3365.175127633327,
+            "fees": {
+              "commission": 1010.0,
+              "stamp_tax": 66.2137503862381,
+              "transfer_fee": 2.70275772023201,
+              "slippage": 135.1378860116005,
+              "total": 1214.0543941180706
+            },
+            "execution_rejections": {
+              "below_board_lot": 44
+            },
+            "constructor_suppression": {
+              "threshold_dropped": 0,
+              "min_trade_dropped": 143,
+              "budget_skipped_no_viable": 0,
+              "budget_cash_capped": 0
+            },
+            "market_block_counts": {
+              "buy_blocked": 0,
+              "sell_blocked": 0,
+              "nonfinite_signal": 0
+            },
+            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
+            "valuation_complete": true,
+            "terminal_missing_prices": [],
+            "theoretical_equal_weight_return": 0.0005024163921976132,
+            "benchmark_return": 0.0005024163921976132,
+            "net_excess_return": -0.1407477572677719,
+            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
+            "no_trade_reason": null
+          },
+          "config": {
+            "start_date": "2022-01-03",
+            "end_date": "2023-04-21",
+            "train_end_date": "2022-11-04",
+            "rebalance_frequency": "daily",
+            "target_horizon": 1,
+            "initial_capital": 10000,
+            "top_n": 5,
+            "portfolio_method": "equal_weight",
+            "buy_rank": 5,
+            "sell_rank": 5,
+            "min_trade_amount": 500,
+            "turnover_budget": null,
+            "turnover_allocation": "priority",
+            "target_weight_change_threshold": 0.0,
+            "single_weight_cap": 0.18,
+            "commission_rate": 0.00025,
+            "min_commission": 5.0,
+            "stamp_tax_rate": 0.0005,
+            "transfer_fee_rate": 1e-05,
+            "slippage_rate": 0.0005,
+            "lot_size": 100,
+            "benchmark": "全市场等权"
+          }
+        },
+        {
+          "capital": 50000,
+          "account": {
+            "account_summary_version": 2,
+            "initial_capital": 50000,
+            "first_mark_date": "20230131",
+            "final_mark_date": "20230421",
+            "periods": 58,
+            "terminal_net_assets": 47684.1353884337,
+            "net_profit_rmb": -2315.864611566298,
+            "net_return": -0.04631729223132597,
+            "net_cagr": -0.18620778386948267,
+            "max_drawdown": 0.0482010719494802,
+            "annual_returns": {
+              "2023": -0.04631729223132597
+            },
+            "worst_year": "2023",
+            "worst_year_return": -0.04631729223132597,
+            "actual_exposure_mean": 0.8327930100883324,
+            "actual_exposure_min": 0.7906425623340665,
+            "actual_exposure_final": 0.7997878896813586,
+            "actual_exposure_last_entry": 0.7994104118816614,
+            "actual_holdings_mean": 10.0,
+            "actual_holdings_min": 10,
+            "actual_holdings_final": 10,
+            "fraction_days_below_20": 1.0,
+            "actual_max_single_weight": 0.09299418881511057,
+            "dispersion_status": "实际持仓不足20只的天数需审查",
+            "actual_turnover_total": 24.06689570824862,
+            "actual_turnover_daily_mean": 0.41494647772842447,
+            "plan_turnover_total": 25.608617542442,
+            "plan_order_count": 312,
+            "actual_order_count": 288,
+            "cash_min": 6700.671772681476,
+            "final_cash": 9546.94137483812,
+            "fees": {
+              "commission": 1440.0,
+              "stamp_tax": 284.3947846889496,
+              "transfer_fee": 11.757081914186479,
+              "slippage": 587.8540957093239,
+              "total": 2324.00596231246
+            },
+            "execution_rejections": {
+              "below_board_lot": 24
+            },
+            "constructor_suppression": {
+              "threshold_dropped": 0,
+              "min_trade_dropped": 407,
+              "budget_skipped_no_viable": 0,
+              "budget_cash_capped": 0
+            },
+            "market_block_counts": {
+              "buy_blocked": 0,
+              "sell_blocked": 0,
+              "nonfinite_signal": 0
+            },
+            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
+            "valuation_complete": true,
+            "terminal_missing_prices": [],
+            "theoretical_equal_weight_return": 0.0005024163921976132,
+            "benchmark_return": 0.0005024163921976132,
+            "net_excess_return": -0.04679619744683383,
+            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
+            "no_trade_reason": null
+          },
+          "config": {
+            "start_date": "2022-01-03",
+            "end_date": "2023-04-21",
+            "train_end_date": "2022-11-04",
+            "rebalance_frequency": "daily",
+            "target_horizon": 1,
+            "initial_capital": 50000,
+            "top_n": 10,
+            "portfolio_method": "equal_weight",
+            "buy_rank": 10,
+            "sell_rank": 10,
+            "min_trade_amount": 1000,
+            "turnover_budget": null,
+            "turnover_allocation": "priority",
+            "target_weight_change_threshold": 0.0,
+            "single_weight_cap": 0.09,
+            "commission_rate": 0.00025,
+            "min_commission": 5.0,
+            "stamp_tax_rate": 0.0005,
+            "transfer_fee_rate": 1e-05,
+            "slippage_rate": 0.0005,
+            "lot_size": 100,
+            "benchmark": "全市场等权"
+          }
+        },
+        {
+          "capital": 100000,
+          "account": {
+            "account_summary_version": 2,
+            "initial_capital": 100000,
+            "first_mark_date": "20230131",
+            "final_mark_date": "20230421",
+            "periods": 58,
+            "terminal_net_assets": 96842.9331104075,
+            "net_profit_rmb": -3157.0668895925082,
+            "net_return": -0.03157066889592508,
+            "net_cagr": -0.13010351136657272,
+            "max_drawdown": 0.03630936741310686,
+            "annual_returns": {
+              "2023": -0.03157066889592508
+            },
+            "worst_year": "2023",
+            "worst_year_return": -0.03157066889592508,
+            "actual_exposure_mean": 0.8675334108923517,
+            "actual_exposure_min": 0.8486191718680591,
+            "actual_exposure_final": 0.8489345792795845,
+            "actual_exposure_last_entry": 0.8486191718680591,
+            "actual_holdings_mean": 10.0,
+            "actual_holdings_min": 10,
+            "actual_holdings_final": 10,
+            "fraction_days_below_20": 1.0,
+            "actual_max_single_weight": 0.09250665868767981,
+            "dispersion_status": "实际持仓不足20只的天数需审查",
+            "actual_turnover_total": 24.92100312554178,
+            "actual_turnover_daily_mean": 0.4296724676817549,
+            "plan_turnover_total": 25.460614191657,
+            "plan_order_count": 288,
+            "actual_order_count": 288,
+            "cash_min": 11039.005093280555,
+            "final_cash": 14629.618434122769,
+            "fees": {
+              "commission": 1440.0,
+              "stamp_tax": 592.4515297174454,
+              "transfer_fee": 24.518935831785203,
+              "slippage": 1225.94679158926,
+              "total": 3282.9172571384906
+            },
+            "execution_rejections": {},
+            "constructor_suppression": {
+              "threshold_dropped": 0,
+              "min_trade_dropped": 431,
+              "budget_skipped_no_viable": 0,
+              "budget_cash_capped": 0
+            },
+            "market_block_counts": {
+              "buy_blocked": 0,
+              "sell_blocked": 0,
+              "nonfinite_signal": 0
+            },
+            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
+            "valuation_complete": true,
+            "terminal_missing_prices": [],
+            "theoretical_equal_weight_return": 0.0005024163921976132,
+            "benchmark_return": 0.0005024163921976132,
+            "net_excess_return": -0.03205697933621987,
+            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
+            "no_trade_reason": null
+          },
+          "config": {
+            "start_date": "2022-01-03",
+            "end_date": "2023-04-21",
+            "train_end_date": "2022-11-04",
+            "rebalance_frequency": "daily",
+            "target_horizon": 1,
+            "initial_capital": 100000,
+            "top_n": 10,
+            "portfolio_method": "equal_weight",
+            "buy_rank": 10,
+            "sell_rank": 10,
+            "min_trade_amount": 2000,
+            "turnover_budget": null,
+            "turnover_allocation": "priority",
+            "target_weight_change_threshold": 0.0,
+            "single_weight_cap": 0.09,
+            "commission_rate": 0.00025,
+            "min_commission": 5.0,
+            "stamp_tax_rate": 0.0005,
+            "transfer_fee_rate": 1e-05,
+            "slippage_rate": 0.0005,
+            "lot_size": 100,
+            "benchmark": "全市场等权"
+          }
+        }
+      ],
+      "selected": {
+        "candidate": {
+          "tokens": [
+            11,
+            94,
+            104,
+            103,
+            107,
+            123
+          ],
+          "candidate_id": "rl:11,94,104,103,107,123",
+          "formula_text": "MA10(CS_ZSCORE(CS_DEMEAN(DELAY1(CLOSE_POSITION))))",
+          "source": "rl",
+          "direction": 1,
+          "data_tier": {
+            "data_tier_version": 2,
+            "max_tier": "A",
+            "tiers_used": [
+              "A"
+            ]
+          },
+          "val_reward": 0.6676305324244743,
+          "val_icir": 0.08000009021402757,
+          "train_reward": -0.7438445955737472,
+          "train_icir": 0.07010379850706913,
+          "complexity_penalty": 0.01541666666666668,
+          "complexity_cost": 3.3083333333333336,
+          "active_ir": 0.8829448434500505,
+          "risk_exposure": 0.02531892537611776,
+          "average_turnover": 0.42449357807010524,
+          "capacity_utilization": 0.0012574316548154248,
+          "eligible": true,
+          "rejection_reasons": []
+        },
+        "selected_by": "validation_net_excess_50000",
+        "validation_account": {
+          "account_summary_version": 2,
+          "initial_capital": 50000,
+          "first_mark_date": "20221108",
+          "final_mark_date": "20230127",
+          "periods": 58,
+          "terminal_net_assets": 48568.79143936703,
+          "net_profit_rmb": -1431.2085606329683,
+          "net_return": -0.028624171212659366,
+          "net_cagr": -0.11854537557615519,
+          "max_drawdown": 0.03390013456600982,
+          "annual_returns": {
+            "2022": -0.02448987635115607,
+            "2023": -0.004238085040101036
+          },
+          "worst_year": "2022",
+          "worst_year_return": -0.02448987635115607,
+          "actual_exposure_mean": 0.8336152424314323,
+          "actual_exposure_min": 0.7987127205790032,
+          "actual_exposure_final": 0.8405273196401533,
+          "actual_exposure_last_entry": 0.84012383669124,
+          "actual_holdings_mean": 10.0,
+          "actual_holdings_min": 10,
+          "actual_holdings_final": 10,
+          "fraction_days_below_20": 1.0,
+          "actual_max_single_weight": 0.0924773475000884,
+          "dispersion_status": "实际持仓不足20只的天数需审查",
+          "actual_turnover_total": 19.323499968982862,
+          "actual_turnover_daily_mean": 0.33316379256867,
+          "plan_turnover_total": 20.549178912899,
+          "plan_order_count": 246,
+          "actual_order_count": 236,
+          "cash_min": 6936.155037319191,
+          "final_cash": 7745.39535267424,
+          "fees": {
+            "commission": 1180.0,
+            "stamp_tax": 226.83963388204575,
+            "transfer_fee": 9.477229618310929,
+            "slippage": 473.8614809155464,
+            "total": 1890.1783444159032
+          },
+          "execution_rejections": {
+            "below_board_lot": 10
+          },
+          "constructor_suppression": {
+            "threshold_dropped": 0,
+            "min_trade_dropped": 447,
+            "budget_skipped_no_viable": 0,
+            "budget_cash_capped": 0
+          },
+          "market_block_counts": {
+            "buy_blocked": 0,
+            "sell_blocked": 0,
+            "nonfinite_signal": 0
+          },
+          "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
+          "valuation_complete": true,
+          "terminal_missing_prices": [],
+          "theoretical_equal_weight_return": 0.011693026725554612,
+          "benchmark_return": 0.011693026725554612,
+          "net_excess_return": -0.03985121659749358,
+          "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
+          "no_trade_reason": null
+        },
+        "frequency": "daily",
+        "target_horizon": 1,
+        "identity": {
+          "method": "rl",
+          "seed": 42,
+          "window": {
+            "name": "synthetic",
+            "start": "2022-01-03",
+            "train_end": "2022-11-04",
+            "validation_end": "2023-01-27",
+            "test_end": "2023-04-21"
+          },
+          "budget": 4,
+          "data": {
+            "primary": {
+              "sha256": "d0c2e7121f0de889fb0e46338259346c8f5c7082ef9c2751d01a97d126b4a9ed",
+              "bytes": 5517312
+            },
+            "v2": {
+              "sha256": "f917dc94ae731de5d039a6ff40060163911a10de64f09a388113e171913ed810",
+              "bytes": 9187328
+            }
+          },
+          "config": {
+            "version": 1,
+            "dataset_id": "e801ae248ffa0c4c0f0113fc50f35248e4bddb987a09c6762cf57555bf59044e",
+            "budget": 4,
+            "time_limit": 180,
+            "threads": 1,
+            "device": "cpu",
+            "attempt_multiplier": 20,
+            "candidates": 15,
+            "horizon": 1,
+            "minimum_validation_excess": -1000000000.0,
+            "index_codes": [
+              "000300.SH"
+            ],
+            "min_listed_sessions": 60,
+            "min_eligible": 24,
+            "feature_names": [
+              "RET_1",
+              "MOMENTUM_20",
+              "REVERSAL_5",
+              "VOL_20",
+              "TURNOVER",
+              "AMPLITUDE",
+              "CLOSE_POSITION",
+              "OVERNIGHT_RET",
+              "ILLIQ_20"
+            ],
+            "model": {
+              "d_model": 16,
+              "nhead": 2,
+              "num_layers": 1,
+              "dim_feedforward": 32,
+              "num_loops": 1,
+              "dropout": 0.0,
+              "batch_size": 8,
+              "max_formula_len": 6,
+              "validation_fraction": 0.35,
+              "validation_splits": 2
+            },
+            "backtest": {
+              "portfolio_method": "equal_weight",
+              "turnover_budget": null,
+              "turnover_allocation": "priority",
+              "target_weight_change_threshold": 0.0,
+              "lot_size": 100,
+              "commission_rate": 0.00025,
+              "min_commission": 5.0,
+              "stamp_tax_rate": 0.0005,
+              "transfer_fee_rate": 1e-05,
+              "slippage_rate": 0.0005
+            },
+            "accounts": {
+              "10000": {
+                "top_n": 5,
+                "buy_rank": 5,
+                "sell_rank": 5,
+                "single_weight_cap": 0.18,
+                "min_trade_amount": 500
+              },
+              "50000": {
+                "top_n": 10,
+                "buy_rank": 10,
+                "sell_rank": 10,
+                "single_weight_cap": 0.09,
+                "min_trade_amount": 1000
+              },
+              "100000": {
+                "top_n": 10,
+                "buy_rank": 10,
+                "sell_rank": 10,
+                "single_weight_cap": 0.09,
+                "min_trade_amount": 2000
+              }
+            },
+            "synthetic_fixture": true,
+            "reward": {
+              "ic_min_stocks": 10,
+              "min_val_reward": -1000000000.0,
+              "min_val_icir": -1000000000.0,
+              "min_valid_ic_days": 2,
+              "min_effective_stocks": 10,
+              "min_coverage": 0.0,
+              "min_activity": 0.0,
+              "min_sign_stability": 0.0,
+              "min_val_window_q25": -1000000000.0
+            }
+          },
+          "code": {
+            "commit": "0c7df0492e6a817e8f1095d6a0febf6dff990f4b",
+            "source_digest": "673f6fb94bef8edc69590fe5af7fba54ca589684c724d7e67b982a6dadccef89",
+            "cloud_version": 1
+          }
+        },
+        "frozen_before_test": true
+      }
+    },
+    {
+      "method": "gp",
+      "seed": 42,
+      "window": {
+        "name": "synthetic",
+        "start": "2022-01-03",
+        "train_end": "2022-11-04",
+        "validation_end": "2023-01-27",
+        "test_end": "2023-04-21"
+      },
+      "outcome": "frozen_test_completed",
+      "search": {
+        "contract_version": 4,
+        "backend": "gp",
+        "seed": 42,
+        "requested_budget": 4,
+        "consumed_budget": 4,
+        "termination_reason": "budget_exhausted",
+        "stagnation_reason": null,
+        "best_so_far": [
+          [
+            1,
+            5.143858784329645
+          ],
+          [
+            2,
+            5.143858784329645
+          ],
+          [
+            3,
+            5.143858784329645
+          ],
+          [
+            4,
+            10.0
+          ]
+        ],
+        "selected": {
+          "tokens": [
+            36,
+            107
+          ],
+          "candidate_id": "gp:36,107",
+          "formula_text": "MA10(ILLIQ_20)",
+          "source": "gp",
+          "direction": -1,
+          "data_tier": {
+            "data_tier_version": 2,
+            "max_tier": "A",
+            "tiers_used": [
+              "A"
+            ]
+          },
+          "val_reward": 10.0,
+          "val_icir": 1.3510820190168062,
+          "train_reward": 10.0,
+          "train_icir": 0.9410137422136725,
+          "complexity_penalty": 0.0,
+          "complexity_cost": 1.5583333333333333,
+          "active_ir": 20.286119456508573,
+          "risk_exposure": 0.026248654003529576,
+          "average_turnover": 0.049775058201842096,
+          "capacity_utilization": 0.0006117640990537822,
+          "eligible": true,
+          "rejection_reasons": []
+        },
+        "rejection_reasons": {},
+        "proposal_count": 5,
+        "invalid_proposals": 1,
+        "semantic_duplicates": 0,
+        "elite_archive": {
+          "version": 1,
+          "source_backends": [
+            "gp"
+          ],
+          "entries": [
+            {
+              "tokens": [
+                36,
+                107
+              ],
+              "canonical_tokens": [
+                36,
+                107,
+                123
+              ],
+              "formula_text": "MA10(ILLIQ_20)",
+              "source": "gp",
+              "direction": -1,
+              "val_reward": 10.0,
+              "train_reward": 10.0,
+              "complexity_cost": 1.5583333333333333
+            },
+            {
+              "tokens": [
+                6,
+                101
+              ],
+              "canonical_tokens": [
+                6,
+                101,
+                123
+              ],
+              "formula_text": "DOWNVOL20(TURNOVER)",
+              "source": "gp",
+              "direction": 1,
+              "val_reward": 5.143858784329645,
+              "train_reward": 0.18005514660677058,
+              "complexity_cost": 1.5666666666666667
+            },
+            {
+              "tokens": [
+                34,
+                108,
+                99
+              ],
+              "canonical_tokens": [
+                34,
+                108,
+                99,
+                123
+              ],
+              "formula_text": "TS_RANK20(MA60(OVERNIGHT_RET))",
+              "source": "gp",
+              "direction": 1,
+              "val_reward": 0.9817678286156284,
+              "train_reward": -1.2747794429483605,
+              "complexity_cost": 2.1500000000000004
+            },
+            {
+              "tokens": [
+                11,
+                90
+              ],
+              "canonical_tokens": [
+                11,
+                90,
+                123
+              ],
+              "formula_text": "SIGN(CLOSE_POSITION)",
+              "source": "gp",
+              "direction": -1,
+              "val_reward": -5.738750328256167,
+              "train_reward": -7.3321685029684085,
+              "complexity_cost": 1.45
+            }
+          ]
+        },
+        "diagnostics": {
+          "stall_generations": 0,
+          "evaluator": {
+            "budget_used": 4,
+            "n_hits": 4,
+            "n_semantic_dedups": 0,
+            "n_entries": 4,
+            "cap": 16384,
+            "dataset_id": "e801ae248ffa0c4c0f0113fc50f35248e4bddb987a09c6762cf57555bf59044e",
+            "reward_version": 15,
+            "protocol_version": 29,
+            "window_id": "train:0:218:label:220:frequency:daily:horizon:1:val:142:180|180:218",
+            "version": 3,
+            "n_evaluated": 4,
+            "n_invalid": 1
+          },
+          "full_evaluations": 4
+        },
+        "n_scores": 4,
+        "stop_reason": "budget_exhausted"
+      },
+      "curve": [
+        {
+          "effective_evaluations": 1,
+          "best_validation_score": 5.143858784329645,
+          "elapsed_seconds": 0.40152929999749176
+        },
+        {
+          "effective_evaluations": 2,
+          "best_validation_score": 5.143858784329645,
+          "elapsed_seconds": 0.7322622000065167
+        },
+        {
+          "effective_evaluations": 3,
+          "best_validation_score": 5.143858784329645,
+          "elapsed_seconds": 1.0797274000069592
+        },
+        {
+          "effective_evaluations": 4,
+          "best_validation_score": 10.0,
+          "elapsed_seconds": 1.409173499996541
+        }
+      ],
+      "search_seconds": 1.4116923999972641,
+      "elapsed_seconds": 23.97630220002611,
+      "test_accounts": [
+        {
+          "capital": 10000,
+          "account": {
+            "account_summary_version": 2,
+            "initial_capital": 10000,
+            "first_mark_date": "20230131",
+            "final_mark_date": "20230421",
+            "periods": 58,
+            "terminal_net_assets": 10178.650796822561,
+            "net_profit_rmb": 178.65079682256146,
+            "net_return": 0.017865079682256146,
+            "net_cagr": 0.07997240498019198,
+            "max_drawdown": 0.008105527434768778,
+            "annual_returns": {
+              "2023": 0.017865079682256146
+            },
+            "worst_year": "2023",
+            "worst_year_return": 0.017865079682256146,
+            "actual_exposure_mean": 0.6373228398196875,
+            "actual_exposure_min": 0.5773484280456878,
+            "actual_exposure_final": 0.636086229533222,
+            "actual_exposure_last_entry": 0.6355317253662698,
+            "actual_holdings_mean": 5.0,
+            "actual_holdings_min": 5,
+            "actual_holdings_final": 5,
+            "fraction_days_below_20": 1.0,
+            "actual_max_single_weight": 0.17204267171479398,
+            "dispersion_status": "实际持仓不足20只的天数需审查",
+            "actual_turnover_total": 4.003133506109117,
+            "actual_turnover_daily_mean": 0.06901954320877789,
+            "plan_turnover_total": 17.066693831549,
+            "plan_order_count": 208,
+            "actual_order_count": 31,
+            "cash_min": 3071.0347183599547,
+            "final_cash": 3704.1511897363725,
+            "fees": {
+              "commission": 155.0,
+              "stamp_tax": 8.52865586280823,
+              "transfer_fee": 0.40226428127288827,
+              "slippage": 20.113214063644413,
+              "total": 184.04413420772553
+            },
+            "execution_rejections": {
+              "below_board_lot": 177
+            },
+            "constructor_suppression": {
+              "threshold_dropped": 0,
+              "min_trade_dropped": 95,
+              "budget_skipped_no_viable": 0,
+              "budget_cash_capped": 0
+            },
+            "market_block_counts": {
+              "buy_blocked": 0,
+              "sell_blocked": 0,
+              "nonfinite_signal": 0
+            },
+            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
+            "valuation_complete": true,
+            "terminal_missing_prices": [],
+            "theoretical_equal_weight_return": 0.0005024163921976132,
+            "benchmark_return": 0.0005024163921976132,
+            "net_excess_return": 0.017353944383930786,
+            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
+            "no_trade_reason": null
+          },
+          "config": {
+            "start_date": "2022-01-03",
+            "end_date": "2023-04-21",
+            "train_end_date": "2022-11-04",
+            "rebalance_frequency": "daily",
+            "target_horizon": 1,
+            "initial_capital": 10000,
+            "top_n": 5,
+            "portfolio_method": "equal_weight",
+            "buy_rank": 5,
+            "sell_rank": 5,
+            "min_trade_amount": 500,
+            "turnover_budget": null,
+            "turnover_allocation": "priority",
+            "target_weight_change_threshold": 0.0,
+            "single_weight_cap": 0.18,
+            "commission_rate": 0.00025,
+            "min_commission": 5.0,
+            "stamp_tax_rate": 0.0005,
+            "transfer_fee_rate": 1e-05,
+            "slippage_rate": 0.0005,
+            "lot_size": 100,
+            "benchmark": "全市场等权"
+          }
+        },
+        {
+          "capital": 50000,
+          "account": {
+            "account_summary_version": 2,
+            "initial_capital": 50000,
+            "first_mark_date": "20230131",
+            "final_mark_date": "20230421",
+            "periods": 58,
+            "terminal_net_assets": 52288.83478409106,
+            "net_profit_rmb": 2288.8347840910537,
+            "net_return": 0.04577669568182108,
+            "net_cagr": 0.21467174220959762,
+            "max_drawdown": 0.004006172521471396,
+            "annual_returns": {
+              "2023": 0.04577669568182108
+            },
+            "worst_year": "2023",
+            "worst_year_return": 0.04577669568182108,
+            "actual_exposure_mean": 0.8203585766237997,
+            "actual_exposure_min": 0.7862135843626108,
+            "actual_exposure_final": 0.8451642611931188,
+            "actual_exposure_last_entry": 0.8447920132882818,
+            "actual_holdings_mean": 10.0,
+            "actual_holdings_min": 10,
+            "actual_holdings_final": 10,
+            "fraction_days_below_20": 1.0,
+            "actual_max_single_weight": 0.0934762178080164,
+            "dispersion_status": "实际持仓不足20只的天数需审查",
+            "actual_turnover_total": 1.6653974254131123,
+            "actual_turnover_daily_mean": 0.028713748714019178,
+            "plan_turnover_total": 2.8563960366949996,
+            "plan_order_count": 71,
+            "actual_order_count": 22,
+            "cash_min": 8096.180365145683,
+            "final_cash": 8096.180365145683,
+            "fees": {
+              "commission": 110.0,
+              "stamp_tax": 10.556366896629331,
+              "transfer_fee": 0.8396590824127197,
+              "slippage": 41.98295412063599,
+              "total": 163.37898009967805
+            },
+            "execution_rejections": {
+              "below_board_lot": 49
+            },
+            "constructor_suppression": {
+              "threshold_dropped": 0,
+              "min_trade_dropped": 514,
+              "budget_skipped_no_viable": 0,
+              "budget_cash_capped": 0
+            },
+            "market_block_counts": {
+              "buy_blocked": 0,
+              "sell_blocked": 0,
+              "nonfinite_signal": 0
+            },
+            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
+            "valuation_complete": true,
+            "terminal_missing_prices": [],
+            "theoretical_equal_weight_return": 0.0005024163921976132,
+            "benchmark_return": 0.0005024163921976132,
+            "net_excess_return": 0.04525154417205912,
+            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
+            "no_trade_reason": null
+          },
+          "config": {
+            "start_date": "2022-01-03",
+            "end_date": "2023-04-21",
+            "train_end_date": "2022-11-04",
+            "rebalance_frequency": "daily",
+            "target_horizon": 1,
+            "initial_capital": 50000,
+            "top_n": 10,
+            "portfolio_method": "equal_weight",
+            "buy_rank": 10,
+            "sell_rank": 10,
+            "min_trade_amount": 1000,
+            "turnover_budget": null,
+            "turnover_allocation": "priority",
+            "target_weight_change_threshold": 0.0,
+            "single_weight_cap": 0.09,
+            "commission_rate": 0.00025,
+            "min_commission": 5.0,
+            "stamp_tax_rate": 0.0005,
+            "transfer_fee_rate": 1e-05,
+            "slippage_rate": 0.0005,
+            "lot_size": 100,
+            "benchmark": "全市场等权"
+          }
+        },
+        {
+          "capital": 100000,
+          "account": {
+            "account_summary_version": 2,
+            "initial_capital": 100000,
+            "first_mark_date": "20230131",
+            "final_mark_date": "20230421",
+            "periods": 58,
+            "terminal_net_assets": 104813.88027740146,
+            "net_profit_rmb": 4813.880277401461,
+            "net_return": 0.04813880277401461,
+            "net_cagr": 0.22663728607312983,
+            "max_drawdown": 0.0036382138296695565,
+            "annual_returns": {
+              "2023": 0.04813880277401461
+            },
+            "worst_year": "2023",
+            "worst_year_return": 0.04813880277401461,
+            "actual_exposure_mean": 0.855255208413966,
+            "actual_exposure_min": 0.849195897619973,
+            "actual_exposure_final": 0.861061358818345,
+            "actual_exposure_last_entry": 0.8607350694023933,
+            "actual_holdings_mean": 10.0,
+            "actual_holdings_min": 10,
+            "actual_holdings_final": 10,
+            "fraction_days_below_20": 1.0,
+            "actual_max_single_weight": 0.09328761424652227,
+            "dispersion_status": "实际持仓不足20只的天数需审查",
+            "actual_turnover_total": 1.71205504551758,
+            "actual_turnover_daily_mean": 0.029518190439958278,
+            "plan_turnover_total": 1.77991547168,
+            "plan_order_count": 20,
+            "actual_order_count": 20,
+            "cash_min": 14290.84005018902,
+            "final_cash": 14562.69810271883,
+            "fees": {
+              "commission": 100.0,
+              "stamp_tax": 21.860429382324213,
+              "transfer_fee": 1.7266909775733947,
+              "slippage": 86.33454887866974,
+              "total": 209.92166923856735
+            },
+            "execution_rejections": {},
+            "constructor_suppression": {
+              "threshold_dropped": 0,
+              "min_trade_dropped": 565,
+              "budget_skipped_no_viable": 0,
+              "budget_cash_capped": 0
+            },
+            "market_block_counts": {
+              "buy_blocked": 0,
+              "sell_blocked": 0,
+              "nonfinite_signal": 0
+            },
+            "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
+            "valuation_complete": true,
+            "terminal_missing_prices": [],
+            "theoretical_equal_weight_return": 0.0005024163921976132,
+            "benchmark_return": 0.0005024163921976132,
+            "net_excess_return": 0.04761246509887829,
+            "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
+            "no_trade_reason": null
+          },
+          "config": {
+            "start_date": "2022-01-03",
+            "end_date": "2023-04-21",
+            "train_end_date": "2022-11-04",
+            "rebalance_frequency": "daily",
+            "target_horizon": 1,
+            "initial_capital": 100000,
+            "top_n": 10,
+            "portfolio_method": "equal_weight",
+            "buy_rank": 10,
+            "sell_rank": 10,
+            "min_trade_amount": 2000,
+            "turnover_budget": null,
+            "turnover_allocation": "priority",
+            "target_weight_change_threshold": 0.0,
+            "single_weight_cap": 0.09,
+            "commission_rate": 0.00025,
+            "min_commission": 5.0,
+            "stamp_tax_rate": 0.0005,
+            "transfer_fee_rate": 1e-05,
+            "slippage_rate": 0.0005,
+            "lot_size": 100,
+            "benchmark": "全市场等权"
+          }
+        }
+      ],
+      "selected": {
+        "candidate": {
+          "tokens": [
+            36,
+            107
+          ],
+          "candidate_id": "gp:36,107",
+          "formula_text": "MA10(ILLIQ_20)",
+          "source": "gp",
+          "direction": -1,
+          "data_tier": {
+            "data_tier_version": 2,
+            "max_tier": "A",
+            "tiers_used": [
+              "A"
+            ]
+          },
+          "val_reward": 10.0,
+          "val_icir": 1.3510820190168062,
+          "train_reward": 10.0,
+          "train_icir": 0.9410137422136725,
+          "complexity_penalty": 0.0,
+          "complexity_cost": 1.5583333333333333,
+          "active_ir": 20.286119456508573,
+          "risk_exposure": 0.026248654003529576,
+          "average_turnover": 0.049775058201842096,
+          "capacity_utilization": 0.0006117640990537822,
+          "eligible": true,
+          "rejection_reasons": []
+        },
+        "selected_by": "validation_net_excess_50000",
+        "validation_account": {
+          "account_summary_version": 2,
+          "initial_capital": 50000,
+          "first_mark_date": "20221108",
+          "final_mark_date": "20230127",
+          "periods": 58,
+          "terminal_net_assets": 52962.01130888513,
+          "net_profit_rmb": 2962.0113088851263,
+          "net_return": 0.059240226177702526,
+          "net_cagr": 0.2840934853057493,
+          "max_drawdown": 0.004072496586044916,
+          "annual_returns": {
+            "2022": 0.04194878480023467,
+            "2023": 0.0165952891636445
+          },
+          "worst_year": "2023",
+          "worst_year_return": 0.0165952891636445,
+          "actual_exposure_mean": 0.8196464547937836,
+          "actual_exposure_min": 0.810929060216129,
+          "actual_exposure_final": 0.8224523308706466,
+          "actual_exposure_last_entry": 0.8221982104206402,
+          "actual_holdings_mean": 10.0,
+          "actual_holdings_min": 10,
+          "actual_holdings_final": 10,
+          "fraction_days_below_20": 1.0,
+          "actual_max_single_weight": 0.09694846127335556,
+          "dispersion_status": "实际持仓不足20只的天数需审查",
+          "actual_turnover_total": 2.4039114200795297,
+          "actual_turnover_daily_mean": 0.04144674862206086,
+          "plan_turnover_total": 2.598207371136,
+          "plan_order_count": 30,
+          "actual_order_count": 30,
+          "cash_min": 8886.082276694773,
+          "final_cash": 9403.281660295015,
+          "fees": {
+            "commission": 150.0,
+            "stamp_tax": 20.735594677925114,
+            "transfer_fee": 1.233054756641388,
+            "slippage": 61.652737832069405,
+            "total": 233.6213872666359
+          },
+          "execution_rejections": {},
+          "constructor_suppression": {
+            "threshold_dropped": 0,
+            "min_trade_dropped": 560,
+            "budget_skipped_no_viable": 0,
+            "budget_cash_capped": 0
+          },
+          "market_block_counts": {
+            "buy_blocked": 0,
+            "sell_blocked": 0,
+            "nonfinite_signal": 0
+          },
+          "market_block_scope": "可选信号股票/当前持仓的约束观察数，非已发订单",
+          "valuation_complete": true,
+          "terminal_missing_prices": [],
+          "theoretical_equal_weight_return": 0.011693026725554612,
+          "benchmark_return": 0.011693026725554612,
+          "net_excess_return": 0.04699765462063055,
+          "benchmark_kind": "theoretical PIT universe equal-weight (not a replicable small account)",
+          "no_trade_reason": null
+        },
+        "frequency": "daily",
+        "target_horizon": 1,
+        "identity": {
+          "method": "gp",
+          "seed": 42,
+          "window": {
+            "name": "synthetic",
+            "start": "2022-01-03",
+            "train_end": "2022-11-04",
+            "validation_end": "2023-01-27",
+            "test_end": "2023-04-21"
+          },
+          "budget": 4,
+          "data": {
+            "primary": {
+              "sha256": "d0c2e7121f0de889fb0e46338259346c8f5c7082ef9c2751d01a97d126b4a9ed",
+              "bytes": 5517312
+            },
+            "v2": {
+              "sha256": "f917dc94ae731de5d039a6ff40060163911a10de64f09a388113e171913ed810",
+              "bytes": 9187328
+            }
+          },
+          "config": {
+            "version": 1,
+            "dataset_id": "e801ae248ffa0c4c0f0113fc50f35248e4bddb987a09c6762cf57555bf59044e",
+            "budget": 4,
+            "time_limit": 180,
+            "threads": 1,
+            "device": "cpu",
+            "attempt_multiplier": 20,
+            "candidates": 15,
+            "horizon": 1,
+            "minimum_validation_excess": -1000000000.0,
+            "index_codes": [
+              "000300.SH"
+            ],
+            "min_listed_sessions": 60,
+            "min_eligible": 24,
+            "feature_names": [
+              "RET_1",
+              "MOMENTUM_20",
+              "REVERSAL_5",
+              "VOL_20",
+              "TURNOVER",
+              "AMPLITUDE",
+              "CLOSE_POSITION",
+              "OVERNIGHT_RET",
+              "ILLIQ_20"
+            ],
+            "model": {
+              "d_model": 16,
+              "nhead": 2,
+              "num_layers": 1,
+              "dim_feedforward": 32,
+              "num_loops": 1,
+              "dropout": 0.0,
+              "batch_size": 8,
+              "max_formula_len": 6,
+              "validation_fraction": 0.35,
+              "validation_splits": 2
+            },
+            "backtest": {
+              "portfolio_method": "equal_weight",
+              "turnover_budget": null,
+              "turnover_allocation": "priority",
+              "target_weight_change_threshold": 0.0,
+              "lot_size": 100,
+              "commission_rate": 0.00025,
+              "min_commission": 5.0,
+              "stamp_tax_rate": 0.0005,
+              "transfer_fee_rate": 1e-05,
+              "slippage_rate": 0.0005
+            },
+            "accounts": {
+              "10000": {
+                "top_n": 5,
+                "buy_rank": 5,
+                "sell_rank": 5,
+                "single_weight_cap": 0.18,
+                "min_trade_amount": 500
+              },
+              "50000": {
+                "top_n": 10,
+                "buy_rank": 10,
+                "sell_rank": 10,
+                "single_weight_cap": 0.09,
+                "min_trade_amount": 1000
+              },
+              "100000": {
+                "top_n": 10,
+                "buy_rank": 10,
+                "sell_rank": 10,
+                "single_weight_cap": 0.09,
+                "min_trade_amount": 2000
+              }
+            },
+            "synthetic_fixture": true,
+            "reward": {
+              "ic_min_stocks": 10,
+              "min_val_reward": -1000000000.0,
+              "min_val_icir": -1000000000.0,
+              "min_valid_ic_days": 2,
+              "min_effective_stocks": 10,
+              "min_coverage": 0.0,
+              "min_activity": 0.0,
+              "min_sign_stability": 0.0,
+              "min_val_window_q25": -1000000000.0
+            }
+          },
+          "code": {
+            "commit": "0c7df0492e6a817e8f1095d6a0febf6dff990f4b",
+            "source_digest": "673f6fb94bef8edc69590fe5af7fba54ca589684c724d7e67b982a6dadccef89",
             "cloud_version": 1
           }
         },
@@ -2760,5 +2760,140 @@
     "dataset mismatch refused before model",
     "infeasible capital rejected before search",
     "1/5/10 validation only then frozen frequency test"
-  ]
+  ],
+  "real_worker_retry": {
+    "kind": "two effective evaluations on synthetic input using one local RTX2060; not cloud throughput or financial evidence",
+    "task_id": "650f0f9d3a426e8a8899792c7377e3de97ec3fc46d08680386930ced5000df28",
+    "first_attempt": "physical GPU 999 refused before model/search",
+    "second_attempt": "same identity, --task ID --retry --gpus 0; completed; failed attempt preserved",
+    "repeat": "skipped_completed with artifact checksums",
+    "search": {
+      "contract_version": 4,
+      "backend": "random",
+      "seed": 42,
+      "requested_budget": 2,
+      "consumed_budget": 2,
+      "termination_reason": "budget_exhausted",
+      "stagnation_reason": null,
+      "best_so_far": [
+        [
+          1,
+          2.546133886526359
+        ],
+        [
+          2,
+          3.746680846023598
+        ]
+      ],
+      "selected": {
+        "tokens": [
+          10,
+          102,
+          123,
+          0,
+          0,
+          0
+        ],
+        "candidate_id": "random:10,102,123,0,0,0",
+        "formula_text": "CS_RANK(AMPLITUDE)",
+        "source": "random",
+        "direction": 1,
+        "data_tier": {
+          "data_tier_version": 2,
+          "max_tier": "A",
+          "tiers_used": [
+            "A"
+          ]
+        },
+        "val_reward": 3.746680846023598,
+        "val_icir": 0.5164462820521262,
+        "train_reward": 2.389497620202467,
+        "train_icir": 0.30822483561499525,
+        "complexity_penalty": 0.0,
+        "complexity_cost": 1.65,
+        "active_ir": 4.326648781072009,
+        "risk_exposure": 0.024211856322147514,
+        "average_turnover": 1.2051482320487503,
+        "capacity_utilization": 0.00120259557163683,
+        "eligible": true,
+        "rejection_reasons": []
+      },
+      "rejection_reasons": {},
+      "proposal_count": 2,
+      "invalid_proposals": 0,
+      "semantic_duplicates": 0,
+      "elite_archive": {
+        "version": 1,
+        "source_backends": [
+          "random"
+        ],
+        "entries": [
+          {
+            "tokens": [
+              10,
+              102,
+              123,
+              0,
+              0,
+              0
+            ],
+            "canonical_tokens": [
+              10,
+              102,
+              123
+            ],
+            "formula_text": "CS_RANK(AMPLITUDE)",
+            "source": "random",
+            "direction": 1,
+            "val_reward": 3.746680846023598,
+            "train_reward": 2.389497620202467,
+            "complexity_cost": 1.65
+          },
+          {
+            "tokens": [
+              1,
+              99,
+              123,
+              0,
+              0,
+              0
+            ],
+            "canonical_tokens": [
+              1,
+              99,
+              123
+            ],
+            "formula_text": "TS_RANK20(RET_1)",
+            "source": "random",
+            "direction": 1,
+            "val_reward": 2.546133886526359,
+            "train_reward": -2.406755610247553,
+            "complexity_cost": 1.5666666666666667
+          }
+        ]
+      },
+      "diagnostics": {
+        "evaluator": {
+          "budget_used": 2,
+          "n_hits": 0,
+          "n_semantic_dedups": 0,
+          "n_entries": 2,
+          "cap": 16384,
+          "dataset_id": "e801ae248ffa0c4c0f0113fc50f35248e4bddb987a09c6762cf57555bf59044e",
+          "reward_version": 15,
+          "protocol_version": 29,
+          "window_id": "train:0:218:label:220:frequency:daily:horizon:1:val:142:180|180:218",
+          "version": 3,
+          "n_evaluated": 2,
+          "n_invalid": 0
+        },
+        "full_evaluations": 2
+      },
+      "n_scores": 2,
+      "stop_reason": "budget_exhausted"
+    },
+    "outcome": "frozen_test_completed",
+    "source_commit": "0c7df0492e6a817e8f1095d6a0febf6dff990f4b",
+    "wall_seconds": 21.880489900009707
+  }
 }

@@ -14,11 +14,44 @@
   },
   "dependency_consistency": "pip check passed; freeze_lock --check passed; 145 test files covered by shard union",
   "local_python": "3.13.12 Windows, torch 2.11.0+cu128; Ubuntu Python3.12 remains cloud pending",
-  "clean_checkout_full_suite": "pending final verification",
+  "clean_checkout_full_suite": {
+    "commit": "fe8cf504a5816ee1d61b82b16a286629c2d368e5",
+    "directory": "D:/minequant/AlphaGPT-cloud-cleancheck",
+    "result": "2620 passed, 37 skipped in 1297.62s",
+    "command": "python -m pytest -q -n 4 tests --basetemp=D:/minequant/cloud-tests-clean-001 --tb=short",
+    "log_external_path": "D:\\minequant\\cloud_integration_audit\\clean-full-tests.log",
+    "skips": "34 optional historical archive checks plus 3 existing optional artifact checks; no hidden test failure"
+  },
   "cloud_validation": "not executed",
   "rl_duplicate_limit": {
     "result": "1 passed in 27.68s",
     "command": "pytest -q tests/test_cloud_search.py::test_rl_duplicates_do_not_complete_budget_and_sampling_is_bounded",
     "checks": "requested 64, actual unique <64, exactly 128 proposals; duplicates not billed; honest non-budget stop"
-  }
+  },
+  "database_thread_patch": {
+    "commit": "fee1b2515d1234075a35d79522239b5b2ed1d290",
+    "result": "21 passed in 286.03s",
+    "command": "python -m pytest -q tests/test_cloud_search.py tests/test_db.py tests/test_train_module_split.py --basetemp=D:/minequant/cloud-tests-final-threads-001 --tb=short",
+    "log_external_path": "D:\\minequant\\cloud_integration_audit\\final-worker-thread-tests.log"
+  },
+  "deployment_shell_syntax": "7 bash blocks and replacement runner validated with bash -n; no deployment commands executed",
+  "local_gpu_smoke": "environment checker passed on one RTX 2060 6GB with tiny real CUDA allocation; target four RTX4090 not verified",
+  "final_source_clean_entry_regression": {
+    "commit": "0c7df0492e6a817e8f1095d6a0febf6dff990f4b",
+    "directory": "D:/minequant/AlphaGPT-cloud-cleanfinal",
+    "result": "21 passed in 200.81s",
+    "command": "python -m pytest -q tests/test_cloud_search.py tests/test_db.py tests/test_train_module_split.py --basetemp=D:/minequant/cloud-tests-final-clean-001 --tb=short",
+    "log_external_path": "D:\\minequant\\cloud_integration_audit\\final-clean-entry-tests.log",
+    "reason": "verify final database thread and stop-reason additions against actual entry in clean checkout; full suite was on the preceding integrated source"
+  },
+  "proposal_stop_reason": {
+    "result": "1 passed in 29.44s",
+    "stop_reason": "attempt_limit",
+    "requested_budget": 64,
+    "consumed_budget": 1,
+    "proposal_count": 128,
+    "semantic_duplicates": 127,
+    "invalid_proposals": 0
+  },
+  "final_input_file_hashes": "Both source database SHA256, bytes and absent WAL rechecked after all reads: PASS"
 }
