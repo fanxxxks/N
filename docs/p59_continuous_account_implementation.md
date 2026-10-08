@@ -80,3 +80,12 @@ preparation and full original dataset confirmation. The selectors are mutually
 exclusive before any output directory creation. This new assertion failed RED
 when the selector was absent. The primary/v2 paths and preparation hash record
 travel with provenance; the live DB/WAL and old backup remain untouched.
+
+Final review found v1 terminal exposure pointed to the last entry observation,
+rather than terminal exit mark. `p59_terminal_observation_correction.md` precedes
+the reporting fix. Local summary v2 uses terminal assets and cash; preserves
+the prior value as last-entry exposure. The independent 99k-to-198k invested
+wealth oracle failed RED on v1. No trading/returns, framework-boundary or source
+input semantics changed, and no additional engine account run is permitted.
+Original six-run v1 evidence remains intact; corrected summaries explicitly
+record separate engine and summary-correction commits.

@@ -48,6 +48,17 @@ def test_drawdown_and_worst_year_use_continuous_wealth():
     assert row["net_cagr"] == pytest.approx(.99 ** (252/3) - 1)
 
 
+def test_terminal_exposure_uses_last_mark_not_last_entry():
+    data = market()
+    data[1]["open"][:, -1] = 20
+    data[1]["adjusted_open"][:, -1] = 20
+    result = AshareBacktestEngine(cfg()).run(*data)
+    row = summarize_account(result, 100000, data[1], data[2])
+    assert row["terminal_net_assets"] == pytest.approx(198849.51)
+    assert row["actual_exposure_final"] == pytest.approx(198000 / 198849.51)
+    assert row["actual_exposure_last_entry"] == pytest.approx(99000 / 99849.51)
+
+
 def test_continuous_engine_does_not_inject_funds_at_new_year(tmp_path):
     data = list(market(days=5))
     data[3] = ["20211229", "20211230", "20211231", "20220104", "20220105"]

@@ -31,7 +31,7 @@ from ashare_data.db import AshareDB
 from ashare_data.manifest import latest_publication_group
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.continuous_account import (
-    MEMBERS, assemble_frozen_signal, create_output_directory, first_rebalance_mask, account_periods,
+    MEMBERS, ACCOUNT_SUMMARY_VERSION, assemble_frozen_signal, create_output_directory, first_rebalance_mask, account_periods,
     summarize_account,
     validate_snapshot_bridge,
 )
@@ -217,7 +217,7 @@ def main():
         due = due[sl]
         if not first_rebalance_mask(due).any():
             raise ValueError("no executable first rebalance")
-        provenance = dict(implementation_commit=commit, account_summary_version=1,
+        provenance = dict(implementation_commit=commit, account_summary_version=ACCOUNT_SUMMARY_VERSION,
             development_validation=True, not_independent_oos=True, dataset_id=loader.dataset_id,
             dataset_identity_status=loader.dataset_identity_status, factor_cache_outcome=loader.factor_cache_outcome,
             source_root=str(source), source_config_sha256=digest_bytes(source_config_bytes),

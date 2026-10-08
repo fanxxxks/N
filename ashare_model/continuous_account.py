@@ -12,8 +12,14 @@ import numpy as np
 from .r01_baseline import combo_signal
 from .time_contract import _date_key
 
-ACCOUNT_SUMMARY_VERSION = 1
+ACCOUNT_SUMMARY_VERSION = 2
 MEMBERS = ("MOMENTUM_20", "RSQ_60", "REVERSAL_60")
+
+
+def terminal_exposure(net_assets, final_cash):
+    if net_assets <= 0:
+        raise ValueError("terminal assets must be positive to measure exposure")
+    return float((net_assets - final_cash) / net_assets)
 
 
 def validate_snapshot_bridge(reference, backup):
@@ -161,7 +167,8 @@ def summarize_account(result, initial_capital, raw, codes):
         max_drawdown=result.metrics["max_drawdown"], annual_returns=annual,
         worst_year=min(annual, key=annual.get), worst_year_return=min(annual.values()),
         actual_exposure_mean=float(np.mean(exposure)), actual_exposure_min=min(exposure),
-        actual_exposure_final=exposure[-1], actual_holdings_mean=float(np.mean(count)),
+        actual_exposure_final=terminal_exposure(initial_capital * result.equity_curve[-1], result.final_cash),
+        actual_exposure_last_entry=exposure[-1], actual_holdings_mean=float(np.mean(count)),
         actual_holdings_min=min(count), actual_holdings_final=count[-1],
         fraction_days_below_20=float(np.mean(np.asarray(count) < 20)),
         actual_max_single_weight=max(p["actual_max_single_weight"] for p in periods),
