@@ -238,7 +238,8 @@ def run_worker(request_path):
     search["best_so_far"] = [[x, s if math.isfinite(s) else None] for x, s in result.best_so_far]
     search["semantic_duplicates"] = max(0, result.proposal_count - result.consumed_budget - result.invalid_proposals)
     search["stop_reason"] = ("budget_exhausted" if result.consumed_budget >= budget else
-        "time_limit" if search_seconds >= settings["time_limit"] * 0.8 else result.termination_reason)
+        "time_limit" if search_seconds >= settings["time_limit"] * 0.8 else
+        "attempt_limit" if result.proposal_count >= attempts else result.termination_reason)
     write_json(output / "search.json", search)
     write_json(output / "candidates.json", [s.to_dict() for s in result.scores])
     archive = build_elite_archive(identity["method"], result.scores, max_size=settings.get("candidates", 15))

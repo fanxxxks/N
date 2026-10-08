@@ -1,6 +1,6 @@
 # 本轮交付
 
-整合分支 `codex/cloud-four-search` 位于 `D:\minequant\AlphaGPT-cloud-integration`。主目录修复提交 `3c9cfb4`，账户成果结合提交 `9a948c5`，云端入口代码提交 `fe8cf50`。后续交付记录提交只更新说明与验证证据，最终提交由 `git log -1 --format=%H` 查看。
+整合分支 `codex/cloud-four-search` 位于 `D:\minequant\AlphaGPT-cloud-integration`。主目录修复提交 `3c9cfb4`，账户成果结合提交 `9a948c5`，云端入口代码提交 `fe8cf50`，数据库线程限额补充提交 `fee1b25`。后续交付记录提交只更新说明与验证证据，最终提交由 `git log -1 --format=%H` 查看。
 
 使用 [完整操作说明](../../docs/CLOUD_FOUR_SEARCH.md) 部署。统一入口为 `scripts/run_cloud_search.py`，真实数据示例为 `config/cloud_four_search.yaml`。默认四方法均随机种子 42、每 5 日目标/调仓、1,000 次请求预算；这是云端测速计划，不是已完成训练。正式 60 组 × 10,000 次只在云端测速和费用确认后执行。
 
@@ -10,7 +10,7 @@
 - [排除清单](excluded_files.json)：取消跟踪的逐项路径、未纳入的本地文件及排除类别。
 - [单独上传清单](data_upload_manifest.json)：两个完整数据库的路径/尺寸/哈希、成对 dataset ID 和历史门禁；同时列出代码 bundle。
 
-[提交审计](delivery_audit.json) 扫描整个当前索引（既有跟踪文件及暂存修改），不是只看新文件；大文件阈值 1 MiB，扫描禁止目录、数据库/WAL/模型/密钥路径和常见私钥/API 凭据格式。报告只列路径，没有泄漏匹配值，不声称审计全部 Git 历史。五个大型旧 factor diagnostics 已逐项取消跟踪并保留精简 summary，原始文件仍在本地。
+[提交审计](delivery_audit.json) 扫描整个当前索引（既有跟踪文件及暂存修改），不是只看新文件；大文件阈值 1 MiB，扫描禁止目录、数据库/WAL/模型/密钥路径和常见私钥/API 凭据格式。报告只列路径，没有泄漏匹配值，不声称审计全部 Git 历史。七个大型旧 factor diagnostics 已逐项取消跟踪并保留精简 summary，原始文件仍在本地。
 
 [原目录保全](original_preservation.json) 核验主目录 1,921 个、任务目录 666 个开始时记录的文件，缺失/改变均为零；原分支和原 HEAD 保持。按本轮额外授权统一 Git 代理到 7892，并完成远端只读连接检查。没有 push、没有付费训练或目标云服务器执行。
 

@@ -218,4 +218,4 @@ def test_rl_duplicates_do_not_complete_budget_and_sampling_is_bounded(fixture_co
     assert search["semantic_duplicates"] > 0
     assert search["proposal_count"] == (search["consumed_budget"] +
         search["semantic_duplicates"] + search["invalid_proposals"])
-    assert search["stop_reason"] != "budget_exhausted"
+    assert search["stop_reason"] == "attempt_limit"
