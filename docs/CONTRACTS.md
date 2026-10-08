@@ -70,3 +70,4 @@
 | [p58_small_capital_execution.md](p58_small_capital_execution.md) | 任务一，小本金整手与现金一致性（用户直接授权；独立分支工程测量） |
 | [p59_continuous_account.md](p59_continuous_account.md) | 任务二，单次本金连续账户与实际买入持有对照（用户直接授权） |
 | [p60_bounded_return_experiment.md](p60_bounded_return_experiment.md) | 任务三，同配置旧/新执行对照与条件性停止（用户直接授权） |
+| [p61_turnover_budget_diagnostic.md](p61_turnover_budget_diagnostic.md) | 10万元预算0.20与显式关闭的单变量机制诊断（用户直接授权，独立于任务三） |
