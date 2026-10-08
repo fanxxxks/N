@@ -54,3 +54,19 @@ the subsequent measurement log, after they actually run.
 
 Rollback is reverting this implementation commit and retaining its immutable
 report directory. No source data or historical WP18 report migration is required.
+
+## Input recovery implementation
+
+The independent `p59_input_recovery_addendum.md` precedes this extension. An
+explicit `--snapshot-directory backup_20260919_p38` selects the existing paired
+backup, preserves its distinct dataset identity and validates the reference vs
+backup's published historical input fingerprints. Full content confirmation and
+frozen factor SHA checks remain mandatory. No generic fallback, source writes,
+republishing, cache migration, account reruns or configuration searches.
+
+The five new bridge tests failed RED (missing validator), then the expanded
+focused file passed 19 tests: historical price, stock, missing-table and schema
+mismatches refuse; strictly future/unconsumed changes can pass. Existing tests
+remain unchanged. First implementation's exact adjacent run: 159 passed in
+119.00 seconds, zero warnings/skips. The recovered implementation must get its
+own exact verification and measurement record.

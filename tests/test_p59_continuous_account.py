@@ -146,3 +146,36 @@ def test_cache_only_mode_refuses_rebuild_before_any_cache_write(populated_db):
     with pytest.raises(RuntimeError, match="factor cache required"):
         loader.load_data()
     assert not list((config.data_dir / "factor_tensor_cache").glob("*.npz"))
+
+
+def snapshot_members():
+    def table(name):
+        return dict(table=name, schema_digest="same-schema", row_count=2,
+            partitions=[dict(partition_key="2021", hash="historical", row_count=1),
+                dict(partition_key="2026", hash="recent", row_count=1)])
+    return {"primary": {"dataset_id": "primary", "tables": [table(n) for n in
+            ("trade_calendar", "constituents", "stocks")]},
+        "tushare_v2": {"dataset_id": "v2", "tables": [table(n) for n in
+            ("daily_bar_raw", "daily_adj_factor", "daily_price_limit", "daily_suspension")]}}
+
+
+@pytest.mark.parametrize("change", ["historical_price", "stock", "missing", "schema"])
+def test_snapshot_bridge_rejects_historical_mismatch(change):
+    from ashare_model.continuous_account import validate_snapshot_bridge
+    reference, backup = snapshot_members(), snapshot_members()
+    if change == "historical_price": backup["tushare_v2"]["tables"][0]["partitions"][0]["hash"] = "changed"
+    if change == "stock": backup["primary"]["tables"][2]["partitions"][1]["hash"] = "changed"
+    if change == "missing": backup["tushare_v2"]["tables"].pop()
+    if change == "schema": backup["tushare_v2"]["tables"][1]["schema_digest"] = "changed"
+    with pytest.raises(ValueError): validate_snapshot_bridge(reference, backup)
+
+
+def test_snapshot_bridge_allows_only_unconsumed_changes():
+    from ashare_model.continuous_account import validate_snapshot_bridge
+    reference, backup = snapshot_members(), snapshot_members()
+    reference["tushare_v2"]["tables"][2]["partitions"][1]["hash"] = "post-development-window"
+    reference["tushare_v2"]["tables"].append(dict(table="source_ingest_runs", metadata="new"))
+    bridge = validate_snapshot_bridge(reference, backup)
+    assert bridge["historical_inputs_identical"] is True
+    assert bridge["through_year"] == "2025"
+    assert set(bridge["changed_tables"]["tushare_v2"]) == {"daily_price_limit", "source_ingest_runs"}

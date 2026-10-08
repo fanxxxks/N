@@ -16,6 +16,37 @@ ACCOUNT_SUMMARY_VERSION = 1
 MEMBERS = ("MOMENTUM_20", "RSQ_60", "REVERSAL_60")
 
 
+def validate_snapshot_bridge(reference, backup):
+    """Compare existing authoritative fingerprints; never manufacture a dataset ID."""
+    required = {
+        "primary": ("trade_calendar", "constituents", "stocks"),
+        "tushare_v2": ("daily_bar_raw", "daily_adj_factor", "daily_price_limit", "daily_suspension"),
+    }
+    changed = {}
+    for member, names in required.items():
+        a, b = ({t["table"]: t for t in v[member]["tables"]} for v in (reference, backup))
+        changed[member] = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+        for name in names:
+            if name not in a or name not in b:
+                raise ValueError(f"missing snapshot bridge input: {member}/{name}")
+            if member == "primary":
+                equal = a[name] == b[name]
+            else:
+                def historical(table):
+                    partitions = table["partitions"]
+                    if any(len(p["partition_key"]) != 4 or not p["partition_key"].isdigit() for p in partitions):
+                        raise ValueError(f"non-year price partition: {name}")
+                    return dict(schema=table["schema_digest"], partitions=[p for p in partitions
+                        if p["partition_key"] <= "2025"])
+                equal = historical(a[name]) == historical(b[name])
+            if not equal:
+                raise ValueError(f"historical snapshot bridge mismatch: {member}/{name}")
+    return dict(historical_inputs_identical=True, through_year="2025", changed_tables=changed,
+        reference_member_ids={k: v["dataset_id"] for k, v in reference.items()},
+        backup_member_ids={k: v["dataset_id"] for k, v in backup.items()},
+        compared_tables={k: list(v) for k, v in required.items()})
+
+
 def create_output_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=False)
 

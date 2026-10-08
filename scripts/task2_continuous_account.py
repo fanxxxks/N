@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import gc
 import hashlib
 import json
@@ -27,18 +27,22 @@ from loguru import logger
 
 from ashare_data.config import make_backtest_config, make_data_config, make_model_config
 from ashare_data.io_utils import atomic_write_json
+from ashare_data.db import AshareDB
+from ashare_data.manifest import latest_publication_group
 from ashare_model.backtest import AshareBacktestEngine
 from ashare_model.continuous_account import (
     MEMBERS, assemble_frozen_signal, create_output_directory, first_rebalance_mask, account_periods,
     summarize_account,
+    validate_snapshot_bridge,
 )
 from ashare_model.data_loader import AshareDataLoader
 from ashare_model.ledger import ExperimentLedger
-from ashare_model.runspec import _capture_versions
+from ashare_model.runspec import _capture_versions, composite_snapshot_id
 from ashare_model.vocab import FEATURE_NAMES
 from ashare_portfolio.rebalance import RebalancePolicy
 
 FROZEN_DATASET = "d36024cd1b197a8edcf976b2d950b3506bb0fae022f121d6aef06f2a281cde55"
+BACKUP_DATASET = "767d955b0fd99507fed95b4275a2bdde5bdab177e1e22c8dc156a45c107e21b2"
 FROZEN_FACTORS = {
     "MOMENTUM_20": "0bf61a6d89703f571616f0078cc52528ac788f5345d0b64eb6ae089f052ba72c",
     "RSQ_60": "5cbb94a224cf7805e4387271f691f1db48dfdbb1c81c57c93549430d12816587",
@@ -101,6 +105,7 @@ def render_report(rows, provenance):
             f'- 期末缺价持仓：{r["terminal_missing_prices"]}；完整估值：{r["valuation_complete"]}',
             f'- 实际最大单股权重（含价格漂移及扣费）：{r["actual_max_single_weight"]:.2%}', ""]
     lines += ["## 口径与局限", "",
+        f'- 实际只读输入：{provenance["snapshot_directory"] or "当前数据库"}；dataset={provenance["dataset_id"]}。原数据库漂移失败已保留，备份按独立身份确认，历史必需输入和三个因子已核对一致。',
         "- 人民币是现有引擎的复权总回报近似估值：红利没有逐笔现金入账；执行时按复权财富重推股数，不能等同券商现金结算。",
         "- 期末仍持有股票，没有假想清仓，也没有扣假想清仓费用。若期末持仓缺价，估值不合格。",
         "- 各年账户收益接续上年末资产，无年度注资；年化沿用252/实际收益期数。现金、持仓跨年持续。",
@@ -120,6 +125,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--snapshot-directory", choices=["backup_20260919_p38"],
+        help="explicit preregistered recovery; no automatic fallback")
     args = parser.parse_args()
     source, output = args.source_root.resolve(), args.output.resolve()
     create_output_directory(output)
@@ -142,10 +149,32 @@ def main():
             path = ROOT / f"config/small_capital_{capital}.yaml"
             configs[capital] = make_backtest_config(yaml.safe_load(path.read_bytes()))
             hashes[str(capital)] = digest_bytes(path.read_bytes())
-        loader = AshareDataLoader(make_data_config(source_config, source),
+        data_config = make_data_config(source_config, source)
+        expected_dataset = FROZEN_DATASET
+        snapshot_bridge = None
+        if args.snapshot_directory is not None:
+            backup_primary = source / "data" / args.snapshot_directory / "ashare.duckdb"
+            groups = []
+            for path in (data_config.duckdb_path, backup_primary):
+                with AshareDB(path, read_only=True) as db:
+                    group = latest_publication_group(db)
+                if group is None:
+                    raise ValueError(f"missing published composite group: {path}")
+                groups.append(group)
+            identities = [composite_snapshot_id(g.members["primary"], g.members["tushare_v2"])
+                for g in groups]
+            if identities != [FROZEN_DATASET, BACKUP_DATASET]:
+                raise ValueError(f"published recovery identities drifted: {identities}")
+            snapshot_bridge = validate_snapshot_bridge(
+                {k: v.to_dict() for k, v in groups[0].members.items()},
+                {k: v.to_dict() for k, v in groups[1].members.items()})
+            snapshot_bridge["publication_ids"] = [g.publication_id for g in groups]
+            data_config = replace(data_config, duckdb_path=backup_primary)
+            expected_dataset = BACKUP_DATASET
+        loader = AshareDataLoader(data_config,
             make_model_config(source_config), require_factor_cache_hit=True)
         loader.load_data()
-        if loader.dataset_identity_status != "confirmed" or loader.dataset_id != FROZEN_DATASET:
+        if loader.dataset_identity_status != "confirmed" or loader.dataset_id != expected_dataset:
             raise ValueError(f"dataset identity drift: {loader.dataset_id}")
         factors = {}
         factor_hashes = {}
@@ -176,6 +205,8 @@ def main():
             development_validation=True, not_independent_oos=True, dataset_id=loader.dataset_id,
             dataset_identity_status=loader.dataset_identity_status, factor_cache_outcome=loader.factor_cache_outcome,
             source_root=str(source), source_config_sha256=digest_bytes(source_config_bytes),
+            snapshot_directory=args.snapshot_directory, consumed_primary_path=str(data_config.duckdb_path),
+            original_wp18_dataset_id=FROZEN_DATASET, snapshot_bridge=snapshot_bridge,
             direction_file_sha256=digest_bytes(direction_bytes), factor_matrix_sha256=factor_hashes,
             consumed_factor_version=_capture_versions()["factor_compute_version"], source_wp18_factor_version=5,
             factor_version_bridge="only AMPLITUDE differs; all three full matrices byte-identical",
@@ -195,7 +226,7 @@ def main():
         atomic_write_json(output / "provenance.json", provenance)
         del loader, factors, payload
         gc.collect()
-        ledger.complete_trial(input_trial, metrics={"dataset_id": FROZEN_DATASET})
+        ledger.complete_trial(input_trial, metrics={"dataset_id": expected_dataset})
     except Exception as exc:
         ledger.fail_trial(input_trial, error=f"{type(exc).__name__}: {exc}")
         raise
