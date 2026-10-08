@@ -242,6 +242,7 @@ class AshareBacktestEngine:
         daily_returns: list[float] = []
         turnover_list: list[float] = []
         positions: list[dict[str, Any]] = []
+        trades: list[dict[str, Any]] = []
         target_weights_list: list[np.ndarray] = []
         buy_weights_list: list[np.ndarray] = []
         sell_weights_list: list[np.ndarray] = []
@@ -279,6 +280,16 @@ class AshareBacktestEngine:
             sell_weights = np.zeros(n_stocks, dtype=np.float64)
             trade_fees = 0.0
             p_entry = open_[:, entry_day]
+            rejections = []
+            market_blocks = {}
+            if rebalance_due:
+                candidates = eligible & np.isfinite(signal)
+                held_before = weights > _P35_WEIGHT_EPS
+                market_blocks = {
+                    "buy_blocked": int(np.count_nonzero(candidates & buy_blocked)),
+                    "sell_blocked": int(np.count_nonzero(held_before & sell_blocked)),
+                    "nonfinite_signal": int(np.count_nonzero(eligible & ~np.isfinite(signal))),
+                }
             if rebalance_due:
                 # P35: the share book is re-derived from the drifted
                 # weights at the raw entry open — a split halves the raw
@@ -307,6 +318,8 @@ class AshareBacktestEngine:
                         target_weights[i] * capital / p_entry[i], shares[i],
                         lot_size=lot,
                     )
+                    if deltas[i] == 0:
+                        rejections.append(dict(ts_code=ts_codes[i], reason="below_board_lot"))
                 minimum = self.config.min_trade_amount
                 for side in ("sell", "buy"):
                     indices = np.flatnonzero(deltas < 0 if side == "sell" else deltas > 0)
@@ -319,14 +332,18 @@ class AshareBacktestEngine:
                         else:
                             quantity = min(quantity, shares[i])
                         if quantity <= 0:
+                            rejections.append(dict(ts_code=ts_codes[i], reason="insufficient_cash"))
                             continue
                         notional = float(quantity * p_entry[i])
                         full_exit = side == "sell" and quantity >= shares[i]
                         if minimum is not None and not full_exit and notional < minimum:
+                            rejections.append(dict(ts_code=ts_codes[i], reason="below_min_trade_amount"))
                             continue
-                        fees = float(self.cost_model.trade_cost(side, notional).total)
+                        cost = self.cost_model.trade_cost(side, notional)
+                        fees = float(cost.total)
                         if side == "sell":
                             if cash + notional < fees:
+                                rejections.append(dict(ts_code=ts_codes[i], reason="insufficient_cash_for_fees"))
                                 continue
                             shares[i] -= quantity
                             cash += notional - fees
@@ -336,6 +353,12 @@ class AshareBacktestEngine:
                             cash -= notional + fees
                             buy_weights[i] = notional / capital
                         trade_fees += fees
+                        trades.append(dict(date=dates[entry_day], signal_date=dates[t],
+                            ts_code=ts_codes[i], side=side, quantity=float(quantity),
+                            price=float(p_entry[i]), amount=notional,
+                            commission=float(cost.commission), stamp_tax=float(cost.stamp_tax),
+                            transfer_fee=float(cost.transfer_fee), slippage=float(cost.slippage),
+                            total=fees))
                 cost_fraction = trade_fees / capital if capital > 0.0 else 0.0
                 # achieved book weights on the post-fee equity; the fees
                 # are already debited to cash, so the post-execution
@@ -367,6 +390,7 @@ class AshareBacktestEngine:
             # net is the exact equity ratio (fees already inside
             # capital_after).
             gross_ret = float(np.dot(weights, target_ret[:, entry_day - 1]))
+            capital_after_execution = capital
             net_ret = (capital * (1.0 + gross_ret)) / capital_before - 1.0
             daily_returns.append(net_ret)
             turnover_list.append(output.turnover)
@@ -387,7 +411,18 @@ class AshareBacktestEngine:
             target_weights_list.append(target_weights.copy())
             buy_weights_list.append(buy_weights.copy())
             sell_weights_list.append(sell_weights.copy())
-            construction_diagnostics.append(dict(output.diagnostics))
+            diagnostics = dict(output.diagnostics)
+            diagnostics["execution_rejections"] = rejections
+            diagnostics["market_block_counts"] = market_blocks
+            diagnostics["account"] = dict(
+                equity_before=float(capital_before),
+                equity_after_execution=float(capital_after_execution),
+                equity_exit=float(capital), cash=float(cash), fees=float(trade_fees),
+                actual_exposure=float(weights.sum()),
+                actual_max_single_weight=float(weights.max()) if len(weights) else 0.0,
+                actual_turnover=float(buy_weights.sum() + sell_weights.sum()),
+            )
+            construction_diagnostics.append(diagnostics)
             # P35: drift the weights to the next open (share-conserving
             # state evolution).  The cash weight absorbs the residual, so
             # the uninvested fraction earns zero rather than the
@@ -458,6 +493,7 @@ class AshareBacktestEngine:
             benchmark_equity=benchmark_equity,
             metrics=metrics,
             positions=positions,
+            trades=trades,
             target_weights=target_weights_list,
             buy_weights=buy_weights_list,
             sell_weights=sell_weights_list,

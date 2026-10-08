@@ -154,6 +154,7 @@ class AshareDataLoader:
         *,
         allow_development_universe_fallback: bool = False,
         dataset_identity_mode: str = "confirm",
+        require_factor_cache_hit: bool = False,
     ):
         if dataset_identity_mode not in ("confirm", "query"):
             raise ValueError(
@@ -170,6 +171,7 @@ class AshareDataLoader:
         # query/downgrade path is reachable only by asking for it explicitly
         # — never by default and never silently.
         self.dataset_identity_mode = str(dataset_identity_mode)
+        self.require_factor_cache_hit = bool(require_factor_cache_hit)
         self._reset_loaded_state()
 
     def _reset_loaded_state(self) -> None:
@@ -771,6 +773,8 @@ class AshareDataLoader:
             self.factor_cache_outcome,
             self.factor_cache_reason,
         )
+        if self.require_factor_cache_hit and cached is None:
+            raise RuntimeError(f"factor cache required: {self.factor_cache_reason}")
 
         # The industry membership frame feeds both the factor computation
         # (miss path) and the VM's dense industry group ids (every path) —
