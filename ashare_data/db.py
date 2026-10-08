@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import Any, Iterable
 
 import duckdb
@@ -23,7 +24,13 @@ class AshareDB:
         self.read_only = read_only
         if not read_only:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = duckdb.connect(str(self.path), read_only=read_only)
+        options = {}
+        if os.environ.get("ASHARE_DUCKDB_THREADS"):
+            threads = int(os.environ["ASHARE_DUCKDB_THREADS"])
+            if threads <= 0:
+                raise ValueError("ASHARE_DUCKDB_THREADS must be positive")
+            options["config"] = {"threads": threads}
+        self._conn = duckdb.connect(str(self.path), read_only=read_only, **options)
 
     def close(self) -> None:
         self._conn.close()

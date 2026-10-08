@@ -32,6 +32,16 @@ git push -u origin codex/cloud-four-search
 
 不上传三固定因子回放、旧因子缓存、旧模型、原虚拟环境、WAL、逐笔结果、工具状态或密钥。总数据库约 9.09 GB 十进制。带宽 25 Mbps 的传输时间受网络影响，本文没有实测上传时间。上传期间不得写数据库；若源文件变化，重新复制并校验，不沿用这份身份。完整数据库不能裁表后继续冒用已发布身份。
 
+先在服务器确认挂载点并创建下节的 input 目录，再在本地 PowerShell 上传。下面两项输入是实际服务器登录地址与实际数据盘目录，本轮没有执行这些传输：
+
+```powershell
+$cloudRemote = Read-Host '服务器登录地址，例如 user@address'
+$cloudDataPath = Read-Host '服务器上的实际 DATA_ROOT 绝对路径'
+scp -- D:/minequant/AlphaGPT-cloud.bundle D:/minequant/AlphaGPT-cloud.bundle.sha256 "${cloudRemote}:${cloudDataPath}/"
+scp -- D:/minequant/AlphaGPT-task1/data/task2_reference_20261007_clean/ashare.duckdb "${cloudRemote}:${cloudDataPath}/input/ashare.duckdb"
+scp -- D:/minequant/AlphaGPT/data/ashare_v2.duckdb "${cloudRemote}:${cloudDataPath}/input/ashare_v2.duckdb"
+```
+
 ## 3. 确认数据盘与安装环境（Ubuntu 22.04）
 
 先在服务器运行 `lsblk -f`、`findmnt`、`df -hT`，找到实际数据盘挂载点。下面变量中的路径由用户填写，不能使用系统盘代替。代码、Python、虚拟环境、下载缓存、数据库及结果都放到数据盘。系统盘 50 GB，数据盘 170 GB：四个独立任务会复制各自的因子缓存，应监控 `df -h` 和 `du -sh "$DATA_ROOT/runs"`；不要同时永久保存全部窗口的大缓存。输入始终只读，任务之间不共享可写缓存。
@@ -51,6 +61,7 @@ export UV_PYTHON_BIN_DIR="$DATA_ROOT/bin"
 export PATH="$DATA_ROOT/bin:$PATH"
 
 # 使用已上传的 bundle，不需要此时推送。
+(cd "$DATA_ROOT" && sha256sum -c AlphaGPT-cloud.bundle.sha256)
 git clone --branch codex/cloud-four-search "$DATA_ROOT/AlphaGPT-cloud.bundle" "$DATA_ROOT/code"
 # 或在用户完成上述推送后使用：
 # git clone --branch codex/cloud-four-search https://github.com/fanxxxks/N.git "$DATA_ROOT/code"

@@ -3,9 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from ashare_data.config import DataConfig
 from ashare_data.db import AshareDB
+
+
+def test_explicit_worker_thread_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("ASHARE_DUCKDB_THREADS", "2")
+    with AshareDB(tmp_path / "threads.duckdb") as db:
+        assert db.query("SELECT current_setting('threads') AS n").iloc[0]["n"] == 2
+    monkeypatch.setenv("ASHARE_DUCKDB_THREADS", "0")
+    with pytest.raises(ValueError, match="must be positive"):
+        AshareDB(tmp_path / "invalid.duckdb")
 
 
 def test_schema_is_created(data_config: DataConfig):

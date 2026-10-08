@@ -217,6 +217,7 @@ def run_task(task, gpu, retry=False):
         threads = str(task["settings"]["threads"])
         environment.update(OMP_NUM_THREADS=threads, MKL_NUM_THREADS=threads,
                            OPENBLAS_NUM_THREADS=threads, NUMEXPR_NUM_THREADS=threads,
+                           ASHARE_DUCKDB_THREADS=threads,
                            PYTHONUNBUFFERED="1", PYTHONUTF8="1")
         if gpu is not None:
             environment["CUDA_VISIBLE_DEVICES"] = str(gpu)

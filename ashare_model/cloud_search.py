@@ -254,6 +254,7 @@ def run_worker(request_path):
         "research_claim": "historical development comparison; no promotion or significance claim",
         "runtime": {"python": sys.version, "torch": torch.__version__, "numpy": np.__version__,
             "cuda_runtime": torch.version.cuda, "torch_threads": torch.get_num_threads(),
+            "duckdb_threads": __import__("os").environ.get("ASHARE_DUCKDB_THREADS"),
             "visible_devices": __import__("os").environ.get("CUDA_VISIBLE_DEVICES"),
             "gpu_names": [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())],
             "policy_device": str(next(trainer.model.parameters()).device), "factor_device": settings["device"]}})
