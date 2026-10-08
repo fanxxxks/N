@@ -1,0 +1,151 @@
+{
+  "implementation_commit": "5b1efa97d8a93cfa1bac914dda134dd8bd026645",
+  "exactly_nine_accounts": true,
+  "ledgers_reopened_and_hash_chain_verified": [
+    {
+      "directory": ".",
+      "trials": 3,
+      "accounts": 0
+    },
+    {
+      "directory": "after",
+      "trials": 7,
+      "accounts": 6
+    },
+    {
+      "directory": "before",
+      "trials": 3,
+      "accounts": 3
+    }
+  ],
+  "checks": [
+    {
+      "capital": 30000,
+      "mode": "before",
+      "all_cash_nonnegative": true,
+      "fees_reconcile": true,
+      "annual_chain_reconciles": true,
+      "actual_buy_orders_below_1000": 66,
+      "actual_buy_notional_below_1000": 55291.00010395043,
+      "sell_only_trade_days": 30,
+      "first_funded_holdings": 19,
+      "fraction_funded_days_below_20": 0.7431648715824358
+    },
+    {
+      "capital": 30000,
+      "mode": "after",
+      "all_cash_nonnegative": true,
+      "fees_reconcile": true,
+      "annual_chain_reconciles": true,
+      "actual_buy_orders_below_1000": 0,
+      "actual_buy_notional_below_1000": 0,
+      "sell_only_trade_days": 37,
+      "first_funded_holdings": 6,
+      "fraction_funded_days_below_20": 1.0
+    },
+    {
+      "capital": 30000,
+      "mode": "passive",
+      "all_cash_nonnegative": true,
+      "fees_reconcile": true,
+      "annual_chain_reconciles": true,
+      "actual_buy_orders_below_1000": 0,
+      "actual_buy_notional_below_1000": 0,
+      "sell_only_trade_days": 0,
+      "first_funded_holdings": 6,
+      "fraction_funded_days_below_20": 1.0
+    },
+    {
+      "capital": 50000,
+      "mode": "before",
+      "all_cash_nonnegative": true,
+      "fees_reconcile": true,
+      "annual_chain_reconciles": true,
+      "actual_buy_orders_below_1000": 11,
+      "actual_buy_notional_below_1000": 9167.00010299684,
+      "sell_only_trade_days": 28,
+      "first_funded_holdings": 25,
+      "fraction_funded_days_below_20": 0.9834299917149959
+    },
+    {
+      "capital": 50000,
+      "mode": "after",
+      "all_cash_nonnegative": true,
+      "fees_reconcile": true,
+      "annual_chain_reconciles": true,
+      "actual_buy_orders_below_1000": 0,
+      "actual_buy_notional_below_1000": 0,
+      "sell_only_trade_days": 31,
+      "first_funded_holdings": 25,
+      "fraction_funded_days_below_20": 0.9751449875724938
+    },
+    {
+      "capital": 50000,
+      "mode": "passive",
+      "all_cash_nonnegative": true,
+      "fees_reconcile": true,
+      "annual_chain_reconciles": true,
+      "actual_buy_orders_below_1000": 0,
+      "actual_buy_notional_below_1000": 0,
+      "sell_only_trade_days": 0,
+      "first_funded_holdings": 25,
+      "fraction_funded_days_below_20": 0.0
+    },
+    {
+      "capital": 100000,
+      "mode": "before",
+      "all_cash_nonnegative": true,
+      "fees_reconcile": true,
+      "annual_chain_reconciles": true,
+      "actual_buy_orders_below_1000": 8,
+      "actual_buy_notional_below_1000": 6399.000024795531,
+      "sell_only_trade_days": 15,
+      "first_funded_holdings": 25,
+      "fraction_funded_days_below_20": 0.9834299917149959
+    },
+    {
+      "capital": 100000,
+      "mode": "after",
+      "all_cash_nonnegative": true,
+      "fees_reconcile": true,
+      "annual_chain_reconciles": true,
+      "actual_buy_orders_below_1000": 0,
+      "actual_buy_notional_below_1000": 0,
+      "sell_only_trade_days": 16,
+      "first_funded_holdings": 25,
+      "fraction_funded_days_below_20": 0.9834299917149959
+    },
+    {
+      "capital": 100000,
+      "mode": "passive",
+      "all_cash_nonnegative": true,
+      "fees_reconcile": true,
+      "annual_chain_reconciles": true,
+      "actual_buy_orders_below_1000": 0,
+      "actual_buy_notional_below_1000": 0,
+      "sell_only_trade_days": 0,
+      "first_funded_holdings": 25,
+      "fraction_funded_days_below_20": 0.0
+    }
+  ],
+  "source_integrity": [
+    {
+      "path": "D:\\minequant\\AlphaGPT\\data\\ashare.duckdb",
+      "unchanged_from_task2_preparation": true,
+      "sha256": "daf303687bc7d6070e5a6f455bc41bd7d75fc666595f35738dd4cd9d71b929d8"
+    },
+    {
+      "path": "D:\\minequant\\AlphaGPT\\data\\ashare.duckdb.wal",
+      "unchanged_from_task2_preparation": true,
+      "sha256": "05a7e163c5a8a64e10b07ba3d7a7ea3f71dbd6e497c8220ea6e95f00159f9a46"
+    },
+    {
+      "path": "D:\\minequant\\AlphaGPT-task1\\data\\task2_reference_20261007_clean\\ashare.duckdb",
+      "unchanged_from_task2_preparation": true,
+      "sha256": "c13f91f526d6a79d46a90455a4b05c1acb088445ad057465705be7fc039c7529"
+    }
+  ],
+  "current_six_account_terminal_and_fee_replay": "exact equality to P59",
+  "frequency_grid_runs": 0,
+  "cost_stress_runs": 0
+}
