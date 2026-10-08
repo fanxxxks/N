@@ -1,0 +1,245 @@
+{
+  "implementation_commit": "dd5453a92d3613c6b9161000b176259d7faf39fc",
+  "account_summary_version": 1,
+  "development_validation": true,
+  "not_independent_oos": true,
+  "dataset_id": "d36024cd1b197a8edcf976b2d950b3506bb0fae022f121d6aef06f2a281cde55",
+  "dataset_identity_status": "confirmed",
+  "factor_cache_outcome": "hit",
+  "source_root": "D:\\minequant\\AlphaGPT",
+  "source_config_sha256": "3dc7f6caa2285205856dd476144d753bffe75d339b95d9d126a7ac7c88924d4d",
+  "snapshot_directory": null,
+  "consumed_primary_path": "D:\\minequant\\AlphaGPT-task1\\data\\task2_reference_20261007_clean\\ashare.duckdb",
+  "consumed_v2_path": "D:\\minequant\\AlphaGPT\\data\\ashare_v2.duckdb",
+  "private_preparation": {
+    "source_copy": [
+      {
+        "path": "D:\\minequant\\AlphaGPT\\data\\ashare.duckdb",
+        "sha256": "daf303687bc7d6070e5a6f455bc41bd7d75fc666595f35738dd4cd9d71b929d8",
+        "bytes": 948973568
+      },
+      {
+        "path": "D:\\minequant\\AlphaGPT\\data\\ashare.duckdb.wal",
+        "sha256": "05a7e163c5a8a64e10b07ba3d7a7ea3f71dbd6e497c8220ea6e95f00159f9a46",
+        "bytes": 10744360
+      }
+    ],
+    "source_stable_during_copy": true,
+    "source_stable_during_preparation": true,
+    "restored_tables": [
+      "daily_bar",
+      "fundamental_pit",
+      "stocks"
+    ],
+    "backup_primary": "D:\\minequant\\AlphaGPT\\data\\backup_20260919_p38\\ashare.duckdb",
+    "private_primary": "D:\\minequant\\AlphaGPT-task1\\data\\task2_reference_20261007_clean\\ashare.duckdb",
+    "private_primary_file_sha256": "c13f91f526d6a79d46a90455a4b05c1acb088445ad057465705be7fc039c7529",
+    "elapsed_seconds": 20.540034000005107,
+    "no_publication_performed": true,
+    "no_source_write": true,
+    "memory_limit_gb": 4,
+    "method": "private-only CTAS; exact column types/data; indexes are not consumed by read-only backtest",
+    "previous_private_copy_failure": "index pin memory limit and unique ART commit error; discarded copy retained, never used for accounts"
+  },
+  "original_wp18_dataset_id": "d36024cd1b197a8edcf976b2d950b3506bb0fae022f121d6aef06f2a281cde55",
+  "snapshot_bridge": null,
+  "direction_file_sha256": "cf5577204f456c95a41d637d8fb98bf4ad746eb658d1022757c0d5cdf15c8400",
+  "factor_matrix_sha256": {
+    "MOMENTUM_20": "0bf61a6d89703f571616f0078cc52528ac788f5345d0b64eb6ae089f052ba72c",
+    "RSQ_60": "5cbb94a224cf7805e4387271f691f1db48dfdbb1c81c57c93549430d12816587",
+    "REVERSAL_60": "4a63dab2cf3de6a9762712a833070d68debf1e020dfc31e92c051b06a9b62a6a"
+  },
+  "consumed_factor_version": 4,
+  "source_wp18_factor_version": 5,
+  "factor_version_bridge": "only AMPLITUDE differs; all three full matrices byte-identical",
+  "versions": {
+    "feature_registry_version": 15,
+    "data_tier_version": 2,
+    "research_domain_version": 5,
+    "grammar_version": 9,
+    "model_version": 3,
+    "protocol_version": "29",
+    "reward_version": "15",
+    "search_contract_version": 4,
+    "semantic_cache_version": 3,
+    "factor_compute_version": 4,
+    "execution_spec_version": 6,
+    "portfolio_constructor_version": 2,
+    "rebalance_policy_version": 2,
+    "manifest_version": "2",
+    "snapshot_publication_version": "1"
+  },
+  "candidate_config_sha256": {
+    "30000": "abe71c5814a4cf46f23a689af9ec3a2d62805df286539dd2678c14229a541648",
+    "50000": "2b930ef352209a1c057d6b9a684ef7353378ef998db5e277a2c898e63ef65784",
+    "100000": "583195380150ad6d129a6ce064549b3c5cfbcfa7ffdb58ebcf1e207c60270ab9"
+  },
+  "effective_configs": {
+    "30000": {
+      "start_date": "2015-01-01",
+      "end_date": "2026-12-31",
+      "train_end_date": "2023-12-31",
+      "rebalance_frequency": "every_10_days",
+      "target_horizon": 10,
+      "initial_capital": 30000,
+      "top_n": 25,
+      "portfolio_method": "equal_weight",
+      "buy_rank": 25,
+      "sell_rank": 35,
+      "min_trade_amount": 1000.0,
+      "turnover_budget": 0.2,
+      "turnover_allocation": "priority",
+      "target_weight_change_threshold": 0.01,
+      "single_weight_cap": 0.04,
+      "commission_rate": 0.00025,
+      "min_commission": 5.0,
+      "stamp_tax_rate": 0.0005,
+      "transfer_fee_rate": 1e-05,
+      "slippage_rate": 0.0005,
+      "lot_size": 100,
+      "benchmark": "全市场等权"
+    },
+    "50000": {
+      "start_date": "2015-01-01",
+      "end_date": "2026-12-31",
+      "train_end_date": "2023-12-31",
+      "rebalance_frequency": "every_10_days",
+      "target_horizon": 10,
+      "initial_capital": 50000,
+      "top_n": 25,
+      "portfolio_method": "equal_weight",
+      "buy_rank": 25,
+      "sell_rank": 35,
+      "min_trade_amount": 1000.0,
+      "turnover_budget": 0.2,
+      "turnover_allocation": "priority",
+      "target_weight_change_threshold": 0.01,
+      "single_weight_cap": 0.04,
+      "commission_rate": 0.00025,
+      "min_commission": 5.0,
+      "stamp_tax_rate": 0.0005,
+      "transfer_fee_rate": 1e-05,
+      "slippage_rate": 0.0005,
+      "lot_size": 100,
+      "benchmark": "全市场等权"
+    },
+    "100000": {
+      "start_date": "2015-01-01",
+      "end_date": "2026-12-31",
+      "train_end_date": "2023-12-31",
+      "rebalance_frequency": "every_10_days",
+      "target_horizon": 10,
+      "initial_capital": 100000,
+      "top_n": 25,
+      "portfolio_method": "equal_weight",
+      "buy_rank": 25,
+      "sell_rank": 35,
+      "min_trade_amount": 1000.0,
+      "turnover_budget": 0.2,
+      "turnover_allocation": "priority",
+      "target_weight_change_threshold": 0.01,
+      "single_weight_cap": 0.04,
+      "commission_rate": 0.00025,
+      "min_commission": 5.0,
+      "stamp_tax_rate": 0.0005,
+      "transfer_fee_rate": 1e-05,
+      "slippage_rate": 0.0005,
+      "lot_size": 100,
+      "benchmark": "全市场等权"
+    }
+  },
+  "loaded_window": [
+    "20140102",
+    "20260916",
+    3091
+  ],
+  "loaded_stock_count": 1630,
+  "account_signal_window": [
+    "20210104",
+    "20251231",
+    1212
+  ],
+  "frozen_segments": [
+    {
+      "year": "2021",
+      "train_cutoff": "20201231",
+      "fold_test_end": "20211231",
+      "first_signal_date": "20210104",
+      "last_signal_date": "20211231",
+      "date_count": 243,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    },
+    {
+      "year": "2022",
+      "train_cutoff": "20211231",
+      "fold_test_end": "20221231",
+      "first_signal_date": "20220104",
+      "last_signal_date": "20221230",
+      "date_count": 242,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    },
+    {
+      "year": "2023",
+      "train_cutoff": "20221231",
+      "fold_test_end": "20231231",
+      "first_signal_date": "20230103",
+      "last_signal_date": "20231229",
+      "date_count": 242,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    },
+    {
+      "year": "2024",
+      "train_cutoff": "20231231",
+      "fold_test_end": "20241231",
+      "first_signal_date": "20240102",
+      "last_signal_date": "20241231",
+      "date_count": 242,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    },
+    {
+      "year": "2025",
+      "train_cutoff": "20241231",
+      "fold_test_end": "20251231",
+      "first_signal_date": "20250102",
+      "last_signal_date": "20251231",
+      "date_count": 243,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    }
+  ],
+  "stitched_signal_sha256": "32b1e027d1e4f09535faacdba62077c7da515578bb379f722e73b9e56c594c74",
+  "rebalance_mask_sha256": "96d3ca04f722e69bec6ad849b85ce4426a14d2ff5cc3a05e4c2734addf82c5d3",
+  "rebalance_frequency": "every_10_days",
+  "prediction_horizon": 10,
+  "single_initial_funding": true,
+  "price_degraded": {},
+  "environment": {
+    "os": "Windows-11-10.0.22621-SP0",
+    "python": "3.13.12",
+    "torch": "2.11.0+cu128",
+    "cuda": "12.8",
+    "numpy": "2.5.2"
+  },
+  "account_run_budget": 6,
+  "wallclock_budget_seconds": 5400,
+  "wallclock_seconds": 308.0704878999968
+}

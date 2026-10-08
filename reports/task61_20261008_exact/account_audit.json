@@ -1,0 +1,48 @@
+{
+  "measured_commit": "08773ef885eedf1b8231215178b0457ee37ee2a7",
+  "ledgers_reopened_hash_chain_verified": true,
+  "exactly_two_normal_accounts": true,
+  "no_pressure_account": true,
+  "task3_all_source_files_unchanged": true,
+  "sole_normal_parameter_change": "turnover_budget",
+  "original_baseline_replayed": "exact terminal/fees/daily NAV/daily return/all fill fields",
+  "checks": [
+    {
+      "arm": "budget_020",
+      "daily_periods": 1210,
+      "annual_wealth_chain_reconciles": true,
+      "fees_and_terminal_wealth_reconcile": true,
+      "cash_nonnegative": true,
+      "buy_lots_and_minimum_preserved": true,
+      "sell_only_trade_dates": [
+        "20210122",
+        "20210205",
+        "20210226",
+        "20210312",
+        "20210903",
+        "20211221",
+        "20220408",
+        "20220818",
+        "20230206",
+        "20230505",
+        "20230616",
+        "20231227",
+        "20240315",
+        "20240729",
+        "20241016",
+        "20241211"
+      ],
+      "valuation_complete": true
+    },
+    {
+      "arm": "budget_disabled",
+      "daily_periods": 1210,
+      "annual_wealth_chain_reconciles": true,
+      "fees_and_terminal_wealth_reconcile": true,
+      "cash_nonnegative": true,
+      "buy_lots_and_minimum_preserved": true,
+      "sell_only_trade_dates": [],
+      "valuation_complete": true
+    }
+  ]
+}

@@ -52,7 +52,7 @@ from ashare_model.time_contract import TrainingTimeContract
 from ashare_model.targets import causal_target_returns
 from ashare_model.vm import StackVM, formula_decode
 from ashare_model.vocab import FORMULA_VOCAB, resolve_formula_tokens
-from ashare_portfolio.constructor import PortfolioConstructor
+from ashare_portfolio.constructor import PortfolioConstructor, canonical_weights_to_output_grid
 from ashare_portfolio.execution_spec import portfolio_config_provenance
 from ashare_portfolio.rebalance import RebalancePolicy
 from ashare_portfolio.trade_groups import refuse_unwired_trade_groups
@@ -486,7 +486,7 @@ class SimulationRunner:
                 )
                 output = self.portfolio_constructor.construct(
                     signals[:, signal_idx],
-                    prev_weights,
+                    canonical_weights_to_output_grid(prev_weights),
                     capital=equity,
                     eligible=eligible,
                     buy_blocked=buy_blocked,
@@ -522,6 +522,7 @@ class SimulationRunner:
                     self.portfolio,
                     stock_names,
                     self.backtest_config,
+                    lot_size=self.backtest_config.lot_size,
                 )
                 # Persist orders after execution so their final status/reason
                 # (filled, skipped, limit_up, ...) is part of the paper-trail.
@@ -628,10 +629,10 @@ class SimulationRunner:
         # account from a backtest run with a non-default lot_size.
         lot = max(1, int(getattr(self.backtest_config, "lot_size", 100)))
 
-        # T3-02: one shared weight->order rule (whole-lot buys, sells
-        # first, full-exit sells) with the configured trading lot size.
+        # P58: retain continuous target shares here; the shared order rule
+        # rounds only the change from current shares, preserving held lots.
         target_shares = target_shares_from_weights(
-            target_weights, equity, open_prices, lot_size=lot
+            target_weights, equity, open_prices, lot_size=0
         )
         current_quantities = {
             code: pos.quantity for code, pos in self.portfolio.positions.items()

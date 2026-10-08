@@ -1,0 +1,45 @@
+{
+  "engine_measurement_commit": "dd5453a92d3613c6b9161000b176259d7faf39fc",
+  "summary_correction_commit": "b2f1afbe00fc2737e6f5c76b95426d79acd53d6a",
+  "original_results_preserved": true,
+  "zero_new_engine_runs": true,
+  "all_other_summary_values_unchanged": true,
+  "corrections": [
+    {
+      "capital": 30000,
+      "mode": "active",
+      "last_entry_exposure": 0.03362205944961137,
+      "terminal_exposure": 0.0342007724390347
+    },
+    {
+      "capital": 30000,
+      "mode": "passive",
+      "last_entry_exposure": 0.357852205713833,
+      "terminal_exposure": 0.3601966282168003
+    },
+    {
+      "capital": 50000,
+      "mode": "active",
+      "last_entry_exposure": 0.21228082387493297,
+      "terminal_exposure": 0.2130491762536147
+    },
+    {
+      "capital": 50000,
+      "mode": "passive",
+      "last_entry_exposure": 0.8761742740636596,
+      "terminal_exposure": 0.8766288479046641
+    },
+    {
+      "capital": 100000,
+      "mode": "active",
+      "last_entry_exposure": 0.17596387308550665,
+      "terminal_exposure": 0.1763214453089073
+    },
+    {
+      "capital": 100000,
+      "mode": "passive",
+      "last_entry_exposure": 0.9401036020293062,
+      "terminal_exposure": 0.9403538290585408
+    }
+  ]
+}

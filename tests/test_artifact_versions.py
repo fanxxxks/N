@@ -174,13 +174,8 @@ def test_current_semantic_versions_are_pinned():
     # (identity blocks, current-run adjudication, benchmark fail-closed)
     # bumps "28" -> "29".
     assert PROTOCOL_VERSION == "29"
-    # p35 (APPROVED 2026-09-17): share-level execution with drifted non-due
-    # weights bumps the execution spec 3 -> 4.
-    # 4 -> 5: lot_size joined the portfolio_config provenance field set and
-    # every execution path (engine, paper sim, golden matcher) now reads
-    # the configured grain; v4 blocks without lot_size stay legacy by
-    # version (§10.1 case 2: contract change, version bumped).
-    assert EXECUTION_SPEC_VERSION == 5
+    # P58 cash and share-delta execution advances the generation to 6.
+    assert EXECUTION_SPEC_VERSION == 6  # P58 sequential cash execution contract
     assert BARE_FACTOR_BACKTEST_VERSION == 4
     # p17/D5 (t16 F1): the industry membership PIT switch bumps
     # FACTOR_COMPUTE to 3.

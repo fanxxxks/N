@@ -31,7 +31,9 @@ from .rebalance import RebalancePolicy
 # field set and every execution path (engine, paper sim, golden matcher)
 # now reads it from the configuration instead of hardcoding 100; v4
 # provenance blocks recorded without lot_size stay legacy by version.
-EXECUTION_SPEC_VERSION = 5
+# P58: ordinary backtest and paper execution share sequential cash sizing.
+# Generation 5 is already used by the user's uncommitted lot provenance work.
+EXECUTION_SPEC_VERSION = 6
 
 _PORTFOLIO_CONFIG_FIELDS = (
     "rebalance_frequency",
@@ -89,6 +91,7 @@ def portfolio_config_provenance(config) -> dict[str, Any]:
         # external-weight check on it) must distinguish them.
         "lot_size": int(getattr(config, "lot_size", 100)),
         "initial_capital": float(config.initial_capital),
+        "lot_size": int(config.lot_size),
         "single_weight_cap": float(config.single_weight_cap),
         "commission_rate": float(config.commission_rate),
         "min_commission": float(config.min_commission),

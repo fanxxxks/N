@@ -1,0 +1,33 @@
+# P58 execution candidate only; use frozen medium B signals and a NEW account.
+# Mechanical applicability depends on selected prices; not a profitability selection.
+protocol:
+  domain: medium_cross_section
+  frequency: every_10_days
+  horizon: 10
+backtest:
+  initial_capital: 50000
+  top_n: 25
+  buy_rank: 25
+  sell_rank: 35
+  portfolio_method: equal_weight
+  rebalance_frequency: every_10_days
+  target_horizon: 10
+  single_weight_cap: 0.04
+  min_trade_amount: 1000.0
+  lot_size: 100
+  turnover_budget: 0.2
+  turnover_allocation: priority
+  target_weight_change_threshold: 0.01
+  commission_rate: 0.00025
+  min_commission: 5.0
+  stamp_tax_rate: 0.0005
+  transfer_fee_rate: 1.0e-05
+  slippage_rate: 0.0005
+sim:
+  initial_capital: 50000
+  max_positions: 25
+  single_weight_cap: 0.04
+  state_path: data/task1_50000/sim_portfolio_state.json
+  orders_dir: data/task1_50000/sim_orders
+  trades_dir: data/task1_50000/sim_trades
+  progress_path: data/task1_50000/sim_progress.json

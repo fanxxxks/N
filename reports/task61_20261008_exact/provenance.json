@@ -1,0 +1,210 @@
+{
+  "run_kind": "research_development_diagnostic",
+  "implementation_commit": "08773ef885eedf1b8231215178b0457ee37ee2a7",
+  "development_validation": true,
+  "not_independent_oos": true,
+  "dataset_id": "d36024cd1b197a8edcf976b2d950b3506bb0fae022f121d6aef06f2a281cde55",
+  "source_reference": "D:\\minequant\\AlphaGPT-task1\\reports\\task3_20261007_exact\\results.json",
+  "source_reference_sha256": "7608ff395ce4ff592069e9c4d57ba370e7bb5f50fea576ab1c4f59eb8015dc04",
+  "input_bundle": "D:\\minequant\\AlphaGPT-task1\\data\\task3_20261007_replay\\input.npz",
+  "input_bundle_sha256": "90fc3503970a9f2ed00abba110cfd72ea2a1cbff201af47739d03b0a6ef322e4",
+  "signal_sha256": "32b1e027d1e4f09535faacdba62077c7da515578bb379f722e73b9e56c594c74",
+  "due_sha256": "96d3ca04f722e69bec6ad849b85ce4426a14d2ff5cc3a05e4c2734addf82c5d3",
+  "frozen_segments": [
+    {
+      "year": "2021",
+      "train_cutoff": "20201231",
+      "fold_test_end": "20211231",
+      "first_signal_date": "20210104",
+      "last_signal_date": "20211231",
+      "date_count": 243,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    },
+    {
+      "year": "2022",
+      "train_cutoff": "20211231",
+      "fold_test_end": "20221231",
+      "first_signal_date": "20220104",
+      "last_signal_date": "20221230",
+      "date_count": 242,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    },
+    {
+      "year": "2023",
+      "train_cutoff": "20221231",
+      "fold_test_end": "20231231",
+      "first_signal_date": "20230103",
+      "last_signal_date": "20231229",
+      "date_count": 242,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    },
+    {
+      "year": "2024",
+      "train_cutoff": "20231231",
+      "fold_test_end": "20241231",
+      "first_signal_date": "20240102",
+      "last_signal_date": "20241231",
+      "date_count": 242,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    },
+    {
+      "year": "2025",
+      "train_cutoff": "20241231",
+      "fold_test_end": "20251231",
+      "first_signal_date": "20250102",
+      "last_signal_date": "20251231",
+      "date_count": 243,
+      "directions": {
+        "MOMENTUM_20": -1,
+        "RSQ_60": 1,
+        "REVERSAL_60": 1
+      }
+    }
+  ],
+  "factor_sha256": {
+    "MOMENTUM_20": "0bf61a6d89703f571616f0078cc52528ac788f5345d0b64eb6ae089f052ba72c",
+    "RSQ_60": "5cbb94a224cf7805e4387271f691f1db48dfdbb1c81c57c93549430d12816587",
+    "REVERSAL_60": "4a63dab2cf3de6a9762712a833070d68debf1e020dfc31e92c051b06a9b62a6a"
+  },
+  "effective_configs": {
+    "budget_020": {
+      "start_date": "2015-01-01",
+      "end_date": "2026-12-31",
+      "train_end_date": "2023-12-31",
+      "rebalance_frequency": "every_10_days",
+      "target_horizon": 10,
+      "initial_capital": 100000,
+      "top_n": 25,
+      "portfolio_method": "equal_weight",
+      "buy_rank": 25,
+      "sell_rank": 35,
+      "min_trade_amount": 1000.0,
+      "turnover_budget": 0.2,
+      "turnover_allocation": "priority",
+      "target_weight_change_threshold": 0.01,
+      "single_weight_cap": 0.04,
+      "commission_rate": 0.00025,
+      "min_commission": 5.0,
+      "stamp_tax_rate": 0.0005,
+      "transfer_fee_rate": 1e-05,
+      "slippage_rate": 0.0005,
+      "lot_size": 100,
+      "benchmark": "全市场等权"
+    },
+    "budget_disabled": {
+      "start_date": "2015-01-01",
+      "end_date": "2026-12-31",
+      "train_end_date": "2023-12-31",
+      "rebalance_frequency": "every_10_days",
+      "target_horizon": 10,
+      "initial_capital": 100000,
+      "top_n": 25,
+      "portfolio_method": "equal_weight",
+      "buy_rank": 25,
+      "sell_rank": 35,
+      "min_trade_amount": 1000.0,
+      "turnover_budget": null,
+      "turnover_allocation": "priority",
+      "target_weight_change_threshold": 0.01,
+      "single_weight_cap": 0.04,
+      "commission_rate": 0.00025,
+      "min_commission": 5.0,
+      "stamp_tax_rate": 0.0005,
+      "transfer_fee_rate": 1e-05,
+      "slippage_rate": 0.0005,
+      "lot_size": 100,
+      "benchmark": "全市场等权"
+    }
+  },
+  "versions": {
+    "feature_registry_version": 15,
+    "data_tier_version": 2,
+    "research_domain_version": 5,
+    "grammar_version": 9,
+    "model_version": 3,
+    "protocol_version": "29",
+    "reward_version": "15",
+    "search_contract_version": 4,
+    "semantic_cache_version": 3,
+    "factor_compute_version": 4,
+    "execution_spec_version": 6,
+    "portfolio_constructor_version": 2,
+    "rebalance_policy_version": 2,
+    "manifest_version": "2",
+    "snapshot_publication_version": "1"
+  },
+  "prediction_horizon": 10,
+  "rebalance_frequency": "every_10_days",
+  "account_window": [
+    "20210104",
+    "20251231",
+    1212
+  ],
+  "single_initial_funding": true,
+  "normal_account_budget": 2,
+  "conditional_pressure_account_budget": 1,
+  "wallclock_budget_seconds": 900,
+  "source_task3_file_hashes": {
+    "account_audit.json": "46fa40c3f9e5d071c09b2762c4f9550025f1e0c708ba7f97812ff32c05e7b44c",
+    "artifact_checksums.json": "1774d2e6966fc5cea18fe86e59ceb70966cf98fb50f8ac0e7b57b9907ebd59c6",
+    "DECISION.md": "d9464d4e29f0afb6fc64866da79116020079f69837bee72d4e522cee8e350943",
+    "exact_tests.txt": "2641e775f42f80b991d1dac2d735586c60792fed3dc523070532808b55b296d4",
+    "ledger.jsonl": "2d57b00f5a117a40b2a135d7068f1057de4e9146e7b2db8b2172b94572a6fe01",
+    "results.json": "7608ff395ce4ff592069e9c4d57ba370e7bb5f50fea576ab1c4f59eb8015dc04",
+    "RESULTS.md": "b0b03061f3472ceffc407d8d82520e6ad4edf18fef56d7daa4b29672f11d0f85",
+    "after\\daily_100000_active.csv": "c9f7a6aecef74fd5a772ec11c001dd7a055302c885b9cebf9c811f75385b356f",
+    "after\\daily_100000_passive.csv": "ddcde33f610cf9fe7b18032c9562f2d08bdd782857860973c1d04771267724b2",
+    "after\\daily_30000_active.csv": "bda3b261f586c73707aa37300d7be9e35da87ec6c8e15588da646b9f6325519d",
+    "after\\daily_30000_passive.csv": "bb1803c049a78422ea0f63eb1f9ee492b14519037f230d9529167eec9e4a250d",
+    "after\\daily_50000_active.csv": "115f2c9f79d45841c2ccd739f6173bc530eee986de970b80bc36ba3193b40dd8",
+    "after\\daily_50000_passive.csv": "6f137efde0c67f09cd7214192a7544b29e09d4a375c6d58ec4c5729c8c1c9b41",
+    "after\\ledger.jsonl": "f24f73fd5448b721b13cb7aefcd9370a6da9e7c994b59698a33c7dc68eae5050",
+    "after\\partial_results.json": "5270c2d49d12149c39675ed6bafc847891aa893d84d271005bd57ebeb6532ff6",
+    "after\\provenance.json": "8189070c84d7a5d347be61df4296ea90d2ccc6679ea8559a5b8e51cfec9aaeed",
+    "after\\results.json": "44d9eb2817aa3e3970fecd37978f2c97391aef93c2a22359d74066bc38ee6143",
+    "after\\RESULTS.md": "7589452d7a0e2f49d7bf121860938d2465f83db0ba36c70005585c48deab7d8c",
+    "after\\run.log": "70cd163f6fce31d42969646304ebfb89e7f4a7bc951b933bf7c6d32949d4038e",
+    "after\\STAGE_CONTEXT.md": "c4c856b74797bdee074cb6f94e6e4576073dd6e1deb8af9e8525e9313bbd8182",
+    "after\\summary.csv": "078ab6eabd2cb87d7edab08d8a04f3d3ccd64ce0b81a25026e36ba3e6c82505f",
+    "after\\trades_100000_active.csv": "6944120a6ca17bd3d1509e443d1a172ad501d2c9232692d27344e64b200c9ec4",
+    "after\\trades_100000_passive.csv": "3723bf7990d0505743b2e141b9e3ff72f60d424d4dfac79c1a5f3e5755ee45b5",
+    "after\\trades_30000_active.csv": "abdcb30ab7454a7f8b7109d89ca2201da5fe730aad936dee306d5fe23a413311",
+    "after\\trades_30000_passive.csv": "94afc57caf83578abcff4a4bc8aed267944355b37bdb6bac08b347629d65d314",
+    "after\\trades_50000_active.csv": "c5c9185fbbdc510d64de57dcdedfa237de28bcd2347f2995730f53107dc05f40",
+    "after\\trades_50000_passive.csv": "321025e9a172681aa6ca8267d0e96e48b3b54e5694a1ea688412659edc64afd0",
+    "before\\daily_100000.csv": "0692fbb2275fbe0ca9724c24851cb09803f068fc73630b89283aad02e92c19f2",
+    "before\\daily_30000.csv": "1cf31f7200466e164e6cdbd54d35ca4c3a97c3feb05e82a3c79b3530e0902dd9",
+    "before\\daily_50000.csv": "ee40a33f84c772a86780089cdcafd8e54519bd51639aab4da50f6368455744fe",
+    "before\\ledger.jsonl": "1c68096aad29edc4e9fd3a54c6cc5ef779b4b7ecf113fb66147b7f09fb52fbfe",
+    "before\\native_100000.npz": "76e6e134519163c4a2d4d2cbce659b712f43f7c8806288d126d49627fa232998",
+    "before\\native_30000.npz": "99ba1c3a0a14c4dd836baee6b4b96576d13a83cb74134caef7cfdece4030123d",
+    "before\\native_50000.npz": "2ae52180765a85101576efcf30d0f904fef4411b30498f567861067529279bd6",
+    "before\\provenance.json": "f1aac5cd6d32e2099c8e7198d3ebf3ab9d84efb8737ae1db6cb84ee8434be0c9",
+    "before\\trades_100000.csv": "a771abb69a4e11a7a676d3e9bb66185377bd0ad129a426f6dc35f8682c01259e",
+    "before\\trades_30000.csv": "b54b91a1ea6ecc1828ac4307b2bf38565909f56b56cdfcffb03352490a0d88f5",
+    "before\\trades_50000.csv": "ca921dedee3d0ec8533ff324665c880f084c445ba4ba7c02d27ab2803e3e46ff"
+  },
+  "environment": {
+    "python": "3.13.12",
+    "os": "Windows-11-10.0.22621-SP0",
+    "numpy": "2.5.2",
+    "torch": "2.11.0+cu128"
+  },
+  "consumed_account_runs": 2
+}

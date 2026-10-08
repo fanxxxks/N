@@ -155,13 +155,8 @@ def _run(
 
 
 def test_execution_spec_is_versioned():
-    # v4 (p35): share-level execution with drifted non-due weights —
-    # the version the golden parity contract below is defined against.
-    # v5: lot_size joined the provenance field set and every execution
-    # path now consumes the configured grain (the golden matcher's
-    # lot_size default follows the config; run_sim stopped hardcoding
-    # 100) — v4 provenance without lot_size cannot claim parity.
-    assert EXECUTION_SPEC_VERSION == 5
+    # P58: ordinary backtest/paper cash allocation shares execution v6.
+    assert EXECUTION_SPEC_VERSION == 6  # P58 sequential cash execution
 
 
 def test_external_weights_without_constructor_provenance_are_rejected():

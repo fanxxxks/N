@@ -106,7 +106,8 @@ class SimBroker:
         portfolio.mark_new_day()
         cost_model = ExecutionCostModel.from_config(backtest_config)
 
-        for order in orders:
+        # Same deterministic cash order as the ordinary backtest engine.
+        for order in sorted(orders, key=lambda item: (item.side == "buy", item.ts_code)):
             if order.trade_date != date:
                 continue
             bar = bar_lookup.get(order.ts_code)
@@ -153,6 +154,11 @@ class SimBroker:
                     order.reason = "insufficient_cash"
                     continue
                 amount = shares * price
+                if (lot_size > 0 and backtest_config.min_trade_amount is not None
+                        and amount < backtest_config.min_trade_amount):
+                    order.status = "skipped"
+                    order.reason = "below_min_trade_amount"
+                    continue
                 costs = cost_model.buy_cost(amount)
                 commission = float(costs.commission)
                 transfer = float(costs.transfer_fee)
@@ -181,12 +187,22 @@ class SimBroker:
                     order.reason = "no_available_position"
                     continue
                 amount = shares * price
+                if (lot_size > 0 and shares < pos.quantity
+                        and backtest_config.min_trade_amount is not None
+                        and amount < backtest_config.min_trade_amount):
+                    order.status = "skipped"
+                    order.reason = "below_min_trade_amount"
+                    continue
                 costs = cost_model.sell_cost(amount)
                 commission = float(costs.commission)
                 stamp = float(costs.stamp_tax)
                 transfer = float(costs.transfer_fee)
                 slippage = float(costs.slippage)
                 fees = float(costs.total)
+                if lot_size > 0 and portfolio.cash + amount < fees:
+                    order.status = "skipped"
+                    order.reason = "insufficient_cash_for_fees"
+                    continue
                 portfolio.add_sell(order.ts_code, shares, price, date)
                 portfolio.cash -= fees
                 trade = self._make_trade(

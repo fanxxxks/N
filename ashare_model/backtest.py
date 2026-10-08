@@ -16,6 +16,7 @@ from ashare_data.processor import (
 from ashare_data.schemas import BacktestResult
 from ashare_execution import (
     ExecutionCostModel,
+    trade_share_delta,
     validate_execution_config,
 )
 from ashare_logging import (
@@ -36,10 +37,9 @@ from .targets import causal_target_returns
 from .time_contract import TrainingTimeContract
 
 # P35 share-anchored execution constants (p35 §2): the A-share board lot,
-# the weight-comparison epsilon and the bounded affordability-loop cap.
+# and the weight-comparison epsilon. Cash sizing lives in shared execution.
 _P35_LOT = 100
 _P35_WEIGHT_EPS = 1e-12
-_P35_MAX_AFFORDABILITY_PASSES = 64
 
 
 def equal_weight_benchmark_returns(
@@ -251,6 +251,7 @@ class AshareBacktestEngine:
         daily_returns: list[float] = []
         turnover_list: list[float] = []
         positions: list[dict[str, Any]] = []
+        trades: list[dict[str, Any]] = []
         target_weights_list: list[np.ndarray] = []
         buy_weights_list: list[np.ndarray] = []
         sell_weights_list: list[np.ndarray] = []
@@ -288,6 +289,16 @@ class AshareBacktestEngine:
             sell_weights = np.zeros(n_stocks, dtype=np.float64)
             trade_fees = 0.0
             p_entry = open_[:, entry_day]
+            rejections = []
+            market_blocks = {}
+            if rebalance_due:
+                candidates = eligible & np.isfinite(signal)
+                held_before = weights > _P35_WEIGHT_EPS
+                market_blocks = {
+                    "buy_blocked": int(np.count_nonzero(candidates & buy_blocked)),
+                    "sell_blocked": int(np.count_nonzero(held_before & sell_blocked)),
+                    "nonfinite_signal": int(np.count_nonzero(eligible & ~np.isfinite(signal))),
+                }
             # p56 (WP18 FROZEN_18_PLAN §3.2 item 2): the execution gate
             # also admits the opt-in not_due_forced_exit leg so its sell
             # side + fees book; the constructor planned no buys there.
@@ -310,71 +321,58 @@ class AshareBacktestEngine:
                     weights[tradable_price] * capital / p_entry[tradable_price]
                 )
                 shares = new_shares
-                # Sells: reductions and full exits.  A sell-blocked or
-                # suspended name keeps its drifted weight (the constructor
-                # pinned its target there), so it generates zero orders.
-                reduce = (
-                    (target_weights < weights - _P35_WEIGHT_EPS)
-                    & tradable_price
-                )
-                if reduce.any():
-                    delta_notional = (
-                        (weights[reduce] - target_weights[reduce]) * capital
+                # P58: use the paper path's delta rounding and sell-first,
+                # code-ordered cash allocation. A fee shortage only reduces
+                # orders reached after cash has actually been spent.
+                deltas = np.zeros(n_stocks, dtype=np.float64)
+                for i in np.flatnonzero(tradable_price):
+                    if abs(target_weights[i] - weights[i]) <= _P35_WEIGHT_EPS:
+                        continue
+                    deltas[i] = trade_share_delta(
+                        target_weights[i] * capital / p_entry[i], shares[i],
+                        lot_size=lot,
                     )
-                    sell_shares = np.where(
-                        target_weights[reduce] <= _P35_WEIGHT_EPS,
-                        shares[reduce],
-                        np.floor(
-                            delta_notional / p_entry[reduce] / lot
-                        )
-                        * lot,
-                    )
-                    sell_shares = np.minimum(sell_shares, shares[reduce])
-                    notional = sell_shares * p_entry[reduce]
-                    fees = self.cost_model.sell_cost(notional).total
-                    shares[reduce] = shares[reduce] - sell_shares
-                    cash += float(notional.sum() - fees.sum())
-                    trade_fees += float(fees.sum())
-                    sell_weights[reduce] = notional / capital
-                # Buys: increases, lot-floored, capped at the available
-                # cash including their own fees.  The affordability loop
-                # scales proportionally (geometric convergence — a
-                # one-lot-per-pass decrement can never reach affordability
-                # from a large unfunded book).  A missing-bar name is
-                # never bought: there is no price to size against (the
-                # authoritative matcher skips the same order with
-                # ``missing_bar``).
-                increase = (
-                    (target_weights > weights + _P35_WEIGHT_EPS)
-                    & tradable_price
-                )
-                if increase.any():
-                    idx = np.flatnonzero(increase)
-                    buy_shares = np.floor(
-                        (target_weights[idx] - weights[idx])
-                        * capital
-                        / p_entry[idx]
-                        / lot
-                    ) * lot
-                    notional = buy_shares * p_entry[idx]
-                    fees = self.cost_model.buy_cost(notional).total
-                    for _ in range(_P35_MAX_AFFORDABILITY_PASSES):
-                        over = notional.sum() + fees.sum() - cash
-                        if over <= 0.0:
-                            break
-                        scale = max(cash / (notional.sum() + fees.sum()), 0.0)
-                        buy_shares = np.floor(buy_shares * scale / lot) * lot
-                        notional = buy_shares * p_entry[idx]
-                        fees = self.cost_model.buy_cost(notional).total
-                    if notional.sum() + fees.sum() > cash:
-                        # fail-closed: fund nothing rather than go negative
-                        buy_shares = np.zeros_like(buy_shares)
-                        notional = buy_shares * p_entry[idx]
-                        fees = self.cost_model.buy_cost(notional).total
-                    shares[idx] = shares[idx] + buy_shares
-                    cash -= float(notional.sum() + fees.sum())
-                    trade_fees += float(fees.sum())
-                    buy_weights[idx] = notional / capital
+                    if deltas[i] == 0:
+                        rejections.append(dict(ts_code=ts_codes[i], reason="below_board_lot"))
+                minimum = self.config.min_trade_amount
+                for side in ("sell", "buy"):
+                    indices = np.flatnonzero(deltas < 0 if side == "sell" else deltas > 0)
+                    for i in sorted(indices, key=lambda index: ts_codes[index]):
+                        quantity = abs(deltas[i])
+                        if side == "buy":
+                            quantity = self.cost_model.affordable_shares(
+                                cash, p_entry[i], quantity, lot_size=lot,
+                            )
+                        else:
+                            quantity = min(quantity, shares[i])
+                        if quantity <= 0:
+                            rejections.append(dict(ts_code=ts_codes[i], reason="insufficient_cash"))
+                            continue
+                        notional = float(quantity * p_entry[i])
+                        full_exit = side == "sell" and quantity >= shares[i]
+                        if minimum is not None and not full_exit and notional < minimum:
+                            rejections.append(dict(ts_code=ts_codes[i], reason="below_min_trade_amount"))
+                            continue
+                        cost = self.cost_model.trade_cost(side, notional)
+                        fees = float(cost.total)
+                        if side == "sell":
+                            if cash + notional < fees:
+                                rejections.append(dict(ts_code=ts_codes[i], reason="insufficient_cash_for_fees"))
+                                continue
+                            shares[i] -= quantity
+                            cash += notional - fees
+                            sell_weights[i] = notional / capital
+                        else:
+                            shares[i] += quantity
+                            cash -= notional + fees
+                            buy_weights[i] = notional / capital
+                        trade_fees += fees
+                        trades.append(dict(date=dates[entry_day], signal_date=dates[t],
+                            ts_code=ts_codes[i], side=side, quantity=float(quantity),
+                            price=float(p_entry[i]), amount=notional,
+                            commission=float(cost.commission), stamp_tax=float(cost.stamp_tax),
+                            transfer_fee=float(cost.transfer_fee), slippage=float(cost.slippage),
+                            total=fees))
                 cost_fraction = trade_fees / capital if capital > 0.0 else 0.0
                 # achieved book weights on the post-fee equity; the fees
                 # are already debited to cash, so the post-execution
@@ -406,6 +404,7 @@ class AshareBacktestEngine:
             # net is the exact equity ratio (fees already inside
             # capital_after).
             gross_ret = float(np.dot(weights, target_ret[:, entry_day - 1]))
+            capital_after_execution = capital
             net_ret = (capital * (1.0 + gross_ret)) / capital_before - 1.0
             daily_returns.append(net_ret)
             turnover_list.append(output.turnover)
@@ -426,7 +425,18 @@ class AshareBacktestEngine:
             target_weights_list.append(target_weights.copy())
             buy_weights_list.append(buy_weights.copy())
             sell_weights_list.append(sell_weights.copy())
-            construction_diagnostics.append(dict(output.diagnostics))
+            diagnostics = dict(output.diagnostics)
+            diagnostics["execution_rejections"] = rejections
+            diagnostics["market_block_counts"] = market_blocks
+            diagnostics["account"] = dict(
+                equity_before=float(capital_before),
+                equity_after_execution=float(capital_after_execution),
+                equity_exit=float(capital), cash=float(cash), fees=float(trade_fees),
+                actual_exposure=float(weights.sum()),
+                actual_max_single_weight=float(weights.max()) if len(weights) else 0.0,
+                actual_turnover=float(buy_weights.sum() + sell_weights.sum()),
+            )
+            construction_diagnostics.append(diagnostics)
             # P35: drift the weights to the next open (share-conserving
             # state evolution).  The cash weight absorbs the residual, so
             # the uninvested fraction earns zero rather than the
@@ -497,6 +507,7 @@ class AshareBacktestEngine:
             benchmark_equity=benchmark_equity,
             metrics=metrics,
             positions=positions,
+            trades=trades,
             target_weights=target_weights_list,
             buy_weights=buy_weights_list,
             sell_weights=sell_weights_list,

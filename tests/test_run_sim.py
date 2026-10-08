@@ -677,11 +677,14 @@ def test_sim_limit_down_blocks_exit_sell_and_keeps_position(tmp_path: Path):
         for o in _orders_for(runner, d)
         if o["ts_code"] == exiter and o["side"] == "sell"
     ]
-    assert sells
-    assert all(
-        o["status"] == "skipped" and o["reason"] == "limit_down" for o in sells
-    )
+    # P58 rounds the delta, so a constructor-pinned sell-blocked target
+    # no longer manufactures a rounding sell. The original bought shares
+    # must remain intact throughout the limit-down tail.
+    assert not sells
     assert exiter in runner.portfolio.positions
+    bought = sum(t["quantity"] for d in dates[:exit_day]
+        for t in _trades_for(runner, d) if t["ts_code"] == exiter and t["side"] == "buy")
+    assert runner.portfolio.positions[exiter].quantity == bought
 
 
 def test_current_st_stock_stays_in_union_and_trades_on_board_rates(
@@ -925,7 +928,7 @@ def test_make_orders_executes_configured_lot_grain(tmp_path: Path):
 
 def test_simulation_buy_grain_follows_configured_lot_size(tmp_path: Path):
     # End to end: lot_size=200 and lot_size=100 configs over the same
-    # market produce different share books (the first funding targets have
+    # market produce different execution trails (the first funding targets have
     # odd hundreds, e.g. 100000/3/10.6 = 3144.7 -> 3100 vs 3000), and the
     # 200-grain run only ever holds multiples of 200.
     codes = ["000001.SZ", "600000.SH", "300001.SZ"]
@@ -971,5 +974,6 @@ def test_simulation_buy_grain_follows_configured_lot_size(tmp_path: Path):
     }
     assert trail200 != trail100
     positions200 = {k: v.quantity for k, v in runner200.portfolio.positions.items()}
-    positions100 = {k: v.quantity for k, v in runner100.portfolio.positions.items()}
-    assert positions200 != positions100
+    # P58 delta rounding can converge to the same terminal book. The
+    # intermediate fill trail above and the configured grain are authoritative.
+    assert all(quantity % 200 == 0 for quantity in positions200.values())

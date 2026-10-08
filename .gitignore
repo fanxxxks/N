@@ -10,6 +10,9 @@ venv/
 
 # Secrets / environment
 .env
+.env.*
+!.env.example
+!**/.env.example
 config/.webapi_token
 
 # Runtime config overrides (edited via the web UI; baseline stays in git)
@@ -17,6 +20,10 @@ config/runtime_overrides.yaml
 
 # AgentTeams runtime state (team.json, inboxes; local coordination, never commit)
 .agent-teams/
+.mimosa/
+.zcode/
+nul
+NUL
 
 # Large local data & artifacts (regenerable; never commit)
 data/
@@ -25,6 +32,27 @@ data/
 STOP_SIGNAL
 best_ashare_strategy.json
 ashare_model.pt
+*.pt
+*.pth
+cloud-runs/
+cloud-smoke/
+factor_cache/
+*.pem
+*.key
+id_rsa
+id_ed25519
+tmp/
+temp/
+*_backup/
+reports/task2_20261007_exact_reference/daily_*.csv
+reports/task2_20261007_exact_reference/trades_*.csv
+reports/task3_20261007_exact/after/daily_*.csv
+reports/task3_20261007_exact/after/trades_*.csv
+reports/task3_20261007_exact/before/daily_*.csv
+reports/task3_20261007_exact/before/trades_*.csv
+reports/task3_20261007_exact/before/native_*.npz
+reports/task61_20261008_exact/daily_*.csv
+reports/task61_20261008_exact/trades_*.csv
 
 # Logs
 logs/
@@ -42,3 +70,14 @@ webui/dist/
 # Research experiment scratch outputs
 phase_diagram.png
 mechanism_analysis.png
+
+# Individually reviewed historical raw experiment metrics
+experiments/20260816_TURNOVER_CHG/metrics.json
+experiments/20260818_GROSS_MARGIN/metrics.json
+experiments/20260820_protocol_screening/metrics.json
+experiments/20260821_GROSS_MARGIN/metrics.json
+experiments/20260822_protocol_screening/metrics.json
+experiments/20260823_GROSS_MARGIN/metrics.json
+experiments/20260823_LIMIT_BREAK/metrics.json
+experiments/20260823_protocol_screening/metrics.json
+experiments/20260823_protocol_screening_2/metrics.json

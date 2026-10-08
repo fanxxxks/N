@@ -1,0 +1,41 @@
+{
+  "commit": "dbaf7296a41ce9813ae736c0e4879d54d9488b0f",
+  "versions": {
+    "feature_registry_version": 15,
+    "data_tier_version": 2,
+    "research_domain_version": 5,
+    "grammar_version": 9,
+    "model_version": 3,
+    "protocol_version": "29",
+    "reward_version": "15",
+    "search_contract_version": 4,
+    "semantic_cache_version": 3,
+    "factor_compute_version": 4,
+    "execution_spec_version": 4,
+    "portfolio_constructor_version": 2,
+    "rebalance_policy_version": 2,
+    "manifest_version": "2",
+    "snapshot_publication_version": "1"
+  },
+  "execution_dependencies": {
+    "ashare_model.backtest": "D:\\minequant\\AlphaGPT-task3-before\\ashare_model\\backtest.py",
+    "ashare_portfolio.constructor": "D:\\minequant\\AlphaGPT-task3-before\\ashare_portfolio\\constructor.py",
+    "ashare_portfolio.rebalance": "D:\\minequant\\AlphaGPT-task3-before\\ashare_portfolio\\rebalance.py",
+    "ashare_execution": "D:\\minequant\\AlphaGPT-task3-before\\ashare_execution.py",
+    "ashare_data.processor": "D:\\minequant\\AlphaGPT-task3-before\\ashare_data\\processor.py",
+    "ashare_data.config": "D:\\minequant\\AlphaGPT-task3-before\\ashare_data\\config.py"
+  },
+  "dependency_sha256": {
+    "ashare_model.backtest": "918526ec9dad921595e7a3166f56a83de1dc2ad6b816618bbfe2614c8962d2c0",
+    "ashare_portfolio.constructor": "7ad3a658e1484eb964e441bb707c48e8619229997cda33b5d2c65d6102cebd3f",
+    "ashare_portfolio.rebalance": "1858bc939572003c81e98bda8e81b947fb24173d1ad1de36c044090c919770dd",
+    "ashare_execution": "3810078c78f29004ed9922c92b410be8610b76e4cef76d3711c047c813b02b57",
+    "ashare_data.processor": "85e2d7a4ff2ba1a8d5139bcd97cb640fbabcd9131ff6fb8650eee9b9f719435b",
+    "ashare_data.config": "656d63840a12be744e0b0eaab899f8a3b681ad4cbc0c7e973adb0ae6ce47eb34"
+  },
+  "replay_input_sha256": "90fc3503970a9f2ed00abba110cfd72ea2a1cbff201af47739d03b0a6ef322e4",
+  "development_validation": true,
+  "rebalance_frequency": "every_10_days",
+  "prediction_horizon": 10,
+  "account_run_budget": 3
+}

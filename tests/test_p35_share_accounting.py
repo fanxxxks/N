@@ -171,17 +171,17 @@ class TestReconciliation:
         # Same doubling scenario with real fees: commission 10bp both
         # sides, stamp 10bp sell.  Hand chain (fees hit the funding too):
         #   t0 funding: 5,000 shares each = 1,000,000 + 1,000 fees > cash
-        #     -> lot-reduced to 4,900 each (980,000), fees 980,
-        #     cash 19,020, E = 999,020
-        #   t0 return: A doubles, B flat -> E(open2) = 1,489,020
-        #     (share view: 4,900x200 + 4,900x100 + 19,020)
+        #     -> P58 sequential fills: A 5,000, B 4,900; fees 990,
+        #     cash 9,010, E = 999,010
+        #   t0 return: A doubles, B flat -> E(open2) = 1,499,010
+        #     (share view: 5,000x200 + 4,900x100 + 9,010)
         #   t1 execution (entry open A=200, B=100):
-        #     sells 1,100 A @200 = 220,000 (lot floor from 1,177.45)
-        #       -> sell fees 220 + 220 = 440; cash = 238,580
-        #     buys B: 2,500 unaffordable -> 2,400 unaffordable
-        #       -> 2,300 @100 = 230,000, fee 230; cash = 8,350
-        #     E_after = 8,350 + 3,800x200 + 7,200x100 = 1,488,350
-        #     (= 1,489,020 - 670 total fees, exact)
+        #     sells 1,200 A @200 = 240,000 (lot floor from 1,252.475)
+        #       -> sell fees 240 + 240 = 480; cash = 248,530
+        #     buys B: 2,500 unaffordable -> 2,400 @100 = 240,000
+        #       fee 240; cash = 8,290
+        #     E_after = 8,290 + 3,800x200 + 7,300x100 = 1,498,290
+        #     (= 1,499,010 - 720 total fees, exact)
         open_ = np.array([
             [100.0, 100.0, 200.0, 200.0, 200.0],
             [100.0, 100.0, 100.0, 100.0, 100.0],
@@ -193,14 +193,14 @@ class TestReconciliation:
             stamp_tax_rate=0.001,
         )
         assert result.final_shares[0] == pytest.approx(3_800.0, abs=1e-6)
-        assert result.final_shares[1] == pytest.approx(7_200.0, abs=1e-6)
-        assert result.final_cash == pytest.approx(8_350.0, abs=1e-6)
+        assert result.final_shares[1] == pytest.approx(7_300.0, abs=1e-6)
+        assert result.final_cash == pytest.approx(8_290.0, abs=1e-6)
         # the reconciliation identity at the execution instant
         assert result.final_cash + result.final_shares[0] * 200.0 + (
             result.final_shares[1] * 100.0
-        ) == pytest.approx(1_488_350.0, abs=1e-6)
+        ) == pytest.approx(1_498_290.0, abs=1e-6)
         assert result.equity_curve[-1] == pytest.approx(
-            1_488_350.0 / 1_000_000.0, abs=1e-6
+            1_498_290.0 / 1_000_000.0, abs=1e-6
         )
 
 
