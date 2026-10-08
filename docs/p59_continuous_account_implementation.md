@@ -70,3 +70,13 @@ mismatches refuse; strictly future/unconsumed changes can pass. Existing tests
 remain unchanged. First implementation's exact adjacent run: 159 passed in
 119.00 seconds, zero warnings/skips. The recovered implementation must get its
 own exact verification and measurement record.
+
+The named whole-backup route refused an actual historical price-limit mismatch
+before accounts ran; it remains an explicitly checked diagnostic route, never
+an automatic fallback. `p59_reference_reconstruction_addendum.md` independently
+preregistered the final private-copy preparation. The CLI now also accepts an
+explicit `--primary-snapshot` with the original v2 path, requires recorded
+preparation and full original dataset confirmation. The selectors are mutually
+exclusive before any output directory creation. This new assertion failed RED
+when the selector was absent. The primary/v2 paths and preparation hash record
+travel with provenance; the live DB/WAL and old backup remain untouched.

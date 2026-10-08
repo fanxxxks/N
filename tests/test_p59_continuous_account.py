@@ -179,3 +179,17 @@ def test_snapshot_bridge_allows_only_unconsumed_changes():
     assert bridge["historical_inputs_identical"] is True
     assert bridge["through_year"] == "2025"
     assert set(bridge["changed_tables"]["tushare_v2"]) == {"daily_price_limit", "source_ingest_runs"}
+
+
+def test_snapshot_selectors_are_exclusive_before_output_creation(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(__file__).resolve().parents[1] / "scripts/task2_continuous_account.py"
+    output = tmp_path / "report"
+    proc = subprocess.run([sys.executable, str(script), "--source-root", str(tmp_path),
+        "--output", str(output), "--snapshot-directory", "backup_20260919_p38",
+        "--primary-snapshot", str(tmp_path / "ashare.duckdb")], capture_output=True, text=True)
+    assert proc.returncode == 2
+    assert "not allowed with argument" in proc.stderr
+    assert not output.exists()

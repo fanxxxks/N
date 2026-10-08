@@ -25,7 +25,7 @@ import torch
 import yaml
 from loguru import logger
 
-from ashare_data.config import make_backtest_config, make_data_config, make_model_config
+from ashare_data.config import make_backtest_config, make_data_config, make_model_config, resolve_v2_duckdb_path
 from ashare_data.io_utils import atomic_write_json
 from ashare_data.db import AshareDB
 from ashare_data.manifest import latest_publication_group
@@ -66,6 +66,8 @@ def write_csv(path, rows):
 
 
 def render_report(rows, provenance):
+    snapshot_label = provenance["snapshot_directory"] or (
+        "原发布快照的独立重建副本" if provenance.get("private_preparation") else "当前数据库")
     lines = ["# 任务二：连续账户实际金额（开发验证）", "",
         "2021—2025年，medium B三因子等权，10交易日调仓、10日预测。仅一次投入本金。",
         "1万元不适用：既定25只/单股4%/最低1000元条件无法同时成立。", "",
@@ -105,7 +107,7 @@ def render_report(rows, provenance):
             f'- 期末缺价持仓：{r["terminal_missing_prices"]}；完整估值：{r["valuation_complete"]}',
             f'- 实际最大单股权重（含价格漂移及扣费）：{r["actual_max_single_weight"]:.2%}', ""]
     lines += ["## 口径与局限", "",
-        f'- 实际只读输入：{provenance["snapshot_directory"] or "当前数据库"}；dataset={provenance["dataset_id"]}。原数据库漂移失败已保留，备份按独立身份确认，历史必需输入和三个因子已核对一致。',
+        f'- 实际只读输入：{snapshot_label}；dataset={provenance["dataset_id"]}。之前的输入失败均已保留；本表输入经完整内容确认，三个因子与原冻结字节一致。',
         "- 人民币是现有引擎的复权总回报近似估值：红利没有逐笔现金入账；执行时按复权财富重推股数，不能等同券商现金结算。",
         "- 期末仍持有股票，没有假想清仓，也没有扣假想清仓费用。若期末持仓缺价，估值不合格。",
         "- 各年账户收益接续上年末资产，无年度注资；年化沿用252/实际收益期数。现金、持仓跨年持续。",
@@ -125,8 +127,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--snapshot-directory", choices=["backup_20260919_p38"],
+    snapshots = parser.add_mutually_exclusive_group()
+    snapshots.add_argument("--snapshot-directory", choices=["backup_20260919_p38"],
         help="explicit preregistered recovery; no automatic fallback")
+    snapshots.add_argument("--primary-snapshot", type=Path,
+        help="explicit private primary reconstruction; must confirm the original composite identity")
     args = parser.parse_args()
     source, output = args.source_root.resolve(), args.output.resolve()
     create_output_directory(output)
@@ -152,6 +157,17 @@ def main():
         data_config = make_data_config(source_config, source)
         expected_dataset = FROZEN_DATASET
         snapshot_bridge = None
+        preparation = None
+        if args.primary_snapshot is not None:
+            snapshot_path = args.primary_snapshot.resolve()
+            preparation_path = snapshot_path.parent / "preparation.json"
+            preparation = json.loads(preparation_path.read_bytes())
+            if (preparation["private_primary"] != str(snapshot_path)
+                or preparation["restored_tables"] != ["daily_bar", "fundamental_pit", "stocks"]
+                or preparation["no_source_write"] is not True or preparation["no_publication_performed"] is not True):
+                raise ValueError("private reconstruction preparation does not match")
+            data_config = replace(data_config, duckdb_path=snapshot_path,
+                v2_duckdb_path=resolve_v2_duckdb_path(data_config))
         if args.snapshot_directory is not None:
             backup_primary = source / "data" / args.snapshot_directory / "ashare.duckdb"
             groups = []
@@ -206,6 +222,7 @@ def main():
             dataset_identity_status=loader.dataset_identity_status, factor_cache_outcome=loader.factor_cache_outcome,
             source_root=str(source), source_config_sha256=digest_bytes(source_config_bytes),
             snapshot_directory=args.snapshot_directory, consumed_primary_path=str(data_config.duckdb_path),
+            consumed_v2_path=str(resolve_v2_duckdb_path(data_config)), private_preparation=preparation,
             original_wp18_dataset_id=FROZEN_DATASET, snapshot_bridge=snapshot_bridge,
             direction_file_sha256=digest_bytes(direction_bytes), factor_matrix_sha256=factor_hashes,
             consumed_factor_version=_capture_versions()["factor_compute_version"], source_wp18_factor_version=5,
