@@ -4,6 +4,10 @@
 
 ## 目录结构
 
+四路云端搜索使用 `scripts/run_cloud_search.py` 和 `config/cloud_four_search.yaml`。
+环境安装、选定数据、任务预览、单卡/四卡测速、冻结账户回测及失败重跑的完整命令见
+[云端操作说明](docs/CLOUD_FOUR_SEARCH.md)。正式搜索预算在云端测速后决定。
+
 - `ashare_data/`：AkShare 数据获取、交易日历、DuckDB/Parquet、清洗复权、股票池。
 - `ashare_model/`：因子、公式词表、算子、StackVM、Transformer 生成器、训练与回测。
 - `ashare_trading/`：模拟券商撮合、组合管理、风控、日频模拟运行器。

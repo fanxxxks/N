@@ -1,0 +1,34 @@
+{
+  "run_id": "wp18-c1-20260927",
+  "stages": [
+    "M1",
+    "M2",
+    "M3",
+    "C1"
+  ],
+  "row_count": 180,
+  "direction_rows": 30,
+  "summary_rows": 40,
+  "factor_cache_outcome": "hit",
+  "elapsed_sec": 384.7,
+  "algorithm_search_budget": 0,
+  "development_validation": "开发验证（development validation, 2021-2025 测试窗）",
+  "account_rows": 90,
+  "failed_rows": 0,
+  "m3_failed_keys": [],
+  "m3_elapsed_sec": 455.6,
+  "stress_rows": 20,
+  "stress_failed_keys": [],
+  "stress_screen": {
+    "A": {
+      "passed": false,
+      "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive not met — no 0x/2x stress rows for this rule (研发资源分配门槛)"
+    },
+    "B": {
+      "passed": true,
+      "skip_reason": null
+    }
+  },
+  "c1_elapsed_sec": 384.7,
+  "formal_row_total": 240
+}

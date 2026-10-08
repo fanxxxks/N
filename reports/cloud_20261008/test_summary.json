@@ -1,0 +1,24 @@
+{
+  "integration_baseline_full_suite": {
+    "result": "37 failed, 2614 passed, 3 skipped in 1227.64s",
+    "resolution": "34 archive-only checks depended on excluded raw historical artifacts; 3 checks needed exact cash allocation expectations and train method size repair",
+    "log_external_path": "D:\\minequant\\cloud_integration_audit\\full-tests.log"
+  },
+  "after_repairs_targeted": {
+    "result": "94 passed, 35 skipped in 6.54s",
+    "log_external_path": "D:\\minequant\\cloud_integration_audit\\repaired-tests-v3.log"
+  },
+  "cloud_entry_and_account_targeted": {
+    "result": "37 passed in 261.08s",
+    "log_external_path": "D:\\minequant\\cloud_integration_audit\\cloud-tests-v4.log"
+  },
+  "dependency_consistency": "pip check passed; freeze_lock --check passed; 145 test files covered by shard union",
+  "local_python": "3.13.12 Windows, torch 2.11.0+cu128; Ubuntu Python3.12 remains cloud pending",
+  "clean_checkout_full_suite": "pending final verification",
+  "cloud_validation": "not executed",
+  "rl_duplicate_limit": {
+    "result": "1 passed in 27.68s",
+    "command": "pytest -q tests/test_cloud_search.py::test_rl_duplicates_do_not_complete_budget_and_sampling_is_bounded",
+    "checks": "requested 64, actual unique <64, exactly 128 proposals; duplicates not billed; honest non-budget stop"
+  }
+}

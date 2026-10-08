@@ -1,0 +1,317 @@
+{
+  "reconcile_schema_version": 1,
+  "experiment_id": "wp18_slow",
+  "n_rows_observed": 110,
+  "n_expected_keys": 110,
+  "n_actual_keys": 110,
+  "n_missing": 0,
+  "n_duplicates": 0,
+  "n_unexpected": 0,
+  "n_failed_rows": 0,
+  "n_primary_failed_rows": 0,
+  "n_benchmark_failed_rows": 0,
+  "missing": [],
+  "duplicates": [],
+  "unexpected": [],
+  "failed_rows": [],
+  "primary_failed_rows": [],
+  "benchmark_failed_rows": [],
+  "coverage": {
+    "groups": {
+      "-|2021-12-31": {
+        "n_rows": 22,
+        "n_dates_observed": [
+          222
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": false,
+        "daily_dates_consistent": true
+      },
+      "-|2022-12-31": {
+        "n_rows": 22,
+        "n_dates_observed": [
+          221
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": false,
+        "daily_dates_consistent": true
+      },
+      "-|2023-12-31": {
+        "n_rows": 22,
+        "n_dates_observed": [
+          221
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": false,
+        "daily_dates_consistent": true
+      },
+      "-|2024-12-31": {
+        "n_rows": 22,
+        "n_dates_observed": [
+          221
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": false,
+        "daily_dates_consistent": true
+      },
+      "-|2025-12-31": {
+        "n_rows": 22,
+        "n_dates_observed": [
+          222
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": false,
+        "daily_dates_consistent": true
+      }
+    },
+    "fold_windows": {
+      "-": [
+        [
+          "2020-12-31",
+          "2021-12-31"
+        ],
+        [
+          "2021-12-31",
+          "2022-12-31"
+        ],
+        [
+          "2022-12-31",
+          "2023-12-31"
+        ],
+        [
+          "2023-12-31",
+          "2024-12-31"
+        ],
+        [
+          "2024-12-31",
+          "2025-12-31"
+        ]
+      ]
+    },
+    "summary_layer_extra_arms": []
+  },
+  "arm_status": [
+    {
+      "candidate": "S1:A:None:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:A:None:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:A:None:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:A:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:A:None:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    }
+  ],
+  "issues": [],
+  "issue_codes": {}
+}

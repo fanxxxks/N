@@ -1,0 +1,54 @@
+{
+  "wp18_precheck_schema_version": 1,
+  "generated": "2026-09-27",
+  "spec": "reports/wp18/FROZEN_18_PLAN.md (frozen 2026-09-27, §10.2: the materialized RunPlan must pass WP14 precheck, exit 0)",
+  "commands": [
+    "python scripts/wp14_integrity.py materialize --experiment wp18_medium --out reports/wp18/medium/integrity/plan.json",
+    "python scripts/wp14_integrity.py materialize --experiment wp18_slow --out reports/wp18/slow/integrity/plan.json",
+    "python scripts/wp14_integrity.py precheck --plan reports/wp18/medium/integrity/plan.json --out reports/wp18/medium/integrity/precheck_medium.json",
+    "python scripts/wp14_integrity.py precheck --plan reports/wp18/slow/integrity/plan.json --out reports/wp18/slow/integrity/precheck_slow.json"
+  ],
+  "ok": true,
+  "medium": {
+    "precheck_schema_version": 1,
+    "experiment_id": "wp18_medium",
+    "plan_path": "reports\\wp18\\medium\\integrity\\plan.json",
+    "ok": true,
+    "checks_run": [
+      "P-DOM",
+      "P-DEP",
+      "P-REF"
+    ],
+    "expected_row_count": 200,
+    "issues": []
+  },
+  "slow": {
+    "precheck_schema_version": 1,
+    "experiment_id": "wp18_slow",
+    "plan_path": "reports\\wp18\\slow\\integrity\\plan.json",
+    "ok": true,
+    "checks_run": [
+      "P-DOM",
+      "P-DEP",
+      "P-REF"
+    ],
+    "expected_row_count": 280,
+    "issues": []
+  },
+  "formal_row_budget": {
+    "definition": "FROZEN_18_PLAN §4.6: formal evaluation rows = account (1x) + stress (0x/2x); measurement rows (direction evidence 80 + signal summary 100) are excluded",
+    "medium_account_M3": 90,
+    "medium_stress_C1_max": 40,
+    "slow_account_S3": 130,
+    "slow_stress_C2_max": 40,
+    "two_domain_total_at_full_extension": 300,
+    "cap": 300,
+    "within_cap": true,
+    "per_plan_expected_row_count": {
+      "wp18_medium": 200,
+      "wp18_slow": 280
+    },
+    "per_plan_cap": 300,
+    "algorithm_search_budget": 0
+  }
+}

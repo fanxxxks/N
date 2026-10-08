@@ -1,0 +1,135 @@
+{
+  "wp18_stage12_result_schema": 2,
+  "generated": "2026-09-27",
+  "spec": "FROZEN_18_PLAN stages 1+2 (M1/M2/S1/S2), both domains",
+  "development_validation": "开发验证（development validation, 2021-2025 测试窗）——不作为样本外结论发布",
+  "algorithm_search_budget": 0,
+  "per_stage_rows": {
+    "M1": {
+      "expected": 30,
+      "materialized": 30,
+      "failed": 0
+    },
+    "M2": {
+      "expected": 40,
+      "materialized": 40,
+      "failed": 0
+    },
+    "S1": {
+      "expected": 50,
+      "materialized": 50,
+      "failed": 0
+    },
+    "S2": {
+      "expected": 60,
+      "materialized": 60,
+      "failed": 0
+    }
+  },
+  "totals": {
+    "expected_rows": 180,
+    "materialized_rows": 180,
+    "missing_rows": 0,
+    "duplicate_rows": 0,
+    "unexpected_rows": 0,
+    "failed_rows": 0
+  },
+  "contract_adjudication_record": {
+    "note_for_report_writer": "WP18 报告须设『契约裁决记录』一节，醒目留痕本裁决（可被用户推翻回退）",
+    "ruling_date": "2026-09-27",
+    "what_happened": "slow Rule A 评分被 WP16-A (C1) 守卫在浮点 ε 区间（缺口 1-2e-12）拒绝 19/25 键；裁决认定为规格缺陷（容差钉在 round-12 网格自身噪声地板上，真实费用缺口 ≥5e-5），授权窄幅勘误",
+    "landed": "角色拆分：_P52_C1_TOLERANCE 保持 1e-12（成交精度逐字节不变）；新增 _P52_C1_REFUSAL_TOLERANCE=1e-9 仅用于最终拒绝比较；test_p52 _C1_TOL 按 §8.1 先例重锚；只重学 19 键（31 保留逐字 + 19 追加 wp18_relearn 出处），medium 与已成功键不动",
+    "documents": [
+      "reports/wp16/FROZEN_A.md §8.3",
+      "reports/p52_red_evidence.txt (2026-09-27 节)",
+      "reports/wp18/errata/errata.jsonl E1/E2"
+    ]
+  },
+  "frozen_direction_books": {
+    "medium": {
+      "entries": 30,
+      "complete": true,
+      "path": "reports/wp18/medium/direction_frozen.json"
+    },
+    "slow": {
+      "entries": 50,
+      "complete": true,
+      "preserved_attempt1": 31,
+      "relearned_per_FROZEN_A_8_3": 19,
+      "path": "reports/wp18/slow/direction_frozen.json"
+    }
+  },
+  "integrity": {
+    "medium": {
+      "full_plan_status_label": "measurement_incomplete",
+      "stages12_subset": {
+        "expected_rows": 70,
+        "observed_rows": 70,
+        "missing": 0,
+        "duplicates": 0,
+        "unexpected": 0,
+        "failed": 0,
+        "issue_codes": {}
+      },
+      "full_plan_missing_rows_are_exactly_unrun_stages": {
+        "<control>": 10,
+        "C1": 40,
+        "M3": 80
+      }
+    },
+    "slow": {
+      "full_plan_status_label": "measurement_incomplete",
+      "stages12_subset": {
+        "expected_rows": 110,
+        "observed_rows": 110,
+        "missing": 0,
+        "duplicates": 0,
+        "unexpected": 0,
+        "failed": 0,
+        "issue_codes": {}
+      },
+      "full_plan_missing_rows_are_exactly_unrun_stages": {
+        "<control>": 10,
+        "C2": 40,
+        "S3": 120
+      }
+    }
+  },
+  "integrity_status_note": "status 工具总体值（全量计划）= measurement_incomplete：medium 因 M3/C1 未运行（本 ask 之外），slow 因 S3/C2 未运行；两域阶段 1+2 子集对账全零",
+  "runtime_sec": {
+    "medium": 279.3,
+    "slow": 536.1,
+    "domain_gate": "medium 279.3s << 3600s cap, passed before slow"
+  },
+  "factor_cache": {
+    "medium": "hit (data/r1/medium_a, key ed8dc37c37ee)",
+    "slow": "hit after FROZEN_18_PLAN §9(b) read-only copy (miss event registered: budget:factor_cache_miss in trials.jsonl)"
+  },
+  "outputs": [
+    "reports/wp18/medium/direction_frozen.json",
+    "reports/wp18/medium/signal_summary.json",
+    "reports/wp18/medium/run_meta.json",
+    "reports/wp18/medium/integrity/{plan,plan_stages12,precheck_medium,reconcile_full,reconcile_stages12,status_full,status_stages12}.json",
+    "reports/wp18/slow/direction_frozen.json",
+    "reports/wp18/slow/signal_summary.json",
+    "reports/wp18/slow/integrity/{plan,plan_stages12,precheck_slow,reconcile_full,reconcile_stages12,status_full,status_stages12}.json",
+    "data/r1/wp18_medium/wp18_medium_report.json",
+    "data/r1/wp18_medium/wp18_medium_run_meta.json",
+    "data/r1/wp18_slow/wp18_slow_report.json",
+    "data/r1/wp18_slow/wp18_slow_run_meta.json",
+    "data/r1/wp18_medium/runs/wp18_stage12/wp18-stage12-20260927/trials.jsonl",
+    "data/r1/wp18_slow/runs/wp18_stage12/wp18-stage12-20260927/trials.jsonl",
+    "reports/wp18/integrity_stage12_summary.json",
+    "reports/wp18/stage12_result.json",
+    "reports/wp18/errata/errata.jsonl",
+    "reports/wp16/FROZEN_A.md (§8.3 append)",
+    "reports/p52_red_evidence.txt (2026-09-27 append)",
+    "scripts/wp18_stage12.py",
+    "scripts/wp18_reconcile_stage12.py"
+  ],
+  "errata": {
+    "E1": "wp18 report schema-key collision (shared key across the two wp18 experiment ids) — fixed per-experiment keys before any reconcile ran; reconcile.py/status.py registrations",
+    "E2": "FROZEN_A §8.3 adjudicated erratum execution (see contract_adjudication_record)",
+    "E3": "slow_ab factor_tensor_cache disclosure: the first slow run's load_data cold-rebuilt (~52 min) and ADDED one byte-identical content-addressed entry (sha256 81db3d19...) to the existing dir at 17:35:57 before the driver's refusal fired; no pre-existing file modified; corrected ledger trial budget:factor_cache_miss_correction"
+  }
+}

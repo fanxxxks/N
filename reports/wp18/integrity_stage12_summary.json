@@ -1,0 +1,77 @@
+{
+  "wp18_reconcile_stage12": true,
+  "domains": [
+    {
+      "domain": "medium",
+      "full": {
+        "expected_rows": 200,
+        "observed_rows": 70,
+        "missing": 130,
+        "duplicates": 0,
+        "unexpected": 0,
+        "failed": 0,
+        "missing_by_stage": {
+          "<control>": 10,
+          "C1": 40,
+          "M3": 80
+        },
+        "issue_codes": {
+          "missing_row": 130
+        },
+        "status_label": "measurement_incomplete"
+      },
+      "stages12_subset": {
+        "expected_rows": 70,
+        "observed_rows": 70,
+        "missing": 0,
+        "duplicates": 0,
+        "unexpected": 0,
+        "failed": 0,
+        "issue_codes": {}
+      },
+      "outputs": [
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\medium\\integrity\\reconcile_full.json",
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\medium\\integrity\\reconcile_stages12.json",
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\medium\\integrity\\plan_stages12.json",
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\medium\\integrity\\status_full.json",
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\medium\\integrity\\status_stages12.json"
+      ]
+    },
+    {
+      "domain": "slow",
+      "full": {
+        "expected_rows": 280,
+        "observed_rows": 110,
+        "missing": 170,
+        "duplicates": 0,
+        "unexpected": 0,
+        "failed": 0,
+        "missing_by_stage": {
+          "<control>": 10,
+          "C2": 40,
+          "S3": 120
+        },
+        "issue_codes": {
+          "missing_row": 170
+        },
+        "status_label": "measurement_incomplete"
+      },
+      "stages12_subset": {
+        "expected_rows": 110,
+        "observed_rows": 110,
+        "missing": 0,
+        "duplicates": 0,
+        "unexpected": 0,
+        "failed": 0,
+        "issue_codes": {}
+      },
+      "outputs": [
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\slow\\integrity\\reconcile_full.json",
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\slow\\integrity\\reconcile_stages12.json",
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\slow\\integrity\\plan_stages12.json",
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\slow\\integrity\\status_full.json",
+        "D:\\minequant\\AlphaGPT\\reports\\wp18\\slow\\integrity\\status_stages12.json"
+      ]
+    }
+  ]
+}

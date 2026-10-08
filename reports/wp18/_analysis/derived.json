@@ -1,0 +1,3307 @@
+{
+ "generated": "2026-09-27",
+ "development_validation": "开发验证（development validation, 2021-2025 测试窗）",
+ "q2_direction_books": {
+  "medium": {
+   "cells": [
+    {
+     "candidate": "MOMENTUM_20",
+     "fold": "2021-12-31",
+     "A_dir": 1,
+     "B_dir": -1,
+     "disagree": true,
+     "A_val_reward_plus": 0.12568610316105083,
+     "A_val_reward_minus": -0.6883886317730328,
+     "A_val_icir_plus": -0.45579631163437306,
+     "B_ic_mean": -0.05536826415645976,
+     "B_n_dates": 109,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2020-12-31"
+    },
+    {
+     "candidate": "MOMENTUM_20",
+     "fold": "2022-12-31",
+     "A_dir": 1,
+     "B_dir": -1,
+     "disagree": true,
+     "A_val_reward_plus": -0.3033645392091749,
+     "A_val_reward_minus": -1.448721670535322,
+     "A_val_icir_plus": -0.31716484493412705,
+     "B_ic_mean": -0.05925627354893858,
+     "B_n_dates": 124,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2021-12-31"
+    },
+    {
+     "candidate": "MOMENTUM_20",
+     "fold": "2023-12-31",
+     "A_dir": 1,
+     "B_dir": -1,
+     "disagree": true,
+     "A_val_reward_plus": 0.01464065958693958,
+     "A_val_reward_minus": -0.518622346550214,
+     "A_val_icir_plus": -0.25611057080972016,
+     "B_ic_mean": -0.06052887916691752,
+     "B_n_dates": 140,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2022-12-31"
+    },
+    {
+     "candidate": "MOMENTUM_20",
+     "fold": "2024-12-31",
+     "A_dir": 1,
+     "B_dir": -1,
+     "disagree": true,
+     "A_val_reward_plus": -0.21436528553320522,
+     "A_val_reward_minus": -0.36473883001420104,
+     "A_val_icir_plus": -0.08762167293563766,
+     "B_ic_mean": -0.05532605404409098,
+     "B_n_dates": 156,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2023-12-31"
+    },
+    {
+     "candidate": "MOMENTUM_20",
+     "fold": "2025-12-31",
+     "A_dir": -1,
+     "B_dir": -1,
+     "disagree": false,
+     "A_val_reward_plus": -0.8699352722922706,
+     "A_val_reward_minus": -0.11894650533923683,
+     "A_val_icir_plus": -0.07807728261102043,
+     "B_ic_mean": -0.05215464309316084,
+     "B_n_dates": 172,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2024-12-31"
+    },
+    {
+     "candidate": "RSQ_60",
+     "fold": "2021-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": -0.08694768316102017,
+     "A_val_reward_minus": -0.2983222201390642,
+     "A_val_icir_plus": 0.23552712971856243,
+     "B_ic_mean": 0.0459272014648687,
+     "B_n_dates": 109,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2020-12-31"
+    },
+    {
+     "candidate": "RSQ_60",
+     "fold": "2022-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": -0.6082725456190026,
+     "A_val_reward_minus": -1.3049001500208406,
+     "A_val_icir_plus": 0.21065128817157816,
+     "B_ic_mean": 0.049962870821902865,
+     "B_n_dates": 124,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2021-12-31"
+    },
+    {
+     "candidate": "RSQ_60",
+     "fold": "2023-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -0.8207056980139205,
+     "A_val_reward_minus": -0.10385738932455135,
+     "A_val_icir_plus": 0.44318358742941266,
+     "B_ic_mean": 0.04510530560178324,
+     "B_n_dates": 140,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2022-12-31"
+    },
+    {
+     "candidate": "RSQ_60",
+     "fold": "2024-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": 0.26666519896244606,
+     "A_val_reward_minus": -0.8039539681061196,
+     "A_val_icir_plus": 0.3558735399206002,
+     "B_ic_mean": 0.04254419160397633,
+     "B_n_dates": 156,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2023-12-31"
+    },
+    {
+     "candidate": "RSQ_60",
+     "fold": "2025-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -0.43794426682995313,
+     "A_val_reward_minus": -0.11641911561756467,
+     "A_val_icir_plus": 0.29146554006230757,
+     "B_ic_mean": 0.03725804231663103,
+     "B_n_dates": 172,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2024-12-31"
+    },
+    {
+     "candidate": "REVERSAL_60",
+     "fold": "2021-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -0.4976727281437223,
+     "A_val_reward_minus": 0.02228890423139751,
+     "A_val_icir_plus": 0.11566669747658012,
+     "B_ic_mean": 0.05588441511456087,
+     "B_n_dates": 105,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2020-12-31"
+    },
+    {
+     "candidate": "REVERSAL_60",
+     "fold": "2022-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -0.6362676397334466,
+     "A_val_reward_minus": -0.029656232769983193,
+     "A_val_icir_plus": 0.18714470750391213,
+     "B_ic_mean": 0.05669373813426242,
+     "B_n_dates": 120,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2021-12-31"
+    },
+    {
+     "candidate": "REVERSAL_60",
+     "fold": "2023-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -1.306871542321932,
+     "A_val_reward_minus": -0.5295187543414597,
+     "A_val_icir_plus": 0.19753888159308375,
+     "B_ic_mean": 0.05206972788354708,
+     "B_n_dates": 136,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2022-12-31"
+    },
+    {
+     "candidate": "REVERSAL_60",
+     "fold": "2024-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": 0.07474302664855798,
+     "A_val_reward_minus": 0.2750075514261396,
+     "A_val_icir_plus": 0.2528598804804921,
+     "B_ic_mean": 0.04599382842975236,
+     "B_n_dates": 152,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2023-12-31"
+    },
+    {
+     "candidate": "REVERSAL_60",
+     "fold": "2025-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": -0.2808143478395583,
+     "A_val_reward_minus": -0.567508011849415,
+     "A_val_icir_plus": 0.13744451929563156,
+     "B_ic_mean": 0.0415357769522415,
+     "B_n_dates": 168,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2024-12-31"
+    }
+   ],
+   "n_cells": 15,
+   "n_disagree": 10,
+   "disagree_rate": 0.6666666666666666,
+   "all_same_train_cutoff": true
+  },
+  "slow": {
+   "cells": [
+    {
+     "candidate": "ROE",
+     "fold": "2021-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": 0.24530238537322974,
+     "A_val_reward_minus": -0.13964530119015206,
+     "A_val_icir_plus": 0.8617763403840055,
+     "B_ic_mean": 0.08674817137295185,
+     "B_n_dates": 38,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2020-12-31"
+    },
+    {
+     "candidate": "ROE",
+     "fold": "2022-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -1.0554250991945364,
+     "A_val_reward_minus": -0.403852570986326,
+     "A_val_icir_plus": 0.45106097563517666,
+     "B_ic_mean": 0.06199310128546857,
+     "B_n_dates": 46,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2021-12-31"
+    },
+    {
+     "candidate": "ROE",
+     "fold": "2023-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": -0.38338930802658633,
+     "A_val_reward_minus": -0.44266137484621504,
+     "A_val_icir_plus": -0.03551291699459855,
+     "B_ic_mean": 0.0659970834621866,
+     "B_n_dates": 54,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2022-12-31"
+    },
+    {
+     "candidate": "ROE",
+     "fold": "2024-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -1.6143995570928893,
+     "A_val_reward_minus": -0.31088900532081515,
+     "A_val_icir_plus": -0.7853945320391171,
+     "B_ic_mean": 0.06823554042301354,
+     "B_n_dates": 62,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2023-12-31"
+    },
+    {
+     "candidate": "ROE",
+     "fold": "2025-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -1.5147699617405928,
+     "A_val_reward_minus": 0.19484065158883812,
+     "A_val_icir_plus": -0.26049287802542426,
+     "B_ic_mean": 0.0657563969739916,
+     "B_n_dates": 70,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2024-12-31"
+    },
+    {
+     "candidate": "PE_TTM",
+     "fold": "2021-12-31",
+     "A_dir": 1,
+     "B_dir": -1,
+     "disagree": true,
+     "A_val_reward_plus": 0.11446784558645234,
+     "A_val_reward_minus": -0.8736937971076868,
+     "A_val_icir_plus": 0.07572115494215964,
+     "B_ic_mean": -0.07355820040559312,
+     "B_n_dates": 26,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2020-12-31"
+    },
+    {
+     "candidate": "PE_TTM",
+     "fold": "2022-12-31",
+     "A_dir": 1,
+     "B_dir": -1,
+     "disagree": true,
+     "A_val_reward_plus": 1.0645616212591682,
+     "A_val_reward_minus": -1.3832224295675295,
+     "A_val_icir_plus": 0.13496674856806742,
+     "B_ic_mean": -0.06365323757779776,
+     "B_n_dates": 34,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2021-12-31"
+    },
+    {
+     "candidate": "PE_TTM",
+     "fold": "2023-12-31",
+     "A_dir": 1,
+     "B_dir": -1,
+     "disagree": true,
+     "A_val_reward_plus": 0.8819929235187088,
+     "A_val_reward_minus": -0.05437486317704526,
+     "A_val_icir_plus": -0.22557376812871538,
+     "B_ic_mean": -0.04741033211715179,
+     "B_n_dates": 42,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2022-12-31"
+    },
+    {
+     "candidate": "PE_TTM",
+     "fold": "2024-12-31",
+     "A_dir": 1,
+     "B_dir": -1,
+     "disagree": true,
+     "A_val_reward_plus": 0.39479104506225227,
+     "A_val_reward_minus": 0.22516602895893478,
+     "A_val_icir_plus": -0.489239144174647,
+     "B_ic_mean": -0.029001833374217724,
+     "B_n_dates": 50,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2023-12-31"
+    },
+    {
+     "candidate": "PE_TTM",
+     "fold": "2025-12-31",
+     "A_dir": -1,
+     "B_dir": -1,
+     "disagree": false,
+     "A_val_reward_plus": -0.056836237174213336,
+     "A_val_reward_minus": 0.19845305025333135,
+     "A_val_icir_plus": -0.2359977769947117,
+     "B_ic_mean": -0.036223126661236144,
+     "B_n_dates": 58,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2024-12-31"
+    },
+    {
+     "candidate": "REVENUE_YOY",
+     "fold": "2021-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": -0.10286011639032422,
+     "A_val_reward_minus": -1.6247090445367307,
+     "A_val_icir_plus": 1.1552923048135249,
+     "B_ic_mean": 0.03298481624612697,
+     "B_n_dates": 38,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2020-12-31"
+    },
+    {
+     "candidate": "REVENUE_YOY",
+     "fold": "2022-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": -0.09776110116410844,
+     "A_val_reward_minus": -1.372516836901651,
+     "A_val_icir_plus": 0.9204878975986193,
+     "B_ic_mean": 0.016642139308800354,
+     "B_n_dates": 46,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2021-12-31"
+    },
+    {
+     "candidate": "REVENUE_YOY",
+     "fold": "2023-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": -0.03295370387937539,
+     "A_val_reward_minus": -1.387583940572168,
+     "A_val_icir_plus": -0.07358812994016606,
+     "B_ic_mean": 0.030525166921436826,
+     "B_n_dates": 54,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2022-12-31"
+    },
+    {
+     "candidate": "REVENUE_YOY",
+     "fold": "2024-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -1.0605239652743936,
+     "A_val_reward_minus": -0.23883293830609745,
+     "A_val_icir_plus": -0.33786151762984007,
+     "B_ic_mean": 0.03546277032998521,
+     "B_n_dates": 62,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2023-12-31"
+    },
+    {
+     "candidate": "REVENUE_YOY",
+     "fold": "2025-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -0.9954348672695348,
+     "A_val_reward_minus": 0.21645865742934955,
+     "A_val_icir_plus": -0.3536029680293554,
+     "B_ic_mean": 0.03412868625899893,
+     "B_n_dates": 70,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2024-12-31"
+    },
+    {
+     "candidate": "DIVIDEND_YIELD",
+     "fold": "2021-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": 0.5747342275609758,
+     "A_val_reward_minus": -0.07942315481147372,
+     "A_val_icir_plus": 0.4042498367726626,
+     "B_ic_mean": 0.028061639621325334,
+     "B_n_dates": 54,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2020-12-31"
+    },
+    {
+     "candidate": "DIVIDEND_YIELD",
+     "fold": "2022-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -0.19005646933274334,
+     "A_val_reward_minus": 0.25450341723478614,
+     "A_val_icir_plus": 0.4148164466440022,
+     "B_ic_mean": 0.026716753508216208,
+     "B_n_dates": 62,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2021-12-31"
+    },
+    {
+     "candidate": "DIVIDEND_YIELD",
+     "fold": "2023-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": 0.03909872946361151,
+     "A_val_reward_minus": 0.36811431537540384,
+     "A_val_icir_plus": 0.24626435493921603,
+     "B_ic_mean": 0.027051485094877554,
+     "B_n_dates": 70,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2022-12-31"
+    },
+    {
+     "candidate": "DIVIDEND_YIELD",
+     "fold": "2024-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -0.5477875329518708,
+     "A_val_reward_minus": -0.2731292476312289,
+     "A_val_icir_plus": 0.24648956300204888,
+     "B_ic_mean": 0.02317945747728601,
+     "B_n_dates": 78,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2023-12-31"
+    },
+    {
+     "candidate": "DIVIDEND_YIELD",
+     "fold": "2025-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -0.9472228704347676,
+     "A_val_reward_minus": 0.4290467345713552,
+     "A_val_icir_plus": 0.17656141492706495,
+     "B_ic_mean": 0.02571495937047271,
+     "B_n_dates": 86,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2024-12-31"
+    },
+    {
+     "candidate": "MARKET_CAP",
+     "fold": "2021-12-31",
+     "A_dir": 1,
+     "B_dir": -1,
+     "disagree": true,
+     "A_val_reward_plus": -0.40550612862239455,
+     "A_val_reward_minus": -0.8614904582547225,
+     "A_val_icir_plus": 0.5797883549604261,
+     "B_ic_mean": -0.0011527513524235001,
+     "B_n_dates": 54,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2020-12-31"
+    },
+    {
+     "candidate": "MARKET_CAP",
+     "fold": "2022-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": 0.15535043625801592,
+     "A_val_reward_minus": -1.2282216157918402,
+     "A_val_icir_plus": 0.2711702602115481,
+     "B_ic_mean": 0.003143571616169744,
+     "B_n_dates": 62,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2021-12-31"
+    },
+    {
+     "candidate": "MARKET_CAP",
+     "fold": "2023-12-31",
+     "A_dir": 1,
+     "B_dir": 1,
+     "disagree": false,
+     "A_val_reward_plus": -0.29055142852203236,
+     "A_val_reward_minus": -0.5572231823106246,
+     "A_val_icir_plus": 0.03074760509520416,
+     "B_ic_mean": 0.013769600378286189,
+     "B_n_dates": 70,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2022-12-31"
+    },
+    {
+     "candidate": "MARKET_CAP",
+     "fold": "2024-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -0.38031747209844496,
+     "A_val_reward_minus": -0.053312220266025556,
+     "A_val_icir_plus": -0.3155608585844423,
+     "B_ic_mean": 0.016312996774151874,
+     "B_n_dates": 78,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2023-12-31"
+    },
+    {
+     "candidate": "MARKET_CAP",
+     "fold": "2025-12-31",
+     "A_dir": -1,
+     "B_dir": 1,
+     "disagree": true,
+     "A_val_reward_plus": -1.2065616444406932,
+     "A_val_reward_minus": -0.22703135503417082,
+     "A_val_icir_plus": -0.18483956364088758,
+     "B_ic_mean": 0.02241825901087961,
+     "B_n_dates": 86,
+     "same_train_cutoff": true,
+     "A_train_cutoff": "2024-12-31"
+    }
+   ],
+   "n_cells": 25,
+   "n_disagree": 16,
+   "disagree_rate": 0.64,
+   "all_same_train_cutoff": true
+  }
+ },
+ "q1_signal": {
+  "medium": {
+   "per_candidate": {
+    "MOMENTUM_20": {
+     "A": {
+      "ic_by_fold": [
+       -0.022684,
+       -0.013735,
+       -0.029962,
+       -0.00579,
+       0.051373
+      ],
+      "ic_pos_folds": 1,
+      "ic_mean_across_folds": -0.0041596888315602615,
+      "q_spread_by_fold": [
+       0.000484,
+       -0.002823,
+       -0.00325,
+       -0.0011,
+       0.000125
+      ],
+      "q_sign_matches_ic_sign_folds": 4,
+      "coverage_min": 0.9942726605205189,
+      "coverage_max": 0.9990417462955644,
+      "n_eff_min": 795.9090909090909,
+      "n_dates_per_fold": [
+       231,
+       232
+      ],
+      "n_ic_dates_per_fold": [
+       21,
+       23,
+       24
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       0.022684,
+       0.013735,
+       0.029962,
+       0.00579,
+       0.051373
+      ],
+      "ic_pos_folds": 5,
+      "ic_mean_across_folds": 0.024708748263534634,
+      "q_spread_by_fold": [
+       -0.000494,
+       0.002697,
+       0.003152,
+       0.001168,
+       0.000125
+      ],
+      "q_sign_matches_ic_sign_folds": 4,
+      "coverage_min": 0.9942726605205189,
+      "coverage_max": 0.9990417462955644,
+      "n_eff_min": 795.9090909090909,
+      "n_dates_per_fold": [
+       231,
+       232
+      ],
+      "n_ic_dates_per_fold": [
+       21,
+       23,
+       24
+      ]
+     }
+    },
+    "RSQ_60": {
+     "A": {
+      "ic_by_fold": [
+       0.019142,
+       0.066309,
+       -0.025981,
+       0.017425,
+       -0.055376
+      ],
+      "ic_pos_folds": 3,
+      "ic_mean_across_folds": 0.004304069736111173,
+      "q_spread_by_fold": [
+       0.001833,
+       0.00979,
+       -0.003788,
+       0.00528,
+       -0.008515
+      ],
+      "q_sign_matches_ic_sign_folds": 5,
+      "coverage_min": 0.9992976996963902,
+      "coverage_max": 0.9997563761768384,
+      "n_eff_min": 795.9090909090909,
+      "n_dates_per_fold": [
+       231,
+       232
+      ],
+      "n_ic_dates_per_fold": [
+       21,
+       23,
+       24
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       0.019142,
+       0.066309,
+       0.025981,
+       0.017425,
+       0.055376
+      ],
+      "ic_pos_folds": 5,
+      "ic_mean_across_folds": 0.036846698758981014,
+      "q_spread_by_fold": [
+       0.001833,
+       0.00979,
+       0.003749,
+       0.00528,
+       0.008476
+      ],
+      "q_sign_matches_ic_sign_folds": 5,
+      "coverage_min": 0.9992976996963902,
+      "coverage_max": 0.9997563761768384,
+      "n_eff_min": 795.9090909090909,
+      "n_dates_per_fold": [
+       231,
+       232
+      ],
+      "n_ic_dates_per_fold": [
+       21,
+       23,
+       24
+      ]
+     }
+    },
+    "REVERSAL_60": {
+     "A": {
+      "ic_by_fold": [
+       -0.078621,
+       -0.045614,
+       -0.001237,
+       0.004879,
+       0.052081
+      ],
+      "ic_pos_folds": 2,
+      "ic_mean_across_folds": -0.013702418184923137,
+      "q_spread_by_fold": [
+       -0.010808,
+       -0.008069,
+       0.001184,
+       0.001773,
+       0.000938
+      ],
+      "q_sign_matches_ic_sign_folds": 4,
+      "coverage_min": 0.9947349813711892,
+      "coverage_max": 0.9988468472370352,
+      "n_eff_min": 795.9090909090909,
+      "n_dates_per_fold": [
+       231,
+       232
+      ],
+      "n_ic_dates_per_fold": [
+       21,
+       23,
+       24
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       0.078621,
+       0.045614,
+       0.001237,
+       -0.004879,
+       0.052081
+      ],
+      "ic_pos_folds": 4,
+      "ic_mean_across_folds": 0.03453494614940613,
+      "q_spread_by_fold": [
+       0.010795,
+       0.008212,
+       -0.001244,
+       -0.00168,
+       0.000938
+      ],
+      "q_sign_matches_ic_sign_folds": 4,
+      "coverage_min": 0.9947349813711892,
+      "coverage_max": 0.9988468472370352,
+      "n_eff_min": 795.9090909090909,
+      "n_dates_per_fold": [
+       231,
+       232
+      ],
+      "n_ic_dates_per_fold": [
+       21,
+       23,
+       24
+      ]
+     }
+    },
+    "all3": {
+     "A": {
+      "ic_by_fold": [
+       -0.044835,
+       0.001956,
+       -0.023214,
+       0.005086,
+       0.030877
+      ],
+      "ic_pos_folds": 3,
+      "ic_mean_across_folds": -0.006025958520034706,
+      "q_spread_by_fold": [
+       -0.003003,
+       0.000512,
+       -0.002,
+       0.001717,
+       -0.004315
+      ],
+      "q_sign_matches_ic_sign_folds": 4,
+      "coverage_min": 1.0,
+      "coverage_max": 1.0,
+      "n_eff_min": 795.9090909090909,
+      "n_dates_per_fold": [
+       231,
+       232
+      ],
+      "n_ic_dates_per_fold": [
+       21,
+       23,
+       24
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       0.05393,
+       0.054726,
+       0.023214,
+       0.007705,
+       0.069522
+      ],
+      "ic_pos_folds": 5,
+      "ic_mean_across_folds": 0.041819282595502404,
+      "q_spread_by_fold": [
+       0.002474,
+       0.008796,
+       0.001986,
+       0.001973,
+       0.004749
+      ],
+      "q_sign_matches_ic_sign_folds": 5,
+      "coverage_min": 1.0,
+      "coverage_max": 1.0,
+      "n_eff_min": 795.9090909090909,
+      "n_dates_per_fold": [
+       231,
+       232
+      ],
+      "n_ic_dates_per_fold": [
+       21,
+       23,
+       24
+      ]
+     }
+    }
+   }
+  },
+  "slow": {
+   "per_candidate": {
+    "ROE": {
+     "A": {
+      "ic_by_fold": [
+       -0.055354,
+       0.030631,
+       -0.091873,
+       0.026719,
+       -0.008006
+      ],
+      "ic_pos_folds": 2,
+      "ic_mean_across_folds": -0.019576406327756948,
+      "q_spread_by_fold": [
+       -0.015131,
+       0.005301,
+       -0.023748,
+       0.016159,
+       0.001573
+      ],
+      "q_sign_matches_ic_sign_folds": 4,
+      "coverage_min": 0.9701539676273194,
+      "coverage_max": 0.9958339683991262,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       -0.055354,
+       -0.030631,
+       -0.091873,
+       -0.026719,
+       0.008006
+      ],
+      "ic_pos_folds": 1,
+      "ic_mean_across_folds": -0.03931425528116372,
+      "q_spread_by_fold": [
+       -0.015131,
+       -0.005353,
+       -0.023748,
+       -0.016074,
+       -0.001344
+      ],
+      "q_sign_matches_ic_sign_folds": 4,
+      "coverage_min": 0.9701539676273194,
+      "coverage_max": 0.9958339683991262,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     }
+    },
+    "PE_TTM": {
+     "A": {
+      "ic_by_fold": [
+       -0.036032,
+       -0.048343,
+       -0.052734,
+       -0.032057,
+       0.011378
+      ],
+      "ic_pos_folds": 1,
+      "ic_mean_across_folds": -0.031557793874075625,
+      "q_spread_by_fold": [
+       0.00017,
+       -0.00655,
+       -0.007296,
+       0.005779,
+       -0.013051
+      ],
+      "q_sign_matches_ic_sign_folds": 2,
+      "coverage_min": 0.8891767853816323,
+      "coverage_max": 0.9168058614695573,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       0.036032,
+       0.048343,
+       0.052734,
+       0.032057,
+       0.011378
+      ],
+      "ic_pos_folds": 5,
+      "ic_mean_across_folds": 0.036109075629995026,
+      "q_spread_by_fold": [
+       0.000203,
+       0.006996,
+       0.007305,
+       -0.00576,
+       -0.013051
+      ],
+      "q_sign_matches_ic_sign_folds": 3,
+      "coverage_min": 0.8891767853816323,
+      "coverage_max": 0.9168058614695573,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     }
+    },
+    "REVENUE_YOY": {
+     "A": {
+      "ic_by_fold": [
+       -0.032585,
+       -0.034702,
+       -0.069884,
+       0.008893,
+       -0.048468
+      ],
+      "ic_pos_folds": 1,
+      "ic_mean_across_folds": -0.0353492297065493,
+      "q_spread_by_fold": [
+       -0.002249,
+       -0.006907,
+       -0.016698,
+       0.005005,
+       -0.022115
+      ],
+      "q_sign_matches_ic_sign_folds": 5,
+      "coverage_min": 0.9721730302859399,
+      "coverage_max": 0.9976347327360893,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       -0.032585,
+       -0.034702,
+       -0.069884,
+       -0.008893,
+       0.048468
+      ],
+      "ic_pos_folds": 1,
+      "ic_mean_across_folds": -0.019519130512872428,
+      "q_spread_by_fold": [
+       -0.002249,
+       -0.006907,
+       -0.016698,
+       -0.00511,
+       0.022112
+      ],
+      "q_sign_matches_ic_sign_folds": 5,
+      "coverage_min": 0.9721730302859399,
+      "coverage_max": 0.9976347327360893,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     }
+    },
+    "DIVIDEND_YIELD": {
+     "A": {
+      "ic_by_fold": [
+       -0.008287,
+       -0.019006,
+       0.003608,
+       -0.013309,
+       0.023215
+      ],
+      "ic_pos_folds": 2,
+      "ic_mean_across_folds": -0.0027557054074232347,
+      "q_spread_by_fold": [
+       -0.002535,
+       -0.005162,
+       0.006291,
+       0.000408,
+       0.010176
+      ],
+      "q_sign_matches_ic_sign_folds": 4,
+      "coverage_min": 0.29054965649996894,
+      "coverage_max": 0.3612768597371835,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       -0.008287,
+       0.019006,
+       -0.003608,
+       0.013309,
+       -0.023215
+      ],
+      "ic_pos_folds": 2,
+      "ic_mean_across_folds": -0.000558916096940583,
+      "q_spread_by_fold": [
+       -0.002535,
+       0.005162,
+       -0.006291,
+       -0.000408,
+       -0.010176
+      ],
+      "q_sign_matches_ic_sign_folds": 4,
+      "coverage_min": 0.29054965649996894,
+      "coverage_max": 0.3612768597371835,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     }
+    },
+    "MARKET_CAP": {
+     "A": {
+      "ic_by_fold": [
+       -0.07147,
+       -0.022345,
+       -0.03952,
+       -0.04642,
+       0.039045
+      ],
+      "ic_pos_folds": 1,
+      "ic_mean_across_folds": -0.028142107281768393,
+      "q_spread_by_fold": [
+       -0.016184,
+       -0.0075,
+       -0.005642,
+       -0.00339,
+       0.008038
+      ],
+      "q_sign_matches_ic_sign_folds": 5,
+      "coverage_min": 0.9992717912242375,
+      "coverage_max": 0.999773648113357,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       0.07147,
+       -0.022345,
+       -0.03952,
+       0.04642,
+       -0.039045
+      ],
+      "ic_pos_folds": 2,
+      "ic_mean_across_folds": 0.0033958245486366027,
+      "q_spread_by_fold": [
+       0.016083,
+       -0.0075,
+       -0.005642,
+       0.00324,
+       -0.007689
+      ],
+      "q_sign_matches_ic_sign_folds": 5,
+      "coverage_min": 0.9992717912242375,
+      "coverage_max": 0.999773648113357,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     }
+    },
+    "slow_all5": {
+     "A": {
+      "ic_by_fold": [
+       -0.082323,
+       -0.043139,
+       -0.104225,
+       -0.02187,
+       0.00742
+      ],
+      "ic_pos_folds": 1,
+      "ic_mean_across_folds": -0.04882753878721792,
+      "q_spread_by_fold": [
+       -0.020708,
+       -0.009036,
+       -0.022939,
+       0.00706,
+       -0.004619
+      ],
+      "q_sign_matches_ic_sign_folds": 3,
+      "coverage_min": 1.0,
+      "coverage_max": 1.0,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     },
+     "B": {
+      "ic_by_fold": [
+       0.004974,
+       -0.008018,
+       -0.054354,
+       0.02187,
+       0.003659
+      ],
+      "ic_pos_folds": 3,
+      "ic_mean_across_folds": -0.006373757626665627,
+      "q_spread_by_fold": [
+       0.000958,
+       -0.003443,
+       -0.01493,
+       -0.007185,
+       -0.000739
+      ],
+      "q_sign_matches_ic_sign_folds": 3,
+      "coverage_min": 1.0,
+      "coverage_max": 1.0,
+      "n_eff_min": 795.7420814479638,
+      "n_dates_per_fold": [
+       221,
+       222
+      ],
+      "n_ic_dates_per_fold": [
+       11
+      ]
+     }
+    }
+   }
+  }
+ },
+ "q3_account": {
+  "medium": {
+   "table": {
+    "MOMENTUM_20/A": {
+     "dynamic_annual_net_excess": [
+      0.04421142870820849,
+      0.020494811950459102,
+      0.004443019784315494,
+      -0.051629723322971,
+      -0.06540956174420498
+     ],
+     "hold_annual_net_excess": [
+      -0.07253796287520065,
+      -0.007811605525011922,
+      0.023705430845141873,
+      -0.09724841133285855,
+      -0.0708366673884111
+     ],
+     "dynamic": {
+      "arithmetic": -0.047890024624192895,
+      "geometric": -0.05131110711523612,
+      "annualized": -0.010479574663893376,
+      "total_return_by_fold": [
+       0.16831321436612123,
+       -0.10677997274744255,
+       -0.05676583249064937,
+       0.042377410502513424,
+       0.16856515277205042
+      ],
+      "active_ir_by_fold": [
+       0.3703253740448348,
+       0.09170866710424905,
+       -0.02521525280289162,
+       -0.4768648900048099,
+       -0.7003659644446618
+      ],
+      "turnover_mean": 0.0093377505048687,
+      "cost_fraction_sum_total": 0.01356404017480808,
+      "invested_ratio_target_mean": 0.4018251441733388,
+      "suppressed_min_trade_total": 2134,
+      "suppressed_threshold_total": 66,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.22472921627634035,
+      "geometric": -0.2098207580312721,
+      "annualized": -0.04600714219331381,
+      "turnover_mean": 0.005015241518751374,
+      "cost_fraction_sum_total": 0.006478337545366605,
+      "invested_ratio_target_mean": 0.3953500737138329,
+      "hold_forced_exit_total": 6
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.035527567529420434,
+      "per_fold_excess_diff": [
+       0.11674939158340913,
+       0.028306417475471024,
+       -0.01926241106082638,
+       0.045618688009887554,
+       0.0054271056442061205
+      ],
+      "arithmetic_diff": 0.17683919165214745
+     },
+     "screen_descriptive": {
+      "passed": true,
+      "n_positive_years": 3,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": true,
+      "median_net_excess": 0.004443019784315494,
+      "condition_ii_median_positive": true,
+      "dynamic_minus_hold_annualized": 0.035527567529420434,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.04421142870820849,
+      "ex_minus_max_year": {
+       "n_positive_years": 2,
+       "median_net_excess": -0.023593351769327753,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "MOMENTUM_20/B": {
+     "dynamic_annual_net_excess": [
+      -0.08026399541328089,
+      0.008624197054190264,
+      -0.011621994732129437,
+      0.046453606014774884,
+      -0.06540956174420498
+     ],
+     "hold_annual_net_excess": [
+      -0.032688211875607553,
+      0.00036081639573937174,
+      0.002546686709436363,
+      -0.10245961736442855,
+      -0.0708366673884111
+     ],
+     "dynamic": {
+      "arithmetic": -0.10221774882065016,
+      "geometric": -0.10327979507213214,
+      "annualized": -0.021566325963323085,
+      "total_return_by_fold": [
+       0.0290442130252051,
+       -0.11717010000432138,
+       -0.07185187549655159,
+       0.15018324263675153,
+       0.16856515277205042
+      ],
+      "active_ir_by_fold": [
+       -0.7301056129630618,
+       -0.04991503762221249,
+       -0.19175501377171228,
+       0.0788222876431629,
+       -0.7003659644446618
+      ],
+      "turnover_mean": 0.00909394778191877,
+      "cost_fraction_sum_total": 0.014445603717061908,
+      "invested_ratio_target_mean": 0.3985489406884157,
+      "suppressed_min_trade_total": 2049,
+      "suppressed_threshold_total": 54,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.20307699352327147,
+      "geometric": -0.19095287418570706,
+      "annualized": -0.041494158730688735,
+      "turnover_mean": 0.005506336810216562,
+      "cost_fraction_sum_total": 0.008515495160820008,
+      "invested_ratio_target_mean": 0.4383458352384226,
+      "hold_forced_exit_total": 9
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.01992783276736565,
+      "per_fold_excess_diff": [
+       -0.04757578353767333,
+       0.008263380658450892,
+       -0.0141686814415658,
+       0.14891322337920343,
+       0.0054271056442061205
+      ],
+      "arithmetic_diff": 0.10085924470262131
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 2,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.011621994732129437,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.01992783276736565,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.046453606014774884,
+      "ex_minus_max_year": {
+       "n_positive_years": 1,
+       "median_net_excess": -0.03851577823816721,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "REVERSAL_60/A": {
+     "dynamic_annual_net_excess": [
+      -0.1479796426785902,
+      -0.1104645735315839,
+      0.004035997741313357,
+      -0.09024224775260936,
+      -0.11057921363178103
+     ],
+     "hold_annual_net_excess": [
+      -0.06610167114020882,
+      -0.12584117193678712,
+      -0.03135864764082508,
+      -0.10976935756672646,
+      -0.1868632101016111
+     ],
+     "dynamic": {
+      "arithmetic": -0.45522967985325113,
+      "geometric": -0.38426258481298037,
+      "annualized": -0.09243213754591606,
+      "total_return_by_fold": [
+       -0.046719261060964024,
+       -0.22140627412537384,
+       -0.05714805138244017,
+       -6.257756729233233e-05,
+       0.1120872786166347
+      ],
+      "active_ir_by_fold": [
+       -1.7540797430980897,
+       -1.0277859759091685,
+       0.006924073250255834,
+       -0.7065872438738179,
+       -1.123456960583808
+      ],
+      "turnover_mean": 0.007771540595992063,
+      "cost_fraction_sum_total": 0.011530394316932261,
+      "invested_ratio_target_mean": 0.45685623223797067,
+      "suppressed_min_trade_total": 2676,
+      "suppressed_threshold_total": 102,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.5199340583861586,
+      "geometric": -0.4275743294126585,
+      "annualized": -0.10557522515457674,
+      "turnover_mean": 0.005117657608020675,
+      "cost_fraction_sum_total": 0.007285968429723641,
+      "invested_ratio_target_mean": 0.43258145487070027,
+      "hold_forced_exit_total": 6
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.013143087608660675,
+      "per_fold_excess_diff": [
+       -0.08187797153838139,
+       0.015376598405203223,
+       0.035394645382138434,
+       0.019527109814117094,
+       0.07628399646983008
+      ],
+      "arithmetic_diff": 0.06470437853290745
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.1104645735315839,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.013143087608660675,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.004035997741313357,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.11052189358168246,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "REVERSAL_60/B": {
+     "dynamic_annual_net_excess": [
+      -0.07697983848915613,
+      0.14112094839518008,
+      0.018872021673736583,
+      -0.04500048608878182,
+      -0.11057921363178103
+     ],
+     "hold_annual_net_excess": [
+      -0.04799410585960173,
+      0.15491273404460948,
+      0.01085099964283609,
+      -0.11402064234618636,
+      -0.1868632101016111
+     ],
+     "dynamic": {
+      "arithmetic": -0.07256656814080231,
+      "geometric": -0.08846588392872012,
+      "annualized": -0.018354713652888766,
+      "total_return_by_fold": [
+       0.03271868337385242,
+       -0.0011981710363770937,
+       -0.043216106605669435,
+       0.049663770389279716,
+       0.1120872786166347
+      ],
+      "active_ir_by_fold": [
+       -0.6748007717217627,
+       0.8503058980632925,
+       0.11178763180491452,
+       -0.44196839635774576,
+       -1.123456960583808
+      ],
+      "turnover_mean": 0.009528629139043487,
+      "cost_fraction_sum_total": 0.015108047913981994,
+      "invested_ratio_target_mean": 0.4024420651383192,
+      "suppressed_min_trade_total": 1929,
+      "suppressed_threshold_total": 158,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.18311422461995364,
+      "geometric": -0.19931228276338075,
+      "annualized": -0.04348313169518281,
+      "turnover_mean": 0.005180268305265813,
+      "cost_fraction_sum_total": 0.007527233765472379,
+      "invested_ratio_target_mean": 0.4850702952774477,
+      "hold_forced_exit_total": 8
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.025128418042294043,
+      "per_fold_excess_diff": [
+       -0.028985732629554395,
+       -0.0137917856494294,
+       0.008021022030900493,
+       0.06902015625740454,
+       0.07628399646983008
+      ],
+      "arithmetic_diff": 0.11054765647915132
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 2,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.04500048608878182,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.025128418042294043,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.14112094839518008,
+      "ex_minus_max_year": {
+       "n_positive_years": 1,
+       "median_net_excess": -0.060990162288968974,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "RSQ_60/A": {
+     "dynamic_annual_net_excess": [
+      -0.14595091346040023,
+      -0.023288726137361326,
+      0.02253716129766259,
+      0.0195694355266669,
+      -0.12324695283644171
+     ],
+     "hold_annual_net_excess": [
+      -0.15025530501940398,
+      -0.025120857013373854,
+      0.048756524850548155,
+      -0.13177421801881217,
+      -0.10258501219325766
+     ],
+     "dynamic": {
+      "arithmetic": -0.2503799956098738,
+      "geometric": -0.23753094025431587,
+      "annualized": -0.0527939898917148,
+      "total_return_by_fold": [
+       -0.044449422703693675,
+       -0.14510288495242385,
+       -0.03977431363793915,
+       0.12063418072910426,
+       0.09624817092514415
+      ],
+      "active_ir_by_fold": [
+       -1.3278507510628443,
+       -0.18846128295953146,
+       0.19051055769460803,
+       0.009562144903252334,
+       -0.8722229469674132
+      ],
+      "turnover_mean": 0.00807881065827965,
+      "cost_fraction_sum_total": 0.013649157192432131,
+      "invested_ratio_target_mean": 0.6755663296236035,
+      "suppressed_min_trade_total": 2500,
+      "suppressed_threshold_total": 359,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.3609788673942995,
+      "geometric": -0.3230759981296558,
+      "annualized": -0.0750718812195511,
+      "turnover_mean": 0.005199707048461061,
+      "cost_fraction_sum_total": 0.008894827650686932,
+      "invested_ratio_target_mean": 0.6205397085870483,
+      "hold_forced_exit_total": 4
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.022277891327836308,
+      "per_fold_excess_diff": [
+       0.004304391559003751,
+       0.0018321308760125277,
+       -0.026219363552885566,
+       0.15134365354547907,
+       -0.02066194064318405
+      ],
+      "arithmetic_diff": 0.11059887178442573
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 2,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.023288726137361326,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.022277891327836308,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.02253716129766259,
+      "ex_minus_max_year": {
+       "n_positive_years": 1,
+       "median_net_excess": -0.07326783948690152,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "RSQ_60/B": {
+     "dynamic_annual_net_excess": [
+      -0.14595091346040023,
+      -0.023288726137361326,
+      0.16038534033427432,
+      0.0195694355266669,
+      -0.015620342135745369
+     ],
+     "hold_annual_net_excess": [
+      -0.15025530501940398,
+      -0.025120857013373854,
+      0.1348223510012152,
+      -0.13177421801881217,
+      0.013696210597230696
+     ],
+     "dynamic": {
+      "arithmetic": -0.00490520587256571,
+      "geometric": -0.0285270667975962,
+      "annualized": -0.0057716539152185,
+      "total_return_by_fold": [
+       -0.044449422703693675,
+       -0.14510288495242385,
+       0.08967365885551137,
+       0.12063418072910426,
+       0.2308191034188647
+      ],
+      "active_ir_by_fold": [
+       -1.3278507510628443,
+       -0.18846128295953146,
+       1.5837311219623407,
+       0.009562144903252334,
+       -0.21646450967281444
+      ],
+      "turnover_mean": 0.00935294710301499,
+      "cost_fraction_sum_total": 0.017374967711217517,
+      "invested_ratio_target_mean": 0.7095853591458134,
+      "suppressed_min_trade_total": 2075,
+      "suppressed_threshold_total": 565,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.1586318184531441,
+      "geometric": -0.17261503851222826,
+      "annualized": -0.03718793322496994,
+      "turnover_mean": 0.005171788068925392,
+      "cost_fraction_sum_total": 0.009391677845598606,
+      "invested_ratio_target_mean": 0.6950834372431706,
+      "hold_forced_exit_total": 4
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.03141627930975144,
+      "per_fold_excess_diff": [
+       0.004304391559003751,
+       0.0018321308760125277,
+       0.025562989333059116,
+       0.15134365354547907,
+       -0.029316552732976064
+      ],
+      "arithmetic_diff": 0.1537266125805784
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 2,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.015620342135745369,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.03141627930975144,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.16038534033427432,
+      "ex_minus_max_year": {
+       "n_positive_years": 1,
+       "median_net_excess": -0.019454534136553348,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "combo:all3/A": {
+     "dynamic_annual_net_excess": [
+      -0.05459821035260293,
+      0.0033779984720001544,
+      0.02417094301199052,
+      -0.006401515528183466,
+      -0.06562490278530131
+     ],
+     "hold_annual_net_excess": [
+      -0.08784311227443775,
+      -0.04718223261641463,
+      0.11860009447827946,
+      -0.13308436942971624,
+      -0.09317488677060415
+     ],
+     "dynamic": {
+      "arithmetic": -0.09907568718209703,
+      "geometric": -0.09804344385867914,
+      "annualized": -0.020426283193502814,
+      "total_return_by_fold": [
+       0.0577603092286012,
+       -0.12176199952765154,
+       -0.03824009148212493,
+       0.09208886106377512,
+       0.16829590110170756
+      ],
+      "active_ir_by_fold": [
+       -0.6069185925745444,
+       -0.07861942116581522,
+       0.24850835047111908,
+       -0.22864299278850794,
+       -0.7473088700885355
+      ],
+      "turnover_mean": 0.009777692383866606,
+      "cost_fraction_sum_total": 0.015457704292407264,
+      "invested_ratio_target_mean": 0.47191063278630174,
+      "suppressed_min_trade_total": 2096,
+      "suppressed_threshold_total": 166,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.2426845066128933,
+      "geometric": -0.23571627322297928,
+      "annualized": -0.05234355076120001,
+      "turnover_mean": 0.005232112640636223,
+      "cost_fraction_sum_total": 0.007911921813603987,
+      "invested_ratio_target_mean": 0.4531052128638896,
+      "hold_forced_exit_total": 5
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.031917267567697194,
+      "per_fold_excess_diff": [
+       0.033244901921834824,
+       0.050560231088414787,
+       -0.09442915146628894,
+       0.12668285390153278,
+       0.02754998398530284
+      ],
+      "arithmetic_diff": 0.1436088194307963
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 2,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.006401515528183466,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.031917267567697194,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.02417094301199052,
+      "ex_minus_max_year": {
+       "n_positive_years": 1,
+       "median_net_excess": -0.030499862940393196,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律",
+     "is_screen_unit": true
+    },
+    "combo:all3/B": {
+     "dynamic_annual_net_excess": [
+      0.010919273307907096,
+      0.09215545935439695,
+      0.002315287216983597,
+      -0.0749899054149894,
+      -0.06031277357104625
+     ],
+     "hold_annual_net_excess": [
+      -0.0002282957421216869,
+      0.13390178632824656,
+      0.08654431613349867,
+      -0.12967437650759095,
+      -0.15850141294895503
+     ],
+     "dynamic": {
+      "arithmetic": -0.029912659106748007,
+      "geometric": -0.03808856560936613,
+      "annualized": -0.007736497370678719,
+      "total_return_by_fold": [
+       0.13106437373906532,
+       -0.044056748016155445,
+       -0.058763905071472,
+       0.016701652081166474,
+       0.1749379218550826
+      ],
+      "active_ir_by_fold": [
+       0.07501591964810331,
+       0.639494288362683,
+       -0.025471738232534385,
+       -0.6564359646941608,
+       -0.6164672589442043
+      ],
+      "turnover_mean": 0.009786889238809979,
+      "cost_fraction_sum_total": 0.01631494346905205,
+      "invested_ratio_target_mean": 0.47545921563243604,
+      "suppressed_min_trade_total": 2089,
+      "suppressed_threshold_total": 93,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.06795798273692244,
+      "geometric": -0.09789126958715877,
+      "annualized": -0.02039323152225503,
+      "turnover_mean": 0.0051818793379744,
+      "cost_fraction_sum_total": 0.00838693689481278,
+      "invested_ratio_target_mean": 0.5897303689329652,
+      "hold_forced_exit_total": 5
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.01265673415157631,
+      "per_fold_excess_diff": [
+       0.011147569050028783,
+       -0.04174632697384961,
+       -0.08422902891651507,
+       0.05468447109260155,
+       0.09818863937790878
+      ],
+      "arithmetic_diff": 0.03804532363017443
+     },
+     "screen_descriptive": {
+      "passed": true,
+      "n_positive_years": 3,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": true,
+      "median_net_excess": 0.002315287216983597,
+      "condition_ii_median_positive": true,
+      "dynamic_minus_hold_annualized": 0.01265673415157631,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.09215545935439695,
+      "ex_minus_max_year": {
+       "n_positive_years": 2,
+       "median_net_excess": -0.028998743177031328,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律",
+     "is_screen_unit": true
+    }
+   },
+   "controls": {
+    "2021-12-31": {
+     "benchmark_total_return": 0.1188473734782225,
+     "cash_excess_return": -0.10622304372825675,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    },
+    "2022-12-31": {
+     "benchmark_total_return": -0.12471869842693561,
+     "cash_excess_return": 0.14248984663877762,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    },
+    "2023-12-31": {
+     "benchmark_total_return": -0.06093810307737335,
+     "cash_excess_return": 0.06489253080874846,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    },
+    "2024-12-31": {
+     "benchmark_total_return": 0.09912492634720027,
+     "cash_excess_return": -0.09018531376285788,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    },
+    "2025-12-31": {
+     "benchmark_total_return": 0.2503499981798627,
+     "cash_excess_return": -0.2002239361333209,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    }
+   },
+   "folds": [
+    "2021-12-31",
+    "2022-12-31",
+    "2023-12-31",
+    "2024-12-31",
+    "2025-12-31"
+   ]
+  },
+  "slow": {
+   "table": {
+    "DIVIDEND_YIELD/A": {
+     "dynamic_annual_net_excess": [
+      -0.1264103493060046,
+      0.023203961985206467,
+      0.06322252440671594,
+      -0.040612603939305436,
+      -0.08188216826034644
+     ],
+     "hold_annual_net_excess": [
+      -0.1264103493060046,
+      0.020628517067538654,
+      0.07479445748575064,
+      -0.14667082783949548,
+      -0.08888310359738238
+     ],
+     "dynamic": {
+      "arithmetic": -0.16247863511373406,
+      "geometric": -0.16288274658368607,
+      "annualized": -0.03493345948429627,
+      "total_return_by_fold": [
+       -0.03047878715638619,
+       -0.09744427548789203,
+       0.03006208775242225,
+       0.06556617218982574,
+       0.14436049324385203
+      ],
+      "active_ir_by_fold": [
+       -1.6630583321751728,
+       0.25485987692153766,
+       0.6840418323833267,
+       -0.5329091920052789,
+       -1.331608020626138
+      ],
+      "turnover_mean": 0.006036102509937231,
+      "cost_fraction_sum_total": 0.007340891744065169,
+      "invested_ratio_target_mean": 0.6914480019914653,
+      "suppressed_min_trade_total": 487,
+      "suppressed_threshold_total": 432,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.26654130618959315,
+      "geometric": -0.254939927066849,
+      "annualized": -0.057159437880841546,
+      "turnover_mean": 0.005526042586221537,
+      "cost_fraction_sum_total": 0.008730412421887336,
+      "invested_ratio_target_mean": 0.543169893372481,
+      "hold_forced_exit_total": 4
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.022225978396545276,
+      "per_fold_excess_diff": [
+       0.0,
+       0.002575444917667813,
+       -0.011571933079034702,
+       0.10605822390019004,
+       0.007000935337035941
+      ],
+      "arithmetic_diff": 0.10406267107585909
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 2,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.040612603939305436,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.022225978396545276,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.06322252440671594,
+      "ex_minus_max_year": {
+       "n_positive_years": 1,
+       "median_net_excess": -0.06124738609982594,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "DIVIDEND_YIELD/B": {
+     "dynamic_annual_net_excess": [
+      -0.1264103493060046,
+      0.05580668254013488,
+      -0.057341594573786736,
+      -0.0008874181780503809,
+      -0.1329321540692756
+     ],
+     "hold_annual_net_excess": [
+      -0.1264103493060046,
+      0.05240909465130583,
+      -0.06547903153329793,
+      -0.10691646312217662,
+      -0.1332198605011804
+     ],
+     "dynamic": {
+      "arithmetic": -0.26176483358698244,
+      "geometric": -0.24679405268829224,
+      "annualized": -0.05510674660036019,
+      "total_return_by_fold": [
+       -0.03047878715638619,
+       -0.06868581367112203,
+       -0.0867418034879236,
+       0.10968788392479256,
+       0.08073076629507447
+      ],
+      "active_ir_by_fold": [
+       -1.6630583321751728,
+       0.4197829308614899,
+       -0.8145167637410201,
+       -0.20809545684636713,
+       -1.9416067459092992
+      ],
+      "turnover_mean": 0.005554028981141596,
+      "cost_fraction_sum_total": 0.0064067286258222035,
+      "invested_ratio_target_mean": 0.5993747460682604,
+      "suppressed_min_trade_total": 528,
+      "suppressed_threshold_total": 395,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.3796166098113537,
+      "geometric": -0.33490733433213116,
+      "annualized": -0.0783279199444209,
+      "turnover_mean": 0.00534247725332942,
+      "cost_fraction_sum_total": 0.007682887208042965,
+      "invested_ratio_target_mean": 0.4785376722642457,
+      "hold_forced_exit_total": 5
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.023221173344060708,
+      "per_fold_excess_diff": [
+       0.0,
+       0.0033975878888290456,
+       0.00813743695951119,
+       0.10602904494412624,
+       0.0002877064319047884
+      ],
+      "arithmetic_diff": 0.11785177622437126
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.057341594573786736,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.023221173344060708,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.05580668254013488,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.09187597193989566,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "MARKET_CAP/A": {
+     "dynamic_annual_net_excess": [
+      -0.14416117131084338,
+      0.040075243952800266,
+      -0.0354507805426868,
+      -0.09919241960043801,
+      -0.047439726351344524
+     ],
+     "hold_annual_net_excess": [
+      -0.14416117131084338,
+      0.040075243952800266,
+      -0.036568330783603775,
+      -0.13984625954100283,
+      -0.055707468325403076
+     ],
+     "dynamic": {
+      "arithmetic": -0.28616885385251245,
+      "geometric": -0.26327461060582347,
+      "annualized": -0.05927837535085334,
+      "total_return_by_fold": [
+       -0.05017888143455296,
+       -0.08256232361373583,
+       -0.06553373360052428,
+       0.0005031223749940583,
+       0.1872902441417572
+      ],
+      "active_ir_by_fold": [
+       -1.867744378201917,
+       0.2170348990389208,
+       -0.5765980556377639,
+       -1.1445728681746972,
+       -0.7051114286583126
+      ],
+      "turnover_mean": 0.005236597072772463,
+      "cost_fraction_sum_total": 0.00637950242485691,
+      "invested_ratio_target_mean": 0.5263576724420788,
+      "suppressed_min_trade_total": 764,
+      "suppressed_threshold_total": 265,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.3362079860080528,
+      "geometric": -0.30343716232582796,
+      "annualized": -0.06976631864707694,
+      "turnover_mean": 0.005272868532181037,
+      "cost_fraction_sum_total": 0.007030787932397026,
+      "invested_ratio_target_mean": 0.4124893045286063,
+      "hold_forced_exit_total": 2
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.0104879432962236,
+      "per_fold_excess_diff": [
+       0.0,
+       0.0,
+       0.0011175502409169757,
+       0.04065383994056482,
+       0.008267741974058551
+      ],
+      "arithmetic_diff": 0.050039132155540345
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.047439726351344524,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.0104879432962236,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.040075243952800266,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.07331607297589127,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "MARKET_CAP/B": {
+     "dynamic_annual_net_excess": [
+      -0.03693369470191754,
+      0.040075243952800266,
+      -0.0354507805426868,
+      -0.0006605633365595054,
+      -0.17650129254771874
+     ],
+     "hold_annual_net_excess": [
+      -0.03720731420531709,
+      0.040075243952800266,
+      -0.036568330783603775,
+      -0.11144389740662786,
+      -0.15671756130520986
+     ],
+     "dynamic": {
+      "arithmetic": -0.20947108717608232,
+      "geometric": -0.204900848818241,
+      "annualized": -0.04482211681114179,
+      "total_return_by_fold": [
+       0.06882357365343816,
+       -0.08256232361373583,
+       -0.06553373360052428,
+       0.10993984558916581,
+       0.026425317608898657
+      ],
+      "active_ir_by_fold": [
+       -0.40151910979233835,
+       0.2170348990389208,
+       -0.5765980556377639,
+       -0.2186994197785717,
+       -2.0866255813523558
+      ],
+      "turnover_mean": 0.005692489474203004,
+      "cost_fraction_sum_total": 0.006296129553919337,
+      "invested_ratio_target_mean": 0.5474681041196031,
+      "suppressed_min_trade_total": 561,
+      "suppressed_threshold_total": 338,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.3018618597479583,
+      "geometric": -0.2771030874167807,
+      "annualized": -0.06283669780656687,
+      "turnover_mean": 0.00530644233169592,
+      "cost_fraction_sum_total": 0.007084362368811763,
+      "invested_ratio_target_mean": 0.42669546484621074,
+      "hold_forced_exit_total": 3
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.018014580995425078,
+      "per_fold_excess_diff": [
+       0.000273619503399547,
+       0.0,
+       0.0011175502409169757,
+       0.11078333407006835,
+       -0.019783731242508873
+      ],
+      "arithmetic_diff": 0.092390772571876
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.0354507805426868,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.018014580995425078,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.040075243952800266,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.03619223762230217,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "PE_TTM/A": {
+     "dynamic_annual_net_excess": [
+      -0.14412138760036808,
+      0.104991121312908,
+      -0.009729517388446296,
+      -0.010644166472870809,
+      -0.130543306733798
+     ],
+     "hold_annual_net_excess": [
+      -0.14772529160443337,
+      0.09667601923272451,
+      -0.019666722148364624,
+      -0.155875238178947,
+      -0.1312464236393489
+     ],
+     "dynamic": {
+      "arithmetic": -0.19004725688257518,
+      "geometric": -0.19438921736861559,
+      "annualized": -0.042309776304451985,
+      "total_return_by_fold": [
+       -0.05013472895266302,
+       -0.02530082062911565,
+       -0.04061468098821197,
+       0.09885132199348101,
+       0.08370827356114252
+      ],
+      "active_ir_by_fold": [
+       -1.6189551818581516,
+       0.8490307462945231,
+       -0.17813548494245177,
+       -0.15976763883652334,
+       -0.9180250588640849
+      ],
+      "turnover_mean": 0.00561484384174024,
+      "cost_fraction_sum_total": 0.00786597782789189,
+      "invested_ratio_target_mean": 0.6437603725434402,
+      "suppressed_min_trade_total": 816,
+      "suppressed_threshold_total": 336,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.3578376563383694,
+      "geometric": -0.3280531249404972,
+      "annualized": -0.07643601767426567,
+      "turnover_mean": 0.0055306167078412296,
+      "cost_fraction_sum_total": 0.008330636263042052,
+      "invested_ratio_target_mean": 0.46311653144004195,
+      "hold_forced_exit_total": 3
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.03412624136981368,
+      "per_fold_excess_diff": [
+       0.0036039040040652948,
+       0.00831510208018349,
+       0.009937204759918328,
+       0.1452310717060762,
+       0.0007031169055509157
+      ],
+      "arithmetic_diff": 0.16779039945579421
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.010644166472870809,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.03412624136981368,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.104991121312908,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.0705937366033344,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "PE_TTM/B": {
+     "dynamic_annual_net_excess": [
+      -0.039111053074796454,
+      0.009796807849240974,
+      0.1450184218081667,
+      0.13945526035639366,
+      -0.130543306733798
+     ],
+     "hold_annual_net_excess": [
+      0.0376068373467735,
+      0.009796807849240974,
+      0.15003938860731547,
+      -0.09668464598706084,
+      -0.1312464236393489
+     ],
+     "dynamic": {
+      "arithmetic": 0.1246161302052069,
+      "geometric": 0.10068968859616412,
+      "annualized": 0.019372655643177028,
+      "total_return_by_fold": [
+       0.06640711287143164,
+       -0.10927056248873024,
+       0.1093068845026941,
+       0.2655627801083922,
+       0.08370827356114252
+      ],
+      "active_ir_by_fold": [
+       -0.3601717905294466,
+       0.03308535928400949,
+       1.099434289739326,
+       0.4851948523288458,
+       -0.9180250588640849
+      ],
+      "turnover_mean": 0.0059040545013471415,
+      "cost_fraction_sum_total": 0.009822032257598817,
+      "invested_ratio_target_mean": 0.8267631441461157,
+      "suppressed_min_trade_total": 325,
+      "suppressed_threshold_total": 719,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.030488035823079795,
+      "geometric": -0.05438243417603961,
+      "annualized": -0.011121109346918567,
+      "turnover_mean": 0.005354804433980082,
+      "cost_fraction_sum_total": 0.009207787519976657,
+      "invested_ratio_target_mean": 0.6939043139079566,
+      "hold_forced_exit_total": 1
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.030493764990095595,
+      "per_fold_excess_diff": [
+       -0.07671789042156996,
+       0.0,
+       -0.005020966799148763,
+       0.2361399063434545,
+       0.0007031169055509157
+      ],
+      "arithmetic_diff": 0.1551041660282867
+     },
+     "screen_descriptive": {
+      "passed": true,
+      "n_positive_years": 3,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": true,
+      "median_net_excess": 0.009796807849240974,
+      "condition_ii_median_positive": true,
+      "dynamic_minus_hold_annualized": 0.030493764990095595,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.1450184218081667,
+      "ex_minus_max_year": {
+       "n_positive_years": 2,
+       "median_net_excess": -0.01465712261277774,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "REVENUE_YOY/A": {
+     "dynamic_annual_net_excess": [
+      -0.11099478397512796,
+      0.030036872805378367,
+      -0.07954079717904183,
+      -0.09428195399288197,
+      -0.028615751430862923
+     ],
+     "hold_annual_net_excess": [
+      -0.11099478397512796,
+      0.02988964554157092,
+      -0.08011117398835998,
+      -0.13396073589811064,
+      -0.04199060831332402
+     ],
+     "dynamic": {
+      "arithmetic": -0.2833964137725363,
+      "geometric": -0.25844101249190143,
+      "annualized": -0.05804720186157253,
+      "total_return_by_fold": [
+       -0.01337039125862316,
+       -0.09141704826345709,
+       -0.10824864373735099,
+       0.0059570464755169805,
+       0.210752824303168
+      ],
+      "active_ir_by_fold": [
+       -1.4135860632698165,
+       0.14667490665673538,
+       -1.0152605050635013,
+       -0.8086605935277167,
+       -0.37870476879873693
+      ],
+      "turnover_mean": 0.005306110523225609,
+      "cost_fraction_sum_total": 0.006466199025666667,
+      "invested_ratio_target_mean": 0.4751482234982641,
+      "suppressed_min_trade_total": 1012,
+      "suppressed_threshold_total": 134,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.3371676566333517,
+      "geometric": -0.3012244619163257,
+      "annualized": -0.06917607239301515,
+      "turnover_mean": 0.005242682973400535,
+      "cost_fraction_sum_total": 0.006832300719163008,
+      "invested_ratio_target_mean": 0.4027183147715768,
+      "hold_forced_exit_total": 4
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.011128870531442625,
+      "per_fold_excess_diff": [
+       0.0,
+       0.00014722726380744788,
+       0.0005703768093181516,
+       0.039678781905228666,
+       0.013374856882461095
+      ],
+      "arithmetic_diff": 0.05377124286081536
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.07954079717904183,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.011128870531442625,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.030036872805378367,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.0869113755859619,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "REVENUE_YOY/B": {
+     "dynamic_annual_net_excess": [
+      -0.11099478397512796,
+      0.030036872805378367,
+      -0.07954079717904183,
+      -0.07544758670958296,
+      -0.0637491912240935
+     ],
+     "hold_annual_net_excess": [
+      -0.11099478397512796,
+      0.02988964554157092,
+      -0.08011117398835998,
+      -0.11807520925848747,
+      -0.06391208409252813
+     ],
+     "dynamic": {
+      "arithmetic": -0.2996954862824679,
+      "geometric": -0.2703990893832533,
+      "annualized": -0.061104897952586223,
+      "total_return_by_fold": [
+       -0.01337039125862316,
+       -0.09141704826345709,
+       -0.10824864373735099,
+       0.02687587940378755,
+       0.1669617997731756
+      ],
+      "active_ir_by_fold": [
+       -1.4135860632698165,
+       0.14667490665673538,
+       -1.0152605050635013,
+       -0.8631785660967479,
+       -0.8769441865640238
+      ],
+      "turnover_mean": 0.005192316633292601,
+      "cost_fraction_sum_total": 0.005508974370366293,
+      "invested_ratio_target_mean": 0.4940958131524925,
+      "suppressed_min_trade_total": 953,
+      "suppressed_threshold_total": 160,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.34320360577293263,
+      "geometric": -0.304689906353125,
+      "annualized": -0.0701011581945662,
+      "turnover_mean": 0.00523615108005429,
+      "cost_fraction_sum_total": 0.006488336050958628,
+      "invested_ratio_target_mean": 0.38233313293350146,
+      "hold_forced_exit_total": 3
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.00899626024197997,
+      "per_fold_excess_diff": [
+       0.0,
+       0.00014722726380744788,
+       0.0005703768093181516,
+       0.04262762254890451,
+       0.00016289286843462758
+      ],
+      "arithmetic_diff": 0.043508119490464736
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.07544758670958296,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.00899626024197997,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.030036872805378367,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.0774941919443124,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "ROE/A": {
+     "dynamic_annual_net_excess": [
+      -0.21596102614278445,
+      -0.00960443344322126,
+      -0.09703348303916548,
+      -0.09612372724614882,
+      -0.012530638907828018
+     ],
+     "hold_annual_net_excess": [
+      -0.21596102614278445,
+      -0.024611897700444585,
+      -0.09673769316293457,
+      -0.14589638942102745,
+      -0.04265910998461209
+     ],
+     "dynamic": {
+      "arithmetic": -0.431253308779148,
+      "geometric": -0.37417832434467035,
+      "annualized": -0.08947867812775889,
+      "total_return_by_fold": [
+       -0.12986329880758185,
+       -0.12638416059988145,
+       -0.1251957569745641,
+       0.0039114377010183166,
+       0.23080163140003607
+      ],
+      "active_ir_by_fold": [
+       -2.439569158208882,
+       -0.14252937023632864,
+       -1.206905133918787,
+       -1.0034693863398967,
+       -0.09584046735936798
+      ],
+      "turnover_mean": 0.005477761372951131,
+      "cost_fraction_sum_total": 0.007010014785355482,
+      "invested_ratio_target_mean": 0.5475188435805665,
+      "suppressed_min_trade_total": 879,
+      "suppressed_threshold_total": 247,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.5258661164118031,
+      "geometric": -0.43518508104925957,
+      "annualized": -0.10796636143355487,
+      "turnover_mean": 0.005493520941330223,
+      "cost_fraction_sum_total": 0.007939907028118882,
+      "invested_ratio_target_mean": 0.4350743113076382,
+      "hold_forced_exit_total": 4
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.018487683305795977,
+      "per_fold_excess_diff": [
+       0.0,
+       0.015007464257223324,
+       -0.0002957898762309119,
+       0.049772662174878635,
+       0.03012847107678407
+      ],
+      "arithmetic_diff": 0.09461280763265512
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 0,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.09612372724614882,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.018487683305795977,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": -0.00960443344322126,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.09657860514265715,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "ROE/B": {
+     "dynamic_annual_net_excess": [
+      -0.21596102614278445,
+      0.06449786415219338,
+      -0.09703348303916548,
+      -0.11812576376072914,
+      -0.21909838356927946
+     ],
+     "hold_annual_net_excess": [
+      -0.21596102614278445,
+      0.06449786415219338,
+      -0.09673769316293457,
+      -0.10491372870406679,
+      -0.22002322393447216
+     ],
+     "dynamic": {
+      "arithmetic": -0.5857207923597652,
+      "geometric": -0.48101229517675426,
+      "annualized": -0.12293574041291955,
+      "total_return_by_fold": [
+       -0.12986329880758185,
+       -0.06101942846526498,
+       -0.1251957569745641,
+       -0.020525641549227536,
+       -0.026668551616821135
+      ],
+      "active_ir_by_fold": [
+       -2.439569158208882,
+       0.3364459682447712,
+       -1.206905133918787,
+       -0.7471832212074824,
+       -1.9406433041152427
+      ],
+      "turnover_mean": 0.004758139210652192,
+      "cost_fraction_sum_total": 0.0032246285843774564,
+      "invested_ratio_target_mean": 0.2749923660453108,
+      "suppressed_min_trade_total": 1093,
+      "suppressed_threshold_total": 77,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.5731378077920646,
+      "geometric": -0.473688449494141,
+      "annualized": -0.1204742067400727,
+      "turnover_mean": 0.004836324626502038,
+      "cost_fraction_sum_total": 0.0037638475024079957,
+      "invested_ratio_target_mean": 0.23520941287805502,
+      "hold_forced_exit_total": 3
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": -0.0024615336728468495,
+      "per_fold_excess_diff": [
+       0.0,
+       0.0,
+       -0.0002957898762309119,
+       -0.013212035056662352,
+       0.0009248403651926917
+      ],
+      "arithmetic_diff": -0.012582984567700572
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.11812576376072914,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": -0.0024615336728468495,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": false,
+      "excluded_year_excess": 0.06449786415219338,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.1670433949517568,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律；§5 判定单位仅 (域, 主组合, 规则)，单因子行是描述性参考",
+     "is_screen_unit": false
+    },
+    "combo:slow_all5/A": {
+     "dynamic_annual_net_excess": [
+      -0.17113608685690573,
+      0.05060703923324206,
+      -0.0410784208783056,
+      -0.057167090715069646,
+      -0.06692012230387756
+     ],
+     "hold_annual_net_excess": [
+      -0.17113608685690573,
+      0.046481182636302965,
+      -0.03984104032442337,
+      -0.16290153105845318,
+      -0.0869339222590636
+     ],
+     "dynamic": {
+      "arithmetic": -0.2856946815209165,
+      "geometric": -0.2653843319157907,
+      "annualized": -0.05981777245794151,
+      "total_return_by_fold": [
+       -0.08011599529092273,
+       -0.07327235555955658,
+       -0.07098585563533721,
+       0.04717954216044595,
+       0.16300948763081347
+      ],
+      "active_ir_by_fold": [
+       -1.63350760416812,
+       0.29417166982453474,
+       -0.5081272721725176,
+       -0.5270199205756747,
+       -0.9007524598909105
+      ],
+      "turnover_mean": 0.005519969621780335,
+      "cost_fraction_sum_total": 0.006415536626668433,
+      "invested_ratio_target_mean": 0.418022174602336,
+      "suppressed_min_trade_total": 847,
+      "suppressed_threshold_total": 183,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.4143313978625429,
+      "geometric": -0.3634440968908147,
+      "annualized": -0.08637639876081082,
+      "turnover_mean": 0.005556469477351999,
+      "cost_fraction_sum_total": 0.00696785960889287,
+      "invested_ratio_target_mean": 0.3054457409431426,
+      "hold_forced_exit_total": 4
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": 0.026558626302869315,
+      "per_fold_excess_diff": [
+       0.0,
+       0.004125856596939093,
+       -0.001237380553882228,
+       0.10573444034338353,
+       0.02001379995518604
+      ],
+      "arithmetic_diff": 0.12863671634162643
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.057167090715069646,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.026558626302869315,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.05060703923324206,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.0620436065094736,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律",
+     "is_screen_unit": true
+    },
+    "combo:slow_all5/B": {
+     "dynamic_annual_net_excess": [
+      -0.07495645977841991,
+      0.013067467762025498,
+      -0.04098477438089887,
+      -0.06187716155980438,
+      -0.06882350808461402
+     ],
+     "hold_annual_net_excess": [
+      -0.045372108527084065,
+      0.013067467762025498,
+      -0.045679752202584356,
+      -0.10259041174306371,
+      -0.003936146504759597
+     ],
+     "dynamic": {
+      "arithmetic": -0.23357443604171169,
+      "geometric": -0.2149130497888374,
+      "annualized": -0.04723992110791497,
+      "total_return_by_fold": [
+       0.026625411984108505,
+       -0.10638555330494182,
+       -0.07089512984236801,
+       0.041948191215692265,
+       0.16063706939039024
+      ],
+      "active_ir_by_fold": [
+       -0.8442326009835459,
+       0.04249197833372307,
+       -0.52730120821787,
+       -0.5692205824811032,
+       -0.7942851116110088
+      ],
+      "turnover_mean": 0.005744783084241609,
+      "cost_fraction_sum_total": 0.00724934995260917,
+      "invested_ratio_target_mean": 0.586791074125545,
+      "suppressed_min_trade_total": 766,
+      "suppressed_threshold_total": 286,
+      "hold_forced_exit_total": 0
+     },
+     "hold": {
+      "arithmetic": -0.18451095121546623,
+      "geometric": -0.17501792550016382,
+      "annualized": -0.03774782274738775,
+      "turnover_mean": 0.005057307980812001,
+      "cost_fraction_sum_total": 0.0071074375550273985,
+      "invested_ratio_target_mean": 0.5277769570921411,
+      "hold_forced_exit_total": 3
+     },
+     "dynamic_minus_hold": {
+      "annualized_canonical_iii": -0.009492098360527224,
+      "per_fold_excess_diff": [
+       -0.02958435125133585,
+       0.0,
+       0.0046949778216854865,
+       0.04071325018325933,
+       -0.06488736157985442
+      ],
+      "arithmetic_diff": -0.04906348482624545
+     },
+     "screen_descriptive": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.06187716155980438,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": -0.009492098360527224,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": false,
+      "excluded_year_excess": 0.013067467762025498,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.0653503348222092,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "note": "研发资源分配门槛，非统计显著性证明也非市场规律",
+     "is_screen_unit": true
+    }
+   },
+   "controls": {
+    "2021-12-31": {
+     "benchmark_total_return": 0.10981307078604763,
+     "cash_excess_return": -0.09894735760164575,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    },
+    "2022-12-31": {
+     "benchmark_total_return": -0.11791220710191386,
+     "cash_excess_return": 0.13367400393844586,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    },
+    "2023-12-31": {
+     "benchmark_total_return": -0.031188613759661865,
+     "cash_excess_return": 0.03219265814029648,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    },
+    "2024-12-31": {
+     "benchmark_total_return": 0.110673515792586,
+     "cash_excess_return": -0.09964540814103096,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    },
+    "2025-12-31": {
+     "benchmark_total_return": 0.24642007124021648,
+     "cash_excess_return": -0.19770226501168497,
+     "cash_total_return": 0.0,
+     "cash_invested_ratio_target_mean": 0.0
+    }
+   },
+   "folds": [
+    "2021-12-31",
+    "2022-12-31",
+    "2023-12-31",
+    "2024-12-31",
+    "2025-12-31"
+   ]
+  }
+ },
+ "q5_reexecuted": {
+  "medium": {
+   "main_combo": "combo:all3",
+   "screen_adjudication": {
+    "A": {
+     "judgment_unit": {
+      "domain": "medium",
+      "main_combo": "combo:all3",
+      "rule_letter": "A",
+      "rule_id": "reference_return"
+     },
+     "basis": "1x account rows, reference grid, concatenated test years 2021-2025 (D:\\minequant\\AlphaGPT\\reports\\wp18\\medium\\account_report.json)",
+     "conditions_i_ii_leg": "dynamic",
+     "conditions_i_ii_leg_reading": "§5 names no mode for (i)/(ii) and the judgment unit is mode-free; the annual net-excess series is the main strategy (dynamic) leg; the hold leg's numbers are recorded as audit fields, never merged into the verdict",
+     "annual_net_excess_dynamic": [
+      -0.05459821035260293,
+      0.0033779984720001544,
+      0.02417094301199052,
+      -0.006401515528183466,
+      -0.06562490278530131
+     ],
+     "annual_net_excess_hold_audit": [
+      -0.08784311227443775,
+      -0.04718223261641463,
+      0.11860009447827946,
+      -0.13308436942971624,
+      -0.09317488677060415
+     ],
+     "dynamic_cumulative_net_excess": -0.09804344385867914,
+     "hold_cumulative_net_excess": -0.23571627322297928,
+     "screen": {
+      "passed": false,
+      "n_positive_years": 2,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.006401515528183466,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.031917267567697194,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.02417094301199052,
+      "ex_minus_max_year": {
+       "n_positive_years": 1,
+       "median_net_excess": -0.030499862940393196,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律",
+     "passed": false,
+     "failed_conditions": [
+      "i_3_of_5_positive",
+      "ii_median_positive"
+     ],
+     "stress_rows_authorized": 0,
+     "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive not met — no 0x/2x stress rows for this rule (研发资源分配门槛)"
+    },
+    "B": {
+     "judgment_unit": {
+      "domain": "medium",
+      "main_combo": "combo:all3",
+      "rule_letter": "B",
+      "rule_id": "label_ic"
+     },
+     "basis": "1x account rows, reference grid, concatenated test years 2021-2025 (D:\\minequant\\AlphaGPT\\reports\\wp18\\medium\\account_report.json)",
+     "conditions_i_ii_leg": "dynamic",
+     "conditions_i_ii_leg_reading": "§5 names no mode for (i)/(ii) and the judgment unit is mode-free; the annual net-excess series is the main strategy (dynamic) leg; the hold leg's numbers are recorded as audit fields, never merged into the verdict",
+     "annual_net_excess_dynamic": [
+      0.010919273307907096,
+      0.09215545935439695,
+      0.002315287216983597,
+      -0.0749899054149894,
+      -0.06031277357104625
+     ],
+     "annual_net_excess_hold_audit": [
+      -0.0002282957421216869,
+      0.13390178632824656,
+      0.08654431613349867,
+      -0.12967437650759095,
+      -0.15850141294895503
+     ],
+     "dynamic_cumulative_net_excess": -0.03808856560936613,
+     "hold_cumulative_net_excess": -0.09789126958715877,
+     "screen": {
+      "passed": true,
+      "n_positive_years": 3,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": true,
+      "median_net_excess": 0.002315287216983597,
+      "condition_ii_median_positive": true,
+      "dynamic_minus_hold_annualized": 0.01265673415157631,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.09215545935439695,
+      "ex_minus_max_year": {
+       "n_positive_years": 2,
+       "median_net_excess": -0.028998743177031328,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律",
+     "passed": true,
+     "failed_conditions": [],
+     "stress_rows_authorized": 20,
+     "skip_reason": null
+    }
+   },
+   "row_count": 20,
+   "reexec": {
+    "B/dynamic/0x": {
+     "per_fold_excess": [
+      0.015162079596566347,
+      0.09475203240711605,
+      0.0018099682078198676,
+      -0.0741045403393491,
+      -0.056428320212612126
+     ],
+     "arithmetic": -0.018808780340458964,
+     "geometric": -0.02731247140420956,
+     "annualized": -0.00552316902973693,
+     "turnover_by_fold": [
+      0.012742930194711207,
+      0.006453986238017315,
+      0.010708640174190476,
+      0.006896908786476192,
+      0.013605794569125003
+     ],
+     "cost_fraction_sum_by_fold": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "invested_ratio_target_by_fold": [
+      0.5319487546948793,
+      0.4272139744671732,
+      0.6375138677646363,
+      0.45940331754223374,
+      0.33672930258236206
+     ],
+     "lotgap_l1_mean_due_by_fold": [
+      0.016054813155347836,
+      0.006721665949416672,
+      0.028435034842826102,
+      0.022545701620652173,
+      0.028284946105043483
+     ],
+     "suppressed_min_trade_total": 2050
+    },
+    "B/dynamic/2x": {
+     "per_fold_excess": [
+      0.009134353648997173,
+      0.09110124759464089,
+      0.0010102855751801254,
+      -0.07561142564891299,
+      -0.061720608159489876
+     ],
+     "arithmetic": -0.03608614698958468,
+     "geometric": -0.04404086007181729,
+     "annualized": -0.0089675708266298,
+     "turnover_by_fold": [
+      0.01276074604313793,
+      0.006458323690329004,
+      0.009414812987277057,
+      0.006694136616471862,
+      0.013598488968586207
+     ],
+     "cost_fraction_sum_by_fold": [
+      0.00645015756349699,
+      0.0031945014664864543,
+      0.004410879843601038,
+      0.0025763393954065772,
+      0.006289320909017928
+     ],
+     "invested_ratio_target_by_fold": [
+      0.5338746382016294,
+      0.4284188575722987,
+      0.6240426860853118,
+      0.45524800263968396,
+      0.3366007526683922
+     ],
+     "lotgap_l1_mean_due_by_fold": [
+      0.015969786281565222,
+      0.00668539167229167,
+      0.016489146790391308,
+      0.022415156371565218,
+      0.028184878472565223
+     ],
+     "suppressed_min_trade_total": 2108
+    },
+    "B/hold/0x": {
+     "per_fold_excess": [
+      0.0013251783207997025,
+      0.13542146257218746,
+      0.08846544922862964,
+      -0.12748772170828704,
+      -0.15762127562909523
+     ],
+     "arithmetic": -0.05989690721576546,
+     "geometric": -0.0904515865930825,
+     "annualized": -0.018782773638211903,
+     "turnover_by_fold": [
+      0.004837234649172414,
+      0.004329004329004329,
+      0.005307765324549784,
+      0.006949835003939394,
+      0.004480435286896551
+     ],
+     "cost_fraction_sum_by_fold": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "invested_ratio_target_by_fold": [
+      0.8444507534616983,
+      0.8428145639720693,
+      0.6217858101493983,
+      0.030914899536069265,
+      0.6047095329520042
+     ],
+     "lotgap_l1_mean_due_by_fold": [
+      0.004186135338000002,
+      0.006528416798166666,
+      0.00872602665069566,
+      0.016452784258,
+      0.017225027571999996
+     ],
+     "suppressed_min_trade_total": 0
+    },
+    "B/hold/2x": {
+     "per_fold_excess": [
+      -0.0007539263053271128,
+      0.13341035094627718,
+      0.08584780944879311,
+      -0.13049630927753986,
+      -0.15878171822091824
+     ],
+     "arithmetic": -0.07077379340871492,
+     "geometric": -0.10048436439193631,
+     "annualized": -0.020957052468028592,
+     "turnover_by_fold": [
+      0.004838219717456896,
+      0.004329004329004329,
+      0.005309484700757576,
+      0.006953622834233767,
+      0.0044806455003060346
+     ],
+     "cost_fraction_sum_by_fold": [
+      0.0023151973256722415,
+      0.0017602884015369415,
+      0.00240607969460928,
+      0.003391916245176642,
+      0.0014427448606365064
+     ],
+     "invested_ratio_target_by_fold": [
+      0.8461438525011551,
+      0.8443049507694806,
+      0.6230806668200217,
+      0.03095246153061905,
+      0.6054785997595087
+     ],
+     "lotgap_l1_mean_due_by_fold": [
+      0.004118896197913045,
+      0.006466399618125001,
+      0.008672017536000009,
+      0.01641540381191305,
+      0.017190428744869566
+     ],
+     "suppressed_min_trade_total": 0
+    }
+   }
+  },
+  "slow": {
+   "main_combo": "combo:slow_all5",
+   "screen_adjudication": {
+    "A": {
+     "judgment_unit": {
+      "domain": "slow",
+      "main_combo": "combo:slow_all5",
+      "rule_letter": "A",
+      "rule_id": "reference_return"
+     },
+     "basis": "1x account rows, reference grid, concatenated test years 2021-2025 (D:\\minequant\\AlphaGPT\\reports\\wp18\\slow\\account_report.json)",
+     "conditions_i_ii_leg": "dynamic",
+     "conditions_i_ii_leg_reading": "§5 names no mode for (i)/(ii) and the judgment unit is mode-free; the annual net-excess series is the main strategy (dynamic) leg; the hold leg's numbers are recorded as audit fields, never merged into the verdict",
+     "annual_net_excess_dynamic": [
+      -0.17113608685690573,
+      0.05060703923324206,
+      -0.0410784208783056,
+      -0.057167090715069646,
+      -0.06692012230387756
+     ],
+     "annual_net_excess_hold_audit": [
+      -0.17113608685690573,
+      0.046481182636302965,
+      -0.03984104032442337,
+      -0.16290153105845318,
+      -0.0869339222590636
+     ],
+     "dynamic_cumulative_net_excess": -0.2653843319157907,
+     "hold_cumulative_net_excess": -0.3634440968908147,
+     "screen": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.057167090715069646,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": 0.026558626302869315,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": true,
+      "excluded_year_excess": 0.05060703923324206,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.0620436065094736,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律",
+     "passed": false,
+     "failed_conditions": [
+      "i_3_of_5_positive",
+      "ii_median_positive"
+     ],
+     "stress_rows_authorized": 0,
+     "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive not met — no 0x/2x stress rows for this rule (研发资源分配门槛)"
+    },
+    "B": {
+     "judgment_unit": {
+      "domain": "slow",
+      "main_combo": "combo:slow_all5",
+      "rule_letter": "B",
+      "rule_id": "label_ic"
+     },
+     "basis": "1x account rows, reference grid, concatenated test years 2021-2025 (D:\\minequant\\AlphaGPT\\reports\\wp18\\slow\\account_report.json)",
+     "conditions_i_ii_leg": "dynamic",
+     "conditions_i_ii_leg_reading": "§5 names no mode for (i)/(ii) and the judgment unit is mode-free; the annual net-excess series is the main strategy (dynamic) leg; the hold leg's numbers are recorded as audit fields, never merged into the verdict",
+     "annual_net_excess_dynamic": [
+      -0.07495645977841991,
+      0.013067467762025498,
+      -0.04098477438089887,
+      -0.06187716155980438,
+      -0.06882350808461402
+     ],
+     "annual_net_excess_hold_audit": [
+      -0.045372108527084065,
+      0.013067467762025498,
+      -0.045679752202584356,
+      -0.10259041174306371,
+      -0.003936146504759597
+     ],
+     "dynamic_cumulative_net_excess": -0.2149130497888374,
+     "hold_cumulative_net_excess": -0.17501792550016382,
+     "screen": {
+      "passed": false,
+      "n_positive_years": 1,
+      "min_positive_years": 3,
+      "condition_i_3_of_5_positive": false,
+      "median_net_excess": -0.06187716155980438,
+      "condition_ii_median_positive": false,
+      "dynamic_minus_hold_annualized": -0.009492098360527224,
+      "dynamic_minus_hold_threshold": 0.005,
+      "condition_iii_dynamic_minus_hold_50bp": false,
+      "excluded_year_excess": 0.013067467762025498,
+      "ex_minus_max_year": {
+       "n_positive_years": 0,
+       "median_net_excess": -0.0653503348222092,
+       "n_years": 4
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+     },
+     "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律",
+     "passed": false,
+     "failed_conditions": [
+      "i_3_of_5_positive",
+      "ii_median_positive",
+      "iii_dynamic_minus_hold_50bp"
+     ],
+     "stress_rows_authorized": 0,
+     "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive+iii_dynamic_minus_hold_50bp not met — no 0x/2x stress rows for this rule (研发资源分配门槛)"
+    }
+   },
+   "row_count": 0,
+   "reexec": {}
+  }
+ }
+}

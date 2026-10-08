@@ -43,6 +43,7 @@ import hashlib
 import json
 from collections import Counter
 from pathlib import Path
+import pytest
 
 from ashare_model.r01_baseline import R01_COMBO_ARMS
 from ashare_model.research_domain import tier_restricted_features
@@ -55,6 +56,7 @@ _REPORT = _SLOW_DIR / "r01_baseline_report.json"
 _RUN_META = _SLOW_DIR / "r01_baseline_run_meta.json"
 _ERRATUM_MD = _SLOW_DIR / "ERRATUM.md"
 _ERRATA_JSON = _SLOW_DIR / "errata.json"
+pytestmark = pytest.mark.skipif(not _REPORT.is_file(), reason="optional frozen historical run archive absent")
 
 #: F1 (DESIGN §0): the audited report bytes.  The run_meta digest was
 #: measured in the same read-only session (2209 bytes) and is pinned so

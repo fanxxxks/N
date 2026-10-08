@@ -1,0 +1,345 @@
+{
+  "version": 1,
+  "historical_research": true,
+  "dataset_id": "d36024cd1b197a8edcf976b2d950b3506bb0fae022f121d6aef06f2a281cde55",
+  "publication_id": 7,
+  "files": {
+    "primary": {
+      "path": "D:\\minequant\\AlphaGPT-task1\\data\\task2_reference_20261007_clean\\ashare.duckdb",
+      "bytes": 950546432,
+      "sha256": "c13f91f526d6a79d46a90455a4b05c1acb088445ad057465705be7fc039c7529",
+      "wal_exists": false,
+      "cloud_relative_path": "input/ashare.duckdb",
+      "member_dataset_id": "5a6fc8921b2f4940755de378bc475c6345c28ae4590b41ef359a9348fc670dcc"
+    },
+    "v2": {
+      "path": "D:\\minequant\\AlphaGPT\\data\\ashare_v2.duckdb",
+      "bytes": 8135127040,
+      "sha256": "f96e9813861312335a74996e4fa58dad875f9a60a9bd4a39388f94ecfb98dc10",
+      "wal_exists": false,
+      "cloud_relative_path": "input/ashare_v2.duckdb",
+      "member_dataset_id": "b1237612eae21c026ebdc5c17f49e582cdbcaa5fe2f08d1daaaa09147aaef32a"
+    }
+  },
+  "source_cutoff": "20260916",
+  "campaign_cutoff": "20251231",
+  "gates": {
+    "mode": "formal",
+    "ok": true,
+    "degraded": false,
+    "checks": [
+      {
+        "name": "G1 historical member intervals per configured index",
+        "ok": true,
+        "detail": "rows per index: {'000300.SH': 817, '000905.SH': 1757}; snapshot-shaped=False"
+      },
+      {
+        "name": "G2 valid list_date for all participating stocks",
+        "ok": true,
+        "detail": "missing stock rows: 0, null list_date: 0"
+      },
+      {
+        "name": "G3 open calendar covers the daily-bar window",
+        "ok": true,
+        "detail": "calendar 19901219..20261231 vs daily 20150105..20260916"
+      },
+      {
+        "name": "G4 no duplicate/overlapping intervals",
+        "ok": true,
+        "detail": "clean"
+      },
+      {
+        "name": "G5 strict-mode PIT universe contract",
+        "ok": true,
+        "detail": "mode=strict, constituent_rows=2574, stock_rows=5548, open_sessions=8797"
+      },
+      {
+        "name": "G6 >= 100 eligible stocks per major window",
+        "ok": true,
+        "detail": "min eligible per year: 2015:473, 2016:737, 2017:747, 2018:737, 2019:792, 2020:795, 2021:795, 2022:796, 2023:797, 2024:796, 2025:794, 2026:795"
+      },
+      {
+        "name": "G7 every PIT member interval has daily bars",
+        "ok": true,
+        "detail": "2426 observed intervals, 0 zero-bar, median coverage 100.00%; zero-bar codes: none"
+      },
+      {
+        "name": "G8 daily bars fresh within the open-session tolerance",
+        "ok": true,
+        "detail": "daily 20260916 vs reference 20251231, lag=0 <= N=3, today=20260101; basis=historical_snapshot, data_cutoff=20251231"
+      }
+    ],
+    "status": {
+      "mode": "strict",
+      "strict": true,
+      "degraded": false,
+      "membership_source": "constituents_pit_intervals",
+      "session_source": "trade_calendar.is_open=True",
+      "warnings": [],
+      "constituent_rows": 2574,
+      "stock_rows": 5548,
+      "open_sessions": 8797
+    },
+    "warnings": []
+  },
+  "source_eligibility": [
+    {
+      "spec_id": "historical_2021",
+      "ok": true,
+      "checks": {
+        "daily_bar_raw": {
+          "source": "daily_bar_raw",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_bar_raw=0; daily_adj_factor=0; daily_basic_pit=0; today=20260101)"
+        },
+        "daily_price_limit": {
+          "source": "daily_price_limit",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_price_limit=0; today=20260101)"
+        },
+        "margin_detail_pit": {
+          "source": "margin_detail_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "dataset_manifest": {
+          "source": "dataset_manifest",
+          "required": true,
+          "ok": true,
+          "detail": "manifest b1237612eae2… verified (fast)"
+        },
+        "industry_membership_pit": {
+          "source": "industry_membership_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "industry_index": {
+          "source": "industry_index",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "financial_version_tables": {
+          "source": "financial_version_tables",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        }
+      },
+      "reasons": []
+    },
+    {
+      "spec_id": "historical_2022",
+      "ok": true,
+      "checks": {
+        "daily_bar_raw": {
+          "source": "daily_bar_raw",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_bar_raw=0; daily_adj_factor=0; daily_basic_pit=0; today=20260101)"
+        },
+        "daily_price_limit": {
+          "source": "daily_price_limit",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_price_limit=0; today=20260101)"
+        },
+        "margin_detail_pit": {
+          "source": "margin_detail_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "dataset_manifest": {
+          "source": "dataset_manifest",
+          "required": true,
+          "ok": true,
+          "detail": "manifest b1237612eae2… verified (fast)"
+        },
+        "industry_membership_pit": {
+          "source": "industry_membership_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "industry_index": {
+          "source": "industry_index",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "financial_version_tables": {
+          "source": "financial_version_tables",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        }
+      },
+      "reasons": []
+    },
+    {
+      "spec_id": "historical_2023",
+      "ok": true,
+      "checks": {
+        "daily_bar_raw": {
+          "source": "daily_bar_raw",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_bar_raw=0; daily_adj_factor=0; daily_basic_pit=0; today=20260101)"
+        },
+        "daily_price_limit": {
+          "source": "daily_price_limit",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_price_limit=0; today=20260101)"
+        },
+        "margin_detail_pit": {
+          "source": "margin_detail_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "dataset_manifest": {
+          "source": "dataset_manifest",
+          "required": true,
+          "ok": true,
+          "detail": "manifest b1237612eae2… verified (fast)"
+        },
+        "industry_membership_pit": {
+          "source": "industry_membership_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "industry_index": {
+          "source": "industry_index",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "financial_version_tables": {
+          "source": "financial_version_tables",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        }
+      },
+      "reasons": []
+    },
+    {
+      "spec_id": "historical_2024",
+      "ok": true,
+      "checks": {
+        "daily_bar_raw": {
+          "source": "daily_bar_raw",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_bar_raw=0; daily_adj_factor=0; daily_basic_pit=0; today=20260101)"
+        },
+        "daily_price_limit": {
+          "source": "daily_price_limit",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_price_limit=0; today=20260101)"
+        },
+        "margin_detail_pit": {
+          "source": "margin_detail_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "dataset_manifest": {
+          "source": "dataset_manifest",
+          "required": true,
+          "ok": true,
+          "detail": "manifest b1237612eae2… verified (fast)"
+        },
+        "industry_membership_pit": {
+          "source": "industry_membership_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "industry_index": {
+          "source": "industry_index",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "financial_version_tables": {
+          "source": "financial_version_tables",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        }
+      },
+      "reasons": []
+    },
+    {
+      "spec_id": "historical_2025",
+      "ok": true,
+      "checks": {
+        "daily_bar_raw": {
+          "source": "daily_bar_raw",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_bar_raw=0; daily_adj_factor=0; daily_basic_pit=0; today=20260101)"
+        },
+        "daily_price_limit": {
+          "source": "daily_price_limit",
+          "required": true,
+          "ok": true,
+          "detail": "lag 0 <= 3 sessions (daily_price_limit=0; today=20260101)"
+        },
+        "margin_detail_pit": {
+          "source": "margin_detail_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "dataset_manifest": {
+          "source": "dataset_manifest",
+          "required": true,
+          "ok": true,
+          "detail": "manifest b1237612eae2… verified (fast)"
+        },
+        "industry_membership_pit": {
+          "source": "industry_membership_pit",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "industry_index": {
+          "source": "industry_index",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        },
+        "financial_version_tables": {
+          "source": "financial_version_tables",
+          "required": false,
+          "ok": true,
+          "detail": "not required by this factor set (not evaluated; p17 §12 non-goal: no global freshness gate)"
+        }
+      },
+      "reasons": []
+    }
+  ],
+  "full_uncached_confirmation_local_seconds": 147.53707190000569,
+  "additional_uploads": [
+    {
+      "local_path": "D:/minequant/AlphaGPT-cloud.bundle",
+      "cloud_relative_path": "AlphaGPT-cloud.bundle",
+      "kind": "local Git bundle; code only, no selected database; alternative to future push/clone"
+    },
+    {
+      "local_path": "D:/minequant/AlphaGPT-cloud.bundle.sha256",
+      "cloud_relative_path": "AlphaGPT-cloud.bundle.sha256",
+      "kind": "bundle checksum receipt"
+    }
+  ]
+}

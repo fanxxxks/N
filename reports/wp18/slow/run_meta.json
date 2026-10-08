@@ -1,0 +1,36 @@
+{
+  "run_id": "wp18-c2-20260927",
+  "stages": [
+    "S1",
+    "S2",
+    "S3",
+    "C2"
+  ],
+  "row_count": 240,
+  "direction_rows": 50,
+  "summary_rows": 60,
+  "failed_rows": 0,
+  "stage1_failed_keys": [],
+  "factor_cache_outcome": "not_applicable(no stress row executed)",
+  "elapsed_sec": 0.1,
+  "algorithm_search_budget": 0,
+  "development_validation": "开发验证（development validation, 2021-2025 测试窗）",
+  "account_rows": 130,
+  "s3_failed_keys": [],
+  "s3_elapsed_sec": 470.1,
+  "formal_row_accounting": "cumulative formal evaluation rows after S3 = 220 <= 300 (90 M3 + 130 S3; C1/C2 conditional stress unrun)",
+  "stress_rows": 0,
+  "stress_failed_keys": [],
+  "stress_screen": {
+    "A": {
+      "passed": false,
+      "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive not met — no 0x/2x stress rows for this rule (研发资源分配门槛)"
+    },
+    "B": {
+      "passed": false,
+      "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive+iii_dynamic_minus_hold_50bp not met — no 0x/2x stress rows for this rule (研发资源分配门槛)"
+    }
+  },
+  "c2_elapsed_sec": 0.1,
+  "formal_row_total": 240
+}

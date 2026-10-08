@@ -1,0 +1,18 @@
+{
+  "AlphaGPT": {
+    "scope": "all paths fingerprinted at start, tracked and untracked nonignored; Windows nul skipped",
+    "checked_paths": 1921,
+    "missing_paths": [],
+    "changed_paths": [],
+    "head": "dbaf7296a41ce9813ae736c0e4879d54d9488b0f",
+    "branch": "codex/b04-load-cache-performance"
+  },
+  "AlphaGPT-task1": {
+    "scope": "all paths fingerprinted at start, tracked and untracked nonignored; Windows nul skipped",
+    "checked_paths": 666,
+    "missing_paths": [],
+    "changed_paths": [],
+    "head": "dc809e53465a3d12e5741246d148ab477e325826",
+    "branch": "codex/task61-turnover-budget-diagnostic"
+  }
+}

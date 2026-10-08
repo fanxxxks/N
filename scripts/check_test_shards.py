@@ -94,6 +94,7 @@ SHARDS: dict[str, tuple[str, ...]] = {
     ),
     # Artifacts/protocol/admission/identity/registries + training split.
     "shard-model-2": (
+        "test_cloud_search.py",
         "test_admission.py",
         "test_artifact_schemas.py",
         "test_artifact_versions.py",

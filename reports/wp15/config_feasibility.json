@@ -1,0 +1,29 @@
+{
+  "work_package": "WP15",
+  "topic": "W6 configuration feasibility — can one ordinary replacement pair complete in a single session?",
+  "contract": "reports/wp15/FROZEN_EXPECTATIONS.md §5 (frozen 2026-09-22)",
+  "criterion": {
+    "formula": "sell_min + buy_min <= turnover_budget * equity",
+    "pair_feasible_iff": "2 * min_trade_amount <= turnover_budget * E",
+    "single_leg_feasible_iff": "min_trade_amount <= turnover_budget * E",
+    "scope": "upper-bound NECESSARY condition ignoring lot granularity and fees; lots and fees can only tighten it (§5.1)"
+  },
+  "slow_reference_config": {
+    "config_path": "configs/r1_slow_ab.yaml",
+    "sources": {
+      "initial_capital": "configs/r1_slow_ab.yaml backtest.initial_capital (line 58)",
+      "min_trade_amount": "configs/r1_slow_ab.yaml backtest.min_trade_amount (line 63)",
+      "turnover_budget": "injected by protocol.domain slow_fundamental (ashare_domain.py:271) via ashare_data/config.py:939-940 (not written in the yaml)"
+    },
+    "initial_capital": 100000.0,
+    "min_trade_amount": 5000.0,
+    "turnover_budget": 0.05,
+    "pair_requirement_yuan": 10000.0,
+    "session_budget_yuan": 5000.0,
+    "substitution": "2 * 5000 = 10000 > 0.05 * 100000 = 5000",
+    "verdict": "INFEASIBLE: a single session can never complete one ordinary buy+sell pair under this configuration",
+    "boundary_note": "The single minimum leg 5,000 equals the ENTIRE session budget 5,000 — at most one minimum-sized single leg can ever execute per session, never a pair; the equality 2m = B_r would be feasible only in the idealization that ignores lots and fees (§5.2)"
+  },
+  "wording": "在该配置下测出的长期受限收益不能直接代表因子的信息质量：收益被执行可行性（换手预算与最低订单金额的结构性冲突）压制，而非由信号的信息含量决定。对此配置产出的任何收益结论，必须附带本可行性判定；要评估因子信息质量，需在满足 §5.1 判据的配置下重测，或明确声明收益为执行受限下界。",
+  "wording_source": "frozen verbatim §5.3 — report chapters quoting this verdict must adopt this wording"
+}

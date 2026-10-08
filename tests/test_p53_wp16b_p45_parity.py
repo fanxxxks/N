@@ -320,17 +320,16 @@ def test_p53_s3_fee_financing_affordable_scaling_and_cash_nonneg():
         signal, dict(raw), list(codes), list(dates),
         universe_mask=universe, rebalance_mask=mask, signal_range=lsr,
     )
-    # §2 S3 engine hand path (one affordability pass converges):
-    # 4995 shares per name -> a = (0.4995, 0.4995), c = 999/1e6,
-    # R_net = g - c = 6993/500000, cash stays +0.10 >= 0.
+    # P58 cash allocation: code-first buys 5000 shares, then remaining cash
+    # affords 4990. Fees are 99.90, net gain 1399.10, cash +0.10.
     np.testing.assert_allclose(
-        engine.buy_weights[0], [0.4995, 0.4995], atol=1e-12
+        engine.buy_weights[0], [0.5, 0.499], atol=1e-12
     )
     assert engine.cost_fractions[0] == pytest.approx(
         float(F(999, 1_000_000)), abs=1e-12
     )
     assert engine.daily_returns[0] == pytest.approx(
-        float(F(6993, 500_000)), abs=1e-9
+        float(F(13991, 1_000_000)), abs=1e-9
     )
     assert engine.final_cash == pytest.approx(0.10, abs=1e-9)
     assert engine.final_cash >= 0.0

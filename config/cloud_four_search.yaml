@@ -1,0 +1,57 @@
+# Historical development experiment. No profitability or promotion claim.
+version: 1
+primary: null
+v2: null
+output: null
+dataset_id: d36024cd1b197a8edcf976b2d950b3506bb0fae022f121d6aef06f2a281cde55
+methods: [random, gp, tpe, rl]
+seeds: [42]
+budget: 1000
+time_limit: 7200
+threads: 8
+device: cuda
+attempt_multiplier: 20
+candidates: 15
+# Pre-fix five-day cadence. Other horizons require separate matched configs.
+horizon: 5
+minimum_validation_excess: 0.0
+index_codes: [000300.SH, 000905.SH]
+min_listed_sessions: 60
+min_eligible: 100
+# Same price/volume domain and operator vocabulary for all four methods.
+feature_names: [RET_1, MOMENTUM_20, REVERSAL_5, REVERSAL_60, VOL_20,
+  SKEW_20, KURT_20, TURNOVER, TURNOVER_CHG, VOLUME_IMPACT, AMPLITUDE, CLOSE_POSITION,
+  OVERNIGHT_RET, INTRADAY_RET, ILLIQ_20, AMOUNT_SHARE, MAX_20, HIGH_52W,
+  BETA_60, IVOL_60, RSQ_60]
+model:
+  d_model: 64
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 128
+  num_loops: 3
+  dropout: 0.1
+  batch_size: 64
+  max_formula_len: 12
+  validation_fraction: 0.35
+  validation_splits: 4
+backtest:
+  portfolio_method: equal_weight
+  turnover_budget: null
+  turnover_allocation: priority
+  target_weight_change_threshold: 0.0
+  lot_size: 100
+  commission_rate: 0.00025
+  min_commission: 5.0
+  stamp_tax_rate: 0.0005
+  transfer_fee_rate: 0.00001
+  slippage_rate: 0.0005
+accounts:
+  '10000': {top_n: 5, buy_rank: 5, sell_rank: 5, single_weight_cap: 0.18, min_trade_amount: 500}
+  '50000': {top_n: 10, buy_rank: 10, sell_rank: 10, single_weight_cap: 0.09, min_trade_amount: 1000}
+  '100000': {top_n: 10, buy_rank: 10, sell_rank: 10, single_weight_cap: 0.09, min_trade_amount: 2000}
+windows:
+  - {name: historical_2021, start: '2016-01-01', train_end: '2019-12-31', validation_end: '2020-12-31', test_end: '2021-12-31'}
+  - {name: historical_2022, start: '2017-01-01', train_end: '2020-12-31', validation_end: '2021-12-31', test_end: '2022-12-31'}
+  - {name: historical_2023, start: '2018-01-01', train_end: '2021-12-31', validation_end: '2022-12-31', test_end: '2023-12-31'}
+  - {name: historical_2024, start: '2019-01-01', train_end: '2022-12-31', validation_end: '2023-12-31', test_end: '2024-12-31'}
+  - {name: historical_2025, start: '2020-01-01', train_end: '2023-12-31', validation_end: '2024-12-31', test_end: '2025-12-31'}

@@ -285,6 +285,7 @@ def test_p50_st1_clean_slow_report_true_negative_is_economic_negative():
 # --- ST2: the REAL slow artifact — completed stamp must not upgrade ----
 
 
+@pytest.mark.skipif(not _R1_SLOW_REPORT.is_file(), reason="optional frozen historical run archive absent")
 def test_p50_st2_real_slow_artifact_incomplete_not_negative():
     # RED (F7 + F4, measured): completed=true, worth_search=false, and
     # 30 primary program-error rows.  The overall result must be
@@ -719,6 +720,7 @@ def test_p50_st11_source_discipline_single_stamp_read_no_verdict_literals():
 # --- ST12: end-to-end — real plan, real reconcile, real report ----------
 
 
+@pytest.mark.skipif(not _R1_SLOW_REPORT.is_file(), reason="optional frozen historical run archive absent")
 def test_p50_st12_end_to_end_real_reconcile_feeds_real_classification():
     # The integrated R3->R4/R5 pipeline on the frozen slow artifact:
     # the landed reconcile_report (no synthetic construction) feeds

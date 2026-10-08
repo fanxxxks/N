@@ -28,8 +28,9 @@ mutable locals, ``_LoopContext`` the window-derived read-only context, and
 from __future__ import annotations
 
 import json
+import time
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import torch
@@ -169,6 +170,8 @@ class _RLRunState:
     semantic_duplicates: int = 0
     best_so_far: list[tuple[int, float]] = field(default_factory=list)
     best_reward: float = -float("inf")
+    proposal_count: int = 0
+    invalid_proposals: int = 0
 
     def record_step_summary(self, summary: dict[str, object]) -> None:
         """Retain ``summary`` under the P1-3 bound and accumulate the
@@ -278,6 +281,10 @@ class RLTrainingLoopMixin:
         train_end_date: str | None = None,
         device: str | None = None,
         window_cap: tuple[int, int] | None = None,
+        effective_budget: int | None = None,
+        proposal_limit: int | None = None,
+        time_limit_s: float | None = None,
+        progress_callback=None,
     ) -> list[int] | None:
         """Run REINFORCE training.
 
@@ -324,9 +331,28 @@ class RLTrainingLoopMixin:
         )
 
         run = _RLRunState()
+        if effective_budget is not None and effective_budget <= 0:
+            raise ValueError("effective_budget must be positive")
+        if proposal_limit is not None and proposal_limit <= 0:
+            raise ValueError("proposal_limit must be positive")
+        started = time.monotonic()
         pbar = tqdm(range(steps))
         for step in pbar:
+            if effective_budget is not None:
+                remaining = effective_budget - self.semantic_cache.budget_used
+                if remaining <= 0:
+                    break
+                # No step can evaluate more fresh classes than it proposes.
+                ctx.batch_size = min(batch_size, remaining)
+            if time_limit_s is not None and time.monotonic() - started >= time_limit_s:
+                break
+            if proposal_limit is not None:
+                if run.proposal_count >= proposal_limit:
+                    break
+                ctx.batch_size = min(ctx.batch_size, proposal_limit - run.proposal_count)
             self._train_step(step, pbar, ctx, run)
+            if progress_callback is not None:
+                progress_callback(run, self)
 
         return self._finish_training(
             contract=window.contract,
@@ -336,6 +362,7 @@ class RLTrainingLoopMixin:
             batch_size=batch_size,
             vm_device=vm_device,
             save_artifacts=save_artifacts,
+            effective_budget=effective_budget,
         )
 
     def _train_step(
@@ -357,19 +384,16 @@ class RLTrainingLoopMixin:
         )
         rewards = torch.zeros(ctx.batch_size, device=policy_device)
 
-        # Batched reward evaluation with semantic deduplication (T2-01):
-        # the budget unit is the **unique semantic formula evaluation**.
-        # Structurally invalid / degenerate formulas are rejected
-        # pre-evaluation (never executed, never billed); canonical
-        # duplicates hit the semantic cache; numerically equivalent
-        # formulas (same calibration fingerprint) reuse the first
-        # evaluation's score without billing.  Valid signals are scored
-        # in chunks so the vectorized basket simulation stays
-        # memory-bounded.
+        # T2-01 bills only unique valid semantic evaluations. Canonical
+        # duplicates and equal fingerprints reuse scores; invalid formulas
+        # are never billed. Chunked scoring bounds memory.
         state = _StepState()
+        run.proposal_count += ctx.batch_size
         for i in range(ctx.batch_size):
             key = tuple(sequences[i].tolist())
             ckey = self.semantic_cache.key_for(key)
+            if ckey is None:
+                run.invalid_proposals += 1
             if not self._route_one(key, ckey, state, ctx):
                 continue
             # Score as soon as one full chunk is ready: buffering every
@@ -410,6 +434,7 @@ class RLTrainingLoopMixin:
         batch_scores = self._resolve_batch_rewards(
             sequences, ctx.batch_size, state, rewards
         )
+        run.invalid_proposals += self._count_invalid_proposals(sequences, batch_scores)
         unique_frac = self._update_selection_and_track(
             state, ctx.batch_size, pbar
         )
@@ -436,6 +461,11 @@ class RLTrainingLoopMixin:
             state.semantic_duplicate_proposals,
             run,
         )
+
+    def _count_invalid_proposals(self, sequences, scores):
+        return sum("invalid_formula" in score.rejection_reasons
+            for sequence, score in zip(sequences, scores)
+            if self.semantic_cache.key_for(tuple(sequence.tolist())) is not None)
 
     def _sample_batch(
         self, batch_size: int, max_len: int, policy_device: torch.device
@@ -1055,15 +1085,13 @@ class RLTrainingLoopMixin:
         batch_size: int,
         vm_device: torch.device,
         save_artifacts: bool,
+        effective_budget: int | None = None,
     ) -> list[int] | None:
-        """Post-loop tail of the historical ``train``: the bare-factor
-        hard-fail, the run grammar log, the ``SearchResult`` shaping, the
-        selection JSON and the artifact write."""
+        """Finish the ledger, selection and optional artifact persistence."""
 
-        # Hard fail on zero operator coverage: a run whose executed
-        # formulas never used any operator is bare-factor screening, not
-        # formula search — no artifact may be produced from it.
-        if not self._run_operator_coverage:
+        # Legacy runs require operators; bounded cloud runs record rejection
+        # and filter bare factors before constructing a strategy.
+        if not self._run_operator_coverage and effective_budget is None:
             raise RuntimeError(
                 "operator coverage is zero across the whole run: no executed "
                 "formula used any operator (bare-factor screening only); "
@@ -1072,14 +1100,14 @@ class RLTrainingLoopMixin:
         _facade_logger().info(
             "grammar stats (run): mean_formula_len={:.2f}, "
             "operator_coverage={}/39, unique_steps={}",
-            float(np.mean([h["mean_formula_len"] for h in self.history])),
+            float(np.mean([h["mean_formula_len"] for h in self.history])) if self.history else 0.0,
             len(self._run_operator_coverage),
             len(self.history),
         )
         self.search_result = self._build_rl_search_result(
             seed=seed,
-            requested_budget=int(steps) * int(batch_size),
-            proposal_count=int(steps) * int(batch_size),
+            requested_budget=int(effective_budget or (steps * batch_size)),
+            proposal_count=run.proposal_count,
             reward_values=run.reward_values,
             step_summaries=run.step_summaries,
             step_aggregates=run.whole_run_step_aggregates(),
@@ -1088,6 +1116,8 @@ class RLTrainingLoopMixin:
             semantic_duplicates=run.semantic_duplicates,
             best_so_far=run.best_so_far,
         )
+        if effective_budget is not None:
+            self.search_result = replace(self.search_result, invalid_proposals=run.invalid_proposals)
 
         selection_path = self.data_config.data_dir / "training_selection.json"
         if save_artifacts:
@@ -1143,7 +1173,7 @@ class RLTrainingLoopMixin:
             vm_device=vm_device,
             searcher="rl",
             seed=seed,
-            requested_budget=int(steps) * int(batch_size),
+            requested_budget=int(effective_budget or (steps * batch_size)),
         )
 
     def _build_rl_search_result(

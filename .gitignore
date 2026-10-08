@@ -81,3 +81,10 @@ experiments/20260823_GROSS_MARGIN/metrics.json
 experiments/20260823_LIMIT_BREAK/metrics.json
 experiments/20260823_protocol_screening/metrics.json
 experiments/20260823_protocol_screening_2/metrics.json
+
+# Individually reviewed bulk historical factor diagnostics (summaries retained)
+docs/factor_inventory_audit_f1_20260907/metrics.json
+docs/factor_inventory_audit_f2_20260908/metrics.json
+docs/factor_inventory_audit_v2_20260905/metrics.json
+docs/factor_inventory_audit_v2_fix2_20260906/metrics.json
+docs/factor_inventory_audit_v2_fix_20260906/metrics.json

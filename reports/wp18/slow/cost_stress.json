@@ -1,0 +1,124 @@
+{
+  "wp18_stage_schema": "cost_stress",
+  "wp18_stage_schema_version": 1,
+  "domain": "slow",
+  "stage": "C2",
+  "generated": "wp18-c2-20260927",
+  "development_validation": "开发验证（development validation, 2021-2025 测试窗）",
+  "reference": "config_backtest_block_verbatim",
+  "main_combo": "combo:slow_all5",
+  "screen_adjudication": {
+    "A": {
+      "judgment_unit": {
+        "domain": "slow",
+        "main_combo": "combo:slow_all5",
+        "rule_letter": "A",
+        "rule_id": "reference_return"
+      },
+      "basis": "1x account rows, reference grid, concatenated test years 2021-2025 (D:\\minequant\\AlphaGPT\\reports\\wp18\\slow\\account_report.json)",
+      "conditions_i_ii_leg": "dynamic",
+      "conditions_i_ii_leg_reading": "§5 names no mode for (i)/(ii) and the judgment unit is mode-free; the annual net-excess series is the main strategy (dynamic) leg; the hold leg's numbers are recorded as audit fields, never merged into the verdict",
+      "annual_net_excess_dynamic": [
+        -0.17113608685690573,
+        0.05060703923324206,
+        -0.0410784208783056,
+        -0.057167090715069646,
+        -0.06692012230387756
+      ],
+      "annual_net_excess_hold_audit": [
+        -0.17113608685690573,
+        0.046481182636302965,
+        -0.03984104032442337,
+        -0.16290153105845318,
+        -0.0869339222590636
+      ],
+      "dynamic_cumulative_net_excess": -0.2653843319157907,
+      "hold_cumulative_net_excess": -0.3634440968908147,
+      "screen": {
+        "passed": false,
+        "n_positive_years": 1,
+        "min_positive_years": 3,
+        "condition_i_3_of_5_positive": false,
+        "median_net_excess": -0.057167090715069646,
+        "condition_ii_median_positive": false,
+        "dynamic_minus_hold_annualized": 0.026558626302869315,
+        "dynamic_minus_hold_threshold": 0.005,
+        "condition_iii_dynamic_minus_hold_50bp": true,
+        "excluded_year_excess": 0.05060703923324206,
+        "ex_minus_max_year": {
+          "n_positive_years": 0,
+          "median_net_excess": -0.0620436065094736,
+          "n_years": 4
+        },
+        "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律",
+      "passed": false,
+      "failed_conditions": [
+        "i_3_of_5_positive",
+        "ii_median_positive"
+      ],
+      "stress_rows_authorized": 0,
+      "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive not met — no 0x/2x stress rows for this rule (研发资源分配门槛)"
+    },
+    "B": {
+      "judgment_unit": {
+        "domain": "slow",
+        "main_combo": "combo:slow_all5",
+        "rule_letter": "B",
+        "rule_id": "label_ic"
+      },
+      "basis": "1x account rows, reference grid, concatenated test years 2021-2025 (D:\\minequant\\AlphaGPT\\reports\\wp18\\slow\\account_report.json)",
+      "conditions_i_ii_leg": "dynamic",
+      "conditions_i_ii_leg_reading": "§5 names no mode for (i)/(ii) and the judgment unit is mode-free; the annual net-excess series is the main strategy (dynamic) leg; the hold leg's numbers are recorded as audit fields, never merged into the verdict",
+      "annual_net_excess_dynamic": [
+        -0.07495645977841991,
+        0.013067467762025498,
+        -0.04098477438089887,
+        -0.06187716155980438,
+        -0.06882350808461402
+      ],
+      "annual_net_excess_hold_audit": [
+        -0.045372108527084065,
+        0.013067467762025498,
+        -0.045679752202584356,
+        -0.10259041174306371,
+        -0.003936146504759597
+      ],
+      "dynamic_cumulative_net_excess": -0.2149130497888374,
+      "hold_cumulative_net_excess": -0.17501792550016382,
+      "screen": {
+        "passed": false,
+        "n_positive_years": 1,
+        "min_positive_years": 3,
+        "condition_i_3_of_5_positive": false,
+        "median_net_excess": -0.06187716155980438,
+        "condition_ii_median_positive": false,
+        "dynamic_minus_hold_annualized": -0.009492098360527224,
+        "dynamic_minus_hold_threshold": 0.005,
+        "condition_iii_dynamic_minus_hold_50bp": false,
+        "excluded_year_excess": 0.013067467762025498,
+        "ex_minus_max_year": {
+          "n_positive_years": 0,
+          "median_net_excess": -0.0653503348222092,
+          "n_years": 4
+        },
+        "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律"
+      },
+      "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律",
+      "passed": false,
+      "failed_conditions": [
+        "i_3_of_5_positive",
+        "ii_median_positive",
+        "iii_dynamic_minus_hold_50bp"
+      ],
+      "stress_rows_authorized": 0,
+      "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive+iii_dynamic_minus_hold_50bp not met — no 0x/2x stress rows for this rule (研发资源分配门槛)"
+    }
+  },
+  "conditions_i_ii_leg": "dynamic",
+  "annotation": "研发资源分配门槛，非统计显著性证明也非市场规律",
+  "row_count": 0,
+  "failed_rows": 0,
+  "rows": []
+}

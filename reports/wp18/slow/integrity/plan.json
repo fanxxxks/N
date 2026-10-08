@@ -1,0 +1,1298 @@
+{
+  "plan_schema_version": 1,
+  "experiment_id": "wp18_slow",
+  "research_domain": "slow_fundamental",
+  "tier_set": "AB",
+  "folds": [
+    {
+      "train_end": "2020-12-31",
+      "test_end": "2021-12-31"
+    },
+    {
+      "train_end": "2021-12-31",
+      "test_end": "2022-12-31"
+    },
+    {
+      "train_end": "2022-12-31",
+      "test_end": "2023-12-31"
+    },
+    {
+      "train_end": "2023-12-31",
+      "test_end": "2024-12-31"
+    },
+    {
+      "train_end": "2024-12-31",
+      "test_end": "2025-12-31"
+    }
+  ],
+  "arms": [
+    {
+      "candidate": "S1:A:None:ROE",
+      "kind": "single",
+      "members": [
+        "ROE"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S1:B:None:ROE",
+      "kind": "single",
+      "members": [
+        "ROE"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S1:A:None:PE_TTM",
+      "kind": "single",
+      "members": [
+        "PE_TTM"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S1:B:None:PE_TTM",
+      "kind": "single",
+      "members": [
+        "PE_TTM"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S1:A:None:REVENUE_YOY",
+      "kind": "single",
+      "members": [
+        "REVENUE_YOY"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S1:B:None:REVENUE_YOY",
+      "kind": "single",
+      "members": [
+        "REVENUE_YOY"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S1:A:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "members": [
+        "DIVIDEND_YIELD"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S1:B:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "members": [
+        "DIVIDEND_YIELD"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S1:A:None:MARKET_CAP",
+      "kind": "single",
+      "members": [
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S1:B:None:MARKET_CAP",
+      "kind": "single",
+      "members": [
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "dir"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S1; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:A:None:ROE",
+      "kind": "single",
+      "members": [
+        "ROE"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:B:None:ROE",
+      "kind": "single",
+      "members": [
+        "ROE"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:A:None:PE_TTM",
+      "kind": "single",
+      "members": [
+        "PE_TTM"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:B:None:PE_TTM",
+      "kind": "single",
+      "members": [
+        "PE_TTM"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:A:None:REVENUE_YOY",
+      "kind": "single",
+      "members": [
+        "REVENUE_YOY"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:B:None:REVENUE_YOY",
+      "kind": "single",
+      "members": [
+        "REVENUE_YOY"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:A:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "members": [
+        "DIVIDEND_YIELD"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:B:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "members": [
+        "DIVIDEND_YIELD"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:A:None:MARKET_CAP",
+      "kind": "single",
+      "members": [
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:B:None:MARKET_CAP",
+      "kind": "single",
+      "members": [
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:A:None:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S2:B:None:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "sig"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S2; mode=None; diagnostic measurement row (outside the 300 formal-row budget)"
+    },
+    {
+      "candidate": "S3:A:dynamic:ROE",
+      "kind": "single",
+      "members": [
+        "ROE"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:hold:ROE",
+      "kind": "single",
+      "members": [
+        "ROE"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:dynamic:ROE",
+      "kind": "single",
+      "members": [
+        "ROE"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:hold:ROE",
+      "kind": "single",
+      "members": [
+        "ROE"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:dynamic:PE_TTM",
+      "kind": "single",
+      "members": [
+        "PE_TTM"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:hold:PE_TTM",
+      "kind": "single",
+      "members": [
+        "PE_TTM"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:dynamic:PE_TTM",
+      "kind": "single",
+      "members": [
+        "PE_TTM"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:hold:PE_TTM",
+      "kind": "single",
+      "members": [
+        "PE_TTM"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:dynamic:REVENUE_YOY",
+      "kind": "single",
+      "members": [
+        "REVENUE_YOY"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:hold:REVENUE_YOY",
+      "kind": "single",
+      "members": [
+        "REVENUE_YOY"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:dynamic:REVENUE_YOY",
+      "kind": "single",
+      "members": [
+        "REVENUE_YOY"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:hold:REVENUE_YOY",
+      "kind": "single",
+      "members": [
+        "REVENUE_YOY"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:dynamic:DIVIDEND_YIELD",
+      "kind": "single",
+      "members": [
+        "DIVIDEND_YIELD"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:hold:DIVIDEND_YIELD",
+      "kind": "single",
+      "members": [
+        "DIVIDEND_YIELD"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:dynamic:DIVIDEND_YIELD",
+      "kind": "single",
+      "members": [
+        "DIVIDEND_YIELD"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:hold:DIVIDEND_YIELD",
+      "kind": "single",
+      "members": [
+        "DIVIDEND_YIELD"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:dynamic:MARKET_CAP",
+      "kind": "single",
+      "members": [
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:hold:MARKET_CAP",
+      "kind": "single",
+      "members": [
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:dynamic:MARKET_CAP",
+      "kind": "single",
+      "members": [
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:hold:MARKET_CAP",
+      "kind": "single",
+      "members": [
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:A:hold:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "S3:B:hold:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "benchmark:equal_weight",
+      "kind": "benchmark",
+      "members": [],
+      "direction_rule": null,
+      "cost_levels": [
+        "ref"
+      ],
+      "is_primary": false,
+      "members_source": "wp18_frozen_plan§3.5(comparison arm: measured and reported, never adjudicated)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3"
+    },
+    {
+      "candidate": "control:cash",
+      "kind": "control",
+      "members": [],
+      "direction_rule": null,
+      "cost_levels": [
+        "1x"
+      ],
+      "is_primary": false,
+      "members_source": "wp18_frozen_plan§3.5(comparison arm: measured and reported, never adjudicated)",
+      "cell": null,
+      "period": null,
+      "note": "stage=S3"
+    },
+    {
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "0x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=C2; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "2x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=C2; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "0x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=C2; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "reference_return",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "2x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=C2; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "0x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=C2; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "2x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=C2; mode=dynamic; formal evaluation row"
+    },
+    {
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "0x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=C2; mode=hold; formal evaluation row"
+    },
+    {
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "kind": "combo",
+      "members": [
+        "ROE",
+        "PE_TTM",
+        "REVENUE_YOY",
+        "DIVIDEND_YIELD",
+        "MARKET_CAP"
+      ],
+      "direction_rule": {
+        "rule": "label_ic",
+        "rule_version": 1,
+        "scope": "per_fold",
+        "learned_at": "config_backtest_block_verbatim"
+      },
+      "cost_levels": [
+        "2x"
+      ],
+      "is_primary": true,
+      "members_source": "wp18_frozen_plan§1(FROZEN_18_PLAN candidates)",
+      "cell": null,
+      "period": null,
+      "note": "stage=C2; mode=hold; formal evaluation row"
+    }
+  ],
+  "key_axes": [
+    "candidate",
+    "cost_level",
+    "fold_test_end"
+  ],
+  "adjudication_rules": {
+    "min_positive_years": 3.0,
+    "median_must_be_positive": 1.0,
+    "dynamic_minus_hold_annualized_bp": 50.0
+  },
+  "verdict_map": {
+    "executable_edge_with_cost_space": "economic_positive",
+    "signal_only_execution_loss": "inconclusive_mixed",
+    "hold_value_no_dynamic_increment": "economic_negative",
+    "direction_rules_unstable_no_increment": "economic_negative",
+    "no_increment_pause_hypotheses": "economic_negative",
+    "measurement_blocked": "inconclusive_mixed"
+  },
+  "sources": {
+    "contract": {
+      "path": "reports/wp18/FROZEN_18_PLAN.md",
+      "sha256": "fa7adbc5496d77844a43c241842623b95f06858e2b7b47c56ee21c07b7f83171"
+    },
+    "config": {
+      "path": "configs/r1_slow_ab.yaml",
+      "sha256": "3d20efdcb2e36e649477188d0a41c2cae044c2d709967080883db6b750d0087c"
+    },
+    "code_constants": [
+      {
+        "module": "ashare_model.wp18_signal_vs_account",
+        "names": [
+          "SLOW_SINGLES",
+          "SLOW_COMBO_ID",
+          "WP18_RULES",
+          "WP18_MODES",
+          "WP18_STAGES",
+          "WP18_ADJUDICATION_RULES"
+        ]
+      }
+    ],
+    "product": {
+      "report_path": "data/r1/wp18_slow/wp18_slow_report.json",
+      "run_meta_path": "data/r1/wp18_slow/wp18_slow_run_meta.json"
+    },
+    "adjudication_path": "adjudication.verdict",
+    "summary_layer_path": "arm_summaries",
+    "summary_layer_arms": "all_arms",
+    "summary_layer_period_prefilter": false
+  },
+  "expected_row_count": 280
+}

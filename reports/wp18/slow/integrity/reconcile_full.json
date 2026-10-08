@@ -1,0 +1,1393 @@
+{
+  "reconcile_schema_version": 1,
+  "experiment_id": "wp18_slow",
+  "n_rows_observed": 240,
+  "n_expected_keys": 280,
+  "n_actual_keys": 240,
+  "n_missing": 40,
+  "n_duplicates": 0,
+  "n_unexpected": 0,
+  "n_failed_rows": 0,
+  "n_primary_failed_rows": 0,
+  "n_benchmark_failed_rows": 0,
+  "missing": [
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2021-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2022-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2023-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2024-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2025-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2021-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2022-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2023-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2024-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2025-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2021-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2022-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2023-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2024-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2025-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2021-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2022-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2023-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2024-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2025-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2021-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2022-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2023-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2024-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2025-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2021-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2022-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2023-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2024-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2025-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2021-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2022-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2023-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2024-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "0x",
+      "fold_test_end": "2025-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2021-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2022-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2023-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2024-12-31"
+    },
+    {
+      "period": null,
+      "cell": null,
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "cost_level": "2x",
+      "fold_test_end": "2025-12-31"
+    }
+  ],
+  "duplicates": [],
+  "unexpected": [],
+  "failed_rows": [],
+  "primary_failed_rows": [],
+  "benchmark_failed_rows": [],
+  "coverage": {
+    "groups": {
+      "-|2021-12-31": {
+        "n_rows": 48,
+        "n_dates_observed": [
+          222
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": true,
+        "daily_dates_consistent": true
+      },
+      "-|2022-12-31": {
+        "n_rows": 48,
+        "n_dates_observed": [
+          221
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": true,
+        "daily_dates_consistent": true
+      },
+      "-|2023-12-31": {
+        "n_rows": 48,
+        "n_dates_observed": [
+          221
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": true,
+        "daily_dates_consistent": true
+      },
+      "-|2024-12-31": {
+        "n_rows": 48,
+        "n_dates_observed": [
+          221
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": true,
+        "daily_dates_consistent": true
+      },
+      "-|2025-12-31": {
+        "n_rows": 48,
+        "n_dates_observed": [
+          222
+        ],
+        "n_dates_consistent": true,
+        "daily_dates_present": true,
+        "daily_dates_consistent": true
+      }
+    },
+    "fold_windows": {
+      "-": [
+        [
+          "2020-12-31",
+          "2021-12-31"
+        ],
+        [
+          "2021-12-31",
+          "2022-12-31"
+        ],
+        [
+          "2022-12-31",
+          "2023-12-31"
+        ],
+        [
+          "2023-12-31",
+          "2024-12-31"
+        ],
+        [
+          "2024-12-31",
+          "2025-12-31"
+        ]
+      ]
+    },
+    "summary_layer_extra_arms": []
+  },
+  "arm_status": [
+    {
+      "candidate": "S1:A:None:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:A:None:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:A:None:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:A:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:A:None:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S1:B:None:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:A:None:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S2:B:None:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:dynamic:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:hold:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:dynamic:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:hold:ROE",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:dynamic:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:hold:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:dynamic:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:hold:PE_TTM",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:dynamic:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:hold:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:dynamic:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:hold:REVENUE_YOY",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:dynamic:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:hold:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:dynamic:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:hold:DIVIDEND_YIELD",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:dynamic:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:hold:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:dynamic:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:hold:MARKET_CAP",
+      "kind": "single",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:A:hold:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "S3:B:hold:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "benchmark:equal_weight",
+      "kind": "benchmark",
+      "is_primary": false,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "control:cash",
+      "kind": "control",
+      "is_primary": false,
+      "n_expected_rows": 5,
+      "n_present_rows": 5,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "citable"
+    },
+    {
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 0,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "missing"
+    },
+    {
+      "candidate": "C2:A:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 0,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "missing"
+    },
+    {
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 0,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "missing"
+    },
+    {
+      "candidate": "C2:A:hold:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 0,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "missing"
+    },
+    {
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 0,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "missing"
+    },
+    {
+      "candidate": "C2:B:dynamic:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 0,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "missing"
+    },
+    {
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 0,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "missing"
+    },
+    {
+      "candidate": "C2:B:hold:combo:slow_all5",
+      "kind": "combo",
+      "is_primary": true,
+      "n_expected_rows": 5,
+      "n_present_rows": 0,
+      "n_failed_rows": 0,
+      "failure_reasons": [],
+      "status": "missing"
+    }
+  ],
+  "issues": [
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2021-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2021-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2022-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2022-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2023-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2023-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2024-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2024-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2025-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2025-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2021-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2021-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2022-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2022-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2023-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2023-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2024-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2024-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2025-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2025-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2021-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='0x', fold_test_end='2021-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2022-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='0x', fold_test_end='2022-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2023-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='0x', fold_test_end='2023-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2024-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='0x', fold_test_end='2024-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2025-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='0x', fold_test_end='2025-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2021-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='2x', fold_test_end='2021-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2022-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='2x', fold_test_end='2022-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2023-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='2x', fold_test_end='2023-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2024-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='2x', fold_test_end='2024-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:A:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2025-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:A:hold:combo:slow_all5', cost_level='2x', fold_test_end='2025-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2021-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2021-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2022-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2022-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2023-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2023-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2024-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2024-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2025-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='0x', fold_test_end='2025-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2021-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2021-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2022-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2022-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2023-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2023-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2024-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2024-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:dynamic:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2025-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:dynamic:combo:slow_all5', cost_level='2x', fold_test_end='2025-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2021-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='0x', fold_test_end='2021-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2022-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='0x', fold_test_end='2022-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2023-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='0x', fold_test_end='2023-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2024-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='0x', fold_test_end='2024-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "0x",
+        "fold_test_end": "2025-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='0x', fold_test_end='2025-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2021-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='2x', fold_test_end='2021-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2022-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='2x', fold_test_end='2022-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2023-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='2x', fold_test_end='2023-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2024-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='2x', fold_test_end='2024-12-31')"
+    },
+    {
+      "code": "missing_row",
+      "key": {
+        "period": null,
+        "cell": null,
+        "candidate": "C2:B:hold:combo:slow_all5",
+        "cost_level": "2x",
+        "fold_test_end": "2025-12-31"
+      },
+      "detail": "planned row absent from the report at (period=None, cell=None, candidate='C2:B:hold:combo:slow_all5', cost_level='2x', fold_test_end='2025-12-31')"
+    }
+  ],
+  "missing_by_stage": {
+    "C2": 40
+  },
+  "issue_codes": {
+    "missing_row": 40
+  },
+  "missing_adjudication": {
+    "stress_stage": "C2",
+    "executed_letters": [],
+    "skipped_letters": [
+      "A",
+      "B"
+    ],
+    "note": "the missing rows are EXACTLY the §5-screened-out stress arms (planned at the 40-row upper bound, §4.5; the skip decisions with full evidence live in cost_stress.json screen_adjudication)"
+  }
+}

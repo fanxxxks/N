@@ -1,0 +1,116 @@
+{
+  "package": "p57_wp18_closure",
+  "purpose": "WP18 closure verifications — zero new measurement rows / backtests / scoring; data/** untouched",
+  "r1_slow_cost_stress_closure": {
+    "item": "slow cost-stress closure (1x initial screen refused authorization for BOTH rules)",
+    "carriers": {
+      "cost_stress.screen_adjudication": "reports\\wp18\\slow\\cost_stress.json",
+      "trial_ledger.screen:1x_initial": "data\\r1\\wp18_slow\\runs\\wp18_c2\\wp18-c2-20260927\\trials.jsonl"
+    },
+    "screen_outcome": {
+      "A": {
+        "failed_conditions": [
+          "i_3_of_5_positive",
+          "ii_median_positive"
+        ],
+        "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive not met — no 0x/2x stress rows for this rule (研发资源分配门槛)",
+        "dynamic_cumulative_net_excess": -0.2653843319157907
+      },
+      "B": {
+        "failed_conditions": [
+          "i_3_of_5_positive",
+          "ii_median_positive",
+          "iii_dynamic_minus_hold_50bp"
+        ],
+        "skip_reason": "FROZEN_18_PLAN §5: conditions i_3_of_5_positive+ii_median_positive+iii_dynamic_minus_hold_50bp not met — no 0x/2x stress rows for this rule (研发资源分配门槛)",
+        "dynamic_cumulative_net_excess": -0.2149130497888374
+      }
+    },
+    "dual_carrier_verbatim_identical": true,
+    "dual_carrier_detail": {
+      "slow:combo:slow_all5:A": true,
+      "slow:combo:slow_all5:B": true
+    },
+    "stress_rows_authorized": 0,
+    "row_count": 0,
+    "ledger_rows_total": 6,
+    "ledger_screen_rows": 4,
+    "unrun_row_keys_preserved": {
+      "medium_c1_a": 20,
+      "slow_c2": 40,
+      "total": 60,
+      "slow_c2_arms_in_plan": 8,
+      "slow_missing_by_stage": {
+        "C2": 40
+      },
+      "medium_missing_by_stage": {
+        "C1": 20
+      },
+      "slow_missing_adjudication_note": "the missing rows are EXACTLY the §5-screened-out stress arms (planned at the 40-row upper bound, §4.5; the skip decisions with full evidence live in cost_stress.json screen_adjudication)"
+    },
+    "measurement_incomplete_semantics": "designed-in state: the missing rows are EXACTLY the §5-screened-out stress arms (initial screen refused authorization); NOT a measurement failure and NOT evidence of a negative economic result (WP18_REPORT.md:38,194)",
+    "status_labels": {
+      "slow": {
+        "label": "measurement_incomplete",
+        "verdict_valid": false,
+        "primary_arms_measured": false
+      },
+      "medium": {
+        "label": "measurement_incomplete",
+        "verdict_valid": false
+      }
+    },
+    "disposition": "closed by design — no chase (不追跑): running 0x/2x rows for a rule that failed the §5 initial screen would be selection-shopping an already-refused result; the 60 row keys stay materialized in the plans for any future round under a changed screen criterion"
+  },
+  "r3_method_revision_zero_trigger": {
+    "item": "method-revision zero-trigger closure (WP17 W6)",
+    "registry": "ashare_model\\method_revision_registry.json",
+    "episodes": [],
+    "guard_liveness": {
+      "require_open_episode_none": "G1_REFUSED",
+      "attested_version_needs_no_episode": true
+    },
+    "closure": "no trigger record was ever opened; the guards refuse any method-version comparison or acceptance calibration on start (fail-closed, FROZEN_17 §6.5 G1).  Formally closed with this package; reopening requires the W6 episode protocol."
+  },
+  "e3_cache_entry_byte_identity": {
+    "item": "errata E3 — slow_ab content-addressed cache entry byte identity (disclosed write; verified no-op)",
+    "files": {
+      "slow_ab_entry": "data\\r1\\slow_ab\\factor_tensor_cache\\ed8dc37c37eecfe36af9f5bcf09effa1c8a7c3170a574091588e2b052cd851f0.npz",
+      "medium_a_entry": "data\\r1\\medium_a\\factor_tensor_cache\\ed8dc37c37eecfe36af9f5bcf09effa1c8a7c3170a574091588e2b052cd851f0.npz"
+    },
+    "sizes_bytes": {
+      "slow_ab": 1684390858,
+      "medium_a": 1684390858
+    },
+    "sha256": {
+      "slow_ab": "81db3d19f49424ddb51734519ff4e99284c5b694dce3116d00fd59ce9f4d8b4f",
+      "medium_a": "81db3d19f49424ddb51734519ff4e99284c5b694dce3116d00fd59ce9f4d8b4f"
+    },
+    "registered_sha256_in_errata_e3": "81db3d19f49424ddb51734519ff4e99284c5b694dce3116d00fd59ce9f4d8b4f",
+    "byte_identical": true,
+    "matches_errata_registration": true,
+    "preexisting_entry_untouched": {
+      "name": "4ab7587af59df64c45a37f9ccf4fbc7b6d1a2166b8e755f1a6ce123ef9e4210d.npz",
+      "present_in_slow_ab": true,
+      "same_size_as_medium_a_twin": true,
+      "note": "the directory's only pre-E3 entry; left as-is (zero mutations to data/** in this package)"
+    },
+    "action": "verified_no_op_not_deleted",
+    "rationale": "the appended entry is the deterministic rebuild of the same domain-independent tensor (identity key = v2 duckdb + dataset_id + dates + ts_codes); deleting it would be a further mutation of an existing directory — disclosure over restoration, per errata E3"
+  },
+  "domain_gate_pipeline_note": {
+    "item": "§9.3 domain-gate shape deviation (errata E4) — pipeline note for future packages",
+    "source": [
+      "WP18_REPORT.md §9.3",
+      "errata E4"
+    ],
+    "note": "future packages replicating this pipeline must either split the signal-diagnostics stage per-domain (medium diagnostics gate the slow leg) or align the gate definition with the stage partitioning, so the frozen-form gate (full-domain integrity + runtime cap BEFORE entering the next domain) is executable as written instead of the post-hoc subset-gate + second-checkpoint + ledger-backfill shape WP18 landed",
+    "disposition": "orchestration-layer note recorded; no rerun"
+  },
+  "standing_items_restated": {
+    "item": "§9.2/§9.7/§9.8 standing items restated",
+    "s9_2_contract_ruling_user_overridable": "the E2/E9 adjudication (FROZEN_A §8.3 dual-constant refusal gate; re-learn of the 19 refused keys) is a run-owner-level ratification the user may still overturn — rollback actions listed in errata E9 standing",
+    "s9_7_restart_conditions": "the hypothesis batch (medium 3-factor + slow 5-factor equal-weight combos, A/B orientation, reference grid) is PAUSED (stop-table rows 4 and 6); only a new economic hypothesis or a new information source justifies restart; B-fulltrain would need separate pre-registration (contract §2.3)",
+    "s9_8_measurement_limits": "DIVIDEND_YIELD's 'no information' reading over 0.291-0.361 coverage is coverage-limited (measurement_incomplete semantics — not an economic negative result); slow 2021 fold budget constriction degrades dynamic to hold (Q3 mechanism note)"
+  }
+}

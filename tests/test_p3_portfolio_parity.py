@@ -130,13 +130,16 @@ def test_plan_reward_cannot_replace_fills_below_actual_minimum():
         rebalance_mask=rebalance_mask)
     # P58: every entry price is >10, so floor(5000/p/100)*100*p <5000.
     # Actual fills must be rejected; a continuous-weight reward still buys.
-    np.testing.assert_array_equal(backtest.target_weights[0], reward.target_weights[0])
+    np.testing.assert_array_equal(backtest.target_weights[0][:20], np.full(20, 0.05))
+    # The basket reserves fees continuously; the actual minimum is checked
+    # after lot rounding in the account. The two targets need not be equal.
+    assert np.all(reward.target_weights[0] <= backtest.target_weights[0])
     np.testing.assert_array_equal(backtest.final_shares, np.zeros(len(codes)))
     assert backtest.final_cash == 100_000
     np.testing.assert_array_equal(backtest.buy_weights, np.zeros((len(dates) - 2, len(codes))))
     np.testing.assert_array_equal(backtest.sell_weights, np.zeros((len(dates) - 2, len(codes))))
     assert backtest.cost_fractions == [0] * (len(dates) - 2)
-    assert reward.turnover[0] == 1
+    assert 0 < reward.turnover[0] < 1
 
 
 def test_weekly_non_rebalance_days_hold_with_zero_cost_and_turnover():

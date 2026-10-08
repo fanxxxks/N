@@ -1,0 +1,13 @@
+{
+  "precheck_schema_version": 1,
+  "experiment_id": "wp18_medium",
+  "plan_path": "reports\\wp18\\medium\\integrity\\plan.json",
+  "ok": true,
+  "checks_run": [
+    "P-DOM",
+    "P-DEP",
+    "P-REF"
+  ],
+  "expected_row_count": 200,
+  "issues": []
+}
