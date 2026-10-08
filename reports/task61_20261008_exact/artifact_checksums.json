@@ -1,0 +1,65 @@
+{
+  "scope": "raw local file bytes before Git line-ending conversion",
+  "files": [
+    {
+      "path": "account_audit.json",
+      "bytes": 1394,
+      "sha256": "cef6085a78c3958ea917befa396c5c84acfb8b896df7bac6a048eab3078dff35"
+    },
+    {
+      "path": "daily_budget_020.csv",
+      "bytes": 1658729,
+      "sha256": "9a70c80e143f7d6f7248afa5ec8f2cd54d963adad14ed5f89cc20599bc35968e"
+    },
+    {
+      "path": "daily_budget_disabled.csv",
+      "bytes": 2326813,
+      "sha256": "a47b42bdeb8ee66002e13bf9246930fe94dde50585650494249fb04e97682425"
+    },
+    {
+      "path": "DECISION.md",
+      "bytes": 2832,
+      "sha256": "6d584748edb41ab224f1feb6a580507f4de41de0ee5e5301a601b0da2296fbc4"
+    },
+    {
+      "path": "exact_tests.txt",
+      "bytes": 265,
+      "sha256": "86e4d8825e0fdd50eb530bba6b9300df383c34214956c60b3c16e26ba20f217f"
+    },
+    {
+      "path": "ledger.jsonl",
+      "bytes": 10558,
+      "sha256": "65728cd3c80b7712313435f4447ce71653ecb906c5050f06bd5585a81a1b04ad"
+    },
+    {
+      "path": "provenance.json",
+      "bytes": 9176,
+      "sha256": "cbf49aaef1e37261b33a950e3ba486c4eb5d1e3aff2279aac392610c5fb2e03d"
+    },
+    {
+      "path": "results.json",
+      "bytes": 18393,
+      "sha256": "6474560c3986fea9ac9199f0a274ec2522030d78a4ed6a1f4174ec2779aa8598"
+    },
+    {
+      "path": "RESULTS.md",
+      "bytes": 3586,
+      "sha256": "74edb4814ac52c55ddc9c6bf2974e4e7a15aebdd3f9982f142d95eb5b03643cd"
+    },
+    {
+      "path": "summary.csv",
+      "bytes": 3492,
+      "sha256": "f28e3712a4a2f77901e9f76730003fee6a2043d06eea734b1115216dbb203372"
+    },
+    {
+      "path": "trades_budget_020.csv",
+      "bytes": 88571,
+      "sha256": "6944120a6ca17bd3d1509e443d1a172ad501d2c9232692d27344e64b200c9ec4"
+    },
+    {
+      "path": "trades_budget_disabled.csv",
+      "bytes": 439414,
+      "sha256": "607fb48f9ff7ef9a8aff259b1e05776edfadf72886633143214fefb9c1bc0312"
+    }
+  ]
+}
